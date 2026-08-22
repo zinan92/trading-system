@@ -21,6 +21,7 @@ from services.broker_port import (
 )
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
+from services.live_activation_gate import LiveActivationGate as SourceBoundLiveActivationGate
 from services.order_lifecycle import IllegalOrderTransition, OrderLifecycleStore
 from services.paper_executor import PaperExecutor
 from services.risk_policy_composition import build_live_money_risk_adapter
@@ -56,8 +57,13 @@ class BinanceUsdmBrokerAdapter:
         if not readiness["ready"] and not self.dry_run:
             raise RuntimeError(f"live broker preflight failed: {readiness['block_reason']}")
         if not self.dry_run:
-            activation = self._live_activation(request.run_date)
-            if activation.get("real_money_ready") is not True:
+            if self._source_bound_live_scope():
+                activation = SourceBoundLiveActivationGate(self.output_root, park_user_id="").canary_status()
+                if activation.get("ready") is not True:
+                    raise RuntimeError("source-bound Live activation/canary is not ready; real broker submission is blocked")
+            else:
+                activation = self._live_activation(request.run_date)
+            if not self._source_bound_live_scope() and activation.get("real_money_ready") is not True:
                 raise RuntimeError("live activation gate is not real_money_ready; real broker submission is blocked")
         if not self.dry_run:
             reconciliation = self._live_reconciliation_check(request.run_date)
@@ -68,6 +74,9 @@ class BinanceUsdmBrokerAdapter:
             if not reconciliation["ready"]:
                 raise RuntimeError(reconciliation["block_reason"])
         return self._submit_binance_order(request, readiness)
+
+    def _source_bound_live_scope(self) -> bool:
+        return str(self.provider).lower() in {"hyperliquid", "standard_broker"} or str(self.broker_config.get("broker_id") or "").lower() == "hyperliquid"
 
     def _live_reconciliation_check(self, run_date: str) -> dict:
         """Refresh exchange reconciliation inline before any real order POST.

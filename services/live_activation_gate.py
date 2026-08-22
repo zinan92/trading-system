@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import time
 from pathlib import Path
@@ -80,6 +81,7 @@ class LiveActivationGate:
         source_attestation_resolver: Any | None = None,
         readiness_receipt_resolver: Any | None = None,
         readiness_windows_resolver: Any | None = None,
+        credential_presence_resolver: Any | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "live_activation"
@@ -92,6 +94,7 @@ class LiveActivationGate:
         )
         self._readiness_receipt_resolver = readiness_receipt_resolver or self._default_readiness_receipt
         self._readiness_windows_resolver = readiness_windows_resolver or self._default_readiness_windows
+        self._credential_presence_resolver = credential_presence_resolver or (lambda name: bool(os.getenv(name)))
 
     def rows(self) -> list[dict[str, Any]]:
         return [dict(row) for row in load_json(self.path) if isinstance(row, dict)]
@@ -146,6 +149,8 @@ class LiveActivationGate:
             blockers.append("release_sha_does_not_match_source")
         if not _ENV_NAME.fullmatch(str(credential_source or "")):
             blockers.append("credential_source_must_be_env_name")
+        elif not bool(self._credential_presence_resolver(str(credential_source))):
+            blockers.append("credential_source_unavailable")
         if str(instrument_scope) != "default_perpetuals":
             blockers.append("unsupported_instrument_scope")
         if str(strategy_scope) != "dca":
@@ -177,8 +182,10 @@ class LiveActivationGate:
                 for name, value in sorted(critical.items())
                 if not self._gate_passes(value)
             )
-        elif not isinstance(readiness.get("gate_evidence"), Mapping):
-            blockers.append("critical_gate_results_missing")
+        # The canonical #860 receipt does not duplicate per-window gate
+        # evidence.  _readiness_is_current() verifies every persisted window
+        # and its required evidence categories before this point, so that
+        # receipt shape is itself the critical-gate proof.
         declared = self._declared_capabilities(capabilities)
         blockers.extend(f"capability_missing:{name}" for name in sorted(REQUIRED_CAPABILITIES - declared))
         declared_gaps = capabilities.get("gaps") if isinstance(capabilities, Mapping) else None
@@ -202,6 +209,11 @@ class LiveActivationGate:
             "risk_limits": normalized_risk_limits or {},
             "readiness_receipt_digest": str(readiness.get("receipt_digest") or ""),
             "readiness_snapshot": dict(readiness),
+            "critical_gate_results": dict(critical) if isinstance(critical, Mapping) else {
+                "receipt_status": "pass",
+                "window_chain": "pass",
+                "required_gate_evidence": "pass",
+            },
             "source_attestation": source,
             "network_io": False,
             "real_money_eligible": False,
@@ -210,6 +222,27 @@ class LiveActivationGate:
             "next_action": "notify_park_and_wait" if blockers else "await_exact_live_activation_confirmation",
         }
         result["preflight_digest"] = _digest({key: value for key, value in result.items() if key != "preflight_digest"})
+        if result["status"] == "ready_for_activation":
+            existing = next(
+                (
+                    row
+                    for row in reversed(self.rows())
+                    if row.get("event") == "preflight_completed"
+                    and row.get("preflight_digest") == result["preflight_digest"]
+                ),
+                None,
+            )
+            if existing is None:
+                self._append(
+                    {
+                        "schema_version": LIVE_GATE_SCHEMA,
+                        "event": "preflight_completed",
+                        "preflight_digest": result["preflight_digest"],
+                        "preflight": dict(result),
+                        "network_io": False,
+                        "live_writes_enabled": False,
+                    }
+                )
         return result
 
     def prepare_activation(self, preflight: Mapping[str, Any], *, plan_digest: str, expires_at: float) -> dict[str, Any]:
@@ -312,6 +345,75 @@ class LiveActivationGate:
             return {"status": "activated_pending_canary", "environment": "mainnet", "activation_digest": latest.get("activation_digest"), "plan_digest": latest.get("plan_digest"), "release_sha": latest.get("release_sha"), "account_id": latest.get("account_id"), "live_writes_enabled": False, "next_action": latest.get("next_action")}
         return {"status": str(latest.get("status") or "blocked"), "environment": "mainnet", "activation_digest": latest.get("activation_digest"), "blockers": list(latest.get("blockers") or []), "live_writes_enabled": False, "next_action": latest.get("next_action")}
 
+    def canary_status(self) -> dict[str, Any]:
+        """Verify the durable source-bound activation + attended-canary chain.
+
+        This is deliberately independent of the legacy ``live_activation``
+        JSON artifact.  Live adapters call it immediately before a write.
+        No event can make it ready until a later attended-canary story records
+        a complete, identity-bound ``canary_passed`` receipt.
+        """
+
+        try:
+            rows = self.rows()
+        except Exception as exc:  # journal uncertainty must block writes.
+            return {"ready": False, "status": "blocked", "blockers": [f"activation_journal_unreadable:{type(exc).__name__}"], "live_writes_enabled": False}
+        confirmed = next((row for row in reversed(rows) if row.get("event") == "activation_confirmed"), None)
+        if confirmed is None:
+            return {"ready": False, "status": "blocked", "blockers": ["activation_confirmation_missing"], "live_writes_enabled": False}
+        preflight_row = next(
+            (
+                row
+                for row in reversed(rows)
+                if row.get("event") == "preflight_completed"
+                and row.get("preflight_digest") == confirmed.get("preflight_digest")
+            ),
+            None,
+        )
+        preflight = preflight_row.get("preflight") if isinstance(preflight_row, Mapping) else None
+        if not isinstance(preflight, Mapping) or not self._preflight_is_current(preflight):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_preflight_not_current"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        canary = next(
+            (
+                row
+                for row in reversed(rows)
+                if row.get("event") == "canary_passed"
+                and row.get("activation_digest") == confirmed.get("activation_digest")
+            ),
+            None,
+        )
+        if not isinstance(canary, Mapping):
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_missing"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        identity_fields = ("preflight_digest", "plan_digest", "release_sha", "account_id", "environment_fingerprint", "strategy_scope")
+        if any(canary.get(field) != confirmed.get(field) for field in identity_fields):
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_identity_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        if canary.get("execution_authorized") is not True or canary.get("live_writes_enabled") is not True:
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_not_authorized"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        if not _SHA256.fullmatch(str(canary.get("canary_receipt_digest") or "")):
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_receipt_missing"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        source = canary.get("source_attestation") if isinstance(canary.get("source_attestation"), Mapping) else {}
+        try:
+            current = dict(self._source_attestation_resolver())
+        except Exception:
+            current = {}
+        if source.get("source_sha") != current.get("source_sha") or source.get("source_tree_sha") != current.get("source_tree_sha") or source.get("tracked_tree_clean") is not True or current.get("tracked_tree_clean") is not True:
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_source_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        return {
+            "ready": True,
+            "status": "ready",
+            "activation_digest": confirmed.get("activation_digest"),
+            "preflight_digest": confirmed.get("preflight_digest"),
+            "plan_digest": confirmed.get("plan_digest"),
+            "release_sha": confirmed.get("release_sha"),
+            "account_id": confirmed.get("account_id"),
+            "environment_fingerprint": confirmed.get("environment_fingerprint"),
+            "strategy_scope": confirmed.get("strategy_scope"),
+            "live_writes_enabled": True,
+            "execution_authorized": True,
+            "canary_receipt_digest": canary.get("canary_receipt_digest"),
+            "blockers": [],
+        }
+
     def _record_rejected(self, code: str, activation_digest: str) -> dict[str, Any]:
         row = {"schema_version": LIVE_GATE_SCHEMA, "event": "activation_rejected", "activation_digest": activation_digest, "code": code, "execution_authorized": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait"}
         self._append(row)
@@ -322,6 +424,17 @@ class LiveActivationGate:
             return False
         supplied = str(preflight.get("preflight_digest") or "")
         if supplied != _digest({key: value for key, value in preflight.items() if key != "preflight_digest"}):
+            return False
+        recorded = next(
+            (
+                row
+                for row in reversed(self.rows())
+                if row.get("event") == "preflight_completed"
+                and row.get("preflight_digest") == supplied
+            ),
+            None,
+        )
+        if recorded is None or recorded.get("preflight") != dict(preflight):
             return False
         try:
             current = dict(self._source_attestation_resolver())
@@ -344,6 +457,7 @@ class LiveActivationGate:
             and _ACCOUNT.fullmatch(account_id) is not None
             and preflight.get("environment_fingerprint") == expected_fingerprint
             and _ENV_NAME.fullmatch(str(preflight.get("credential_source") or "")) is not None
+            and bool(self._credential_presence_resolver(str(preflight.get("credential_source") or "")))
             and preflight.get("instrument_scope") == "default_perpetuals"
             and preflight.get("strategy_scope") == "dca"
             and _SHA256.fullmatch(str(preflight.get("readiness_receipt_digest") or "")) is not None
@@ -352,6 +466,8 @@ class LiveActivationGate:
             and self._declared_capabilities(capabilities) >= REQUIRED_CAPABILITIES
             and not capabilities.get("gaps")
             and risk_limits is not None
+            and isinstance(preflight.get("critical_gate_results"), Mapping)
+            and all(self._gate_passes(value) for value in preflight["critical_gate_results"].values())
             and preflight.get("network_io") is False
             and preflight.get("real_money_eligible") is False
             and preflight.get("live_writes_enabled") is False

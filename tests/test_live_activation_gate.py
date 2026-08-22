@@ -2,6 +2,8 @@ from pathlib import Path
 
 from services.paper_release_receipt import current_source_attestation
 from services.live_activation_gate import LiveActivationGate, _digest
+from services.broker_adapter import LiveBrokerAdapter
+from services.broker_port import BrokerOrderRequest
 
 
 def _readiness(source: dict) -> tuple[dict, list[dict]]:
@@ -56,6 +58,7 @@ def _ready_gate(tmp_path: Path) -> tuple[LiveActivationGate, dict, list[dict]]:
         park_chat_id="chat",
         readiness_receipt_resolver=lambda: readiness,
         readiness_windows_resolver=lambda: rows,
+        credential_presence_resolver=lambda _: True,
     )
     return gate, readiness, rows
 
@@ -149,3 +152,59 @@ def test_live_preflight_blocks_grid_and_missing_soak_or_capabilities(tmp_path: P
     assert result["status"] == "blocked"
     assert "live_scope_must_be_dca" in result["blockers"]
     assert result["live_writes_enabled"] is False
+
+
+def test_prepare_rejects_self_consistent_forged_preflight(tmp_path: Path) -> None:
+    gate, _, _ = _ready_gate(tmp_path)
+    preflight = _preflight(gate)
+    forged = dict(preflight)
+    forged["risk_limits"] = {
+        "max_acceptable_loss": 999,
+        "max_notional": 999,
+        "max_leverage": 20,
+        "max_open_orders": 999,
+        "max_positions": 999,
+    }
+    forged["preflight_digest"] = _digest({key: value for key, value in forged.items() if key != "preflight_digest"})
+    try:
+        gate.prepare_activation(forged, plan_digest="sha256:" + "c" * 64, expires_at=4102444800)
+    except Exception as exc:  # noqa: BLE001 - exact typed blocker is asserted below.
+        assert getattr(exc, "code", "") == "live_preflight_blocked"
+    else:
+        raise AssertionError("a forged preflight must not be activatable")
+
+
+def test_confirmation_rechecks_current_readiness_and_canary_stays_blocked(tmp_path: Path) -> None:
+    gate, readiness, _ = _ready_gate(tmp_path)
+    preflight = _preflight(gate)
+    proposal = gate.prepare_activation(preflight, plan_digest="sha256:" + "c" * 64, expires_at=4102444800)
+    command = "confirm live " + " ".join([
+        proposal["activation_digest"],
+        preflight["release_sha"],
+        preflight["account_id"],
+        preflight["environment_fingerprint"],
+        preflight["strategy_scope"],
+        proposal["plan_digest"],
+    ])
+    readiness["blockers"] = [{"code": "new_blocker"}]
+    receipt = {"event": "inbound_received", "update_id": 7, "message_id": 8, "sender_id": "park", "chat_id": "chat", "text": command, "text_digest": "sha256:" + "e" * 64}
+    rejected = gate.confirm(activation_digest=proposal["activation_digest"], command_text=command, park_user_id="park", telegram_update_id=7, telegram_message_id=8, telegram_chat_id="chat", telegram_receipt=receipt, current_preflight=preflight, now=1787350000)
+    assert rejected["code"] == "preflight_recheck_failed"
+    assert gate.canary_status()["ready"] is False
+
+
+def test_hyperliquid_live_adapter_does_not_trust_legacy_json(tmp_path: Path) -> None:
+    root = tmp_path / "outputs"
+    (root / "live_activation").mkdir(parents=True)
+    (root / "live_activation" / "2026-08-22.json").write_text(
+        '[{"status":"real_money_ready","real_money_ready":true}]\n', encoding="utf-8"
+    )
+    adapter = LiveBrokerAdapter(root, True, {"provider": "hyperliquid", "broker_id": "hyperliquid", "dry_run": False})
+    adapter.preflight = lambda: {"ready": True, "block_reason": ""}
+    request = BrokerOrderRequest("2026-08-22", {"ticket_id": "ticket-1", "asset": "BTC", "side": "buy", "entry_zone": "1-2"})
+    try:
+        adapter.submit_order(request)
+    except RuntimeError as exc:
+        assert "source-bound Live activation/canary" in str(exc)
+    else:
+        raise AssertionError("legacy real_money_ready JSON must not authorize Hyperliquid")

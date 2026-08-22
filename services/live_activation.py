@@ -83,29 +83,17 @@ class LiveActivationGate(SourceBoundLiveActivationGate):
         receipt to the inherited journal before this check can pass.
         """
 
-        rows = self.rows()
-        confirmed = next((row for row in reversed(rows) if row.get("event") == "activation_confirmed"), None)
-        canary = next(
-            (
-                row
-                for row in reversed(rows)
-                if row.get("event") == "canary_passed"
-                and confirmed
-                and row.get("activation_digest") == confirmed.get("activation_digest")
-                and row.get("execution_authorized") is True
-                and row.get("live_writes_enabled") is True
-            ),
-            None,
-        )
-        passed = bool(confirmed and canary)
+        status = self.canary_status()
+        passed = status.get("ready") is True
         return self._check_bool(
             "source_bound_attended_canary",
             passed,
             "Only a source-bound Telegram activation followed by an attended canary may authorize Live writes.",
             {
-                "activation_digest": confirmed.get("activation_digest") if confirmed else None,
-                "canary_event": canary.get("event") if canary else None,
-                "live_writes_enabled": bool(canary and canary.get("live_writes_enabled") is True),
+                "activation_digest": status.get("activation_digest"),
+                "canary_receipt_digest": status.get("canary_receipt_digest"),
+                "blockers": list(status.get("blockers") or []),
+                "live_writes_enabled": bool(status.get("live_writes_enabled")),
             },
         )
 
