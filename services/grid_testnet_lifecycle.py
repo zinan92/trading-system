@@ -77,7 +77,12 @@ class GridTestnetLifecycle:
         order_id = str(raw_fill.get("order_id") or "").strip()
         if not order_id:
             client_id = str(raw_fill.get("cloid") or raw_fill.get("client_order_id") or "")
-            order_id = self._order_id_for_client(state, client_id)
+            try:
+                order_id = self._order_id_for_client(state, client_id)
+            except GridTestnetLifecycleError as exc:
+                self._block(state, "unknown_grid_client_identity", timestamp=timestamp)
+                self._save(state)
+                raise GridTestnetLifecycleError(state["blocker"]) from exc
         order = next((row for row in state["orders"] if str(row.get("order_id")) == order_id), None)
         if order is None:
             self._block(state, "unknown_fill_order", timestamp=timestamp)
@@ -134,9 +139,19 @@ class GridTestnetLifecycle:
         line = GridLineLifecycle.from_snapshot(rung["line"])
         if order.get("event") in {"entry", "entry_rearm"}:
             if was_cancelled and line.state == "open":
-                self._apply_late_entry_fill(line, fill_id=fill_id, quantity=quantity, at=timestamp)
+                try:
+                    self._apply_late_entry_fill(line, fill_id=fill_id, quantity=quantity, at=timestamp)
+                except Exception as exc:  # noqa: BLE001 - late fills must leave a durable blocker.
+                    self._block(state, f"late_entry_fill_reconciliation_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+                    self._save(state)
+                    raise GridTestnetLifecycleError(state["blocker"]) from exc
             else:
-                line.apply_entry_fill(fill_id=fill_id, quantity=quantity, at=timestamp)
+                try:
+                    line.apply_entry_fill(fill_id=fill_id, quantity=quantity, at=timestamp)
+                except Exception as exc:  # noqa: BLE001
+                    self._block(state, f"grid_entry_fill_state_error:{type(exc).__name__}:{exc}", timestamp=timestamp)
+                    self._save(state)
+                    raise GridTestnetLifecycleError(state["blocker"]) from exc
             rung["line"] = line.snapshot()
             if slippage_breached:
                 self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
@@ -158,13 +173,18 @@ class GridTestnetLifecycle:
                 self._ensure_hard_stop(plan, state, timestamp=timestamp)
                 if receipt_state != "partially_filled":
                     self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
-        elif order.get("event") in {"tp", "hard_stop"}:
+        elif order.get("event") in {"tp", "hard_stop", "hard_stop_recovery"}:
             rearm = order.get("event") == "tp" and state.get("status") not in {"stopping", "hard_stop_triggered"}
-            line.apply_close_fill(fill_id=fill_id, quantity=quantity, at=timestamp, rearm=rearm, terminal_state="stopped" if not rearm else "closed")
+            try:
+                line.apply_close_fill(fill_id=fill_id, quantity=quantity, at=timestamp, rearm=rearm, terminal_state="stopped" if not rearm else "closed")
+            except Exception as exc:  # noqa: BLE001 - unresolved partial/late exits must persist a blocker.
+                self._block(state, f"grid_exit_fill_state_error:{type(exc).__name__}:{exc}", timestamp=timestamp)
+                self._save(state)
+                raise GridTestnetLifecycleError(state["blocker"]) from exc
             rung["line"] = line.snapshot()
             if order.get("event") == "tp" and line.state == "rearmed":
                 self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
-            elif order.get("event") == "hard_stop" and line.open_quantity <= 1e-9:
+            elif order.get("event") in {"hard_stop", "hard_stop_recovery"} and line.open_quantity <= 1e-9:
                 rung["hard_stop_closed"] = True
             self._ensure_hard_stop(plan, state, timestamp=timestamp)
             if slippage_breached:
@@ -264,6 +284,7 @@ class GridTestnetLifecycle:
         if existing_tp is not None:
             try:
                 receipt = self.broker.cancel_order(BrokerCancelRequest(run_date=state["cycle_id"], asset=existing_tp["instrument_id"], client_order_id=existing_tp.get("client_order_id") or "", broker_order_id=existing_tp.get("broker_order_id") or ""))
+                self._require_cancel_receipt(receipt)
                 existing_tp["state"] = "cancelled"
                 existing_tp["cancel_receipt_state"] = str(getattr(receipt.state, "value", receipt.state))
             except Exception as exc:  # noqa: BLE001 - never leave competing TP legs unresolved.
@@ -357,8 +378,21 @@ class GridTestnetLifecycle:
                 state["orders"].append(self._order_row(command, receipt))
             except GridTestnetLifecycleError as exc:
                 self._block(state, f"hard_stop_submit_failed:{exc}", timestamp=timestamp)
+                self._submit_emergency_flatten(plan, state, rung, timestamp=timestamp, reason="hard_stop_submit_failed")
         self._record_event(state, "hard_stop_triggered", timestamp=timestamp, reason=reason)
         self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
+
+    def _submit_emergency_flatten(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, timestamp: str, reason: str) -> None:
+        line = GridLineLifecycle.from_snapshot(rung["line"])
+        if line.open_quantity <= 1e-9:
+            return
+        command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop_recovery", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), attempt=int(rung.get("tp_attempt") or 0) + 1)
+        try:
+            receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
+            state["orders"].append(self._order_row(command, receipt))
+            self._record_event(state, "emergency_flatten_submitted", timestamp=timestamp, rung_id=rung["rung_id"], reason=reason)
+        except GridTestnetLifecycleError as exc:
+            self._block(state, f"emergency_flatten_failed:{exc}", timestamp=timestamp)
 
     def _cancel_all_open_orders(self, state: dict[str, Any], *, timestamp: str, reason: str) -> None:
         for row in state["orders"]:
@@ -633,6 +667,19 @@ class GridTestnetLifecycle:
         total_notional = sum(float(rung["price"]) * float(rung["quantity"]) for rung in rungs)
         if total_notional > float(risk.get("max_notional") or 0.0) + 1e-9:
             raise GridTestnetLifecycleError("max_notional_exceeded_at_full_depth")
+        equity = float(risk.get("equity") or 0.0)
+        if equity <= 0 or total_notional / equity > float(risk.get("leverage_limit") or 0.0) + 1e-9:
+            raise GridTestnetLifecycleError("leverage_exceeded_at_full_depth")
+        quantities = [float(rung["quantity"]) for rung in rungs]
+        if any(abs(quantity - quantities[0]) > 1e-9 for quantity in quantities[1:]):
+            raise GridTestnetLifecycleError("grid_quantity_inconsistent")
+        grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
+        spacing = grid.get("spacing")
+        mode = str(grid.get("mode") or "arithmetic").lower()
+        if spacing not in (None, "") and mode != "geometric":
+            ordered = sorted(float(rung["price"]) for rung in rungs)
+            if any(abs((right - left) - float(spacing)) > max(1e-9, abs(float(spacing)) * 1e-6) for left, right in zip(ordered, ordered[1:])):
+                raise GridTestnetLifecycleError("grid_spacing_inconsistent")
         if modeled_loss > maximum_loss + 1e-9:
             raise GridTestnetLifecycleError("maximum_loss_budget_exceeded_at_full_depth")
 
