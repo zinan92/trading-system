@@ -88,10 +88,12 @@ class GridTestnetLifecycle:
             self._block(state, "unknown_fill_order", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
-        if state["status"] in {"terminal", "sealed"} or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") != "hard_stop_recovery") or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"}):
+        if state["status"] in {"terminal", "sealed"} or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") not in {"hard_stop", "hard_stop_recovery"}) or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"}):
             self._block(state, "late_fill_after_block_or_terminal", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
+        if state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") in {"hard_stop", "hard_stop_recovery"}:
+            state["status"] = "hard_stop_triggered"
 
         fill_identities = [str(raw_fill.get(key) or "") for key in ("tid", "hash") if str(raw_fill.get(key) or "")]
         if any(set(fill_identities).intersection(set(row.get("fill_identities") or [str(row.get("fill_id") or "")])) for row in state["fills"]):
