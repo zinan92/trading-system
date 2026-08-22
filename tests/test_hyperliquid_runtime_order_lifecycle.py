@@ -519,6 +519,17 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
 
         self.assertEqual(pending_cancel.state, OrderState.CANCEL_PENDING)
 
+    def test_cancel_accepts_broker_order_lineage_and_rejects_unknown_identity(self) -> None:
+        adapter, backend = self.adapter()
+        submitted = adapter.submit(self.intent())
+
+        pending_cancel = adapter.cancel("101")
+
+        self.assertEqual(pending_cancel.state, OrderState.CANCEL_PENDING)
+        with self.assertRaises(KeyError):
+            adapter.cancel("unknown-order-reference")
+        self.assertEqual([call[1] for call in backend.calls], ["submit", "cancel"])
+
     def test_query_and_open_orders_use_runtime_operations(self) -> None:
         adapter, backend = self.adapter()
         submitted = adapter.submit(self.intent())
