@@ -643,7 +643,7 @@ class GridTestnetLifecycle:
             bound = float((plan.get("risk_budget") or {}).get("max_slippage") or 0.0)
             if bound <= 0:
                 raise GridTestnetLifecycleError("market_order_slippage_bound_missing")
-            execution_price = execution_price + bound if side == "sell" else max(0.00000001, execution_price - bound)
+            execution_price = max(0.00000001, execution_price - bound) if side == "sell" else execution_price + bound
         return {
             "ticket_id": ticket_id,
             "instrument_id": state["instrument_id"],
