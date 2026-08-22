@@ -38,13 +38,71 @@ class DcaTestnetLifecycle:
     def start(self, plan: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
         identity = self._identity(plan)
         self._validate_risk_inputs(plan)
-        state = self._load(identity["plan_id"]) or {
+        existing = self._load(identity["plan_id"])
+        if existing is not None and (
+            int(existing.get("strategy_plan_version") or 0) != identity["version"]
+            or str(existing.get("direction") or "") != identity["direction"]
+            or [float(value) for value in existing.get("entry_levels") or []] != identity["entry_levels"]
+            or str(existing.get("plan_digest") or "") != identity["plan_digest"]
+            or str(existing.get("instrument_id") or "") != identity["instrument_id"]
+            or float(existing.get("target_price") or 0) != identity["target_price"]
+            or float(existing.get("stop_price") or 0) != identity["stop_price"]
+            or existing.get("risk_budget") != identity["risk_budget"]
+        ):
+            self._block(existing, "strategy_revision_mismatch", timestamp=timestamp)
+            self._save(existing)
+            raise DcaTestnetLifecycleError(existing["blocker"])
+        if existing is not None:
+            self._states[identity["plan_id"]] = existing
+            if existing.get("status") in {
+                "terminal",
+                "blocked_protection",
+                "blocked_reconciliation",
+                "blocked_risk",
+                "stopping",
+                "protection_blocked_flattening",
+                "target_triggered",
+            }:
+                return self.snapshot(plan)
+            return self.snapshot(plan)
+        if self.broker.protection_adapter is None:
+            state = {
+                "schema_version": self.schema_version,
+                "strategy_plan_id": identity["plan_id"],
+                "strategy_plan_version": identity["version"],
+                "cycle_id": identity["cycle_id"],
+                "direction": identity["direction"],
+                "entry_levels": identity["entry_levels"],
+                "plan_digest": identity["plan_digest"],
+                "instrument_id": identity["instrument_id"],
+                "target_price": identity["target_price"],
+                "stop_price": identity["stop_price"],
+                "risk_budget": identity["risk_budget"],
+                "orders": [],
+                "fills": [],
+                "positions": [],
+                "protection": None,
+                "events": [],
+                "status": "blocked_protection",
+                "blocker": "capability_gap:protection_order.submit",
+                "created_at": timestamp,
+            }
+            self._record_event(state, "lifecycle_blocked", timestamp=timestamp, reason=state["blocker"])
+            self._states[identity["plan_id"]] = state
+            self._save(state)
+            return self.snapshot(plan)
+        state = {
             "schema_version": self.schema_version,
             "strategy_plan_id": identity["plan_id"],
             "strategy_plan_version": identity["version"],
             "cycle_id": identity["cycle_id"],
             "direction": identity["direction"],
             "entry_levels": identity["entry_levels"],
+            "plan_digest": identity["plan_digest"],
+            "instrument_id": identity["instrument_id"],
+            "target_price": identity["target_price"],
+            "stop_price": identity["stop_price"],
+            "risk_budget": identity["risk_budget"],
             "next_entry_index": 0,
             "orders": [],
             "fills": [],
@@ -54,14 +112,6 @@ class DcaTestnetLifecycle:
             "status": "starting",
             "created_at": timestamp,
         }
-        if state is not None and (
-            int(state.get("strategy_plan_version") or 0) != identity["version"]
-            or str(state.get("direction") or "") != identity["direction"]
-            or [float(value) for value in state.get("entry_levels") or []] != identity["entry_levels"]
-        ):
-            self._block(state, "strategy_revision_mismatch", timestamp=timestamp)
-            self._save(state)
-            raise DcaTestnetLifecycleError(state["blocker"])
         self._states[identity["plan_id"]] = state
         self._record_event(state, "lifecycle_started", timestamp=timestamp)
         if not state["orders"]:
@@ -91,7 +141,12 @@ class DcaTestnetLifecycle:
         order_id = str(raw_fill.get("order_id") or "").strip()
         if not order_id:
             client_id = str(raw_fill.get("cloid") or raw_fill.get("client_order_id") or "")
-            order_id = self._order_id_for_client(state, client_id)
+            try:
+                order_id = self._order_id_for_client(state, client_id)
+            except DcaTestnetLifecycleError as exc:
+                self._block(state, "unknown_fill_client_identity", timestamp=timestamp)
+                self._save(state)
+                raise DcaTestnetLifecycleError(state["blocker"]) from exc
         order = self._find_order(state, order_id)
         if order is None:
             self._block(state, "unknown_fill_order", timestamp=timestamp)
@@ -667,7 +722,7 @@ class DcaTestnetLifecycle:
         dca = plan.get("dca") if isinstance(plan.get("dca"), dict) else {}
         direction = str(plan.get("direction") or "").lower()
         levels = [float(value) for value in dca.get("entry_levels") or []]
-        if direction not in {"long", "short"} or not levels or not plan.get("strategy_plan_id") or not plan.get("cycle_id"):
+        if direction not in {"long", "short"} or not levels or not plan.get("strategy_plan_id") or not plan.get("cycle_id") or not plan.get("plan_digest"):
             raise ValueError("DCA Testnet StrategyPlan identity is incomplete")
         return {
             "plan_id": str(plan["strategy_plan_id"]),
@@ -675,6 +730,11 @@ class DcaTestnetLifecycle:
             "version": int(plan.get("version") or 0),
             "direction": direction,
             "entry_levels": levels,
+            "plan_digest": str(plan["plan_digest"]),
+            "instrument_id": str(plan.get("instrument_id") or plan.get("execution_context", {}).get("instrument_id") or "BTC-USD-PERP"),
+            "target_price": float(dca["target_price"]),
+            "stop_price": float(dca["stop_price"]),
+            "risk_budget": dict(plan.get("risk_budget") or {}),
         }
 
     def _path(self, plan_id: str) -> Path:

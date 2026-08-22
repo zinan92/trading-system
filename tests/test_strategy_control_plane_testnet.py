@@ -83,3 +83,41 @@ def test_testnet_control_requires_authoritative_market_before_lifecycle(tmp_path
             market={"execution_ready": False, "fresh": False, "is_synthetic": True, "fallback_policy": "cache"},
             adapter=ReadinessOnlyTestnetAdapter(),
         )
+
+
+def test_testnet_control_starts_lifecycle_only_after_authority_gates(tmp_path: Path) -> None:
+    from tests.test_dca_testnet_lifecycle import _broker, _plan
+
+    broker, _ = _broker(tmp_path, protection=True)
+    plane = StrategyControlPlane(tmp_path)
+    plan = _plan()
+    plan.update(
+        {
+            "strategy_session_id": "session-testnet",
+            "strategy_revision_id": "revision-testnet",
+        }
+    )
+    confirmation = {
+        "execution_authorized": True,
+        "plan_digest": plan["plan_digest"],
+        "source": "telegram",
+        "strategy_session_id": plan["strategy_session_id"],
+        "strategy_revision_id": plan["strategy_revision_id"],
+    }
+
+    result = plane.start_testnet_dca(
+        plan,
+        confirmation=confirmation,
+        market={
+            "execution_ready": True,
+            "fresh": True,
+            "is_synthetic": False,
+            "fallback_policy": "none",
+        },
+        adapter=broker,
+        now="2026-08-22T01:00:00+00:00",
+    )
+
+    assert result["runtime"]["execution_environment"] == "testnet"
+    assert result["runtime"]["actual_state"] == "running"
+    assert len(result["lifecycle"]["orders"]) == 1

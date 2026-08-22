@@ -13,6 +13,7 @@ def _plan() -> dict:
         "schema_version": "strategy-plan-v1",
         "strategy_type": "dca",
         "strategy_plan_id": "dca-testnet-plan-1",
+        "plan_digest": "sha256:" + "a" * 64,
         "version": 1,
         "cycle_id": "2026-08-22_DAY",
         "direction": "long",
@@ -194,16 +195,9 @@ def test_dca_testnet_freezes_before_next_entry_when_protection_capability_missin
     plan = _plan()
 
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    blocked = lifecycle.on_fill(
-        plan,
-        _fill(started["orders"][0], price=65000, tid=3),
-        timestamp="2026-08-22T01:01:00+00:00",
-    )
-
-    assert blocked["status"] == "protection_blocked_flattening"
-    assert "capability_gap" in blocked["blocker"]
-    assert len([row for row in blocked["orders"] if row["event"] == "entry"]) == 1
-    assert any(row["event"] == "stop" and row["reduce_only"] for row in blocked["orders"])
+    assert started["status"] == "blocked_protection"
+    assert "capability_gap" in started["blocker"]
+    assert started["orders"] == []
 
 
 def test_dca_testnet_partial_fill_does_not_advance_or_attach_protection(tmp_path: Path) -> None:
@@ -245,6 +239,64 @@ def test_dca_testnet_cancel_failure_stops_before_exit_submission(tmp_path: Path)
     assert blocked["status"] == "blocked_reconciliation"
     assert "entry_cancel_failed" in blocked["blocker"]
     assert not any(row["event"] == "stop" for row in blocked["orders"])
+
+
+def test_dca_testnet_restart_does_not_reopen_terminal_revision(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    opened = lifecycle.on_fill(
+        plan,
+        _fill(started["orders"][0], price=65000, tid=40),
+        timestamp="2026-08-22T01:01:00+00:00",
+    )
+    stopping = lifecycle.stop(
+        plan,
+        timestamp="2026-08-22T01:02:00+00:00",
+        reason="strategy_stop",
+        price=64000,
+    )
+    terminal = lifecycle.on_fill(
+        plan,
+        _fill(next(row for row in stopping["orders"] if row["event"] == "stop"), price=64000, tid=41),
+        timestamp="2026-08-22T01:03:00+00:00",
+    )
+    restarted = DcaTestnetLifecycle(tmp_path / "outputs", broker).start(
+        plan,
+        timestamp="2026-08-22T02:00:00+00:00",
+    )
+
+    assert terminal["status"] == "terminal"
+    assert restarted["status"] == "terminal"
+    assert restarted["sealed"] is True
+
+
+def test_dca_testnet_hash_only_fill_is_idempotent(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    raw = _fill(started["orders"][0], price=65000, tid=50)
+    raw.pop("tid")
+    raw["hash"] = "fill-hash-50"
+
+    first = lifecycle.on_fill(plan, raw, timestamp="2026-08-22T01:01:00+00:00")
+    second = lifecycle.on_fill(plan, raw, timestamp="2026-08-22T01:02:00+00:00")
+
+    assert len(first["fills"]) == len(second["fills"]) == 1
+    assert second["positions"][0]["quantity"] == first["positions"][0]["quantity"]
+
+
+def test_dca_testnet_revision_change_is_rejected_on_restart(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    changed = {**plan, "plan_digest": "sha256:" + "b" * 64}
+
+    with pytest.raises(DcaTestnetLifecycleError, match="strategy_revision_mismatch"):
+        lifecycle.start(changed, timestamp="2026-08-22T01:01:00+00:00")
 
 
 def test_dca_testnet_stop_cancels_remaining_entries_and_reaches_terminal(tmp_path: Path) -> None:

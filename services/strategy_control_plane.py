@@ -6986,6 +6986,72 @@ class StrategyControlPlane:
         )
         return {"action": "start_testnet_dca", "runtime": published, "lifecycle": state}
 
+    def advance_testnet_dca(
+        self,
+        cycle_id: str,
+        *,
+        adapter: Any,
+        fill: dict[str, Any] | None = None,
+        price: float | None = None,
+        timestamp: str | None = None,
+        actor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Advance the durable Testnet DCA lifecycle through the control plane."""
+
+        plan = self.active_plan(cycle_id)
+        runtime = self.runtime_state(cycle_id)
+        if (
+            not plan
+            or plan.get("strategy_type") != "dca"
+            or runtime.get("execution_environment") != "testnet"
+            or runtime.get("actual_state") not in {"running", "partial_entry", "target_triggered", "stopping"}
+        ):
+            raise StrategyControlMachineError(
+                "testnet_dca_not_running",
+                {"cycle_id": cycle_id, "runtime": runtime},
+            )
+        if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+            raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
+        lifecycle = DcaTestnetLifecycle(self.output_root, adapter)
+        observed_at = str(timestamp or self._authorization_clock())
+        if fill is not None:
+            state = lifecycle.on_fill(plan, fill, timestamp=observed_at)
+            action = "testnet_dca_fill"
+        elif price is not None:
+            state = lifecycle.on_market_event(plan, price=float(price), timestamp=observed_at)
+            action = "testnet_dca_market_event"
+        else:
+            raise StrategyControlMachineError("testnet_dca_event_required", {"cycle_id": cycle_id})
+        terminal = str(state.get("status") or "") == "terminal"
+        published = {
+            **runtime,
+            "updated_at": observed_at,
+            "actual_state": "stopped" if terminal else str(state.get("status") or "running"),
+            "desired_state": "stopped" if terminal else "running",
+            "last_action": action,
+            "last_error": state.get("blocker"),
+            "accepted_order_count": len([row for row in state.get("orders") or [] if row.get("state") == "accepted"]),
+            "accepted_order_count_known": True,
+            "dca_lifecycle_status": state.get("status"),
+            "next_action": state.get("next_action"),
+        }
+        self._write_runtime(published)
+        append_control_event(
+            self.output_root,
+            build_control_event(
+                cycle_id=cycle_id,
+                action=action,
+                actor=actor,
+                payload={"environment": "testnet", "plan_digest": plan.get("plan_digest")},
+                result="blocked" if state.get("blocker") else "accepted",
+                error=state.get("blocker"),
+                runtime=published,
+                evidence={"lifecycle": state},
+                now=observed_at,
+            ),
+        )
+        return {"action": action, "runtime": published, "lifecycle": state}
+
     def advance_dca_market_event(
         self,
         cycle_id: str,
