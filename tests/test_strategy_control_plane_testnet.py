@@ -56,6 +56,7 @@ def _durable_confirmation(tmp_path: Path, plan: dict) -> dict:
         plan_digest=plan["plan_digest"],
         risk_digest="sha256:" + "b" * 64,
         expires_at=4102444800,
+        execution_environment="testnet",
     )
     decision = ledger.decide(
         proposal_id=proposal["proposal_id"],

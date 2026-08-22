@@ -1272,6 +1272,7 @@ class ParkTelegramRouter:
                 plan_digest=str(plan["plan_digest"]),
                 risk_digest=risk_digest,
                 expires_at=time.time() + self.confirmation_ttl_seconds,
+                execution_environment="paper",
             )
             self.telegram.queue_outbound(
                 idempotency_key=f"park-proposal:{proposal_id}",

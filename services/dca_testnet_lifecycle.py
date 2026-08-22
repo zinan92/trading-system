@@ -232,6 +232,7 @@ class DcaTestnetLifecycle:
         slippage_exceeded = max_slippage not in (None, "") and slippage > float(max_slippage)
         is_entry_event = self._is_entry_event(order["event"])
         if slippage_exceeded and not is_entry_event:
+            group_before_exit = self._protection_group(plan, state, state["positions"][0]) if state["positions"] else None
             self._decrease_position(state, quantity)
             self._block(state, "exit_fill_slippage_exceeded", timestamp=timestamp)
             self._record_event(
@@ -246,6 +247,17 @@ class DcaTestnetLifecycle:
             if sum(float(row["quantity"]) for row in state["positions"]) > 1e-9:
                 self._flatten_after_block(plan, state, timestamp=timestamp, reason="exit_slippage")
             else:
+                try:
+                    if group_before_exit is not None and state.get("protection") is not None:
+                        self.broker.request("protection_order", "cancel", group_before_exit)
+                    state["positions"] = []
+                    state["protection"] = None
+                    state["reconciliation"] = self._terminal_reconciliation(state, timestamp)
+                except Exception as exc:  # noqa: BLE001 - keep the blocker if venue truth is unavailable.
+                    state["reconciliation"] = {
+                        "status": "blocked",
+                        "reason": f"exit_slippage_reconciliation_failed:{type(exc).__name__}:{exc}",
+                    }
                 self._queue_park_notification(state, timestamp=timestamp, reason="exit_fill_slippage_exceeded")
                 state["next_action"] = "notify_park_and_wait"
             state["updated_at"] = timestamp

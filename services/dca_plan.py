@@ -317,7 +317,7 @@ def build_dca_strategy_plan(
         },
     }
     plan["strategy_session_id"] = _required_text(
-        strategy_session_id or f"session:{strategy_plan_id}",
+        strategy_session_id or str(preview.get("strategy_session_id") or "session:dca"),
         "strategy_session_id",
     )
     plan["strategy_revision_id"] = _required_text(

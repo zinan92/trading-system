@@ -6895,7 +6895,11 @@ class StrategyControlPlane:
         timestamp = str(now or self._authorization_clock())
         cycle_id = str(plan.get("cycle_id") or "")
         digest = str(plan.get("plan_digest") or "")
-        confirmation_evidence = self._validate_durable_testnet_confirmation(plan, confirmation)
+        with production_mutation_lock(self.output_root):
+            confirmation_evidence = self._validate_durable_testnet_confirmation(plan, confirmation)
+            # Reserve the one-time durable receipt before any lifecycle write.
+            # A failed lifecycle therefore fails closed and requires a fresh Park confirmation.
+            self._record_testnet_confirmation_consumed(confirmation_evidence)
         market_dict = dict(market)
         if (
             market_dict.get("execution_ready") is not True
@@ -7004,7 +7008,6 @@ class StrategyControlPlane:
                 now=timestamp,
             ),
         )
-        self._record_testnet_confirmation_consumed(confirmation_evidence)
         return {"action": "start_testnet_dca", "runtime": published, "lifecycle": state}
 
     def _validate_durable_testnet_confirmation(
@@ -7033,6 +7036,8 @@ class StrategyControlPlane:
             decision.get("execution_authorized") is not True
             or str(decision.get("plan_digest") or "") != digest
             or str(proposal.get("plan_digest") or "") != digest
+            or str(proposal.get("execution_environment") or "paper") != "testnet"
+            or str(decision.get("execution_environment") or "paper") != "testnet"
             or str(decision.get("receipt_digest") or "") != receipt_digest
             or str(decision.get("strategy_session_id") or "") != str(plan.get("strategy_session_id") or "")
             or str(decision.get("strategy_revision_id") or "") != str(plan.get("strategy_revision_id") or "")
@@ -7075,6 +7080,7 @@ class StrategyControlPlane:
                 "target_triggered",
                 "stopping",
                 "budget_exhausted",
+                "blocked_reconciliation",
                 "blocked_risk_flattening",
                 "protection_blocked_flattening",
             }
