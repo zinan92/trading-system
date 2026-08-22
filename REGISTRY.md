@@ -25,10 +25,11 @@
 
 ## Next
 
-- TESTNET-01 (#30): separate human-gated external testnet proof; local Testnet fixtures exist, but external proof is not started and not authorized. It requires a new explicit decision before any credential or network step.
-- No live/testnet milestone is implied; future external environments require a separate approved plan.
+- TESTNET-01 (#30) is merged in PR #48 at `f5dbf87`: human-gated Hyperliquid Testnet proof for one default validator-operated perpetual, including submit/query/cancel-replace/fill/fee/position/reconciliation evidence. The final account was flat with no open orders; evidence is stored outside the repository.
+- Mainnet/live remains a separate future milestone requiring its own specification, credentials, release identity, approval, and evidence.
 
 ## Safety boundary
 
-- Paper only; no testnet or mainnet credentials, network I/O, or live execution.
+- Paper remains the default development environment. The Hyperliquid Testnet proof is a separate, explicitly approved evidence class and is not live authority or a host-wide default.
+- No Mainnet/live credentials, network I/O, or live execution.
 - The trading system remains the host for strategy, risk, Recording Track, and Telegram control.
