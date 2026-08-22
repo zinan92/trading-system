@@ -511,6 +511,14 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertNotEqual(promoted.client_order_lineage[0], promoted.client_order_lineage[-1])
         self.assertEqual(stale_cancel.broker_order_id, "202")
 
+    def test_cancel_accepts_client_order_identity(self) -> None:
+        adapter, _ = self.adapter()
+        submitted = adapter.submit(self.intent())
+
+        pending_cancel = adapter.cancel(submitted.client_order_id)
+
+        self.assertEqual(pending_cancel.state, OrderState.CANCEL_PENDING)
+
     def test_query_and_open_orders_use_runtime_operations(self) -> None:
         adapter, backend = self.adapter()
         submitted = adapter.submit(self.intent())

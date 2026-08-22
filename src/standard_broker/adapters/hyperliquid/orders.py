@@ -148,6 +148,20 @@ class HyperliquidOrderAdapter:
             return self._replace(receipt, state=OrderState.CANCEL_PENDING, reason=None)
         return self._replace(receipt, state=OrderState.UNKNOWN, reason="cancel_outcome_unknown")
 
+    def resolve_order_id(self, reference: str) -> str:
+        """Resolve canonical, client, or broker order identity to one local order id."""
+
+        reference = str(reference or "").strip()
+        if reference in self._orders:
+            return reference
+        canonical = self._by_client.get(reference)
+        if canonical is not None:
+            return canonical
+        for receipt in self._orders.values():
+            if reference in receipt.broker_order_lineage:
+                return receipt.order_id
+        raise KeyError(f"unknown Hyperliquid order identity: {reference}")
+
     def modify(self, order_id: str, intent: OrderIntent) -> OrderReceipt:
         receipt = self._orders[order_id]
         if intent.order_id != order_id:
@@ -801,7 +815,9 @@ class HyperliquidRuntimeOrderAdapter:
         return receipt
 
     def cancel(self, order_id: str) -> OrderReceipt:
-        return self._bind_receipt(self._lifecycle.cancel(order_id))
+        return self._bind_receipt(
+            self._lifecycle.cancel(self._lifecycle.resolve_order_id(order_id))
+        )
 
     def modify(self, order_id: str, intent: OrderIntent) -> OrderReceipt:
         self._validate_intent(intent)
