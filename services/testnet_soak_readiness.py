@@ -191,6 +191,7 @@ class TestnetSoakReadiness:
                 **dict(payload),
                 "artifact_ref": str(path),
                 "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "artifact_kind": category,
             }
         return self.record_window({**dict(observation), "evidence": evidence})
 
