@@ -127,6 +127,9 @@ def test_attended_dca_canary_keeps_fixture_non_network_and_distinguishes_stop_ca
     canary.cancel("entry-2", timestamp="2026-08-22T00:04:00+00:00")
     stopped = canary.stop(timestamp="2026-08-22T00:05:00+00:00")
     assert stopped["status"] == "stopped"
+    assert stopped["receipts"]
+    assert all(row.get("request_digest", "").startswith("sha256:") and row.get("response_digest", "").startswith("sha256:") for row in stopped["receipts"])
+    assert stopped["receipt_chain_digest"].startswith("sha256:")
     assert any(name == "cancel_order" for name, _ in transport.calls)
     flatten = [request for name, request in transport.calls if name == "flatten_reduce_only"]
     assert flatten and flatten[-1]["reduce_only"] is True
