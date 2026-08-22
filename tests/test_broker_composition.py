@@ -260,6 +260,45 @@ def test_standard_broker_requires_explicit_environment_identity(tmp_path: Path):
         )
 
 
+@pytest.mark.parametrize(
+    ("selection_environment", "configured_environment"),
+    [("testnet", "mainnet"), ("paper", "mainnet")],
+)
+def test_standard_broker_rejects_contradictory_environment_sources(
+    tmp_path: Path,
+    selection_environment: str,
+    configured_environment: str,
+):
+    with pytest.raises(ValueError, match="contradictory.*environment"):
+        BrokerBuildContext(
+            output_root=tmp_path / "outputs",
+            execution_mode="live",
+            live_trading_enabled=False,
+            selection_environment=selection_environment,
+            broker_config={
+                "provider": "standard_broker",
+                "broker_id": "hyperliquid",
+                "environment": configured_environment,
+            },
+        )
+
+
+def test_standard_broker_accepts_live_mainnet_alias_pair(tmp_path: Path):
+    context = BrokerBuildContext(
+        output_root=tmp_path / "outputs",
+        execution_mode="live",
+        live_trading_enabled=False,
+        selection_environment="live",
+        broker_config={
+            "provider": "standard_broker",
+            "broker_id": "hyperliquid",
+            "environment": "mainnet",
+        },
+    )
+
+    assert context.environment == "live"
+
+
 @pytest.mark.parametrize("environment", ["testnet", "mainnet", "live"])
 def test_configured_standard_broker_preserves_environment_selection(
     tmp_path: Path,

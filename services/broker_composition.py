@@ -60,6 +60,17 @@ class BrokerBuildContext:
             self.selection_environment or configured_environment
         ):
             raise ValueError("standard_broker requires explicit environment")
+        if provider == "standard_broker" and self.selection_environment and configured_environment:
+            normalized_selection = (
+                "mainnet" if self.selection_environment == "live" else self.selection_environment
+            )
+            normalized_configured = (
+                "mainnet" if configured_environment == "live" else configured_environment
+            )
+            if normalized_selection != normalized_configured:
+                raise ValueError(
+                    "contradictory standard_broker environment sources"
+                )
 
     @property
     def provider(self) -> str:
