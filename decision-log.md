@@ -1,5 +1,34 @@
 # Decision Log
 
+## Isolate standard-broker environment identities before Testnet/Live writes (Issue #856 / PR #863)
+
+Date: 2026-08-22
+
+### Decision
+
+- The canonical composition seam now requires explicit Paper, Testnet, or
+  Live/Mainnet environment identity for `standard_broker`; missing or
+  contradictory sources fail before transport. Account, credential-source,
+  runtime, ledger, and environment-fingerprint identifiers are bound to one
+  environment. Credential sources are references to environment-variable names,
+  never secret values.
+- Only Hyperliquid default perpetual scope is accepted. Unknown capabilities,
+  unsupported scopes, cross-environment identifiers, and legacy/wildcard
+  fallback are blockers. Testnet and Mainnet currently resolve to non-network,
+  read-only capability gates; this PR does not connect or enable writes.
+- Existing Paper, Telegram, trusted-market, freshness, reconciliation,
+  immutable-fill, Supervisor, boot, and release-SHA gates remain authoritative.
+
+### Verification
+
+- Merged source: `main@0beb87069b140468a6a50a33e99ae4e26176dcef`.
+- Focused host/composition tests: 56 passed; compile, diff, and gitleaks passed.
+- Standards review found no hard violations; spec review found no remaining
+  gaps. Remaining observations are non-blocking duplication/module-boundary
+  refactoring opportunities for later lifecycle tickets.
+- No network transport, order write, credential value, or deployment occurred;
+  #857 is the next implementation frontier.
+
 ## Consume the standard-broker Paper host contract without fallback (Issue #852 / PR #853)
 
 Date: 2026-08-21
