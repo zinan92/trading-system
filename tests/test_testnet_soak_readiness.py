@@ -33,7 +33,7 @@ def _observation(index: int, *, evidence=None, mutations=None) -> dict:
     evidence_payload = evidence or _evidence((start + timedelta(hours=12)).isoformat())
     for category, payload in evidence_payload.items():
         path = Path(f"/tmp/testnet-soak-{index}-{category}.json")
-        path.write_text(json.dumps({"artifact_kind": category, "category": category, "window": index, "strategy_session_id": "session-continuous", "strategy_revision_id": "revision-dca-1", "plan_digest": "sha256:" + "a" * 64, "environment": "testnet", "release_sha": attestation["source_sha"], "account_fingerprint": "testnet-account-fingerprint"}), encoding="utf-8")
+        path.write_text(json.dumps({"artifact_kind": category, "category": category, "window": index, "window_index": index, "record_window_id": f"soak-window-{index:02d}", "starts_at": (start).isoformat(), "ends_at": (start + timedelta(hours=12)).isoformat(), "strategy_session_id": "session-continuous", "strategy_revision_id": "revision-dca-1", "plan_digest": "sha256:" + "a" * 64, "environment": "testnet", "release_sha": attestation["source_sha"], "account_fingerprint": "testnet-account-fingerprint"}), encoding="utf-8")
         payload["artifact_ref"] = str(path)
         payload["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
         payload["artifact_kind"] = category

@@ -256,6 +256,8 @@ class TestnetSoakReadiness:
             if not self._receipt_integrity_ok(receipt, rows):
                 status = "blocked"
                 receipt = {**receipt, "blockers": [*list(receipt.get("blockers") or []), {"code": "readiness_receipt_integrity_invalid"}]}
+            elif not self._receipt_is_fresh(receipt, rows, now=now):
+                status = "stale"
             if status == "ready" and now is not None:
                 age = _parse_timestamp(now) - _parse_timestamp(str(receipt.get("created_at") or now))
                 if age > timedelta(hours=24):
@@ -334,6 +336,9 @@ class TestnetSoakReadiness:
                     return False
                 for identity_key in ("strategy_session_id", "strategy_revision_id", "plan_digest", "environment", "release_sha", "account_fingerprint"):
                     if str(artifact.get(identity_key) or "") != str(row.get(identity_key) or ""):
+                        return False
+                for window_key in ("window_index", "record_window_id", "starts_at", "ends_at"):
+                    if str(artifact.get(window_key) or "") != str(row.get(window_key) or ""):
                         return False
         return True
 
