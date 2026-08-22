@@ -239,6 +239,9 @@ class LiveDcaCanary:
             if abs(actual_price - entry["price"]) > state["risk_limits"]["max_slippage"]:
                 self._recover_after_protection_gap(state, "entry_slippage_exceeded", timestamp=timestamp)
                 raise LiveDcaCanaryError("entry_slippage_exceeded", "entry fill exceeded the approved slippage ceiling")
+            if self._projected_loss(state) > state["risk_limits"]["max_acceptable_loss"]:
+                self._recover_after_protection_gap(state, "filled_risk_budget_exceeded", timestamp=timestamp)
+                raise LiveDcaCanaryError("filled_risk_budget_exceeded", "actual fill prices consume more than the approved loss budget")
         state["status"] = "running"
         self._event(state, "entry_submitted", timestamp=timestamp, order_id=order_id, index=int(index))
         self._save(state)
@@ -273,10 +276,12 @@ class LiveDcaCanary:
             stop_loss = _number(response.get("stop_loss"), "protection stop loss")
             self._require(take_profit == float(state["target_price"]), "protection_take_profit_mismatch", response)
             self._require(stop_loss == float(state["stop_price"]), "protection_stop_loss_mismatch", response)
+            protection_id = str(response.get("group_id") or response.get("protection_order_id") or "").strip()
+            self._require(bool(protection_id), "protection_identity_missing", response)
         except LiveDcaCanaryError as exc:
             self._recover_after_protection_gap(state, exc.code, timestamp=timestamp)
             raise
-        state["protection"] = {"quantity": covered_quantity, "take_profit": take_profit, "stop_loss": stop_loss, "reduce_only": True, "group_id": response.get("group_id")}
+        state["protection"] = {"quantity": covered_quantity, "take_profit": take_profit, "stop_loss": stop_loss, "reduce_only": True, "group_id": protection_id}
         state["status"] = "running"
         self._event(state, "protection_replaced", timestamp=timestamp, quantity=quantity)
         self._save(state)
@@ -433,6 +438,23 @@ class LiveDcaCanary:
 
     def _open_quantity(self, state: Mapping[str, Any]) -> float:
         return sum(float(fill.get("quantity") or 0) for fill in state.get("fills") or [])
+
+    def _projected_loss(self, state: Mapping[str, Any]) -> float:
+        direction = str(state.get("direction") or "long")
+        stop = float(state["stop_price"])
+        fills_by_index: dict[int, float] = {}
+        realized_projection = 0.0
+        for fill in state.get("fills") or []:
+            index = int(fill.get("index") or 0)
+            quantity = float(fill.get("quantity") or 0)
+            price = float(fill.get("price") or 0)
+            fills_by_index[index] = fills_by_index.get(index, 0.0) + quantity
+            realized_projection += ((price - stop) if direction == "long" else (stop - price)) * quantity
+        residual_projection = 0.0
+        for index, entry in enumerate(state.get("entries") or []):
+            residual = max(float(entry["quantity"]) - fills_by_index.get(index, 0.0), 0.0)
+            residual_projection += ((float(entry["price"]) - stop) if direction == "long" else (stop - float(entry["price"]))) * residual
+        return max(0.0, realized_projection + residual_projection)
 
     def _account_snapshot(self, limits: Mapping[str, float], *, admission: Mapping[str, Any] | None = None, state: Mapping[str, Any] | None = None, timestamp: str) -> dict[str, Any]:
         identity = admission or state or {}

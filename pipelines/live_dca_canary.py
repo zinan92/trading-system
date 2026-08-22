@@ -52,6 +52,7 @@ def run_attended_canary(
         }
         write_json(root / "dualtrack" / "live_dca_canary" / "current.json", [payload])
         return payload
+    canary = None
     try:
         transport = transport_factory()
         canary = LiveDcaCanary(root, transport=transport, park_user_id=park_user_id, park_chat_id=park_chat_id)
@@ -79,6 +80,14 @@ def run_attended_canary(
             raise LiveDcaCanaryError("action_invalid", f"unsupported attended action: {action}")
         return dict(result)
     except LiveDcaCanaryError as exc:
+        if canary is not None and canary.snapshot():
+            state = canary.snapshot()
+            state["status"] = "blocked"
+            state["blocker"] = exc.code
+            state["next_action"] = "notify_park_and_wait"
+            canary._event(state, "operator_blocked", timestamp=observed_at, code=exc.code)
+            canary._save(state)
+            return state
         payload = {
             "schema_version": "live-dca-canary-v1",
             "status": "blocked",
@@ -95,6 +104,14 @@ def run_attended_canary(
         write_json(root / "dualtrack" / "live_dca_canary" / "current.json", [payload])
         return payload
     except Exception as exc:  # unknown transport/factory state is fail-closed and redacted.
+        if canary is not None and canary.snapshot():
+            state = canary.snapshot()
+            state["status"] = "blocked"
+            state["blocker"] = f"transport_factory_failed:{type(exc).__name__}"
+            state["next_action"] = "notify_park_and_wait"
+            canary._event(state, "operator_blocked", timestamp=observed_at, code=state["blocker"])
+            canary._save(state)
+            return state
         payload = {
             "schema_version": "live-dca-canary-v1",
             "status": "blocked",
