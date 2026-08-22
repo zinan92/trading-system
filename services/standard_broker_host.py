@@ -1,16 +1,17 @@
-"""Paper-only composition boundary for the canonical standard-broker layer.
+"""Environment and Paper composition boundaries for standard-broker.
 
 This module is intentionally not an execution engine and does not import a
-Hyperliquid wire client.  It resolves one explicit canonical Broker binding
-for local Paper fixtures; real strategy/order lifecycle code remains owned by
-the existing Park host until a separately approved integration is complete.
+Hyperliquid wire client.  It resolves the reviewed local Paper binding and
+explicitly identifies Testnet/Live selections without constructing transport.
+Write-capable lifecycle code belongs to later, separately approved tickets.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from collections.abc import Callable, Mapping
+import re
 from typing import Any
 
 from services.broker_port import (
@@ -28,10 +29,202 @@ STANDARD_BROKER_REVISION = f"paper-host-{STANDARD_BROKER_COMMIT}"
 STANDARD_BROKER_PAPER_CAPABILITIES = BrokerCapabilities(
     frozenset({BrokerCapability.PREFLIGHT})
 )
+STANDARD_BROKER_ENVIRONMENT_CAPABILITIES = BrokerCapabilities(
+    frozenset({BrokerCapability.PREFLIGHT})
+)
+_RELEASE_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+_CREDENTIAL_SOURCE_RE = re.compile(
+    r"^(?:[A-Z][A-Z0-9]*_)*(?:TESTNET|MAINNET|LIVE)_[A-Z0-9_]+$"
+)
+
+
+def _is_environment_bound(value: str, environment: str) -> bool:
+    if environment == "paper" and value.lower() == "none":
+        return True
+    tokens = set(
+        re.findall(r"(?<![a-z0-9])(paper|testnet|mainnet|live)(?![a-z0-9])", value.lower())
+    )
+    allowed = {"mainnet", "live"} if environment == "mainnet" else {environment}
+    required = allowed
+    return bool(tokens & required) and tokens <= allowed
+
+
+@dataclass(frozen=True)
+class StandardBrokerEnvironmentIdentity:
+    """Public, non-secret identity for one standard-broker environment."""
+
+    broker_id: str
+    environment: str
+    environment_fingerprint: str
+    execution_scope: str
+    account_id: str
+    credential_source: str
+    runtime_id: str
+    ledger_namespace: str
+    release_sha: str
+
+    def __post_init__(self) -> None:
+        broker_id = str(self.broker_id or "").strip().lower()
+        environment = str(self.environment or "").strip().lower()
+        if environment == "live":
+            environment = "mainnet"
+        if broker_id != "hyperliquid":
+            raise ValueError("standard-broker environment broker_id must be hyperliquid")
+        if environment not in {"paper", "testnet", "mainnet"}:
+            raise ValueError(f"unsupported standard-broker environment: {environment!r}")
+        object.__setattr__(self, "broker_id", broker_id)
+        object.__setattr__(self, "environment", environment)
+        environment_fingerprint = str(self.environment_fingerprint or "").strip().lower()
+        if not environment_fingerprint:
+            raise ValueError("environment_fingerprint is required for environment identity")
+        if not _IDENTIFIER_RE.fullmatch(environment_fingerprint):
+            raise ValueError("environment_fingerprint contains unsafe identity characters")
+        object.__setattr__(self, "environment_fingerprint", environment_fingerprint)
+        for name in ("account_id", "credential_source", "runtime_id", "ledger_namespace"):
+            value = str(getattr(self, name) or "").strip()
+            if not value:
+                raise ValueError(f"{name} is required for standard-broker environment identity")
+            if not _IDENTIFIER_RE.fullmatch(value):
+                raise ValueError(f"{name} contains unsafe identity characters")
+            if name == "credential_source" and not (
+                environment == "paper" and value.lower() == "none"
+            ) and not _CREDENTIAL_SOURCE_RE.fullmatch(value):
+                raise ValueError(
+                    "credential_source must be a non-secret environment variable reference"
+                )
+            if not _is_environment_bound(value, environment):
+                raise ValueError(f"{name} is not environment-bound")
+            object.__setattr__(self, name, value)
+        execution_scope = str(self.execution_scope or "").strip()
+        if not execution_scope or not _IDENTIFIER_RE.fullmatch(execution_scope):
+            raise ValueError("execution_scope is required for standard-broker environment identity")
+        object.__setattr__(self, "execution_scope", execution_scope)
+        if not _is_environment_bound(environment_fingerprint, environment):
+            raise ValueError("environment_fingerprint is not environment-bound")
+        if self.execution_scope != "hypercore:default":
+            raise ValueError("unsupported standard-broker execution_scope")
+        release_sha = str(self.release_sha or "").strip().lower()
+        if not _RELEASE_SHA_RE.fullmatch(release_sha):
+            raise ValueError("release_sha must be a full lowercase 40-character SHA-1")
+        object.__setattr__(self, "release_sha", release_sha)
+
+    def to_public_dict(self) -> dict[str, str]:
+        return {
+            "broker_id": self.broker_id,
+            "environment": self.environment,
+            "environment_fingerprint": self.environment_fingerprint,
+            "execution_scope": self.execution_scope,
+            "account_id": self.account_id,
+            "credential_source": self.credential_source,
+            "runtime_id": self.runtime_id,
+            "ledger_namespace": self.ledger_namespace,
+            "release_sha": self.release_sha,
+        }
 
 
 class StandardBrokerHostError(RuntimeError):
     """Stable host-level diagnostic for canonical broker composition failures."""
+
+
+class StandardBrokerEnvironmentGateAdapter:
+    """Read-only identity gate for explicitly selected non-Paper environments."""
+
+    name = "standard_broker_environment_gate"
+    provider = "standard_broker"
+
+    def __init__(self, identity: StandardBrokerEnvironmentIdentity) -> None:
+        self.identity = identity
+        self.broker_config = {
+            "provider": self.provider,
+            "broker_id": identity.broker_id,
+            "environment": identity.environment,
+            "environment_fingerprint": identity.environment_fingerprint,
+            "execution_scope": identity.execution_scope,
+            "account_id": identity.account_id,
+            "credential_source": identity.credential_source,
+            "runtime_id": identity.runtime_id,
+            "ledger_namespace": identity.ledger_namespace,
+            "release_sha": identity.release_sha,
+            "dry_run": True,
+            "live_trading_enabled": False,
+        }
+
+    @property
+    def capabilities(self) -> BrokerCapabilities:
+        return STANDARD_BROKER_ENVIRONMENT_CAPABILITIES
+
+    @property
+    def descriptor(self) -> BrokerPortDescriptor:
+        return broker_port_descriptor(self)
+
+    def preflight(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "broker_id": self.identity.broker_id,
+            "mode": self.identity.environment,
+            "environment": self.identity.environment,
+            "dry_run": True,
+            "live_trading_enabled": False,
+            "ready": False,
+            "blocker": "capability_gate_pending",
+            "network_io": False,
+            "real_money_eligible": False,
+            "credential_required": False,
+            "control_plane": "telegram",
+            "capability_revision": f"environment-gate-{self.identity.release_sha}",
+            "identity": self.identity.to_public_dict(),
+        }
+
+    def submit_order(self, request: BrokerOrderRequest) -> Any:
+        del request
+        raise UnsupportedBrokerCapability(
+            f"standard-broker {self.identity.environment} capability gate is read-only; "
+            "order lifecycle ticket is not enabled"
+        )
+
+    def record_capability_gap(self, recording: Any, **kwargs: Any) -> dict[str, Any]:
+        return record_standard_broker_capability_gap(
+            recording,
+            identity=self.identity,
+            **kwargs,
+        )
+
+
+def build_standard_broker_environment_gate(
+    *,
+    broker_id: str,
+    environment: str,
+    environment_fingerprint: str,
+    account_id: str,
+    credential_source: str,
+    runtime_id: str,
+    ledger_namespace: str,
+    release_sha: str,
+    execution_scope: str = "hypercore:default",
+) -> StandardBrokerEnvironmentGateAdapter:
+    """Build an explicit non-transport environment identity gate."""
+
+    if str(broker_id or "").strip().lower() != "hyperliquid":
+        raise StandardBrokerHostError(
+            f"unsupported standard_broker selection: broker_id={broker_id!r}"
+        )
+    identity = StandardBrokerEnvironmentIdentity(
+        broker_id=broker_id,
+        environment=environment,
+        environment_fingerprint=environment_fingerprint,
+        execution_scope=execution_scope,
+        account_id=account_id,
+        credential_source=credential_source,
+        runtime_id=runtime_id,
+        ledger_namespace=ledger_namespace,
+        release_sha=release_sha,
+    )
+    if identity.environment == "paper":
+        raise StandardBrokerHostError(
+            "Paper must resolve through the canonical local Paper binding"
+        )
+    return StandardBrokerEnvironmentGateAdapter(identity)
 
 
 class StandardBrokerPaperExecutionAdapter:
@@ -57,6 +250,17 @@ class StandardBrokerPaperExecutionAdapter:
             broker_id=self.broker_config["broker_id"],
             transport_factory=transport_factory,
             fixture_operations=fixture_operations,
+        )
+        self.identity = StandardBrokerEnvironmentIdentity(
+            broker_id=self.broker_config["broker_id"],
+            environment="paper",
+            environment_fingerprint="standard-broker:paper:paper-local",
+            execution_scope="hypercore:default",
+            account_id="paper-local",
+            credential_source="none",
+            runtime_id="standard-broker-paper",
+            ledger_namespace="ledger.standard-broker.paper",
+            release_sha=STANDARD_BROKER_COMMIT,
         )
 
     @property
@@ -203,6 +407,42 @@ def build_paper_broker_binding(
             "canonical broker binding violated Paper/Telegram host policy"
         )
     return binding
+
+
+def record_standard_broker_capability_gap(
+    recording: Any,
+    *,
+    identity: StandardBrokerEnvironmentIdentity,
+    record_window_id: str,
+    strategy_session_id: str,
+    strategy_revision_id: str,
+    occurred_at: str,
+    port: str,
+    operation: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Persist a non-secret environment selection blocker."""
+
+    return recording.record_event(
+        record_window_id=record_window_id,
+        strategy_session_id=strategy_session_id,
+        strategy_revision_id=strategy_revision_id,
+        category="execution_path",
+        event_type="standard_broker_capability_gap",
+        source=f"standard-broker.{identity.environment}",
+        occurred_at=occurred_at,
+        payload={
+            **identity.to_public_dict(),
+            "network_io": False,
+            "real_money_eligible": False,
+            "credential_required": False,
+            "status": "blocked",
+            "port": str(port),
+            "operation": str(operation),
+            "reason": str(reason)[:300],
+            "capability_revision": f"environment-gate-{identity.release_sha}",
+        },
+    )
 
 
 def request_paper_broker(

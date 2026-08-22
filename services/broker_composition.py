@@ -52,6 +52,25 @@ class BrokerBuildContext:
             "selection_environment",
             str(self.selection_environment or "").strip().lower(),
         )
+        provider = str(self.broker_config.get("provider") or "").strip().lower()
+        configured_environment = str(
+            self.broker_config.get("environment") or ""
+        ).strip().lower()
+        if provider == "standard_broker" and not (
+            self.selection_environment or configured_environment
+        ):
+            raise ValueError("standard_broker requires explicit environment")
+        if provider == "standard_broker" and self.selection_environment and configured_environment:
+            normalized_selection = (
+                "mainnet" if self.selection_environment == "live" else self.selection_environment
+            )
+            normalized_configured = (
+                "mainnet" if configured_environment == "live" else configured_environment
+            )
+            if normalized_selection != normalized_configured:
+                raise ValueError(
+                    "contradictory standard_broker environment sources"
+                )
 
     @property
     def provider(self) -> str:
@@ -286,6 +305,38 @@ def _standard_broker_paper_execution(context: BrokerBuildContext) -> BrokerExecu
     )
 
 
+def _standard_broker_environment_gate(context: BrokerBuildContext) -> BrokerExecutionPort:
+    from services.standard_broker_host import (
+        StandardBrokerEnvironmentGateAdapter,
+        StandardBrokerHostError,
+        build_standard_broker_environment_gate,
+    )
+
+    try:
+        adapter = build_standard_broker_environment_gate(
+            broker_id=str(context.broker_config.get("broker_id") or ""),
+            environment=context.environment,
+            environment_fingerprint=str(
+                context.broker_config.get("environment_fingerprint") or ""
+            ),
+            execution_scope=str(
+                context.broker_config.get("execution_scope") or "hypercore:default"
+            ),
+            account_id=str(context.broker_config.get("account_id") or ""),
+            credential_source=str(context.broker_config.get("credential_source") or ""),
+            runtime_id=str(context.broker_config.get("runtime_id") or ""),
+            ledger_namespace=str(context.broker_config.get("ledger_namespace") or ""),
+            release_sha=str(context.broker_config.get("release_sha") or ""),
+        )
+    except (StandardBrokerHostError, ValueError) as exc:
+        raise StandardBrokerHostError(
+            f"standard_broker environment identity blocked: {exc}"
+        ) from exc
+    if not isinstance(adapter, StandardBrokerEnvironmentGateAdapter):
+        raise StandardBrokerHostError("standard_broker environment gate type is invalid")
+    return adapter
+
+
 def _reject_standard_broker_selection(context: BrokerBuildContext) -> BrokerExecutionPort:
     from services.standard_broker_host import StandardBrokerHostError
 
@@ -409,7 +460,10 @@ def _execution_capabilities(provider: str, *, reconciliation: bool = False) -> B
 
 def default_broker_plugin_registry() -> BrokerPluginRegistry:
     registry = BrokerPluginRegistry()
-    from services.standard_broker_host import STANDARD_BROKER_PAPER_CAPABILITIES
+    from services.standard_broker_host import (
+        STANDARD_BROKER_ENVIRONMENT_CAPABILITIES,
+        STANDARD_BROKER_PAPER_CAPABILITIES,
+    )
 
     registry.register(
         BrokerPlugin(
@@ -424,6 +478,14 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
             execution_factory=_reject_standard_broker_selection,
         )
     )
+    for environment in ("testnet", "mainnet", "live"):
+        registry.register(
+            BrokerPlugin(
+                BrokerPluginKey("live", "standard_broker", environment),
+                execution_factory=_standard_broker_environment_gate,
+                capabilities=STANDARD_BROKER_ENVIRONMENT_CAPABILITIES,
+            )
+        )
     registry.register(
         BrokerPlugin(
             BrokerPluginKey("live", "standard_broker", "*"),
@@ -532,11 +594,14 @@ def build_configured_live_broker_execution_port(
 
     provider = str(broker_config.get("provider") or "").strip().lower()
     environment = str(broker_config.get("environment") or "").strip().lower()
-    selection_environment = (
-        "paper"
-        if provider == "tiger_openapi" and environment == "paper"
-        else "standard"
-    )
+    if provider == "standard_broker":
+        selection_environment = environment
+    else:
+        selection_environment = (
+            "paper"
+            if provider == "tiger_openapi" and environment == "paper"
+            else "standard"
+        )
     return build_broker_execution_port(
         BrokerBuildContext(
             output_root=output_root,
