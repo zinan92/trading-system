@@ -149,10 +149,17 @@ class LiveActivationGate:
             blockers.append("release_sha_invalid")
         if normalized_release_sha != current_sha or normalized_release_sha != source_sha:
             blockers.append("release_sha_does_not_match_source")
-        if not _ENV_NAME.fullmatch(str(credential_source or "")):
+        credential_name_valid = _ENV_NAME.fullmatch(str(credential_source or "")) is not None
+        if not credential_name_valid:
             blockers.append("credential_source_must_be_env_name")
-        elif not bool(self._credential_presence_resolver(str(credential_source))):
-            blockers.append("credential_source_unavailable")
+        else:
+            try:
+                credential_present = bool(self._credential_presence_resolver(str(credential_source)))
+            except Exception:
+                credential_present = False
+                blockers.append("credential_source_probe_failed")
+            if not credential_present:
+                blockers.append("credential_source_unavailable")
         if str(instrument_scope) != "default_perpetuals":
             blockers.append("unsupported_instrument_scope")
         if str(strategy_scope) != "dca":
@@ -451,6 +458,10 @@ class LiveActivationGate:
         readiness = preflight.get("readiness_snapshot")
         risk_limits = self._risk_limits(preflight.get("risk_limits"))
         expected_fingerprint = f"hyperliquid:mainnet:{account_id.lower()}"
+        try:
+            credential_present = bool(self._credential_presence_resolver(str(preflight.get("credential_source") or "")))
+        except Exception:
+            credential_present = False
         return (
             source.get("source_sha") == current.get("source_sha")
             and (source.get("source_tree_sha") or source.get("tree_sha")) == (current.get("source_tree_sha") or current.get("tree_sha"))
@@ -462,7 +473,7 @@ class LiveActivationGate:
             and _ACCOUNT.fullmatch(account_id) is not None
             and preflight.get("environment_fingerprint") == expected_fingerprint
             and _ENV_NAME.fullmatch(str(preflight.get("credential_source") or "")) is not None
-            and bool(self._credential_presence_resolver(str(preflight.get("credential_source") or "")))
+            and credential_present
             and preflight.get("instrument_scope") == "default_perpetuals"
             and preflight.get("strategy_scope") == "dca"
             and _SHA256.fullmatch(str(preflight.get("readiness_receipt_digest") or "")) is not None
@@ -495,13 +506,19 @@ class LiveActivationGate:
             return False
         if current_digest != _digest({key: value for key, value in current.items() if key != "receipt_digest"}):
             return False
+        try:
+            readiness_counts_valid = (
+                int(current.get("window_count") or 0) == 14
+                and int(current.get("required_window_count") or 0) == 14
+                and int(current.get("day_count") or 0) == 7
+                and int(current.get("required_day_count") or 0) == 7
+            )
+        except (TypeError, ValueError):
+            readiness_counts_valid = False
         if (
             current.get("status") != "ready"
             or current.get("environment") != "testnet"
-            or int(current.get("window_count") or 0) != 14
-            or int(current.get("required_window_count") or 0) != 14
-            or int(current.get("day_count") or 0) != 7
-            or int(current.get("required_day_count") or 0) != 7
+            or not readiness_counts_valid
             or list(current.get("blockers") or [])
             or current.get("live_enabled") is not False
             or current.get("live_writes_enabled") is not False
