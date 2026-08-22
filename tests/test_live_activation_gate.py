@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from services.paper_release_receipt import current_source_attestation
@@ -112,7 +113,8 @@ def test_live_activation_requires_exact_confirmation_and_is_idempotent(tmp_path:
     gate, _, _ = _ready_gate(tmp_path)
     preflight = _preflight(gate)
     proposal = gate.prepare_activation(preflight, plan_digest="sha256:" + "c" * 64, expires_at=4102444800)
-    rejected = gate.confirm(activation_digest=proposal["activation_digest"], command_text="confirm live wrong", park_user_id="park", telegram_update_id=1, telegram_message_id=1, telegram_chat_id="chat", telegram_receipt={"event": "inbound_received", "update_id": 1, "message_id": 1, "sender_id": "park", "chat_id": "chat", "text": "confirm live wrong", "text_digest": "sha256:" + "d" * 64}, current_preflight=preflight, now=1787350000)
+    rejected_text = "confirm live wrong"
+    rejected = gate.confirm(activation_digest=proposal["activation_digest"], command_text=rejected_text, park_user_id="park", telegram_update_id=1, telegram_message_id=1, telegram_chat_id="chat", telegram_receipt={"event": "inbound_received", "update_id": 1, "message_id": 1, "sender_id": "park", "chat_id": "chat", "text": rejected_text, "text_digest": "sha256:" + hashlib.sha256(rejected_text.encode()).hexdigest()}, current_preflight=preflight, now=1787350000)
     assert rejected["event"] == "activation_rejected"
 
     # A fresh gate is used to model a new exact proposal after rejection.
@@ -127,7 +129,7 @@ def test_live_activation_requires_exact_confirmation_and_is_idempotent(tmp_path:
         preflight["strategy_scope"],
         proposal["plan_digest"],
     ])
-    receipt = {"event": "inbound_received", "update_id": 2, "message_id": 3, "sender_id": "park", "chat_id": "chat", "text": command, "text_digest": "sha256:" + "e" * 64}
+    receipt = {"event": "inbound_received", "update_id": 2, "message_id": 3, "sender_id": "park", "chat_id": "chat", "text": command, "text_digest": "sha256:" + hashlib.sha256(command.encode()).hexdigest()}
     confirmed = gate.confirm(activation_digest=proposal["activation_digest"], command_text=command, park_user_id="park", telegram_update_id=2, telegram_message_id=3, telegram_chat_id="chat", telegram_receipt=receipt, current_preflight=preflight, now=1787350000)
     replay = gate.confirm(activation_digest=proposal["activation_digest"], command_text=command, park_user_id="park", telegram_update_id=2, telegram_message_id=3, telegram_chat_id="chat", telegram_receipt=receipt, current_preflight=preflight, now=1787350001)
     assert confirmed == replay
@@ -187,7 +189,7 @@ def test_confirmation_rechecks_current_readiness_and_canary_stays_blocked(tmp_pa
         proposal["plan_digest"],
     ])
     readiness["blockers"] = [{"code": "new_blocker"}]
-    receipt = {"event": "inbound_received", "update_id": 7, "message_id": 8, "sender_id": "park", "chat_id": "chat", "text": command, "text_digest": "sha256:" + "e" * 64}
+    receipt = {"event": "inbound_received", "update_id": 7, "message_id": 8, "sender_id": "park", "chat_id": "chat", "text": command, "text_digest": "sha256:" + hashlib.sha256(command.encode()).hexdigest()}
     rejected = gate.confirm(activation_digest=proposal["activation_digest"], command_text=command, park_user_id="park", telegram_update_id=7, telegram_message_id=8, telegram_chat_id="chat", telegram_receipt=receipt, current_preflight=preflight, now=1787350000)
     assert rejected["code"] == "preflight_recheck_failed"
     assert gate.canary_status()["ready"] is False

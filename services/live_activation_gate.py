@@ -389,8 +389,11 @@ class LiveActivationGate:
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_identity_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         if canary.get("execution_authorized") is not True or canary.get("live_writes_enabled") is not True:
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_not_authorized"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
-        if not _SHA256.fullmatch(str(canary.get("canary_receipt_digest") or "")):
+        canary_digest = str(canary.get("canary_receipt_digest") or "")
+        if not _SHA256.fullmatch(canary_digest) or canary_digest != _digest({key: value for key, value in canary.items() if key != "canary_receipt_digest"}):
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_receipt_missing"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        if canary.get("risk_limits_digest") != _digest(preflight.get("risk_limits") or {}):
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_risk_limits_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         source = canary.get("source_attestation") if isinstance(canary.get("source_attestation"), Mapping) else {}
         try:
             current = dict(self._source_attestation_resolver())
@@ -603,7 +606,8 @@ class LiveActivationGate:
             and str(receipt.get("chat_id") or "") == self.park_chat_id
             and str(receipt.get("sender_id") or "") == self.park_user_id
             and str(receipt.get("text") or "") == str(command_text).strip()
-            and bool(str(receipt.get("text_digest") or "").strip())
+            and str(receipt.get("text_digest") or "")
+            == "sha256:" + hashlib.sha256(str(command_text).strip().encode("utf-8")).hexdigest()
         )
 
     @staticmethod
