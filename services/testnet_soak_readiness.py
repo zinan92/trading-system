@@ -359,6 +359,8 @@ class TestnetSoakReadiness:
                     actual = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
                     if actual != str(value.get("artifact_sha256") or "").lower():
                         blockers.append({"code": f"artifact_{key}_digest_mismatch", "artifact_ref": reference})
+                if artifact_path.exists() and not self._artifact_content_matches(artifact_path, value, observation):
+                    blockers.append({"code": f"artifact_{key}_identity_mismatch", "artifact_ref": reference})
         identity_evidence = evidence.get("release_account_environment_identity")
         if isinstance(identity_evidence, Mapping):
             for field in ("release_sha", "account_fingerprint", "environment", "broker_id"):
@@ -387,6 +389,8 @@ class TestnetSoakReadiness:
                 blockers.append({"code": f"recording_{category}_artifact_missing", "artifact_ref": reference})
             elif payload.get("artifact_sha256") and hashlib.sha256(artifact_path.read_bytes()).hexdigest() != str(payload["artifact_sha256"]).lower():
                 blockers.append({"code": f"recording_{category}_artifact_digest_mismatch", "artifact_ref": reference})
+            if artifact_path.exists() and not self._artifact_content_matches(artifact_path, payload, observation):
+                blockers.append({"code": f"recording_{category}_artifact_identity_mismatch", "artifact_ref": reference})
         attestation = observation.get("source_attestation") if isinstance(observation.get("source_attestation"), Mapping) else {}
         attestation_tree = str(attestation.get("tree_sha") or attestation.get("source_tree_sha") or "")
         attestation_release = str(attestation.get("release_sha") or attestation.get("source_sha") or "")
@@ -398,3 +402,18 @@ class TestnetSoakReadiness:
         if current.get("attestation_error") or attestation.get("tracked_tree_clean") is not True or not valid_hex(attestation_tree) or not valid_hex(attestation_release) or attestation_release != str(observation.get("release_sha") or "") or (current and (str(current.get("source_sha") or "") != str(attestation.get("source_sha") or attestation.get("release_sha") or "") or str(current.get("source_tree_sha") or "") != attestation_tree or current.get("tracked_tree_clean") is not True)):
             blockers.append({"code": "source_attestation_tree_or_release_invalid"})
         return blockers
+
+    @staticmethod
+    def _artifact_content_matches(path: Path, payload: Mapping[str, Any], observation: Mapping[str, Any]) -> bool:
+        try:
+            artifact = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(artifact, Mapping):
+            return False
+        if artifact.get("artifact_kind") not in (None, "") and str(artifact.get("artifact_kind")) != str(payload.get("artifact_kind") or ""):
+            return False
+        for key in ("strategy_session_id", "strategy_revision_id", "plan_digest", "environment", "broker_id", "release_sha", "account_fingerprint", "window_index", "record_window_id", "starts_at", "ends_at"):
+            if str(artifact.get(key) or "") != str(observation.get(key) or ""):
+                return False
+        return True
