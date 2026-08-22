@@ -294,8 +294,7 @@ class TestnetSoakReadiness:
             return False
         return reference - latest_end <= timedelta(hours=24)
 
-    @staticmethod
-    def _receipt_integrity_ok(receipt: Mapping[str, Any], rows: Sequence[Mapping[str, Any]] | None = None) -> bool:
+    def _receipt_integrity_ok(self, receipt: Mapping[str, Any], rows: Sequence[Mapping[str, Any]] | None = None) -> bool:
         supplied = str(receipt.get("receipt_digest") or "")
         if not supplied:
             return False
@@ -307,10 +306,9 @@ class TestnetSoakReadiness:
         ordered = sorted(rows, key=lambda item: int(item.get("window_index") or 0))
         expected = [str(row.get("row_digest") or "") for row in ordered]
         recomputed = [_digest({key: value for key, value in row.items() if key != "row_digest"}) for row in ordered]
-        return int(receipt.get("window_count") or 0) == len(rows) and expected == recomputed and expected == list(receipt.get("window_digests") or []) and all(expected) and TestnetSoakReadiness._artifacts_intact(ordered)
+        return int(receipt.get("window_count") or 0) == len(rows) and expected == recomputed and expected == list(receipt.get("window_digests") or []) and all(expected) and self._artifacts_intact(ordered)
 
-    @staticmethod
-    def _artifacts_intact(rows: Sequence[Mapping[str, Any]]) -> bool:
+    def _artifacts_intact(self, rows: Sequence[Mapping[str, Any]]) -> bool:
         for row in rows:
             evidence = row.get("gate_evidence") if isinstance(row.get("gate_evidence"), Mapping) else {}
             for category, payload in evidence.items():
@@ -318,7 +316,7 @@ class TestnetSoakReadiness:
                     return False
                 reference = str(payload.get("artifact_ref") or "")
                 expected = str(payload.get("artifact_sha256") or "")
-                path = Path(reference)
+                path = Path(reference) if Path(reference).is_absolute() else self.output_root / reference
                 if not reference or not path.exists() or not path.is_file() or not expected or hashlib.sha256(path.read_bytes()).hexdigest() != expected.lower():
                     return False
         return True
