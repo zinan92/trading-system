@@ -52,6 +52,9 @@ class ProtectionReceipt:
     broker_id: str
     environment: BrokerEnvironment
     provenance: Provenance
+    account_address: str | None = None
+    lifecycle_id: str | None = None
+    release_sha: str | None = None
 
 
 @dataclass(frozen=True)

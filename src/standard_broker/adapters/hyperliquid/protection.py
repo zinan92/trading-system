@@ -18,6 +18,7 @@ from ...protection import (
     ProtectionType,
     TriggerReference,
 )
+from .bridge import NautilusHyperliquidRuntime, NautilusRuntimeState
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,16 @@ class HyperliquidRuntimeProtectionAdapter:
     name = "hyperliquid_runtime_protection_order"
 
     def __init__(self, *, runtime: object) -> None:
+        if not isinstance(runtime, NautilusHyperliquidRuntime):
+            raise RuntimeBoundaryError(
+                "runtime_type_invalid",
+                "protection adapter requires the canonical Hyperliquid runtime",
+            )
+        if runtime.state is not NautilusRuntimeState.READY:
+            raise RuntimeBoundaryError(
+                "runtime_not_ready",
+                "protection adapter requires an approved ready runtime",
+            )
         session = getattr(runtime, "session", None)
         if session is None or getattr(session, "broker_id", "") != "hyperliquid":
             raise RuntimeBoundaryError(
@@ -124,6 +135,19 @@ class HyperliquidRuntimeProtectionAdapter:
             raise RuntimeBoundaryError(
                 "protection_runtime_environment_unsupported",
                 "protection lifecycle supports Paper and approved Testnet only",
+            )
+        if session.environment is BrokerEnvironment.TESTNET:
+            runtime.preflight(
+                required_operations={
+                    "order_execution": {
+                        "submit",
+                        "cancel",
+                        "replace",
+                        "query",
+                        "open_orders",
+                    },
+                    "protection_order": {"submit"},
+                }
             )
         self._runtime = runtime
         self._mapper = HyperliquidProtectionAdapter()
@@ -194,6 +218,18 @@ class HyperliquidRuntimeProtectionAdapter:
                 operation,
                 request,
             )
+            if runtime_receipt.accepted is not True:
+                self._statuses[group.protection_id] = ProtectionLifecycleStatus(
+                    protection_id=group.protection_id,
+                    state=ProtectionLifecycleState.FROZEN,
+                    reason="protection_receipt_not_accepted",
+                    attempts=1,
+                )
+                raise BrokerCapabilityError(
+                    "protection_order",
+                    operation,
+                    "protection_receipt_not_accepted",
+                )
             state = (
                 ProtectionLifecycleState.CANCELED
                 if operation == "cancel"
@@ -214,6 +250,9 @@ class HyperliquidRuntimeProtectionAdapter:
                 broker_id=runtime_receipt.broker_id,
                 environment=runtime_receipt.environment,
                 provenance=runtime_receipt.provenance,
+                account_address=self._runtime.session.account.address,
+                lifecycle_id=self._runtime.session.lifecycle_id,
+                release_sha=self._runtime._config.expected_release_sha,
             )
 
     def _require_group(self, group: ProtectionGroup, operation: str) -> None:
