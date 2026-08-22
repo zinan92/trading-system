@@ -752,7 +752,7 @@ class HyperliquidRuntimeOrderAdapter:
 
     @contextmanager
     def transaction(self):
-        """Rollback lifecycle and staged ledger mutations for one Paper snapshot."""
+        """Rollback lifecycle and staged ledger mutations for one local-fixture snapshot."""
 
         dictionary_fields = (
             "fills",
