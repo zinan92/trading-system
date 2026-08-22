@@ -9,6 +9,7 @@ from tests.test_live_activation_gate import _preflight, _ready_gate
 class FixtureTransport:
     network_io = False
     capabilities = set(REQUIRED_TRANSPORT_CAPABILITIES)
+    identity = {}
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
@@ -99,15 +100,22 @@ def _plan() -> dict:
     }
 
 
+def _make_canary(tmp_path: Path, transport: FixtureTransport) -> LiveDcaCanary:
+    gate = _activated_gate(tmp_path)
+    admission = gate.activation_prerequisite_status()
+    transport.identity = {
+        "broker_id": "hyperliquid",
+        "environment": "mainnet",
+        "account_id": admission["account_id"],
+        "environment_fingerprint": admission["environment_fingerprint"],
+        "release_sha": admission["release_sha"],
+    }
+    return LiveDcaCanary(tmp_path / "outputs", transport=transport, park_user_id="park", park_chat_id="chat", gate=gate)
+
+
 def test_attended_dca_canary_keeps_fixture_non_network_and_distinguishes_stop_cancel_flatten(tmp_path: Path) -> None:
     transport = FixtureTransport()
-    canary = LiveDcaCanary(
-        tmp_path / "outputs",
-        transport=transport,
-        park_user_id="park",
-        park_chat_id="chat",
-        gate=_activated_gate(tmp_path),
-    )
+    canary = _make_canary(tmp_path, transport)
     started = canary.start(_plan(), timestamp="2026-08-22T00:00:00+00:00")
     assert started["status"] == "prepared"
     assert started["network_io"] is False
@@ -127,7 +135,7 @@ def test_attended_dca_canary_keeps_fixture_non_network_and_distinguishes_stop_ca
 
 def test_live_dca_canary_blocks_grid_and_risk_budget_before_transport(tmp_path: Path) -> None:
     transport = FixtureTransport()
-    canary = LiveDcaCanary(tmp_path / "outputs", transport=transport, park_user_id="park", park_chat_id="chat", gate=_activated_gate(tmp_path))
+    canary = _make_canary(tmp_path, transport)
     grid = _plan()
     grid["strategy_type"] = "grid"
     with pytest.raises(LiveDcaCanaryError, match="DCA"):
@@ -146,7 +154,7 @@ def test_live_dca_canary_freezes_on_unknown_entry_response(tmp_path: Path) -> No
             return {"status": "unknown"}
 
     transport = UnknownTransport()
-    canary = LiveDcaCanary(tmp_path / "outputs", transport=transport, park_user_id="park", park_chat_id="chat", gate=_activated_gate(tmp_path))
+    canary = _make_canary(tmp_path, transport)
     canary.start(_plan(), timestamp="2026-08-22T00:00:00+00:00")
     with pytest.raises(LiveDcaCanaryError, match="unknown"):
         canary.submit_entry(0, timestamp="2026-08-22T00:01:00+00:00")

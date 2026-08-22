@@ -53,6 +53,7 @@ class LiveDcaTransport(Protocol):
 
     capabilities: Any
     network_io: bool
+    identity: Mapping[str, Any]
 
     def submit_entry(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
     def cancel_order(self, order_id: str) -> Mapping[str, Any]: ...
@@ -99,6 +100,8 @@ class LiveDcaCanary:
         )
         if bool(getattr(transport, "network_io", False)) and not allow_network:
             raise LiveDcaCanaryError("network_transport_not_allowed", "the default attended harness accepts only a no-network transport")
+        if allow_network and not bool(getattr(transport, "network_io", False)):
+            raise LiveDcaCanaryError("network_transport_mismatch", "allow_network requires a transport that declares network_io=true")
         self.allow_network = bool(allow_network)
 
     def snapshot(self) -> dict[str, Any]:
@@ -108,6 +111,7 @@ class LiveDcaCanary:
     def start(self, plan: Mapping[str, Any], *, timestamp: str) -> dict[str, Any]:
         admission = self.gate.activation_prerequisite_status()
         self._require(admission.get("ready") is True, "activation_prerequisite_blocked", admission)
+        self._validate_transport_identity(admission)
         normalized = self._validate_plan(plan, admission)
         capabilities = self._capabilities()
         missing = sorted(REQUIRED_TRANSPORT_CAPABILITIES - capabilities)
@@ -143,6 +147,7 @@ class LiveDcaCanary:
             "idempotency": {},
             "network_io": bool(getattr(self.transport, "network_io", False)),
             "real_money_eligible": bool(self.allow_network),
+            "transport_identity": dict(getattr(self.transport, "identity", {})),
             "live_writes_enabled": False,
             "created_at": str(timestamp),
             "updated_at": str(timestamp),
@@ -155,6 +160,15 @@ class LiveDcaCanary:
     def submit_entry(self, index: int, *, timestamp: str) -> dict[str, Any]:
         state = self._state()
         self._require(state.get("status") in {"prepared", "running"}, "canary_not_accepting_entries", state)
+        expected_index = sum(1 for order in state.get("orders") or [] if order.get("event") == "entry")
+        if int(index) != expected_index:
+            self._block(state, "entry_sequence_invalid", timestamp=timestamp)
+            self._save(state)
+            raise LiveDcaCanaryError("entry_sequence_invalid", "DCA entries must advance in approved ladder order")
+        if state.get("pending_entry_order_id"):
+            self._block(state, "prior_entry_not_terminal", timestamp=timestamp)
+            self._save(state)
+            raise LiveDcaCanaryError("prior_entry_not_terminal", "the prior DCA entry must be filled or canceled before the next entry")
         if self._open_quantity(state) > 0 and state.get("protection") is None:
             self._block(state, "protection_required_before_next_entry", timestamp=timestamp)
             raise LiveDcaCanaryError("protection_required_before_next_entry", "aggregate protection must cover the current position before another entry")
@@ -193,13 +207,14 @@ class LiveDcaCanary:
         self._require(bool(order_id), "entry_order_identity_missing", response)
         state["orders"].append({"order_id": order_id, "event": "entry", "index": int(index), "price": entry["price"], "quantity": entry["quantity"], "notional": entry["notional"], "state": str(response.get("status") or "submitted"), "reduce_only": False})
         state["idempotency"][key] = order_id
+        if str(response.get("status") or "").lower() not in {"filled", "partially_filled", "partial"}:
+            state["pending_entry_order_id"] = order_id
         fill = response.get("fill") if isinstance(response.get("fill"), Mapping) else None
         if fill:
             state["fills"].append({"order_id": order_id, **dict(fill), "index": int(index), "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"]})
             actual_price = _number(fill.get("price"), "fill price")
             if abs(actual_price - entry["price"]) > state["risk_limits"]["max_slippage"]:
-                self._block(state, "entry_slippage_exceeded", timestamp=timestamp)
-                self._save(state)
+                self._recover_after_protection_gap(state, "entry_slippage_exceeded", timestamp=timestamp)
                 raise LiveDcaCanaryError("entry_slippage_exceeded", "entry fill exceeded the approved slippage ceiling")
         state["status"] = "running"
         self._event(state, "entry_submitted", timestamp=timestamp, order_id=order_id, index=int(index))
@@ -230,8 +245,7 @@ class LiveDcaCanary:
             self._require(response.get("status") not in {"unknown", "rejected", "error"}, "protection_update_unknown", response)
             self._require(response.get("reduce_only") is True, "protection_not_reduce_only", response)
         except LiveDcaCanaryError as exc:
-            self._block(state, exc.code, timestamp=timestamp)
-            self._save(state)
+            self._recover_after_protection_gap(state, exc.code, timestamp=timestamp)
             raise
         state["protection"] = {"quantity": quantity, "take_profit": state["target_price"], "stop_loss": state["stop_price"], "reduce_only": True, "group_id": response.get("group_id")}
         state["status"] = "running"
@@ -257,6 +271,8 @@ class LiveDcaCanary:
         for order in state["orders"]:
             if order.get("order_id") == order_id:
                 order["state"] = "canceled" if response.get("status") in {"canceled", "cancelled", "accepted"} else str(response.get("status"))
+        if state.get("pending_entry_order_id") == order_id:
+            state.pop("pending_entry_order_id", None)
         self._event(state, "entry_canceled", timestamp=timestamp, order_id=order_id)
         self._reconcile(state, timestamp=timestamp)
         self._save(state)
@@ -312,6 +328,17 @@ class LiveDcaCanary:
             raise LiveDcaCanaryError("live_dca_scope_invalid", "Live canary accepts DCA long/short only")
         if str(plan.get("plan_digest") or "") != str(admission.get("plan_digest") or ""):
             raise LiveDcaCanaryError("plan_digest_mismatch", "canary plan digest does not match activation")
+        approved = admission.get("approved_plan") if isinstance(admission.get("approved_plan"), Mapping) else {}
+        canonical = approved.get("canonical_plan") if isinstance(approved.get("canonical_plan"), Mapping) else {}
+        if not canonical or not isinstance(canonical.get("entries"), list) or not isinstance(canonical.get("risk_limits"), Mapping):
+            raise LiveDcaCanaryError("approved_dca_plan_incomplete", "the approved DCA receipt does not contain the canonical ladder and risk limits")
+        for key in ("direction", "target_price", "stop_price", "account_equity"):
+            if str(plan.get(key)) != str(canonical.get(key)):
+                raise LiveDcaCanaryError("approved_dca_plan_mismatch", f"DCA {key} differs from the approved canonical plan")
+        if list(plan.get("entries") or plan.get("ladder") or []) != list(canonical.get("entries") or []):
+            raise LiveDcaCanaryError("approved_dca_entries_mismatch", "DCA entries differ from the approved canonical ladder")
+        if dict(plan.get("risk_limits") or {}) != dict(canonical.get("risk_limits") or {}):
+            raise LiveDcaCanaryError("approved_dca_risk_mismatch", "DCA risk limits differ from the approved canonical limits")
         entries_raw = plan.get("entries") or plan.get("ladder")
         if not isinstance(entries_raw, list) or not entries_raw:
             raise LiveDcaCanaryError("dca_entries_missing", "approved DCA ladder is required")
@@ -351,6 +378,22 @@ class LiveDcaCanary:
             result = {str(item) for item in value}
         return result
 
+    def _validate_transport_identity(self, admission: Mapping[str, Any]) -> None:
+        identity = getattr(self.transport, "identity", None)
+        if not isinstance(identity, Mapping):
+            raise LiveDcaCanaryError("transport_identity_missing", "transport must declare broker/account/environment/release identity")
+        expected = {
+            "broker_id": "hyperliquid",
+            "environment": "mainnet",
+            "account_id": admission.get("account_id"),
+            "environment_fingerprint": admission.get("environment_fingerprint"),
+            "release_sha": admission.get("release_sha"),
+        }
+        if any(identity.get(key) != value for key, value in expected.items()):
+            raise LiveDcaCanaryError("transport_identity_mismatch", "transport identity does not match the approved activation", {"expected": expected, "actual": {key: identity.get(key) for key in expected}})
+        if self.allow_network and not str(identity.get("endpoint") or "").startswith("https://"):
+            raise LiveDcaCanaryError("transport_endpoint_missing", "network transport must declare an HTTPS endpoint")
+
     def _open_quantity(self, state: Mapping[str, Any]) -> float:
         return sum(float(fill.get("quantity") or 0) for fill in state.get("fills") or [])
 
@@ -361,8 +404,19 @@ class LiveDcaCanary:
             state["status"] = "blocked_reconciliation"
             state["next_action"] = "notify_park_and_wait"
             self._event(state, "reconciliation_blocked", timestamp=timestamp, report=dict(report))
+            self._save(state)
             raise LiveDcaCanaryError("reconciliation_mismatch", "canary reconciliation did not prove the expected state", report)
         state["reconciliation"] = dict(report)
+
+    def _recover_after_protection_gap(self, state: dict[str, Any], code: str, *, timestamp: str) -> None:
+        self._block(state, code, timestamp=timestamp)
+        self._save(state)
+        try:
+            self.flatten(timestamp=timestamp, reason=f"recovery:{code}")
+        except LiveDcaCanaryError:
+            state["status"] = "blocked"
+            state["next_action"] = "notify_park_and_wait"
+            self._save(state)
 
     def _call(self, operation: str, request: Mapping[str, Any], *, timestamp: str) -> dict[str, Any]:
         method = getattr(self.transport, operation, None)
