@@ -45,6 +45,7 @@ class DcaTestnetLifecycle:
             or [float(value) for value in existing.get("entry_levels") or []] != identity["entry_levels"]
             or str(existing.get("plan_digest") or "") != identity["plan_digest"]
             or str(existing.get("instrument_id") or "") != identity["instrument_id"]
+            or str(existing.get("cycle_id") or "") != identity["cycle_id"]
             or float(existing.get("target_price") or 0) != identity["target_price"]
             or float(existing.get("stop_price") or 0) != identity["stop_price"]
             or existing.get("risk_budget") != identity["risk_budget"]
@@ -104,6 +105,7 @@ class DcaTestnetLifecycle:
             "schema_version": self.schema_version,
             "strategy_plan_id": identity["plan_id"],
             "strategy_plan_version": identity["version"],
+            "cycle_id": identity["cycle_id"],
             "cycle_id": identity["cycle_id"],
             "direction": identity["direction"],
             "entry_levels": identity["entry_levels"],
@@ -169,9 +171,8 @@ class DcaTestnetLifecycle:
             "terminal",
             "blocked_reconciliation",
             "blocked_risk",
-            "blocked_risk_flattening",
         } or (
-            state["status"] in {"stopping", "blocked_protection"}
+            state["status"] in {"stopping", "blocked_protection", "blocked_risk_flattening"}
             and self._is_entry_event(order["event"])
         ) or (
             state["status"] in {"target_triggered", "protection_blocked_flattening"}
@@ -229,6 +230,7 @@ class DcaTestnetLifecycle:
                 self._confirm_or_update_protection(plan, state, timestamp=timestamp)
             else:
                 self._block(state, "maximum_loss_budget_exceeded", timestamp=timestamp)
+                self._flatten_after_block(plan, state, timestamp=timestamp, reason="risk_budget")
             if state["status"] not in {"blocked_protection", "blocked_risk", "blocked_risk_flattening"}:
                 state["status"] = "partial_entry"
             elif state["status"] == "blocked_protection":
@@ -244,6 +246,7 @@ class DcaTestnetLifecycle:
                 self._flatten_after_block(plan, state, timestamp=timestamp, reason="slippage")
             elif not self._risk_within_budget(plan, state):
                 self._block(state, "maximum_loss_budget_exceeded", timestamp=timestamp)
+                self._flatten_after_block(plan, state, timestamp=timestamp, reason="risk_budget")
             else:
                 self._confirm_or_update_protection(plan, state, timestamp=timestamp)
             if state["status"] not in {"blocked_protection", "blocked_risk", "blocked_risk_flattening"}:
@@ -273,8 +276,9 @@ class DcaTestnetLifecycle:
                         state["terminal_reason"] = order["event"]
                         state["protection"] = None
                         state["sealed"] = True
-                        state["park_notification_required"] = True
+                        self._queue_park_notification(state, timestamp=timestamp, reason=order["event"])
                         state["next_action"] = "notify_park_and_wait"
+                        self._record_event(state, "revision_sealed", timestamp=timestamp, reason=order["event"])
                         self._record_event(state, "terminal_closed", timestamp=timestamp, reason=order["event"])
                 except Exception as exc:  # noqa: BLE001 - terminal protection close remains blocked.
                     self._block(
@@ -461,6 +465,24 @@ class DcaTestnetLifecycle:
             )
         except DcaTestnetLifecycleError:
             state["status"] = "blocked_reconciliation"
+
+    def _queue_park_notification(self, state: dict[str, Any], *, timestamp: str, reason: str) -> None:
+        """Persist one idempotent Telegram notification intent for Park."""
+
+        notification_id = f"dca-terminal:{state['strategy_plan_id']}:{state['plan_digest']}"
+        state["park_notification_required"] = True
+        state["park_notification"] = {
+            "notification_id": notification_id,
+            "channel": "telegram",
+            "status": "queued",
+            "reason": reason,
+            "strategy_session_id": state.get("strategy_session_id", ""),
+            "strategy_revision_id": state.get("strategy_revision_id", ""),
+            "plan_digest": state.get("plan_digest", ""),
+            "queued_at": timestamp,
+            "next_action": "notify_park_and_wait",
+        }
+        self._record_event(state, "park_notification_queued", timestamp=timestamp, notification_id=notification_id, reason=reason)
 
     def _terminal_reconciliation(self, state: dict[str, Any], timestamp: str) -> dict[str, Any]:
         try:
@@ -742,15 +764,26 @@ class DcaTestnetLifecycle:
     ) -> bool:
         stop = float(plan["dca"]["stop_price"])
         direction = state["direction"]
-        added_loss = (price - stop) * quantity if direction == "long" else (stop - price) * quantity
         current_loss = sum(
             (float(position["entry_price"]) - stop) * float(position["quantity"])
             if direction == "long"
             else (stop - float(position["entry_price"])) * float(position["quantity"])
             for position in state["positions"]
         )
+        added_loss = (price - stop) * quantity if direction == "long" else (stop - price) * quantity
         risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), dict) else {}
-        return current_loss + added_loss <= float(risk.get("maximum_loss_at_full_depth") or 0.0) + 1e-9
+        current_exposure = sum(
+            float(position["entry_price"]) * float(position["quantity"])
+            for position in state["positions"]
+        )
+        projected_exposure = current_exposure + price * quantity
+        equity = float(risk.get("equity") or 0.0)
+        projected_leverage = projected_exposure / equity if equity > 0 else float("inf")
+        return (
+            current_loss + added_loss <= float(risk.get("maximum_loss_at_full_depth") or 0.0) + 1e-9
+            and projected_exposure <= float(risk.get("max_notional") or 0.0) + 1e-9
+            and projected_leverage <= float(risk.get("leverage_limit") or 0.0) + 1e-9
+        )
 
     def _catch_up_crossed_entry(
         self,
@@ -786,6 +819,8 @@ class DcaTestnetLifecycle:
             self._save(state)
             return
         index = int(pending.get("strategy_plan_entry_index") or 0)
+        attempt = int(state.get("catch_up_attempts") or 0) + 1
+        state["catch_up_attempts"] = attempt
         quantity = self._entry_quantity(plan, planned)
         if not self._projected_entry_within_budget(plan, state, price=price, quantity=quantity):
             state["status"] = "budget_exhausted"
@@ -804,6 +839,7 @@ class DcaTestnetLifecycle:
             order_type="market",
             time_in_force="ioc",
             planned_price=planned,
+            attempt=attempt,
         )
         try:
             receipt = self.broker.submit_order(
@@ -846,9 +882,11 @@ class DcaTestnetLifecycle:
         )
 
     @staticmethod
-    def _command(plan: dict[str, Any], state: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False, order_type: str = "limit", time_in_force: str = "gtc", planned_price: float | None = None) -> dict[str, Any]:
+    def _command(plan: dict[str, Any], state: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False, order_type: str = "limit", time_in_force: str = "gtc", planned_price: float | None = None, attempt: int | None = None) -> dict[str, Any]:
+        suffix = f":attempt:{attempt}" if attempt is not None else ""
+        ticket_id = f"{state['strategy_plan_id']}:{event}:{index}{suffix}"
         return {
-            "ticket_id": f"{state['strategy_plan_id']}:{event}:{index}",
+            "ticket_id": ticket_id,
             "instrument_id": str(plan.get("instrument_id") or plan.get("execution_context", {}).get("instrument_id") or "BTC-USD-PERP"),
             "side": ("buy" if state["direction"] == "long" else "sell") if DcaTestnetLifecycle._is_entry_event(event) else ("sell" if state["direction"] == "long" else "buy"),
             "order_type": "limit" if order_type == "market" else order_type,
@@ -859,7 +897,7 @@ class DcaTestnetLifecycle:
             "planned_price": planned_price if planned_price is not None else price,
             "strategy_plan_entry_index": index,
             "quantity": quantity,
-            "idempotency_key": f"{state['strategy_plan_id']}:{event}:{index}",
+            "idempotency_key": ticket_id,
             "reduce_only": reduce_only,
             "close_position": reduce_only,
             "event": event,
@@ -924,7 +962,7 @@ class DcaTestnetLifecycle:
 
     @staticmethod
     def _is_entry_event(event: object) -> bool:
-        return str(event or "") in {"entry", "entry_catch_up"}
+        return str(event or "") == "entry" or str(event or "").startswith("entry_catch_up")
 
     @staticmethod
     def _order_id_for_client(state: dict[str, Any], client_id: str) -> str:
@@ -940,7 +978,15 @@ class DcaTestnetLifecycle:
         dca = plan.get("dca") if isinstance(plan.get("dca"), dict) else {}
         direction = str(plan.get("direction") or "").lower()
         levels = [float(value) for value in dca.get("entry_levels") or []]
-        if direction not in {"long", "short"} or not levels or not plan.get("strategy_plan_id") or not plan.get("cycle_id") or not plan.get("plan_digest"):
+        if (
+            direction not in {"long", "short"}
+            or not levels
+            or not plan.get("strategy_plan_id")
+            or not plan.get("cycle_id")
+            or not plan.get("plan_digest")
+            or not str(plan.get("strategy_session_id") or "").strip()
+            or not str(plan.get("strategy_revision_id") or "").strip()
+        ):
             raise ValueError("DCA Testnet StrategyPlan identity is incomplete")
         return {
             "plan_id": str(plan["strategy_plan_id"]),

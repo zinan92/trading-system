@@ -138,7 +138,9 @@ def test_testnet_composition_is_explicit_local_fixture_and_ready(tmp_path: Path)
     preflight = adapter.preflight()
 
     assert adapter.name == "standard_broker_testnet"
-    assert preflight["ready"] is True
+    assert preflight["ready"] is False
+    assert "account.read" in preflight["capability_gaps"]
+    assert "protection_order.submit" in preflight["capability_gaps"]
     assert preflight["environment"] == "testnet"
     assert preflight["network_io"] is False
     assert preflight["external_network"] is True

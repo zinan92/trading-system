@@ -243,27 +243,46 @@ class StandardBrokerTestnetExecutionAdapter:
         return self._ledger
 
     def preflight(self) -> dict[str, Any]:
-        result = self._runtime.preflight(
-            required_operations={
-                "order_execution": {
-                    "submit",
-                    "cancel",
-                    "replace",
-                    "query",
-                    "open_orders",
-                }
-            }
-        )
+        required_operations = {
+            "order_execution": {"submit", "cancel", "replace", "query", "open_orders"},
+            "account": {"read"},
+            "protection_order": {
+                "submit",
+                "cancel",
+                "cancel_replace",
+                "query",
+                "reduce_only",
+                "mark_price_trigger",
+                "grouped_tp_sl",
+                "sibling_cancellation",
+                "position_following",
+                "position_level_tpsl",
+                "take_profit_market",
+                "stop_loss_market",
+            },
+        }
+        capability_gaps = [
+            f"{port}.{operation}"
+            for port, operations in required_operations.items()
+            for operation in operations
+            if not self._runtime.session.capabilities.supports(port, operation)
+        ]
+        runtime_error = None
+        try:
+            result = self._runtime.preflight(required_operations=required_operations)
+        except Exception as exc:  # noqa: BLE001 - preflight is a read-only blocker surface.
+            result = None
+            runtime_error = f"{type(exc).__name__}:{exc}"
         return {
             "provider": self.provider,
             "broker_id": self.broker_config["broker_id"],
             "mode": "testnet",
             "environment": "testnet",
-            "ready": True,
+            "ready": result is not None and not capability_gaps,
             "network_io": False,
             "external_network": True,
             "real_money_eligible": False,
-            "credential_required": result.credential_required,
+            "credential_required": result.credential_required if result is not None else True,
             "control_plane": "telegram",
             "transport_state": "local_fixture",
             "account_id": self.broker_config["account_id"],
@@ -271,9 +290,11 @@ class StandardBrokerTestnetExecutionAdapter:
             "release_sha": self.broker_config["release_sha"],
             "environment_fingerprint": self.broker_config["environment_fingerprint"],
             "ledger_namespace": self.broker_config["ledger_namespace"],
-            "capability_revision": result.capability_revision,
-            "protection_ready": self._protection is not None,
-            "account_read_ready": self._account is not None,
+            "capability_revision": result.capability_revision if result is not None else self._runtime.session.capabilities.revision,
+            "protection_ready": self._protection is not None and not any(gap.startswith("protection_order.") for gap in capability_gaps),
+            "account_read_ready": self._account is not None and "account.read" not in capability_gaps,
+            "capability_gaps": capability_gaps,
+            "runtime_blocker": runtime_error,
         }
 
     def submit_order(self, request: BrokerOrderRequest) -> Any:

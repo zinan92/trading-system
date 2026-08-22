@@ -291,6 +291,8 @@ def test_dca_testnet_restart_does_not_reopen_terminal_revision(tmp_path: Path) -
     assert terminal["status"] == "terminal"
     assert restarted["status"] == "terminal"
     assert restarted["sealed"] is True
+    assert restarted["park_notification"]["status"] == "queued"
+    assert {event["event"] for event in restarted["events"]} >= {"revision_sealed", "park_notification_queued"}
 
 
 def test_dca_testnet_terminal_does_not_seal_when_broker_position_remains(tmp_path: Path) -> None:
@@ -341,6 +343,22 @@ def test_dca_testnet_slippage_records_actual_fill_and_submits_reduce_only_recove
     recovery = next(row for row in slipped["orders"] if row["event"] == "risk_recovery")
     assert recovery["reduce_only"] is True
     assert slipped["fills"][0]["slippage"] == 100
+    recovered = lifecycle.on_fill(plan, _fill(recovery, price=64000, tid=67), timestamp="2026-08-22T01:02:00+00:00")
+    assert recovered["status"] == "terminal"
+    assert recovered["sealed"] is True
+
+
+def test_dca_testnet_loss_budget_breach_submits_recovery_after_recording_fill(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["risk_budget"] = {**plan["risk_budget"], "maximum_loss_at_full_depth": 100.0}
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    breached = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65010, tid=68), timestamp="2026-08-22T01:01:00+00:00")
+
+    assert breached["status"] == "blocked_risk_flattening"
+    assert breached["positions"][0]["quantity"] > 0
+    assert any(row["event"] == "risk_recovery" and row["reduce_only"] for row in breached["orders"])
 
 
 def test_dca_testnet_terminal_stop_is_immutable(tmp_path: Path) -> None:
