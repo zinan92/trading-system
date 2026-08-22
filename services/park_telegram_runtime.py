@@ -66,6 +66,7 @@ from services.telegram_bot_transport import (
     TelegramBotTransport,
     TelegramBotTransportError,
 )
+from services.testnet_soak_readiness import TestnetSoakReadiness
 
 PARK_TELEGRAM_RUNTIME_SCHEMA = "park-telegram-runtime-v1"
 
@@ -933,6 +934,7 @@ class ParkTelegramRouter:
             "orders": list(account.get("orders") or snapshot.get("orders") or [])
             if isinstance(snapshot, Mapping)
             else list(account.get("orders") or []),
+            "testnet_readiness": TestnetSoakReadiness(self.output_root).public_status(now=self.now()),
         }
 
     def _deterministic_conversation_fallback(
@@ -947,6 +949,7 @@ class ParkTelegramRouter:
             market = context.get("market") if isinstance(context.get("market"), Mapping) else {}
             strategy = context.get("strategy") if isinstance(context.get("strategy"), Mapping) else {}
             account = context.get("account") if isinstance(context.get("account"), Mapping) else {}
+            readiness = context.get("testnet_readiness") if isinstance(context.get("testnet_readiness"), Mapping) else {}
             price = market.get("price")
             if strategy.get("status") == "pending_confirmation":
                 strategy_status = "有一张策略提案正在等待你的确认，但还没有执行"
@@ -966,7 +969,8 @@ class ParkTelegramRouter:
                 nav_text = "当前 Paper NAV：暂不可计算（当前行情信任/新鲜度闸未通过）"
             reply = (
                 f"{strategy_status}。当前 Paper 价格：{price_text}。\n"
-                f"{exposure_text}。\n{nav_text}。"
+                f"{exposure_text}。\n{nav_text}。\n"
+                f"Testnet soak readiness：{readiness.get('status', 'missing')}，窗口 {readiness.get('window_count', 0)}/{readiness.get('required_window_count', 14)}；Live 仍关闭。"
             )
             return {
                 "status": "conversation_replied",

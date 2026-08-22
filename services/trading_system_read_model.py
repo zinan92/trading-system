@@ -195,6 +195,7 @@ def project_trading_system_read_model(
         "operations": {
             "safe_repair_queue": _json_copy(_mapping(source.get("safe_repair_queue"))),
             "cloud_health": _json_copy(_mapping(source.get("cloud_health"))),
+            "testnet_readiness": _project_testnet_readiness(source.get("testnet_readiness")),
         },
         "ui_capabilities": _json_copy(_mapping(source.get("ui_capabilities"))),
         "safety": {
@@ -675,6 +676,23 @@ def _project_grid_lifecycle(value: Any) -> dict[str, Any]:
         "reconciliation_status": str(source.get("reconciliation_status") or "unknown"),
         "lines": lines,
         "synthetic_candle_fill_inference": False,
+    }
+
+
+def _project_testnet_readiness(value: Any) -> dict[str, Any]:
+    """Expose readiness evidence without implying Live authorization."""
+
+    source = _mapping(value)
+    status = str(source.get("status") or "incomplete")
+    if status not in {"ready", "blocked", "stale", "incomplete", "missing"}:
+        status = "incomplete"
+    return {
+        **_json_copy(source),
+        "status": status,
+        "environment": "testnet",
+        "live_enabled": False,
+        "live_writes_enabled": False,
+        "operator_action": "notify_park_and_wait" if status in {"blocked", "stale", "missing"} else "await_manual_live_activation" if status == "ready" else "continue_soak",
     }
 
 

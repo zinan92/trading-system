@@ -95,6 +95,7 @@ from services.trading_system_read_model import (
 )
 from services.trading_daily_24h_report import load_daily_report_rows
 from services.cloud_daily_self_review import load_daily_self_review
+from services.testnet_soak_readiness import TestnetSoakReadiness
 from services.cloud_access_gateway import authenticated_access_identity
 from pipelines.cloud_health import build_cloud_health
 
@@ -1597,6 +1598,7 @@ def _assemble_strategy_console_snapshot(
         "safe_repair_queue": safe_repair_queue,
         "cloud_health": cloud_health,
         "cycle_decision": cycle_decision,
+        "testnet_readiness": TestnetSoakReadiness(output).public_status(now=datetime.now(timezone.utc).isoformat()),
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
             "one_production_strategy": True,
