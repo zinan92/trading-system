@@ -74,6 +74,16 @@ def _number(value: Any, name: str) -> float:
     return result
 
 
+def _nonnegative(value: Any, name: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise LiveDcaCanaryError("account_snapshot_invalid", f"{name} must be numeric") from exc
+    if not math.isfinite(result) or result < 0:
+        raise LiveDcaCanaryError("account_snapshot_invalid", f"{name} must be nonnegative and finite")
+    return result
+
+
 class LiveDcaCanary:
     """One attended, bounded DCA Live canary over an injected transport."""
 
@@ -429,7 +439,7 @@ class LiveDcaCanary:
         }
         response = self._call("account_snapshot", request, timestamp=timestamp)
         self._require(response.get("status") in {"ok", "pass", "ready"}, "account_snapshot_unknown", response)
-        fields = {key: _number(response.get(key), key) for key in ("open_orders", "open_positions", "notional", "leverage", "loss")}
+        fields = {key: _nonnegative(response.get(key), key) for key in ("open_orders", "open_positions", "notional", "leverage", "loss")}
         if fields["open_orders"] > limits["max_open_orders"] or fields["open_positions"] > limits["max_positions"] or fields["notional"] > limits["max_notional"] or fields["leverage"] > limits["max_leverage"] or fields["loss"] > limits["max_acceptable_loss"]:
             self._require(False, "current_risk_ceiling_exceeded", {"account": fields, "limits": dict(limits)})
         return {"status": str(response.get("status")), **fields}
