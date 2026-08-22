@@ -85,6 +85,7 @@ class LiveActivationGate:
         readiness_reviews_resolver: Any | None = None,
         credential_presence_resolver: Any | None = None,
         approved_plan_resolver: Any | None = None,
+        park_approval_resolver: Any | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "live_activation"
@@ -100,6 +101,7 @@ class LiveActivationGate:
         self._readiness_reviews_resolver = readiness_reviews_resolver or self._default_readiness_reviews
         self._credential_presence_resolver = credential_presence_resolver or (lambda name: bool(os.getenv(name)))
         self._approved_plan_resolver = approved_plan_resolver or self._default_approved_plan
+        self._park_approval_resolver = park_approval_resolver or self._default_park_approval
 
     def rows(self) -> list[dict[str, Any]]:
         return [dict(row) for row in load_json(self.path) if isinstance(row, dict)]
@@ -688,10 +690,38 @@ class LiveActivationGate:
             or not _SHA256.fullmatch(str(value.get("approval_receipt_digest") or ""))
         ):
             return None
+        try:
+            approval_bound = bool(self._park_approval_resolver(str(plan_digest), str(value.get("approval_receipt_digest") or "")))
+        except Exception:
+            approval_bound = False
+        if not approval_bound:
+            return None
         canonical = value.get("canonical_plan")
         if not isinstance(canonical, Mapping) or str(canonical.get("strategy_type") or canonical.get("strategy_scope") or "").lower() != "dca" or str(canonical.get("plan_digest") or "") != str(plan_digest):
             return None
         return dict(value)
+
+    def _default_park_approval(self, plan_digest: str, receipt_digest: str) -> bool:
+        path = self.output_root / "park_strategy" / "confirmations.jsonl"
+        if not path.exists():
+            return False
+        try:
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        for decision in reversed(rows):
+            if not isinstance(decision, Mapping) or decision.get("event") != "confirmed":
+                continue
+            if str(decision.get("plan_digest") or "") != str(plan_digest) or str(decision.get("receipt_digest") or "") != str(receipt_digest) or decision.get("execution_authorized") is not True:
+                continue
+            proposal_id = str(decision.get("proposal_id") or "")
+            proposal = next((row for row in rows if isinstance(row, Mapping) and row.get("event") == "proposal" and str(row.get("proposal_id") or "") == proposal_id), None)
+            if not isinstance(proposal, Mapping) or str(proposal.get("plan_digest") or "") != str(plan_digest):
+                continue
+            expected = "sha256:" + hashlib.sha256(f"{proposal_id}|{plan_digest}|confirmed|{decision.get('confirmed_at')}".encode("utf-8")).hexdigest()
+            if expected == receipt_digest and str(decision.get("execution_environment") or "paper") in {"paper", "testnet"}:
+                return True
+        return False
 
     @staticmethod
     def _declared_capabilities(capabilities: Mapping[str, Any]) -> set[str]:

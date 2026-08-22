@@ -74,6 +74,21 @@ def create_proposal(
     )
     if preflight.get("status") != "ready_for_activation":
         return {"status": "blocked", "preflight": preflight, "proposal": None, "network_io": False, "live_writes_enabled": False}
+    approval_path = output_root / "dualtrack" / "live_activation" / "approved_dca_plan.json"
+    existing_approval = load_json(approval_path)
+    if existing_approval and existing_approval[-1] != dict(approved_plan):
+        return {
+            "status": "blocked",
+            "code": "approved_dca_plan_immutable",
+            "preflight": preflight,
+            "proposal": None,
+            "network_io": False,
+            "live_writes_enabled": False,
+        }
+    if not existing_approval:
+        from services.journal_store import write_json
+
+        write_json(approval_path, [dict(approved_plan)])
     proposal = gate.prepare_activation(preflight, plan_digest=plan_digest, expires_at=expires_at)
     return {"status": "awaiting_confirmation", "preflight": preflight, "proposal": proposal, "network_io": False, "live_writes_enabled": False}
 
