@@ -67,6 +67,7 @@ from services.telegram_bot_transport import (
     TelegramBotTransportError,
 )
 from services.testnet_soak_readiness import TestnetSoakReadiness
+from services.live_activation_gate import LiveActivationGate
 
 PARK_TELEGRAM_RUNTIME_SCHEMA = "park-telegram-runtime-v1"
 
@@ -498,6 +499,11 @@ class ParkTelegramRouter:
     ) -> None:
         self.output_root = Path(output_root)
         self.telegram = ParkTelegramLedger(self.output_root, park_user_id=park_user_id, chat_id=chat_id)
+        self.live_activation = LiveActivationGate(
+            self.output_root,
+            park_user_id=park_user_id,
+            park_chat_id=chat_id,
+        )
         self.result_path = self.output_root / "park_strategy" / "telegram_results.jsonl"
         self.identity = ParkStrategyIdentityJournal(self.output_root)
         self.confirmations = ParkConfirmationLedger(self.output_root, park_user_id=park_user_id)
@@ -601,6 +607,8 @@ class ParkTelegramRouter:
                 legacy_digest,
                 update_id=received.get("update_id"),
             )
+        elif text.lower().startswith(("confirm live",)) or text.startswith("确认 live"):
+            result = self._handle_live_activation_confirmation(text, received=received)
         elif text.lower().startswith(("confirm", "reject")) or text.startswith(("确认", "拒绝")):
             result = self._handle_confirmation(text, active=active, update_id=received.get("update_id"))
         else:
@@ -610,6 +618,50 @@ class ParkTelegramRouter:
                 update_id=received.get("update_id"),
             )
         return self._remember_result(update_id, result, update_digest=update_digest)
+
+    def _handle_live_activation_confirmation(self, text: str, *, received: Mapping[str, Any]) -> dict[str, Any]:
+        """Route the exact Live activation command through the source-bound gate."""
+
+        proposals = [row for row in self.live_activation.rows() if row.get("event") == "activation_proposed"]
+        proposal = proposals[-1] if proposals else None
+        tokens = str(text or "").strip().split()
+        activation_digest = tokens[2] if len(tokens) > 2 else ""
+        if proposal is None:
+            return self._block(
+                code="live_activation_missing",
+                message="No source-bound Live activation proposal is waiting for confirmation.",
+                binding=None,
+                idempotency_key=f"live-activation-missing:{received.get('update_id')}",
+            )
+        decision = self.live_activation.confirm(
+            activation_digest=activation_digest,
+            command_text=text,
+            park_user_id=self.telegram.park_user_id,
+            telegram_update_id=received.get("update_id"),
+            telegram_message_id=received.get("message_id"),
+            telegram_chat_id=received.get("chat_id"),
+            telegram_receipt=received,
+            current_preflight=proposal.get("preflight") if isinstance(proposal.get("preflight"), Mapping) else None,
+            now=time.time(),
+        )
+        if decision.get("event") == "activation_confirmed":
+            outbound = self.telegram.queue_outbound(
+                idempotency_key=f"live-activation-confirmed:{decision.get('activation_digest')}",
+                message_type="live_activation_receipt",
+                text=(
+                    "Live activation intent recorded for the exact release/account/plan. "
+                    "Live writes remain disabled until the separately attended DCA canary passes."
+                ),
+                binding=None,
+            )
+            return {"status": "live_activation_confirmed", "decision": decision, "outbound": outbound, "execution_authorized": False}
+        return {
+            "status": "blocked",
+            "code": str(decision.get("code") or "live_activation_rejected"),
+            "next_action": "notify_park_and_wait",
+            "decision": decision,
+            "execution_authorized": False,
+        }
 
     def recover_pending_legacy_cutovers(self) -> list[dict[str, Any]]:
         """Reprocess an explicit legacy phrase already ingested before a fix.

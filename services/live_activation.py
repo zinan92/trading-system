@@ -22,11 +22,11 @@ class LiveActivationGate(SourceBoundLiveActivationGate):
     protocol; neither path enables network writes.
     """
 
-    def __init__(self, output_root: Path | None = None, *, park_user_id: str = "") -> None:
+    def __init__(self, output_root: Path | None = None, *, park_user_id: str = "", park_chat_id: str | int | None = None) -> None:
         config = load_pipeline_config()
         self.config = config
         self.output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
-        super().__init__(self.output_root, park_user_id=park_user_id, repo_root=ROOT)
+        super().__init__(self.output_root, park_user_id=park_user_id, park_chat_id=park_chat_id, repo_root=ROOT)
 
     def run(self, run_date: str) -> dict:
         live_env = LiveEnvStatus(self.output_root).run(run_date)

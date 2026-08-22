@@ -127,18 +127,10 @@ class LiveBrokerAdapter:
                 f"live broker preflight failed: {readiness['block_reason']}"
             )
         if not self.dry_run:
-            if self._source_bound_live_scope():
-                activation = SourceBoundLiveActivationGate(self.output_root, park_user_id="").canary_status()
-                if activation.get("ready") is not True:
-                    raise RuntimeError(
-                        "source-bound Live activation/canary is not ready; "
-                        "real broker submission is blocked"
-                    )
-            else:
-                activation = self._live_activation(request.run_date)
-            if not self._source_bound_live_scope() and activation.get("real_money_ready") is not True:
+            activation = SourceBoundLiveActivationGate(self.output_root, park_user_id="").canary_status()
+            if activation.get("ready") is not True:
                 raise RuntimeError(
-                    "live activation gate is not real_money_ready; "
+                    "source-bound Live activation/canary is not ready; "
                     "real broker submission is blocked"
                 )
         if self.provider == "mt5_file_bridge":
@@ -158,9 +150,6 @@ class LiveBrokerAdapter:
                 "order submission yet"
             )
         return self._record_dry_run_request(request, readiness)
-
-    def _source_bound_live_scope(self) -> bool:
-        return str(self.provider).lower() in {"hyperliquid", "standard_broker"} or str(self.broker_config.get("broker_id") or "").lower() == "hyperliquid"
 
     def preflight(self) -> dict:
         if self.provider == "mt5_file_bridge":

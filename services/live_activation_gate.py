@@ -81,6 +81,7 @@ class LiveActivationGate:
         source_attestation_resolver: Any | None = None,
         readiness_receipt_resolver: Any | None = None,
         readiness_windows_resolver: Any | None = None,
+        readiness_reviews_resolver: Any | None = None,
         credential_presence_resolver: Any | None = None,
     ) -> None:
         self.output_root = Path(output_root)
@@ -94,6 +95,7 @@ class LiveActivationGate:
         )
         self._readiness_receipt_resolver = readiness_receipt_resolver or self._default_readiness_receipt
         self._readiness_windows_resolver = readiness_windows_resolver or self._default_readiness_windows
+        self._readiness_reviews_resolver = readiness_reviews_resolver or self._default_readiness_reviews
         self._credential_presence_resolver = credential_presence_resolver or (lambda name: bool(os.getenv(name)))
 
     def rows(self) -> list[dict[str, Any]]:
@@ -522,6 +524,7 @@ class LiveActivationGate:
             return False
         try:
             windows = list(self._readiness_windows_resolver())
+            reviews = list(self._readiness_reviews_resolver())
         except Exception:
             return False
         ordered = sorted((item for item in windows if isinstance(item, Mapping)), key=lambda item: int(item.get("window_index") or 0))
@@ -537,6 +540,17 @@ class LiveActivationGate:
             for item in ordered
         ):
             return False
+        review_by_window = {
+            str(item.get("record_window_id") or ""): item
+            for item in reviews
+            if isinstance(item, Mapping) and item.get("event") == "window_review"
+        }
+        for item in ordered:
+            review = review_by_window.get(str(item.get("record_window_id") or ""))
+            if not isinstance(review, Mapping) or review.get("review_digest") != _digest(review.get("review") or {}):
+                return False
+            if str(item.get("review_digest") or "") != str(review.get("review_digest") or ""):
+                return False
         return True
 
     def _default_readiness_receipt(self) -> Mapping[str, Any]:
@@ -545,6 +559,9 @@ class LiveActivationGate:
 
     def _default_readiness_windows(self) -> list[Mapping[str, Any]]:
         return load_json(self.output_root / "dualtrack" / "testnet_soak" / "windows.json")
+
+    def _default_readiness_reviews(self) -> list[Mapping[str, Any]]:
+        return load_json(self.output_root / "dualtrack" / "testnet_soak" / "reviews.json")
 
     @staticmethod
     def _declared_capabilities(capabilities: Mapping[str, Any]) -> set[str]:

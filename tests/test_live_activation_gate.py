@@ -7,8 +7,9 @@ from services.broker_adapter import LiveBrokerAdapter
 from services.broker_port import BrokerOrderRequest
 
 
-def _readiness(source: dict) -> tuple[dict, list[dict]]:
+def _readiness(source: dict) -> tuple[dict, list[dict], list[dict]]:
     rows = []
+    reviews = []
     required_categories = {
         "orders_fills_positions_reconciliation": {"observed_at": "2026-08-20T01:00:00+00:00"},
         "protection_coverage": {"observed_at": "2026-08-20T01:00:00+00:00"},
@@ -22,12 +23,16 @@ def _readiness(source: dict) -> tuple[dict, list[dict]]:
     for index in range(14):
         row = {
             "window_index": index,
+            "record_window_id": f"soak-window-{index:02d}",
             "status": "pass",
             "blockers": [],
             "package_status": "complete",
-            "review_digest": "sha256:" + f"{index + 1:064x}"[-64:],
             "gate_evidence": required_categories,
         }
+        review = {"status": "pass", "window_index": index}
+        review_digest = _digest(review)
+        row["review_digest"] = review_digest
+        reviews.append({"event": "window_review", "record_window_id": row["record_window_id"], "review": review, "review_digest": review_digest})
         row["row_digest"] = _digest({key: value for key, value in row.items() if key != "row_digest"})
         rows.append(row)
     receipt = {
@@ -47,18 +52,19 @@ def _readiness(source: dict) -> tuple[dict, list[dict]]:
     receipt["window_digests"] = [row["row_digest"] for row in rows]
     receipt["required_day_count"] = 7
     receipt["receipt_digest"] = _digest({key: value for key, value in receipt.items() if key != "receipt_digest"})
-    return receipt, rows
+    return receipt, rows, reviews
 
 
 def _ready_gate(tmp_path: Path) -> tuple[LiveActivationGate, dict, list[dict]]:
     source = current_source_attestation(Path(__file__).resolve().parents[1])
-    readiness, rows = _readiness(source)
+    readiness, rows, reviews = _readiness(source)
     gate = LiveActivationGate(
         tmp_path / "outputs",
         park_user_id="park",
         park_chat_id="chat",
         readiness_receipt_resolver=lambda: readiness,
         readiness_windows_resolver=lambda: rows,
+        readiness_reviews_resolver=lambda: reviews,
         credential_presence_resolver=lambda _: True,
     )
     return gate, readiness, rows
