@@ -187,8 +187,18 @@ class DcaTestnetLifecycle:
             self._block(state, f"fill_rejected:{type(exc).__name__}:{exc}", timestamp=timestamp)
             self._save(state)
             raise DcaTestnetLifecycleError(state["blocker"]) from exc
-        fill_id = str(raw_fill.get("tid") or raw_fill.get("hash") or "")
-        if fill_id in {str(row.get("fill_id") or "") for row in state["fills"]}:
+        fill_identities = [
+            str(raw_fill.get(key) or "")
+            for key in ("tid", "hash")
+            if str(raw_fill.get(key) or "")
+        ]
+        fill_id = fill_identities[0] if fill_identities else ""
+        if any(
+            set(fill_identities).intersection(
+                set(row.get("fill_identities") or [str(row.get("fill_id") or "")])
+            )
+            for row in state["fills"]
+        ):
             return self.snapshot(plan)
         receipt_state = str(getattr(receipt.state, "value", receipt.state) or "").lower()
         if receipt_state in {"unknown", "rejected"}:
@@ -202,6 +212,7 @@ class DcaTestnetLifecycle:
         slippage = abs(price - planned_price)
         fill = {
             "fill_id": fill_id,
+            "fill_identities": fill_identities,
             "order_id": order_id,
             "event": order["event"],
             "quantity": quantity,
@@ -220,6 +231,19 @@ class DcaTestnetLifecycle:
         order["filled_quantity"] = float(receipt.filled_quantity)
         order["average_fill_price"] = price
         slippage_exceeded = max_slippage not in (None, "") and slippage > float(max_slippage)
+        is_entry_event = self._is_entry_event(order["event"])
+        if receipt_state == "partially_filled" and not is_entry_event:
+            group_before_exit = self._protection_group(plan, state, state["positions"][0]) if state["positions"] else None
+            self._decrease_position(state, quantity)
+            if sum(float(row["quantity"]) for row in state["positions"]) <= 1e-9:
+                self._complete_terminal_exit(plan, state, order=order, timestamp=timestamp, group_before_exit=group_before_exit)
+            else:
+                self._confirm_or_update_protection(plan, state, timestamp=timestamp)
+                if state["status"] not in {"blocked_protection", "blocked_reconciliation"}:
+                    state["status"] = "stopping" if order["event"] == "stop" else "target_triggered"
+            state["updated_at"] = timestamp
+            self._save(state)
+            return self.snapshot(plan)
         if receipt_state == "partially_filled":
             self._increase_position(state, order, quantity, price)
             if slippage_exceeded:
@@ -238,7 +262,7 @@ class DcaTestnetLifecycle:
             state["updated_at"] = timestamp
             self._save(state)
             return self.snapshot(plan)
-        if self._is_entry_event(order["event"]):
+        if is_entry_event:
             self._increase_position(state, order, quantity, price)
             if slippage_exceeded:
                 self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
@@ -256,36 +280,10 @@ class DcaTestnetLifecycle:
             elif state["status"] == "blocked_protection":
                 self._flatten_after_protection_failure(plan, state, timestamp=timestamp)
         else:
-            group_before_exit = (
-                self._protection_group(plan, state, state["positions"][0])
-                if state["positions"]
-                else None
-            )
+            group_before_exit = self._protection_group(plan, state, state["positions"][0]) if state["positions"] else None
             self._decrease_position(state, quantity)
             if sum(float(row["quantity"]) for row in state["positions"]) <= 1e-9:
-                try:
-                    if group_before_exit is not None and state.get("protection") is not None:
-                        self.broker.request("protection_order", "cancel", group_before_exit)
-                    state["positions"] = []
-                    reconciliation = self._terminal_reconciliation(state, timestamp)
-                    state["reconciliation"] = reconciliation
-                    if reconciliation["status"] != "ok":
-                        self._block(state, "terminal_reconciliation_blocked", timestamp=timestamp)
-                    else:
-                        state["status"] = "terminal"
-                        state["terminal_reason"] = order["event"]
-                        state["protection"] = None
-                        state["sealed"] = True
-                        self._queue_park_notification(state, timestamp=timestamp, reason=order["event"])
-                        state["next_action"] = "notify_park_and_wait"
-                        self._record_event(state, "revision_sealed", timestamp=timestamp, reason=order["event"])
-                        self._record_event(state, "terminal_closed", timestamp=timestamp, reason=order["event"])
-                except Exception as exc:  # noqa: BLE001 - terminal protection close remains blocked.
-                    self._block(
-                        state,
-                        f"terminal_protection_cancel_failed:{type(exc).__name__}:{exc}",
-                        timestamp=timestamp,
-                    )
+                self._complete_terminal_exit(plan, state, order=order, timestamp=timestamp, group_before_exit=group_before_exit)
         state["updated_at"] = timestamp
         self._save(state)
         return self.snapshot(plan)
@@ -315,8 +313,22 @@ class DcaTestnetLifecycle:
         stop = float(plan["dca"]["stop_price"])
         target_hit = price >= target if identity["direction"] == "long" else price <= target
         stop_hit = price <= stop if identity["direction"] == "long" else price >= stop
-        if stop_hit and state["positions"]:
-            return self.stop(plan, timestamp=timestamp, reason="strategy_stop", price=stop)
+        if stop_hit:
+            if state["positions"]:
+                return self.stop(plan, timestamp=timestamp, reason="strategy_stop", price=stop)
+            if not self._cancel_entries(state, timestamp=timestamp, reason="strategy_stop_before_entry"):
+                state["updated_at"] = timestamp
+                self._save(state)
+                return self.snapshot(plan)
+            state["status"] = "stopped"
+            state["sealed"] = True
+            state["terminal_reason"] = "strategy_stop_before_entry"
+            self._queue_park_notification(state, timestamp=timestamp, reason="strategy_stop_before_entry")
+            state["next_action"] = "notify_park_and_wait"
+            self._record_event(state, "revision_sealed", timestamp=timestamp, reason="strategy_stop_before_entry")
+            state["updated_at"] = timestamp
+            self._save(state)
+            return self.snapshot(plan)
         if target_hit and state["positions"]:
             if not self._cancel_entries(state, timestamp=timestamp, reason="take_profit"):
                 state["updated_at"] = timestamp
@@ -429,6 +441,39 @@ class DcaTestnetLifecycle:
         )
         state["status"] = "protection_blocked_flattening"
         self._record_event(state, "protection_failure_flatten_submitted", timestamp=timestamp)
+
+    def _complete_terminal_exit(
+        self,
+        plan: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        order: dict[str, Any],
+        timestamp: str,
+        group_before_exit: Any | None = None,
+    ) -> None:
+        try:
+            if group_before_exit is not None and state.get("protection") is not None:
+                self.broker.request("protection_order", "cancel", group_before_exit)
+            state["positions"] = []
+            reconciliation = self._terminal_reconciliation(state, timestamp)
+            state["reconciliation"] = reconciliation
+            if reconciliation["status"] != "ok":
+                self._block(state, "terminal_reconciliation_blocked", timestamp=timestamp)
+            else:
+                state["status"] = "terminal"
+                state["terminal_reason"] = order["event"]
+                state["protection"] = None
+                state["sealed"] = True
+                self._queue_park_notification(state, timestamp=timestamp, reason=order["event"])
+                state["next_action"] = "notify_park_and_wait"
+                self._record_event(state, "revision_sealed", timestamp=timestamp, reason=order["event"])
+                self._record_event(state, "terminal_closed", timestamp=timestamp, reason=order["event"])
+        except Exception as exc:  # noqa: BLE001 - terminal protection close remains blocked.
+            self._block(
+                state,
+                f"terminal_protection_cancel_failed:{type(exc).__name__}:{exc}",
+                timestamp=timestamp,
+            )
 
     def _flatten_after_block(
         self,

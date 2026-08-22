@@ -276,12 +276,18 @@ def build_dca_strategy_plan(
     strategy_plan_id: str,
     version: int,
     locked_at: str,
+    strategy_session_id: str | None = None,
+    strategy_revision_id: str | None = None,
 ) -> dict[str, Any]:
     """Project a preview into a serializable StrategyPlan without persistence."""
 
     if preview.get("schema_version") != DCA_PREVIEW_SCHEMA:
         raise ValueError("DCA StrategyPlan requires a versioned DCA preview")
-    return {
+    risk = dict(preview["risk"])
+    risk.setdefault("max_notional", preview["dca"].get("total_possible_notional"))
+    risk.setdefault("max_open_orders", int(preview["dca"].get("max_additions") or len(preview.get("entries") or [])))
+    risk.setdefault("max_open_positions", 1)
+    plan = {
         "schema_version": DCA_PLAN_SCHEMA,
         "strategy_type": "dca",
         "strategy_plan_id": _required_text(strategy_plan_id, "strategy_plan_id"),
@@ -296,7 +302,7 @@ def build_dca_strategy_plan(
             "aggregate_take_profit": dict(preview["aggregate_take_profit"]),
         },
         "execution_context": {"market": dict(preview["market"])},
-        "risk_budget": dict(preview["risk"]),
+        "risk_budget": risk,
         "preview_id": preview["preview_id"],
         "field_sources": {
             "direction": "confirmed",
@@ -304,6 +310,15 @@ def build_dca_strategy_plan(
             "risk_budget": "confirmed",
         },
     }
+    if strategy_session_id is not None:
+        plan["strategy_session_id"] = _required_text(strategy_session_id, "strategy_session_id")
+    if strategy_revision_id is not None:
+        plan["strategy_revision_id"] = _required_text(strategy_revision_id, "strategy_revision_id")
+    digest_payload = {key: value for key, value in plan.items() if key != "plan_digest"}
+    plan["plan_digest"] = "sha256:" + hashlib.sha256(
+        json.dumps(digest_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return plan
 
 
 def build_dca_entry_commands(

@@ -6966,7 +6966,7 @@ class StrategyControlPlane:
                 ),
             )
             raise
-        if state.get("status") not in {"waiting_entry", "open", "partial_entry", "budget_exhausted"}:
+        if state.get("status") not in {"waiting_entry", "open", "partial_entry"}:
             append_control_event(
                 self.output_root,
                 build_control_event(
@@ -7025,6 +7025,7 @@ class StrategyControlPlane:
         adapter: Any,
         fill: dict[str, Any] | None = None,
         price: float | None = None,
+        market: Mapping[str, Any] | None = None,
         timestamp: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -7044,6 +7045,21 @@ class StrategyControlPlane:
             )
         if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
             raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
+        if price is not None:
+            market_dict = dict(market or {})
+            if (
+                market_dict.get("execution_ready") is not True
+                or market_dict.get("fresh") is not True
+                or market_dict.get("is_synthetic") is True
+                or market_dict.get("fallback_policy") not in {"none", None}
+                or not isinstance(price, (int, float))
+                or not math.isfinite(float(price))
+                or float(price) <= 0
+            ):
+                raise StrategyControlMachineError(
+                    "testnet_market_not_authoritative",
+                    {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")},
+                )
         lifecycle = DcaTestnetLifecycle(self.output_root, adapter)
         observed_at = str(timestamp or self._authorization_clock())
         try:

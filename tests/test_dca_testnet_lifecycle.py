@@ -262,6 +262,25 @@ def test_dca_testnet_cancel_failure_stops_before_exit_submission(tmp_path: Path)
     assert not any(row["event"] == "stop" for row in blocked["orders"])
 
 
+def test_dca_testnet_partial_exit_reduces_position_and_refreshes_protection(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=69), timestamp="2026-08-22T01:01:00+00:00")
+    stopping = lifecycle.stop(plan, timestamp="2026-08-22T01:02:00+00:00", reason="strategy_stop", price=64000)
+    stop_order = next(row for row in stopping["orders"] if row["event"] == "stop")
+    partial = lifecycle.on_fill(
+        plan,
+        {**_fill(stop_order, price=64000, tid=70), "sz": str(float(stop_order["quantity"]) / 2)},
+        timestamp="2026-08-22T01:03:00+00:00",
+    )
+
+    assert partial["status"] == "stopping"
+    assert partial["positions"][0]["quantity"] == pytest.approx(float(stop_order["quantity"]) / 2)
+    assert partial["protection"]["quantity"] == pytest.approx(float(stop_order["quantity"]) / 2)
+
+
 def test_dca_testnet_restart_does_not_reopen_terminal_revision(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path, protection=True)
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
@@ -417,6 +436,20 @@ def test_dca_testnet_hash_only_fill_is_idempotent(tmp_path: Path) -> None:
     second = lifecycle.on_fill(plan, raw, timestamp="2026-08-22T01:02:00+00:00")
 
     assert len(first["fills"]) == len(second["fills"]) == 1
+    assert second["positions"][0]["quantity"] == first["positions"][0]["quantity"]
+
+
+def test_dca_testnet_tid_and_hash_aliases_are_one_fill_identity(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    first_raw = _fill(started["orders"][0], price=65000, tid=71)
+    first_raw["hash"] = "fill-hash-71"
+    first = lifecycle.on_fill(plan, {key: value for key, value in first_raw.items() if key != "tid"}, timestamp="2026-08-22T01:01:00+00:00")
+    second = lifecycle.on_fill(plan, first_raw, timestamp="2026-08-22T01:02:00+00:00")
+
+    assert len(second["fills"]) == 1
     assert second["positions"][0]["quantity"] == first["positions"][0]["quantity"]
 
 

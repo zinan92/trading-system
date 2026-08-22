@@ -249,6 +249,7 @@ class StandardBrokerTestnetExecutionAdapter:
             "protection_order": {
                 "submit",
                 "cancel",
+                "replace",
                 "cancel_replace",
                 "query",
                 "reduce_only",
