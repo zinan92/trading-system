@@ -493,6 +493,7 @@ class ParkTelegramRouter:
         confirmation_ttl_seconds: int = 900,
         intent_parser: Any | None = None,
         config: Mapping[str, Any] | None = None,
+        testnet_start_handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.telegram = ParkTelegramLedger(self.output_root, park_user_id=park_user_id, chat_id=chat_id)
@@ -519,6 +520,7 @@ class ParkTelegramRouter:
         )
         self.market_reader = market_reader or default_market_reader
         self.config = dict(config or {})
+        self.testnet_start_handler = testnet_start_handler
         self._uses_default_account_reader = account_reader is None
         self.account_reader = account_reader or (
             lambda root, cycle: default_account_reader(root, cycle, config=self.config)
@@ -1265,6 +1267,7 @@ class ParkTelegramRouter:
             _append_jsonl(plan_path, {"event": "plan_proposed", **plan, "created_at": observed_at})
             proposal_id = f"park-proposal-{str(plan['plan_digest']).removeprefix('sha256:')[:24]}"
             risk_digest = _digest(plan.get("risk") or {})
+            execution_environment = "testnet" if re.search(r"\btestnet\b", str(text or ""), re.IGNORECASE) else "paper"
             proposal = self.confirmations.create_proposal(
                 proposal_id=proposal_id,
                 strategy_session_id=session_id,
@@ -1272,7 +1275,7 @@ class ParkTelegramRouter:
                 plan_digest=str(plan["plan_digest"]),
                 risk_digest=risk_digest,
                 expires_at=time.time() + self.confirmation_ttl_seconds,
-                execution_environment="paper",
+                execution_environment=execution_environment,
             )
             self.telegram.queue_outbound(
                 idempotency_key=f"park-proposal:{proposal_id}",
@@ -1472,6 +1475,28 @@ class ParkTelegramRouter:
                 ),
                 binding=active,
             )
+            if event == "confirmed" and str(decision.get("execution_environment") or "paper") == "testnet":
+                if self.testnet_start_handler is None:
+                    return {
+                        "status": "confirmed_pending_testnet_start",
+                        "decision": decision,
+                        "confirmation_mode": mode,
+                        "next_action": "invoke_attended_testnet_start",
+                    }
+                started = self.testnet_start_handler(
+                    {
+                        "proposal": proposal,
+                        "decision": decision,
+                        "plan_digest": digest,
+                        "environment": "testnet",
+                    }
+                )
+                return {
+                    "status": "testnet_started",
+                    "decision": decision,
+                    "confirmation_mode": mode,
+                    "start": dict(started),
+                }
             return {"status": event, "decision": decision, "confirmation_mode": mode}
         except ParkConfirmationError as exc:
             return self._block(

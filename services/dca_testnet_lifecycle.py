@@ -253,6 +253,12 @@ class DcaTestnetLifecycle:
                     state["positions"] = []
                     state["protection"] = None
                     state["reconciliation"] = self._terminal_reconciliation(state, timestamp)
+                    if state["reconciliation"].get("status") == "ok":
+                        state["status"] = "terminal"
+                        state["sealed"] = True
+                        state["terminal_reason"] = "exit_fill_slippage_exceeded"
+                        state["closure_blocker"] = "exit_fill_slippage_exceeded"
+                        self._record_event(state, "revision_sealed", timestamp=timestamp, reason="exit_fill_slippage_exceeded")
                 except Exception as exc:  # noqa: BLE001 - keep the blocker if venue truth is unavailable.
                     state["reconciliation"] = {
                         "status": "blocked",

@@ -7047,7 +7047,14 @@ class StrategyControlPlane:
         consumed = load_json(self.output_root / "dualtrack" / "testnet_confirmation_consumed.json")
         if any(isinstance(row, dict) and row.get("proposal_id") == proposal_id for row in consumed):
             raise StrategyControlMachineError("testnet_confirmation_replay", {"proposal_id": proposal_id})
-        return {"proposal_id": proposal_id, "receipt_digest": receipt_digest}
+        return {
+            "proposal_id": proposal_id,
+            "receipt_digest": receipt_digest,
+            "execution_environment": "testnet",
+            "plan_digest": digest,
+            "strategy_session_id": str(plan.get("strategy_session_id") or ""),
+            "strategy_revision_id": str(plan.get("strategy_revision_id") or ""),
+        }
 
     def _record_testnet_confirmation_consumed(self, evidence: Mapping[str, Any]) -> None:
         path = self.output_root / "dualtrack" / "testnet_confirmation_consumed.json"

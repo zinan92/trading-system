@@ -316,8 +316,18 @@ def build_dca_strategy_plan(
             "risk_budget": "confirmed",
         },
     }
+    if strategy_session_id is None and not preview.get("strategy_session_id"):
+        session_material = {
+            key: value
+            for key, value in preview.items()
+            if key not in {"cycle_id", "market", "preview_id", "start_facts_digest"}
+        }
+        session_suffix = hashlib.sha256(
+            json.dumps(session_material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:24]
+        strategy_session_id = f"session:dca:{session_suffix}"
     plan["strategy_session_id"] = _required_text(
-        strategy_session_id or str(preview.get("strategy_session_id") or "session:dca"),
+        strategy_session_id or str(preview.get("strategy_session_id") or ""),
         "strategy_session_id",
     )
     plan["strategy_revision_id"] = _required_text(

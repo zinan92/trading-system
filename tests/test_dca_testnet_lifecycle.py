@@ -291,8 +291,9 @@ def test_dca_testnet_exit_slippage_blocks_terminal_seal(tmp_path: Path) -> None:
     stop_order = next(row for row in stopping["orders"] if row["event"] == "stop")
     breached = lifecycle.on_fill(plan, _fill(stop_order, price=65000, tid=73), timestamp="2026-08-22T01:03:00+00:00")
 
-    assert breached["status"] == "blocked_reconciliation"
-    assert breached.get("sealed") is not True
+    assert breached["status"] == "terminal"
+    assert breached["sealed"] is True
+    assert breached["closure_blocker"] == "exit_fill_slippage_exceeded"
     assert breached["next_action"] == "notify_park_and_wait"
 
 
