@@ -406,10 +406,18 @@ class StandardBrokerTestnetExecutionAdapter:
             raise StandardBrokerTestnetHostError("Testnet order side is required")
         order_type_value = str(ticket.get("order_type") or "limit").strip().lower()
         try:
-            order_type = OrderType(order_type_value)
-            time_in_force = TimeInForce(
-                str(ticket.get("time_in_force") or "gtc").strip().lower()
-            )
+            requested_order_type = OrderType(order_type_value)
+            if requested_order_type is OrderType.MARKET:
+                # Hyperliquid's market primitive is an aggressive IOC limit;
+                # retain the canonical market intent at the host boundary and
+                # perform the explicit venue mapping here.
+                order_type = OrderType.LIMIT
+                time_in_force = TimeInForce.IOC
+            else:
+                order_type = requested_order_type
+                time_in_force = TimeInForce(
+                    str(ticket.get("time_in_force") or "gtc").strip().lower()
+                )
         except ValueError as exc:
             raise StandardBrokerTestnetHostError(
                 f"unsupported Testnet order enum: {exc}"

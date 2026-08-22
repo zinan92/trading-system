@@ -88,16 +88,18 @@ class GridTestnetLifecycle:
             self._block(state, "unknown_fill_order", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
-        if state["status"] in {"terminal", "sealed"} or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") not in {"hard_stop", "hard_stop_recovery"}) or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"}):
+        fill_identities = [str(raw_fill.get(key) or "") for key in ("tid", "hash") if str(raw_fill.get(key) or "")]
+        if any(set(fill_identities).intersection(set(row.get("fill_identities") or [str(row.get("fill_id") or "")])) for row in state["fills"]):
+            return self.snapshot(plan)
+        was_cancelled = order.get("state") == "cancelled"
+        late_cancelled_entry_allowed = was_cancelled and order.get("event") in {"entry", "entry_rearm"} and state["status"] in {"active", "hard_stop_triggered", "blocked_reconciliation", "blocked_protection", "blocked_risk"}
+        if state["status"] in {"terminal", "sealed"} or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed) or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed):
             self._block(state, "late_fill_after_block_or_terminal", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
         if state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") in {"hard_stop", "hard_stop_recovery"}:
             state["status"] = "hard_stop_triggered"
 
-        fill_identities = [str(raw_fill.get(key) or "") for key in ("tid", "hash") if str(raw_fill.get(key) or "")]
-        if any(set(fill_identities).intersection(set(row.get("fill_identities") or [str(row.get("fill_id") or "")])) for row in state["fills"]):
-            return self.snapshot(plan)
         try:
             receipt = self.broker.canonical_order_adapter.apply_fill(raw_fill)
         except Exception as exc:  # noqa: BLE001 - canonical seam is fail-closed.
@@ -112,7 +114,6 @@ class GridTestnetLifecycle:
         quantity = float(raw_fill.get("sz") or raw_fill.get("quantity") or 0.0)
         price = float(receipt.average_fill_price or raw_fill.get("px") or 0.0)
         planned = float(order.get("planned_price") or order.get("price") or 0.0)
-        was_cancelled = order.get("state") == "cancelled"
         slippage = abs(price - planned)
         fill_id = fill_identities[0] if fill_identities else ""
         fill = {
@@ -147,6 +148,18 @@ class GridTestnetLifecycle:
                     self._block(state, f"late_entry_fill_reconciliation_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
                     self._save(state)
                     raise GridTestnetLifecycleError(state["blocker"]) from exc
+            elif was_cancelled and line.state == "cancelled":
+                try:
+                    self._apply_late_entry_fill(line, fill_id=fill_id, quantity=quantity, at=timestamp)
+                except Exception as exc:  # noqa: BLE001
+                    self._block(state, f"late_entry_fill_reconciliation_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+                    self._save(state)
+                    raise GridTestnetLifecycleError(state["blocker"]) from exc
+                rung["line"] = line.snapshot()
+                self._hard_stop(plan, state, timestamp=timestamp, reason="late_fill_after_cancel")
+                state["updated_at"] = timestamp
+                self._save(state)
+                return self.snapshot(plan)
             else:
                 try:
                     line.apply_entry_fill(fill_id=fill_id, quantity=quantity, at=timestamp)
@@ -270,6 +283,10 @@ class GridTestnetLifecycle:
         requested = float(line.requested_quantity or 0.0)
         if quantity <= 0 or float(line.entry_filled_quantity) + quantity > requested + 1e-9:
             raise GridTestnetLifecycleError("late_entry_fill_exceeds_requested_quantity")
+        if line.state == "cancelled":
+            line.state = "open_cancelled"
+            line.active = False
+            line.entry_order_open = False
         line.entry_filled_quantity += quantity
         line.processed_fill_ids.add(fill_id)
         line.transitions.append(
@@ -607,7 +624,7 @@ class GridTestnetLifecycle:
             "ticket_id": ticket_id,
             "instrument_id": state["instrument_id"],
             "side": rung["side"] if not reduce_only else ("sell" if rung["side"] == "buy" else "buy"),
-            "order_type": "limit",
+            "order_type": "market" if order_type == "market" else "limit",
             "limit_price": price,
             "time_in_force": time_in_force,
             "price": price,
@@ -638,6 +655,20 @@ class GridTestnetLifecycle:
         grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
         risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), Mapping) else {}
         raw = grid.get("rungs") or risk.get("grid_rungs") or plan.get("grid_rungs")
+        if not isinstance(raw, list) or not raw:
+            orders = grid.get("orders") if isinstance(grid.get("orders"), list) else []
+            raw = [
+                {
+                    "rung": index,
+                    "price": item.get("price"),
+                    "side": item.get("side"),
+                    "take_profit": item.get("tp") or item.get("take_profit"),
+                    "hard_stop": item.get("sl") or item.get("hard_stop"),
+                    "quantity": item.get("quantity"),
+                }
+                for index, item in enumerate(orders, start=1)
+                if isinstance(item, Mapping)
+            ]
         if not isinstance(raw, list) or not raw:
             raise GridTestnetLifecycleError("grid_geometry_missing")
         rungs: list[dict[str, Any]] = []
@@ -688,8 +719,8 @@ class GridTestnetLifecycle:
                 raise ValueError(f"Grid StrategyPlan identity is incomplete: {key}")
         normalized = plan.get("normalized_input") if isinstance(plan.get("normalized_input"), Mapping) else {}
         risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), Mapping) else {}
-        upper = float(plan.get("upper_price_boundary") or normalized.get("upper_price_boundary") or (plan.get("grid") or {}).get("upper_boundary") or 0)
-        lower = float(plan.get("lower_price_boundary") or normalized.get("lower_price_boundary") or (plan.get("grid") or {}).get("lower_boundary") or 0)
+        upper = float(plan.get("upper_price_boundary") or normalized.get("upper_price_boundary") or (plan.get("grid") or {}).get("upper_boundary") or (plan.get("range") or {}).get("high") or 0)
+        lower = float(plan.get("lower_price_boundary") or normalized.get("lower_price_boundary") or (plan.get("grid") or {}).get("lower_boundary") or (plan.get("range") or {}).get("low") or 0)
         if lower <= 0 or upper <= lower:
             raise ValueError("Grid boundaries are invalid")
         direction = str(plan.get("direction") or normalized.get("direction") or "").lower()
