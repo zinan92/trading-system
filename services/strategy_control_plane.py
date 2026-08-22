@@ -6826,11 +6826,21 @@ class StrategyControlPlane:
                     }
                     for index, order in enumerate(preview["orders"], start=1)
                 ],
-                "midpoint": float(preview["range"].get("split_price") or (float(preview["range"]["low"]) + float(preview["range"]["high"])) / 2.0),
+                "midpoint": (
+                    float(preview["range"]["split_price"])
+                    if float(preview["range"].get("split_price") or 0) > float(preview["range"]["low"])
+                    and float(preview["range"].get("split_price") or 0) < float(preview["range"]["high"])
+                    else (float(preview["range"]["low"]) + float(preview["range"]["high"])) / 2.0
+                ),
             },
             "upper_price_boundary": float(preview["range"]["high"]),
             "lower_price_boundary": float(preview["range"]["low"]),
-            "midpoint": float(preview["range"].get("split_price") or (float(preview["range"]["low"]) + float(preview["range"]["high"])) / 2.0),
+            "midpoint": (
+                float(preview["range"]["split_price"])
+                if float(preview["range"].get("split_price") or 0) > float(preview["range"]["low"])
+                and float(preview["range"].get("split_price") or 0) < float(preview["range"]["high"])
+                else (float(preview["range"]["low"]) + float(preview["range"]["high"])) / 2.0
+            ),
             "execution_context": {"market": dict(preview["market"])},
             "tp_sl": {
                 "mode": "per_grid",
@@ -6849,7 +6859,12 @@ class StrategyControlPlane:
                 "max_notional": float(preview["risk"].get("absolute_notional_ceiling") or preview["risk"].get("capital_budget") or 0),
                 "max_open_orders": len(preview["orders"]),
                 "max_open_positions": len(preview["orders"]),
-                "max_slippage": float((current.get("risk_budget") or {}).get("max_slippage") or 0),
+                "max_slippage": float(
+                    ((current.get("risk_budget") or {}).get("max_slippage") if str(current.get("strategy_type") or "").lower() == "grid" else 0)
+                    or ((current.get("grid") or {}).get("max_slippage") if str(current.get("strategy_type") or "").lower() == "grid" else 0)
+                    or preview["risk"].get("max_slippage")
+                    or 0
+                ),
                 "leverage_limit": float(preview["grid"].get("leverage_limit") or preview["grid"].get("leverage") or 0),
             },
             "field_sources": {
@@ -6872,6 +6887,17 @@ class StrategyControlPlane:
         # new Grid's execution routing or stop path.
         plan.pop("dca", None)
         plan.pop("dca_lifecycle", None)
+        if not str(plan.get("strategy_session_id") or "").strip():
+            material = {key: value for key, value in preview.items() if key not in {"cycle_id", "market", "preview_id"}}
+            plan["strategy_session_id"] = "session:grid:" + hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()[:24]
+        if not str(plan.get("strategy_revision_id") or "").strip():
+            plan["strategy_revision_id"] = f"revision:{plan['strategy_plan_id']}:v{version}"
+        if not str(plan.get("instrument_id") or "").strip():
+            plan["instrument_id"] = str((plan.get("execution_context") or {}).get("instrument_id") or preview.get("market", {}).get("symbol") or "").strip()
+        if not plan["instrument_id"]:
+            raise ValueError("Grid plan instrument identity is required")
+        plan.pop("plan_digest", None)
+        plan["plan_digest"] = "sha256:" + hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
         return plan
 
     def _accepted_orders(self, cycle_id: str, *, adapter=None) -> list[dict[str, Any]]:
@@ -7386,9 +7412,9 @@ class StrategyControlPlane:
         ledger = ParkTelegramLedger(self.output_root, park_user_id=park_user_id, chat_id=chat_id)
         row = ledger.queue_outbound(
             idempotency_key=key,
-            message_type="dca_testnet_terminal",
+            message_type="grid_testnet_terminal" if str(plan.get("strategy_type") or "").lower() == "grid" else "dca_testnet_terminal",
             text=(
-                f"DCA Testnet revision terminal: {state.get('terminal_reason')}; "
+                f"{'Grid' if str(plan.get('strategy_type') or '').lower() == 'grid' else 'DCA'} Testnet revision terminal: {state.get('terminal_reason')}; "
                 f"plan={plan.get('plan_digest')}; next_action=notify_park_and_wait"
             ),
             binding={
