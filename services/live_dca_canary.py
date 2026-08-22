@@ -289,9 +289,15 @@ class LiveDcaCanary:
         key = f"cancel:{order_id}"
         if state["idempotency"].get(key):
             return dict(state)
+        order = next((item for item in state.get("orders") or [] if str(item.get("order_id") or "") == order_id), None)
+        self._require(isinstance(order, Mapping), "cancel_order_outside_canary", {"order_id": order_id})
+        self._require(str(order.get("state") or "") not in {"filled", "closed", "canceled", "cancelled"}, "cancel_order_not_working", {"order_id": order_id, "state": order.get("state")})
         try:
             response = self._call("cancel_order", {"order_id": order_id, "activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "idempotency_key": f"{state['activation_digest']}:cancel:{order_id}"}, timestamp=timestamp)
             self._require(response.get("status") not in {"unknown", "error"}, "cancel_unknown", response)
+            if response.get("status") == "accepted":
+                terminal = self._call("query_order", {"order_id": order_id}, timestamp=timestamp)
+                self._require(terminal.get("status") in {"canceled", "cancelled"}, "cancel_not_terminal", terminal)
         except LiveDcaCanaryError as exc:
             self._block(state, exc.code, timestamp=timestamp)
             self._save(state)
@@ -303,7 +309,7 @@ class LiveDcaCanary:
         if state.get("pending_entry_order_id") == order_id:
             state.pop("pending_entry_order_id", None)
         self._event(state, "entry_canceled", timestamp=timestamp, order_id=order_id)
-        self._reconcile(state, timestamp=timestamp)
+        self._reconcile(state, timestamp=timestamp, require_no_open_orders=True)
         self._save(state)
         return dict(state)
 
@@ -323,7 +329,7 @@ class LiveDcaCanary:
             raise
         state["idempotency"][key] = True
         self._event(state, "flatten_requested", timestamp=timestamp, reason=reason)
-        self._reconcile(state, timestamp=timestamp, require_flat=True)
+        self._reconcile(state, timestamp=timestamp, require_flat=True, require_no_open_orders=True)
         if reason == "completed":
             self._require(self._open_quantity(state) > 0 and isinstance(state.get("protection"), Mapping), "canary_completion_proof_missing", {"open_quantity": self._open_quantity(state), "protection": bool(state.get("protection"))})
         state["status"] = "rolled_back" if reason != "completed" else "completed"
@@ -444,8 +450,8 @@ class LiveDcaCanary:
             self._require(False, "current_risk_ceiling_exceeded", {"account": fields, "limits": dict(limits)})
         return {"status": str(response.get("status")), **fields}
 
-    def _reconcile(self, state: dict[str, Any], *, timestamp: str, require_flat: bool = False) -> None:
-        expected = {"activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "open_quantity": self._open_quantity(state), "require_flat": bool(require_flat)}
+    def _reconcile(self, state: dict[str, Any], *, timestamp: str, require_flat: bool = False, require_no_open_orders: bool = False) -> None:
+        expected = {"activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "open_quantity": self._open_quantity(state), "require_flat": bool(require_flat), "require_no_open_orders": bool(require_no_open_orders)}
         try:
             report = self._call("reconcile", expected, timestamp=timestamp)
         except LiveDcaCanaryError as exc:
@@ -455,7 +461,7 @@ class LiveDcaCanary:
             self._event(state, "reconciliation_unknown", timestamp=timestamp, code=exc.code)
             self._save(state)
             raise
-        if report.get("status") not in {"ok", "pass", "reconciled"} or (require_flat and float(report.get("open_quantity") or 0) != 0):
+        if report.get("status") not in {"ok", "pass", "reconciled"} or (require_flat and float(report.get("open_quantity") or 0) != 0) or (require_no_open_orders and ("open_orders" not in report or float(report.get("open_orders") or 0) != 0)):
             state["status"] = "blocked_reconciliation"
             state["next_action"] = "notify_park_and_wait"
             self._event(state, "reconciliation_blocked", timestamp=timestamp, report=dict(report))

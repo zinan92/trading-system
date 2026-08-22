@@ -42,7 +42,7 @@ class FixtureTransport:
 
     def reconcile(self, expected):
         self.calls.append(("reconcile", dict(expected)))
-        return {"status": "ok", "open_quantity": 0 if expected.get("require_flat") else expected.get("open_quantity", 0)}
+        return {"status": "ok", "open_quantity": 0 if expected.get("require_flat") else expected.get("open_quantity", 0), "open_orders": 0}
 
     def flatten_reduce_only(self, request):
         self.calls.append(("flatten_reduce_only", dict(request)))
