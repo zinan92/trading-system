@@ -17,6 +17,7 @@ from services.broker_port import (
 )
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
+from services.live_activation_gate import LiveActivationGate as SourceBoundLiveActivationGate
 
 
 class OandaRestBrokerAdapter:
@@ -111,11 +112,9 @@ class OandaRestBrokerAdapter:
                 f"live broker preflight failed: {readiness['block_reason']}"
             )
         if not self.dry_run:
-            activation = self._live_activation(request.run_date)
-            if activation.get("real_money_ready") is not True:
-                raise RuntimeError(
-                    "live activation gate is not real_money_ready; real broker submission is blocked"
-                )
+            activation = SourceBoundLiveActivationGate(self.output_root, park_user_id="").canary_status()
+            if activation.get("ready") is not True:
+                raise RuntimeError("source-bound Live activation/canary is not ready; real broker submission is blocked")
         return self._submit_with_readiness(request, readiness)
 
     def _submit_with_readiness(

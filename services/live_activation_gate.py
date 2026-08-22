@@ -8,6 +8,7 @@ import math
 import os
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -295,9 +296,6 @@ class LiveActivationGate:
             return self._record_rejected("activation_missing", activation_digest)
         if str(park_user_id) != self.park_user_id:
             return self._record_rejected("unauthorized_user", activation_digest)
-        existing = next((row for row in reversed(self.rows()) if row.get("event") == "activation_confirmed" and row.get("activation_digest") == activation_digest), None)
-        if existing:
-            return dict(existing)
         if not self._telegram_receipt_is_complete(
             telegram_update_id,
             telegram_message_id,
@@ -317,6 +315,9 @@ class LiveActivationGate:
             return self._record_rejected("preflight_recheck_failed", activation_digest)
         if str(current_preflight.get("preflight_digest") or "") != str(proposal.get("preflight_digest") or ""):
             return self._record_rejected("preflight_changed", activation_digest)
+        existing = next((row for row in reversed(self.rows()) if row.get("event") == "activation_confirmed" and row.get("activation_digest") == activation_digest), None)
+        if existing:
+            return dict(existing)
         timestamp = float(now if now is not None else time.time())
         if timestamp > float(proposal.get("expires_at") or 0):
             return self._record_rejected("activation_expired", activation_digest)
@@ -547,11 +548,35 @@ class LiveActivationGate:
         ordered = sorted((item for item in windows if isinstance(item, Mapping)), key=lambda item: int(item.get("window_index") or 0))
         if len(ordered) != 14 or [str(item.get("row_digest") or "") for item in ordered] != window_digests:
             return False
+        try:
+            created_at = datetime.fromisoformat(str(current.get("created_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
+            now = datetime.now(timezone.utc)
+            if created_at > now or now - created_at > timedelta(hours=24):
+                return False
+            previous_end: datetime | None = None
+            for item in ordered:
+                start = datetime.fromisoformat(str(item.get("starts_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
+                end = datetime.fromisoformat(str(item.get("ends_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
+                if end - start != timedelta(hours=12) or end > now or now - end > timedelta(hours=24):
+                    return False
+                if previous_end is not None and start != previous_end:
+                    return False
+                previous_end = end
+        except (TypeError, ValueError, OverflowError):
+            return False
+        try:
+            live_source = dict(self._source_attestation_resolver())
+        except Exception:
+            return False
         if any(
             item.get("status") != "pass"
             or item.get("blockers")
             or item.get("package_status") != "complete"
             or not item.get("review_digest")
+            or item.get("environment") != "testnet"
+            or item.get("broker_id") != "hyperliquid"
+            or item.get("release_sha") != live_source.get("source_sha")
+            or not str(item.get("account_fingerprint") or "").strip()
             or not REQUIRED_READINESS_CATEGORIES.issubset(set((item.get("gate_evidence") or {}).keys()))
             or any(str(item.get("row_digest") or "") != _digest({key: value for key, value in item.items() if key != "row_digest"}) for item in ordered)
             for item in ordered
@@ -573,7 +598,7 @@ class LiveActivationGate:
                 payload = evidence.get(category) if isinstance(evidence.get(category), Mapping) else {}
                 artifact_ref = str(payload.get("artifact_ref") or "")
                 artifact_sha = str(payload.get("artifact_sha256") or "").lower()
-                if not artifact_ref or not re.fullmatch(r"[0-9a-f]{64}", artifact_sha):
+                if payload.get("status") not in {"pass", "ready"} or payload.get("environment") not in {None, "testnet"} or payload.get("broker_id") not in {None, "hyperliquid"} or not artifact_ref or not re.fullmatch(r"[0-9a-f]{64}", artifact_sha):
                     return False
                 artifact_path = Path(artifact_ref)
                 if not artifact_path.is_absolute():
@@ -581,7 +606,18 @@ class LiveActivationGate:
                 try:
                     if not artifact_path.is_file() or hashlib.sha256(artifact_path.read_bytes()).hexdigest() != artifact_sha:
                         return False
+                    artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+                    if not isinstance(artifact_payload, Mapping) or artifact_payload.get("artifact_kind") not in {None, category} or artifact_payload.get("status") not in {"pass", "ready"} or artifact_payload.get("environment") not in {None, "testnet"} or artifact_payload.get("broker_id") not in {None, "hyperliquid"} or artifact_payload.get("release_sha") not in {None, item.get("release_sha")}:
+                        return False
+                    for source_payload in (payload, artifact_payload):
+                        observed = datetime.fromisoformat(str(source_payload.get("observed_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
+                        start = datetime.fromisoformat(str(item.get("starts_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
+                        end = datetime.fromisoformat(str(item.get("ends_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
+                        if not start <= observed <= end:
+                            return False
                 except OSError:
+                    return False
+                except (TypeError, ValueError, json.JSONDecodeError):
                     return False
         return True
 

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from services.paper_release_receipt import current_source_attestation
@@ -11,29 +12,41 @@ from services.broker_port import BrokerOrderRequest
 def _readiness(source: dict, artifact_root: Path | None = None) -> tuple[dict, list[dict], list[dict]]:
     rows = []
     reviews = []
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    final_end = now - timedelta(minutes=1)
+    first_start = final_end - timedelta(hours=12 * 14)
     required_categories = {
-        "orders_fills_positions_reconciliation": {"observed_at": "2026-08-20T01:00:00+00:00"},
-        "protection_coverage": {"observed_at": "2026-08-20T01:00:00+00:00"},
-        "capability_status": {"observed_at": "2026-08-20T01:00:00+00:00"},
-        "market_freshness_trust": {"observed_at": "2026-08-20T01:00:00+00:00"},
-        "runtime_health": {"observed_at": "2026-08-20T01:00:00+00:00"},
-        "retry_outcomes": {"observed_at": "2026-08-20T01:00:00+00:00"},
-        "release_account_environment_identity": {"observed_at": "2026-08-20T01:00:00+00:00"},
-        "recording_package": {"observed_at": "2026-08-20T01:00:00+00:00"},
+        category: {"status": "pass", "observed_at": (first_start + timedelta(hours=12 * index + 6)).isoformat(), "environment": "testnet", "broker_id": "hyperliquid", "release_sha": source["source_sha"], "account_fingerprint": "testnet-account"}
+        for index, category in enumerate((
+            "orders_fills_positions_reconciliation",
+            "protection_coverage",
+            "capability_status",
+            "market_freshness_trust",
+            "runtime_health",
+            "retry_outcomes",
+            "release_account_environment_identity",
+            "recording_package",
+        ))
     }
     for index in range(14):
+        start = first_start + timedelta(hours=12 * index)
+        end = start + timedelta(hours=12)
         evidence = {category: dict(payload) for category, payload in required_categories.items()}
+        for payload in evidence.values():
+            payload["observed_at"] = (start + timedelta(hours=6)).isoformat()
         if artifact_root is not None:
             for category, payload in evidence.items():
                 path = artifact_root / f"{index:02d}-{category}.json"
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps({"category": category, "window_index": index}), encoding="utf-8")
+                path.write_text(json.dumps({"artifact_kind": category, "category": category, "window_index": index, "environment": "testnet", "broker_id": "hyperliquid", "release_sha": source["source_sha"], "account_fingerprint": "testnet-account", "starts_at": start.isoformat(), "ends_at": end.isoformat(), "observed_at": (start + timedelta(hours=6)).isoformat(), "status": "pass"}), encoding="utf-8")
                 payload["artifact_ref"] = str(path)
                 payload["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
                 payload["artifact_kind"] = category
         row = {
             "window_index": index,
             "record_window_id": f"soak-window-{index:02d}",
+            "starts_at": start.isoformat(),
+            "ends_at": end.isoformat(),
             "status": "pass",
             "blockers": [],
             "package_status": "complete",
@@ -58,6 +71,7 @@ def _readiness(source: dict, artifact_root: Path | None = None) -> tuple[dict, l
         "blockers": [],
         "source_attestation": source,
         "critical_gate_results": {"orders": "pass", "protection": "pass", "reconciliation": "pass"},
+        "created_at": now.isoformat(),
     }
     receipt["window_digests"] = [row["row_digest"] for row in rows]
     receipt["required_day_count"] = 7

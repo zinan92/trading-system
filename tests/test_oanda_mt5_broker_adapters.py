@@ -231,7 +231,7 @@ def test_oanda_fail_closed_gates_run_before_network(
     )
 
     expected = (
-        "live activation gate is not real_money_ready"
+        "source-bound Live activation/canary"
         if with_credentials
         else "missing OANDA environment variables"
     )
@@ -260,7 +260,7 @@ def test_mt5_activation_gate_never_writes_an_executable_order(
 
     with pytest.raises(
         RuntimeError,
-        match="live activation gate is not real_money_ready",
+        match="source-bound Live activation/canary",
     ):
         adapter.submit_order(_request())
 
