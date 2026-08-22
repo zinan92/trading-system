@@ -332,6 +332,9 @@ class TestnetSoakReadiness:
                     return False
                 if not isinstance(artifact, Mapping) or (artifact.get("artifact_kind") not in (None, "") and str(artifact.get("artifact_kind")) != str(payload.get("artifact_kind") or category)):
                     return False
+                for identity_key in ("strategy_session_id", "strategy_revision_id", "plan_digest", "environment", "release_sha", "account_fingerprint"):
+                    if str(artifact.get(identity_key) or "") != str(row.get(identity_key) or ""):
+                        return False
         return True
 
     def _gate_blockers(self, observation: Mapping[str, Any], evidence: Mapping[str, Any]) -> list[dict[str, Any]]:

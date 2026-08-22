@@ -33,7 +33,7 @@ def _observation(index: int, *, evidence=None, mutations=None) -> dict:
     evidence_payload = evidence or _evidence((start + timedelta(hours=12)).isoformat())
     for category, payload in evidence_payload.items():
         path = Path(f"/tmp/testnet-soak-{index}-{category}.json")
-        path.write_text(json.dumps({"artifact_kind": category, "category": category, "window": index}), encoding="utf-8")
+        path.write_text(json.dumps({"artifact_kind": category, "category": category, "window": index, "strategy_session_id": "session-continuous", "strategy_revision_id": "revision-dca-1", "plan_digest": "sha256:" + "a" * 64, "environment": "testnet", "release_sha": attestation["source_sha"], "account_fingerprint": "testnet-account-fingerprint"}), encoding="utf-8")
         payload["artifact_ref"] = str(path)
         payload["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
         payload["artifact_kind"] = category
@@ -110,7 +110,7 @@ def test_soak_can_collect_canonical_category_artifacts(tmp_path: Path) -> None:
     artifact_paths = {}
     for category in sorted(set(REQUIRED_CATEGORIES) | {"orders_fills_positions_reconciliation", "protection_coverage", "capability_status", "market_freshness_trust", "runtime_health", "retry_outcomes", "release_account_environment_identity", "recording_package"}):
         path = tmp_path / f"{category}.json"
-        payload = {"status": "pass", "source": "runtime-receipt", "observed_at": observation["ends_at"], "artifact_ref": str(path), "artifact_sha256": "pending", "artifact_kind": category}
+        payload = {"status": "pass", "source": "runtime-receipt", "observed_at": observation["ends_at"], "artifact_ref": str(path), "artifact_sha256": "pending", "artifact_kind": category, "strategy_session_id": observation["strategy_session_id"], "strategy_revision_id": observation["strategy_revision_id"], "plan_digest": observation["plan_digest"], "environment": "testnet", "release_sha": observation["release_sha"], "account_fingerprint": observation["account_fingerprint"]}
         if category == "release_account_environment_identity":
             payload.update({"release_sha": observation["release_sha"], "account_fingerprint": observation["account_fingerprint"], "environment": "testnet", "broker_id": observation["broker_id"]})
         if category == "market_freshness_trust":
