@@ -42,6 +42,19 @@ REQUIRED_CAPABILITIES = frozenset(
     }
 )
 
+REQUIRED_READINESS_CATEGORIES = frozenset(
+    {
+        "orders_fills_positions_reconciliation",
+        "protection_coverage",
+        "capability_status",
+        "market_freshness_trust",
+        "runtime_health",
+        "retry_outcomes",
+        "release_account_environment_identity",
+        "recording_package",
+    }
+)
+
 
 class LiveActivationError(RuntimeError):
     def __init__(self, code: str, message: str, evidence: Mapping[str, Any] | None = None) -> None:
@@ -62,17 +75,23 @@ class LiveActivationGate:
         output_root: Path,
         *,
         park_user_id: str,
+        park_chat_id: str | int | None = None,
         repo_root: Path | None = None,
         source_attestation_resolver: Any | None = None,
+        readiness_receipt_resolver: Any | None = None,
+        readiness_windows_resolver: Any | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "live_activation"
         self.path = self.root / "journal.json"
         self.park_user_id = str(park_user_id or "").strip()
+        self.park_chat_id = str(park_chat_id or "").strip()
         self.repo_root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[1]
         self._source_attestation_resolver = source_attestation_resolver or (
             lambda: current_source_attestation(self.repo_root)
         )
+        self._readiness_receipt_resolver = readiness_receipt_resolver or self._default_readiness_receipt
+        self._readiness_windows_resolver = readiness_windows_resolver or self._default_readiness_windows
 
     def rows(self) -> list[dict[str, Any]]:
         return [dict(row) for row in load_json(self.path) if isinstance(row, dict)]
@@ -141,6 +160,8 @@ class LiveActivationGate:
             blockers.append("testnet_readiness_receipt_digest_missing_or_invalid")
         if list(readiness.get("blockers") or []):
             blockers.append("testnet_readiness_has_blockers")
+        if not self._readiness_is_current(readiness):
+            blockers.append("testnet_readiness_receipt_not_current")
         if readiness.get("live_enabled") is not False or readiness.get("live_writes_enabled") is not False:
             blockers.append("testnet_readiness_live_flags_invalid")
         readiness_source = readiness.get("source_attestation")
@@ -180,6 +201,7 @@ class LiveActivationGate:
             "capabilities": {"operations": sorted(declared), "required": sorted(REQUIRED_CAPABILITIES)},
             "risk_limits": normalized_risk_limits or {},
             "readiness_receipt_digest": str(readiness.get("receipt_digest") or ""),
+            "readiness_snapshot": dict(readiness),
             "source_attestation": source,
             "network_io": False,
             "real_money_eligible": False,
@@ -222,6 +244,7 @@ class LiveActivationGate:
         telegram_update_id: str | int | None = None,
         telegram_message_id: str | int | None = None,
         telegram_chat_id: str | int | None = None,
+        telegram_receipt: Mapping[str, Any] | None = None,
         current_preflight: Mapping[str, Any] | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
@@ -233,7 +256,13 @@ class LiveActivationGate:
         existing = next((row for row in reversed(self.rows()) if row.get("event") == "activation_confirmed" and row.get("activation_digest") == activation_digest), None)
         if existing:
             return dict(existing)
-        if not self._telegram_receipt_is_complete(telegram_update_id, telegram_message_id):
+        if not self._telegram_receipt_is_complete(
+            telegram_update_id,
+            telegram_message_id,
+            telegram_chat_id,
+            telegram_receipt,
+            command_text,
+        ):
             return self._record_rejected("telegram_receipt_incomplete", activation_digest)
         expected = self._confirmation_tokens(proposal)
         command_tokens = str(command_text or "").strip().split()
@@ -305,7 +334,76 @@ class LiveActivationGate:
             and source.get("tracked_tree_clean") is True
             and preflight.get("release_sha") == current.get("source_sha")
             and not preflight.get("blockers")
+            and self._readiness_is_current(preflight.get("readiness_snapshot"))
         )
+
+    def _readiness_is_current(self, readiness: Any) -> bool:
+        if not isinstance(readiness, Mapping):
+            return False
+        try:
+            current = self._readiness_receipt_resolver()
+        except Exception:
+            return False
+        if not isinstance(current, Mapping):
+            return False
+        supplied_digest = str(readiness.get("receipt_digest") or "")
+        current_digest = str(current.get("receipt_digest") or "")
+        if not _SHA256.fullmatch(supplied_digest) or supplied_digest != current_digest:
+            return False
+        if current_digest != _digest({key: value for key, value in current.items() if key != "receipt_digest"}):
+            return False
+        if (
+            current.get("status") != "ready"
+            or current.get("environment") != "testnet"
+            or int(current.get("window_count") or 0) != 14
+            or int(current.get("required_window_count") or 0) != 14
+            or int(current.get("day_count") or 0) != 7
+            or int(current.get("required_day_count") or 0) != 7
+            or list(current.get("blockers") or [])
+            or current.get("live_enabled") is not False
+            or current.get("live_writes_enabled") is not False
+        ):
+            return False
+        source = current.get("source_attestation") if isinstance(current.get("source_attestation"), Mapping) else {}
+        try:
+            live_source = self._source_attestation_resolver()
+        except Exception:
+            return False
+        if (
+            source.get("source_sha") != live_source.get("source_sha")
+            or (source.get("source_tree_sha") or source.get("tree_sha")) != (live_source.get("source_tree_sha") or live_source.get("tree_sha"))
+            or source.get("tracked_tree_clean") is not True
+            or live_source.get("tracked_tree_clean") is not True
+        ):
+            return False
+        window_digests = [str(item or "") for item in current.get("window_digests") or []]
+        if len(window_digests) != 14 or any(not _SHA256.fullmatch(item) for item in window_digests):
+            return False
+        try:
+            windows = list(self._readiness_windows_resolver())
+        except Exception:
+            return False
+        ordered = sorted((item for item in windows if isinstance(item, Mapping)), key=lambda item: int(item.get("window_index") or 0))
+        if len(ordered) != 14 or [str(item.get("row_digest") or "") for item in ordered] != window_digests:
+            return False
+        if any(
+            item.get("status") != "pass"
+            or item.get("blockers")
+            or item.get("package_status") != "complete"
+            or not item.get("review_digest")
+            or not REQUIRED_READINESS_CATEGORIES.issubset(set((item.get("gate_evidence") or {}).keys()))
+            or any(str(item.get("row_digest") or "") != _digest({key: value for key, value in item.items() if key != "row_digest"}) for item in ordered)
+            for item in ordered
+        ):
+            return False
+        return True
+
+    def _default_readiness_receipt(self) -> Mapping[str, Any]:
+        rows = load_json(self.output_root / "dualtrack" / "testnet_soak" / "readiness_receipts.json")
+        return rows[-1] if rows and isinstance(rows[-1], Mapping) else {}
+
+    def _default_readiness_windows(self) -> list[Mapping[str, Any]]:
+        return load_json(self.output_root / "dualtrack" / "testnet_soak" / "windows.json")
 
     @staticmethod
     def _declared_capabilities(capabilities: Mapping[str, Any]) -> set[str]:
@@ -338,7 +436,7 @@ class LiveActivationGate:
         if not isinstance(value, Mapping):
             return None
         result: dict[str, float] = {}
-        for key in ("max_acceptable_loss", "max_notional", "max_leverage"):
+        for key in ("max_acceptable_loss", "max_notional", "max_leverage", "max_open_orders", "max_positions"):
             try:
                 number = float(value.get(key))
             except (TypeError, ValueError):
@@ -348,9 +446,27 @@ class LiveActivationGate:
             result[key] = number
         return result
 
-    @staticmethod
-    def _telegram_receipt_is_complete(update_id: str | int | None, message_id: str | int | None) -> bool:
-        return bool(str(update_id or "").strip()) and bool(str(message_id or "").strip())
+    def _telegram_receipt_is_complete(
+        self,
+        update_id: str | int | None,
+        message_id: str | int | None,
+        chat_id: str | int | None,
+        receipt: Mapping[str, Any] | None,
+        command_text: str,
+    ) -> bool:
+        if not self.park_chat_id or not str(update_id or "").strip() or not str(message_id or "").strip():
+            return False
+        if str(chat_id or "") != self.park_chat_id or not isinstance(receipt, Mapping):
+            return False
+        return (
+            str(receipt.get("event") or "") == "inbound_received"
+            and str(receipt.get("update_id") or "") == str(update_id)
+            and str(receipt.get("message_id") or "") == str(message_id)
+            and str(receipt.get("chat_id") or "") == self.park_chat_id
+            and str(receipt.get("sender_id") or "") == self.park_user_id
+            and str(receipt.get("text") or "") == str(command_text).strip()
+            and bool(str(receipt.get("text_digest") or "").strip())
+        )
 
     @staticmethod
     def _gate_passes(value: Any) -> bool:
