@@ -201,3 +201,28 @@ def test_protection_rechecks_activation_after_start(tmp_path: Path) -> None:
     with pytest.raises(LiveDcaCanaryError, match="activation"):
         canary.replace_protection(quantity=1, timestamp="2026-08-22T00:02:00+00:00")
     assert not [name for name, _ in transport.calls if name == "replace_protection"]
+
+
+def test_flatten_retries_after_reconciliation_block(tmp_path: Path) -> None:
+    class ReconcileOnceTransport(FixtureTransport):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def reconcile(self, expected):
+            self.calls.append(("reconcile", dict(expected)))
+            if expected.get("require_flat") and not self.failed:
+                self.failed = True
+                return {"status": "blocked", "open_quantity": 1, "open_orders": 1}
+            return {"status": "ok", "open_quantity": 0 if expected.get("require_flat") else expected.get("open_quantity", 0), "open_orders": 0}
+
+    transport = ReconcileOnceTransport()
+    canary = _make_canary(tmp_path, transport)
+    canary.start(_plan(), timestamp="2026-08-22T00:00:00+00:00")
+    canary.submit_entry(0, timestamp="2026-08-22T00:01:00+00:00")
+    canary.replace_protection(quantity=1, timestamp="2026-08-22T00:02:00+00:00")
+    with pytest.raises(LiveDcaCanaryError, match="reconciliation"):
+        canary.flatten(timestamp="2026-08-22T00:03:00+00:00")
+    result = canary.flatten(timestamp="2026-08-22T00:04:00+00:00")
+    assert result["idempotency"]["flatten_confirmed"] is True
+    assert len([name for name, _ in transport.calls if name == "flatten_reduce_only"]) == 2
