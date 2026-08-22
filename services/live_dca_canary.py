@@ -131,6 +131,7 @@ class LiveDcaCanary:
             "strategy_scope": "dca",
             "direction": normalized["direction"],
             "risk_limits": normalized["risk_limits"],
+            "derived_leverage": normalized["derived_leverage"],
             "entries": normalized["entries"],
             "target_price": normalized["target_price"],
             "stop_price": normalized["stop_price"],
@@ -153,6 +154,9 @@ class LiveDcaCanary:
     def submit_entry(self, index: int, *, timestamp: str) -> dict[str, Any]:
         state = self._state()
         self._require(state.get("status") in {"prepared", "running"}, "canary_not_accepting_entries", state)
+        if self._open_quantity(state) > 0 and state.get("protection") is None:
+            self._block(state, "protection_required_before_next_entry", timestamp=timestamp)
+            raise LiveDcaCanaryError("protection_required_before_next_entry", "aggregate protection must cover the current position before another entry")
         try:
             entry = dict(state["entries"][int(index)])
         except (IndexError, TypeError, ValueError) as exc:
@@ -177,8 +181,13 @@ class LiveDcaCanary:
             "reduce_only": False,
             "idempotency_key": f"{state['activation_digest']}:entry:{int(index)}",
         }
-        response = self._call("submit_entry", request, timestamp=timestamp)
-        self._require(response.get("status") not in {"unknown", "rejected", "error"}, "entry_submission_unknown", response)
+        try:
+            response = self._call("submit_entry", request, timestamp=timestamp)
+            self._require(response.get("status") not in {"unknown", "rejected", "error"}, "entry_submission_unknown", response)
+        except LiveDcaCanaryError as exc:
+            self._block(state, exc.code, timestamp=timestamp)
+            self._save(state)
+            raise
         order_id = str(response.get("order_id") or response.get("client_order_id") or "")
         self._require(bool(order_id), "entry_order_identity_missing", response)
         state["orders"].append({"order_id": order_id, "event": "entry", "index": int(index), "price": entry["price"], "quantity": entry["quantity"], "notional": entry["notional"], "state": str(response.get("status") or "submitted"), "reduce_only": False})
@@ -186,6 +195,11 @@ class LiveDcaCanary:
         fill = response.get("fill") if isinstance(response.get("fill"), Mapping) else None
         if fill:
             state["fills"].append({"order_id": order_id, **dict(fill), "index": int(index), "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"]})
+            actual_price = _number(fill.get("price"), "fill price")
+            if abs(actual_price - entry["price"]) > state["risk_limits"]["max_slippage"]:
+                self._block(state, "entry_slippage_exceeded", timestamp=timestamp)
+                self._save(state)
+                raise LiveDcaCanaryError("entry_slippage_exceeded", "entry fill exceeded the approved slippage ceiling")
         state["status"] = "running"
         self._event(state, "entry_submitted", timestamp=timestamp, order_id=order_id, index=int(index))
         self._save(state)
@@ -194,7 +208,9 @@ class LiveDcaCanary:
     def replace_protection(self, *, quantity: float, timestamp: str) -> dict[str, Any]:
         state = self._state()
         quantity = _number(quantity, "protection quantity")
-        self._require(quantity >= self._open_quantity(state), "protection_quantity_undercoverage", {"quantity": quantity, "open_quantity": self._open_quantity(state)})
+        open_quantity = self._open_quantity(state)
+        self._require(open_quantity > 0, "protection_without_position", {"open_quantity": open_quantity})
+        self._require(quantity >= open_quantity, "protection_quantity_undercoverage", {"quantity": quantity, "open_quantity": open_quantity})
         request = {
             "activation_digest": state["activation_digest"],
             "plan_digest": state["plan_digest"],
@@ -208,9 +224,14 @@ class LiveDcaCanary:
             "reduce_only": True,
             "idempotency_key": f"{state['activation_digest']}:protection:{quantity}",
         }
-        response = self._call("replace_protection", request, timestamp=timestamp)
-        self._require(response.get("status") not in {"unknown", "rejected", "error"}, "protection_update_unknown", response)
-        self._require(response.get("reduce_only") is True, "protection_not_reduce_only", response)
+        try:
+            response = self._call("replace_protection", request, timestamp=timestamp)
+            self._require(response.get("status") not in {"unknown", "rejected", "error"}, "protection_update_unknown", response)
+            self._require(response.get("reduce_only") is True, "protection_not_reduce_only", response)
+        except LiveDcaCanaryError as exc:
+            self._block(state, exc.code, timestamp=timestamp)
+            self._save(state)
+            raise
         state["protection"] = {"quantity": quantity, "take_profit": state["target_price"], "stop_loss": state["stop_price"], "reduce_only": True, "group_id": response.get("group_id")}
         state["status"] = "running"
         self._event(state, "protection_replaced", timestamp=timestamp, quantity=quantity)
@@ -224,8 +245,13 @@ class LiveDcaCanary:
         key = f"cancel:{order_id}"
         if state["idempotency"].get(key):
             return dict(state)
-        response = self._call("cancel_order", {"order_id": order_id, "activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "idempotency_key": f"{state['activation_digest']}:cancel:{order_id}"}, timestamp=timestamp)
-        self._require(response.get("status") not in {"unknown", "error"}, "cancel_unknown", response)
+        try:
+            response = self._call("cancel_order", {"order_id": order_id, "activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "idempotency_key": f"{state['activation_digest']}:cancel:{order_id}"}, timestamp=timestamp)
+            self._require(response.get("status") not in {"unknown", "error"}, "cancel_unknown", response)
+        except LiveDcaCanaryError as exc:
+            self._block(state, exc.code, timestamp=timestamp)
+            self._save(state)
+            raise
         state["idempotency"][key] = True
         for order in state["orders"]:
             if order.get("order_id") == order_id:
@@ -240,9 +266,14 @@ class LiveDcaCanary:
         key = "flatten"
         if state["idempotency"].get(key):
             return dict(state)
-        response = self._call("flatten_reduce_only", {"activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "reduce_only": True, "reason": str(reason), "idempotency_key": f"{state['activation_digest']}:flatten"}, timestamp=timestamp)
-        self._require(response.get("status") not in {"unknown", "error", "rejected"}, "flatten_unknown", response)
-        self._require(response.get("reduce_only") is True, "flatten_not_reduce_only", response)
+        try:
+            response = self._call("flatten_reduce_only", {"activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "reduce_only": True, "reason": str(reason), "idempotency_key": f"{state['activation_digest']}:flatten"}, timestamp=timestamp)
+            self._require(response.get("status") not in {"unknown", "error", "rejected"}, "flatten_unknown", response)
+            self._require(response.get("reduce_only") is True, "flatten_not_reduce_only", response)
+        except LiveDcaCanaryError as exc:
+            self._block(state, exc.code, timestamp=timestamp)
+            self._save(state)
+            raise
         state["idempotency"][key] = True
         self._event(state, "flatten_requested", timestamp=timestamp, reason=reason)
         self._reconcile(state, timestamp=timestamp, require_flat=True)
@@ -300,14 +331,20 @@ class LiveDcaCanary:
             entries.append({"price": price, "quantity": quantity, "notional": notional})
         if theoretical_loss < 0 or theoretical_loss > limits["max_acceptable_loss"]:
             raise LiveDcaCanaryError("risk_budget_exceeded", "approved DCA ladder exceeds maximum acceptable loss", {"theoretical_loss": theoretical_loss, "max_acceptable_loss": limits["max_acceptable_loss"]})
+        account_equity = _number(plan.get("account_equity"), "account_equity")
+        derived_leverage = total_notional / account_equity
+        if derived_leverage > limits["max_leverage"]:
+            raise LiveDcaCanaryError("leverage_ceiling_exceeded", "approved DCA ladder exceeds maximum leverage")
         if total_notional > limits["max_notional"] or len(entries) > limits["max_open_orders"] or len(entries) > limits["max_positions"]:
             raise LiveDcaCanaryError("global_risk_ceiling_exceeded", "approved DCA ladder exceeds a global ceiling")
-        return {"plan_digest": str(plan["plan_digest"]), "direction": direction, "entries": entries, "target_price": target, "stop_price": stop, "risk_limits": limits}
+        return {"plan_digest": str(plan["plan_digest"]), "direction": direction, "entries": entries, "target_price": target, "stop_price": stop, "risk_limits": limits, "derived_leverage": derived_leverage}
 
     def _capabilities(self) -> set[str]:
         value = getattr(self.transport, "capabilities", set())
         if isinstance(value, Mapping):
             result = {str(key) for key, supported in value.items() if supported is True}
+        elif hasattr(value, "names"):
+            result = {str(item) for item in value.names}
         else:
             result = {str(item) for item in value}
         return result
@@ -349,6 +386,13 @@ class LiveDcaCanary:
             raise LiveDcaCanaryError(code, code.replace("_", " "), evidence)
 
     @staticmethod
+    def _block(state: dict[str, Any], code: str, *, timestamp: str) -> None:
+        state["status"] = "blocked"
+        state["blocker"] = str(code)
+        state["next_action"] = "notify_park_and_wait"
+        LiveDcaCanary._event(state, "canary_blocked", timestamp=timestamp, code=str(code))
+
+    @staticmethod
     def _event(state: dict[str, Any], event: str, *, timestamp: str, **payload: Any) -> None:
         row = {"event": event, "timestamp": str(timestamp), "activation_digest": state.get("activation_digest"), "plan_digest": state.get("plan_digest"), "environment": "mainnet", "account_id": state.get("account_id"), "release_sha": state.get("release_sha"), "network_io": bool(state.get("network_io")), **payload}
         row["event_digest"] = _digest({key: value for key, value in row.items() if key != "event_digest"})
@@ -356,6 +400,8 @@ class LiveDcaCanary:
         state["updated_at"] = str(timestamp)
 
     def _save(self, state: Mapping[str, Any]) -> None:
+        if isinstance(state, dict):
+            state["state_digest"] = _digest({key: value for key, value in state.items() if key != "state_digest"})
         write_json(self.path, [dict(state)])
 
     def _record_canary_passed(self, state: Mapping[str, Any], *, timestamp: str) -> None:

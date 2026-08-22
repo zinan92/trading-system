@@ -83,6 +83,7 @@ def _plan() -> dict:
         "plan_digest": "sha256:" + "c" * 64,
         "target_price": 4500,
         "stop_price": 3700,
+        "account_equity": 2000,
         "risk_limits": {
             "max_acceptable_loss": 1000,
             "max_notional": 10000,
