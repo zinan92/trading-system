@@ -112,7 +112,7 @@ class OandaRestBrokerAdapter:
                 f"live broker preflight failed: {readiness['block_reason']}"
             )
         if not self.dry_run:
-            activation = SourceBoundLiveActivationGate(self.output_root, park_user_id="").canary_status()
+            activation = SourceBoundLiveActivationGate(self.output_root, park_user_id=os.getenv("PARK_TELEGRAM_USER_ID", "")).canary_status()
             if activation.get("ready") is not True:
                 raise RuntimeError("source-bound Live activation/canary is not ready; real broker submission is blocked")
         return self._submit_with_readiness(request, readiness)

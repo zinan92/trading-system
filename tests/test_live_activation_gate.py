@@ -112,6 +112,8 @@ def _ready_gate(tmp_path: Path) -> tuple[LiveActivationGate, dict, list[dict]]:
         approved_plan_resolver=lambda: {
             "status": "approved",
             "strategy_scope": "dca",
+            "strategy_session_id": "session-continuous",
+            "strategy_revision_id": "revision-dca",
             "plan_digest": "sha256:" + "c" * 64,
             "approval_receipt_digest": "sha256:" + "f" * 64,
             "canonical_plan": {"strategy_type": "dca", "plan_digest": "sha256:" + "c" * 64},

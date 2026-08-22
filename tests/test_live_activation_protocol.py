@@ -26,6 +26,8 @@ def test_production_proposal_seam_creates_only_local_confirmation_proposal(tmp_p
     approved = {
         "status": "approved",
         "strategy_scope": "dca",
+        "strategy_session_id": "session-continuous",
+        "strategy_revision_id": "revision-dca",
         "plan_digest": plan_digest,
         "approval_receipt_digest": approval_receipt_digest,
         "canonical_plan": {"strategy_type": "dca", "plan_digest": plan_digest},
@@ -36,8 +38,8 @@ def test_production_proposal_seam_creates_only_local_confirmation_proposal(tmp_p
         "\n".join(
             json.dumps(row)
             for row in [
-                {"event": "proposal", "proposal_id": approval_proposal_id, "plan_digest": plan_digest},
-                {"event": "confirmed", "proposal_id": approval_proposal_id, "plan_digest": plan_digest, "receipt_digest": approval_receipt_digest, "execution_authorized": True, "execution_environment": "testnet", "confirmed_at": approval_time},
+                {"event": "proposal", "proposal_id": approval_proposal_id, "plan_digest": plan_digest, "strategy_session_id": "session-continuous", "strategy_revision_id": "revision-dca", "expires_at": 4102444800},
+                {"event": "confirmed", "proposal_id": approval_proposal_id, "plan_digest": plan_digest, "receipt_digest": approval_receipt_digest, "execution_authorized": True, "execution_environment": "testnet", "confirmed_at": approval_time, "park_user_id": "park", "strategy_session_id": "session-continuous", "strategy_revision_id": "revision-dca"},
             ]
         ) + "\n",
         encoding="utf-8",

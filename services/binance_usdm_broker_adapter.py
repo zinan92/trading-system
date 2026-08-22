@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -57,7 +58,7 @@ class BinanceUsdmBrokerAdapter:
         if not readiness["ready"] and not self.dry_run:
             raise RuntimeError(f"live broker preflight failed: {readiness['block_reason']}")
         if not self.dry_run:
-            activation = SourceBoundLiveActivationGate(self.output_root, park_user_id="").canary_status()
+            activation = SourceBoundLiveActivationGate(self.output_root, park_user_id=os.getenv("PARK_TELEGRAM_USER_ID", "")).canary_status()
             if activation.get("ready") is not True:
                 raise RuntimeError("source-bound Live activation/canary is not ready; real broker submission is blocked")
         if not self.dry_run:

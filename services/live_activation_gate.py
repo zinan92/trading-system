@@ -271,6 +271,9 @@ class LiveActivationGate:
         approved_plan = self._approved_plan(plan_digest)
         if approved_plan is None:
             raise LiveActivationError("approved_dca_plan_missing_or_mismatch", "the plan digest is not bound to an approved canonical DCA plan")
+        readiness_snapshot = preflight.get("readiness_snapshot") if isinstance(preflight.get("readiness_snapshot"), Mapping) else {}
+        if approved_plan.get("strategy_session_id") != readiness_snapshot.get("strategy_session_id") or approved_plan.get("strategy_revision_id") != readiness_snapshot.get("strategy_revision_id"):
+            raise LiveActivationError("approved_dca_plan_identity_mismatch", "approved DCA plan is not bound to the current Testnet strategy identity")
         if float(expires_at) <= time.time():
             raise LiveActivationError("activation_expired", "activation expiry must be in the future")
         payload = {
@@ -688,6 +691,8 @@ class LiveActivationGate:
             or str(value.get("strategy_scope") or "").lower() != "dca"
             or str(value.get("plan_digest") or "") != str(plan_digest)
             or not _SHA256.fullmatch(str(value.get("approval_receipt_digest") or ""))
+            or not str(value.get("strategy_session_id") or "").strip()
+            or not str(value.get("strategy_revision_id") or "").strip()
         ):
             return None
         try:
@@ -712,14 +717,14 @@ class LiveActivationGate:
         for decision in reversed(rows):
             if not isinstance(decision, Mapping) or decision.get("event") != "confirmed":
                 continue
-            if str(decision.get("plan_digest") or "") != str(plan_digest) or str(decision.get("receipt_digest") or "") != str(receipt_digest) or decision.get("execution_authorized") is not True:
+            if str(decision.get("plan_digest") or "") != str(plan_digest) or str(decision.get("receipt_digest") or "") != str(receipt_digest) or decision.get("execution_authorized") is not True or not str(decision.get("park_user_id") or "").strip() or (self.park_user_id and str(decision.get("park_user_id") or "") != self.park_user_id):
                 continue
             proposal_id = str(decision.get("proposal_id") or "")
             proposal = next((row for row in rows if isinstance(row, Mapping) and row.get("event") == "proposal" and str(row.get("proposal_id") or "") == proposal_id), None)
-            if not isinstance(proposal, Mapping) or str(proposal.get("plan_digest") or "") != str(plan_digest):
+            if not isinstance(proposal, Mapping) or str(proposal.get("plan_digest") or "") != str(plan_digest) or str(proposal.get("strategy_session_id") or "") != str(decision.get("strategy_session_id") or "") or str(proposal.get("strategy_revision_id") or "") != str(decision.get("strategy_revision_id") or "") or float(proposal.get("expires_at") or 0) <= time.time():
                 continue
             expected = "sha256:" + hashlib.sha256(f"{proposal_id}|{plan_digest}|confirmed|{decision.get('confirmed_at')}".encode("utf-8")).hexdigest()
-            if expected == receipt_digest and str(decision.get("execution_environment") or "paper") in {"paper", "testnet"}:
+            if expected == receipt_digest and str(decision.get("execution_environment") or "") == "testnet":
                 return True
         return False
 
