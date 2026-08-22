@@ -707,6 +707,8 @@ class LiveActivationGate:
         return dict(value)
 
     def _default_park_approval(self, plan_digest: str, receipt_digest: str) -> bool:
+        if not self.park_user_id:
+            return False
         path = self.output_root / "park_strategy" / "confirmations.jsonl"
         if not path.exists():
             return False
