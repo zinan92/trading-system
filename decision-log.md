@@ -1,5 +1,40 @@
 # Decision Log
 
+## Produce source-bound Testnet soak and readiness evidence (Issue #860 / PR #873)
+
+Date: 2026-08-22
+
+### Decision
+
+- The soak is an attended evidence collector, not a timer that promotes an
+  environment. It requires one immutable strategy session/revision/plan across
+  fourteen contiguous 12-hour windows, with each window beginning at Beijing
+  09:00 or 21:00. A boundary closes a package and creates a review; it never
+  mutates orders, positions, Grid geometry, or strategy identity.
+- Window collection reads existing DCA/Grid/broker/runtime artifacts through
+  `record_window_from_artifacts`; missing, unreadable, malformed, future,
+  stale, cross-broker, cross-account, cross-release, wrong-environment, or
+  wrong-strategy evidence persists a blocked window and cannot be rewritten as
+  pass. Artifact content, category/kind, source timestamps, identity, bytes,
+  SHA, review JSON, row digest, receipt digest, and current source tree are
+  revalidated on finalize and readback.
+- A ready receipt requires fourteen passing packages and reviews, all critical
+  gates, and a fresh source-bound chain. Corrupt journals or receipts produce a
+  durable `readiness_invalidated` blocker; stale readback uses an explicit
+  refresh action. Live writes, Live eligibility, and automatic promotion are
+  always false.
+- Dashboard and Telegram read models expose the same readiness state and
+  provenance. `pipelines/testnet_soak.py` is the attended source handoff CLI;
+  its exit code is nonzero for a blocked window or blocked final receipt.
+
+### Verification
+
+- Merged source: `main@0f04ae1364d47f52d696ed056dd6c43747b98a37`.
+- Trading-system focused soak/readback/Grid/DCA/control/broker tests: 218
+  passed; compile, diff, and gitleaks passed.
+- No network, credentials, Live activation, order write, or deployment
+  occurred; #861 is next.
+
 ## Consume the fixed-geometry Grid Testnet lifecycle (Issue #859 / PR #869)
 
 Date: 2026-08-22
