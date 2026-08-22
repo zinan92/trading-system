@@ -24,6 +24,7 @@ from typing import Any, Callable, Mapping
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dca_execution_lifecycle import DcaPaperLifecycle
 from services.dca_testnet_lifecycle import DcaTestnetLifecycle
+from services.grid_testnet_lifecycle import GridTestnetLifecycle
 from services.dca_plan import (
     build_dca_entry_commands,
     build_dca_preview,
@@ -1272,6 +1273,7 @@ class StrategyControlPlane:
             "strategy_plan_id": row.get("strategy_plan_id"),
             "strategy_plan_version": row.get("strategy_plan_version"),
             "strategy_type": row.get("strategy_type"),
+            "execution_environment": row.get("execution_environment"),
             "preview_id": row.get("preview_id"),
             "risk_decision_id": row.get("risk_decision_id"),
             "risk_policy_id": row.get("risk_policy_id"),
@@ -1282,6 +1284,7 @@ class StrategyControlPlane:
             "last_error": row.get("last_error"),
             "dca_lifecycle_status": row.get("dca_lifecycle_status"),
             "dca_lifecycle_path": row.get("dca_lifecycle_path"),
+            "grid_lifecycle_status": row.get("grid_lifecycle_status"),
             "stale_cycle": False,
             "previous_cycle_id": None,
             "previous_actual_state": None,
@@ -7009,6 +7012,140 @@ class StrategyControlPlane:
             ),
         )
         return {"action": "start_testnet_dca", "runtime": published, "lifecycle": state}
+
+    def start_testnet_grid(
+        self,
+        plan: dict[str, Any],
+        *,
+        confirmation: Mapping[str, Any],
+        market: Mapping[str, Any],
+        adapter: Any,
+        actor: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Start one explicitly confirmed fixed-geometry Grid on Testnet."""
+
+        timestamp = str(now or self._authorization_clock())
+        cycle_id = str(plan.get("cycle_id") or "")
+        with production_mutation_lock(self.output_root):
+            confirmation_evidence = self._validate_durable_testnet_confirmation(plan, confirmation)
+            self._record_testnet_confirmation_consumed(confirmation_evidence)
+            market_dict = dict(market)
+            if (
+                market_dict.get("execution_ready") is not True
+                or market_dict.get("fresh") is not True
+                or market_dict.get("is_synthetic") is True
+                or market_dict.get("fallback_policy") not in {"none", None}
+            ):
+                raise StrategyControlMachineError("testnet_market_not_authoritative", {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")})
+            if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+                raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
+            preflight = adapter.preflight()
+            if (
+                preflight.get("ready") is not True
+                or preflight.get("environment") != "testnet"
+                or preflight.get("network_io") is not False
+                or preflight.get("real_money_eligible") is not False
+                or preflight.get("protection_ready") is not True
+                or preflight.get("account_read_ready") is not True
+            ):
+                raise StrategyControlMachineError("testnet_preflight_blocked", dict(preflight))
+            runtime = self.runtime_state(cycle_id)
+            if runtime.get("desired_state") == "running":
+                raise StrategyControlMachineError("testnet_strategy_already_running", runtime)
+            foreign_active = [row for row in self._all_active_plans() if str(row.get("strategy_plan_id") or "") != str(plan.get("strategy_plan_id") or "")]
+            if foreign_active:
+                raise StrategyControlMachineError("testnet_existing_active_strategy", {"active_strategy_plan_ids": [str(row.get("strategy_plan_id") or "") for row in foreign_active]})
+            lifecycle = GridTestnetLifecycle(self.output_root, adapter)
+            state = lifecycle.start(plan, timestamp=timestamp)
+            if state.get("status") != "active":
+                raise StrategyControlMachineError("testnet_lifecycle_blocked", {"status": state.get("status"), "blocker": state.get("blocker")})
+            self._activate_plan(plan)
+            published = {
+                **runtime,
+                "cycle_id": cycle_id,
+                "desired_state": "running",
+                "actual_state": "running",
+                "updated_at": timestamp,
+                "last_action": "start_testnet_grid",
+                "last_error": None,
+                "strategy_type": "grid",
+                "strategy_plan_id": plan.get("strategy_plan_id"),
+                "strategy_plan_version": plan.get("version"),
+                "execution_environment": "testnet",
+                "accepted_order_count": len([row for row in state.get("orders") or [] if row.get("state") == "accepted"]),
+                "accepted_order_count_known": True,
+            }
+            self._write_runtime(published)
+            append_control_event(
+                self.output_root,
+                build_control_event(
+                    cycle_id=cycle_id,
+                    action="start_testnet_grid",
+                    actor=actor,
+                    payload={"plan_digest": plan.get("plan_digest"), "environment": "testnet"},
+                    result="accepted",
+                    error=None,
+                    runtime=published,
+                    evidence={"preflight": preflight, "lifecycle": state},
+                    now=timestamp,
+                ),
+            )
+            return {"action": "start_testnet_grid", "runtime": published, "lifecycle": state}
+
+    def advance_testnet_grid(
+        self,
+        cycle_id: str,
+        *,
+        adapter: Any,
+        fill: dict[str, Any] | None = None,
+        price: float | None = None,
+        market: Mapping[str, Any] | None = None,
+        timestamp: str | None = None,
+        actor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Advance Grid through an exact broker fill or trusted market event."""
+
+        plan = self.active_plan(cycle_id)
+        runtime = self.runtime_state(cycle_id)
+        if not plan or plan.get("strategy_type") != "grid" or runtime.get("execution_environment") != "testnet" or runtime.get("actual_state") not in {"running", "active", "hard_stop_triggered", "blocked_risk", "blocked_protection", "blocked_reconciliation"}:
+            raise StrategyControlMachineError("testnet_grid_not_running", {"cycle_id": cycle_id, "runtime": runtime})
+        if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+            raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
+        observed_at = str(timestamp or self._authorization_clock())
+        lifecycle = GridTestnetLifecycle(self.output_root, adapter)
+        try:
+            with production_mutation_lock(self.output_root):
+                if fill is not None:
+                    state = lifecycle.on_fill(plan, fill, timestamp=observed_at)
+                    action = "testnet_grid_fill"
+                elif price is not None:
+                    market_dict = dict(market or {})
+                    if market_dict.get("execution_ready") is not True or market_dict.get("fresh") is not True or market_dict.get("is_synthetic") is True or market_dict.get("fallback_policy") not in {"none", None}:
+                        raise StrategyControlMachineError("testnet_market_not_authoritative", {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")})
+                    state = lifecycle.on_market_event(plan, price=float(price), timestamp=observed_at)
+                    action = "testnet_grid_market_event"
+                else:
+                    raise StrategyControlMachineError("testnet_grid_event_required", {"cycle_id": cycle_id})
+        except Exception as exc:
+            try:
+                state = lifecycle.snapshot(plan)
+            except Exception as snapshot_exc:
+                state = {"status": "blocked_reconciliation", "blocker": f"lifecycle_snapshot_failed:{type(snapshot_exc).__name__}:{snapshot_exc}"}
+            published = {**runtime, "updated_at": observed_at, "actual_state": str(state.get("status") or "blocked"), "desired_state": "stopped", "last_action": "testnet_grid_blocked", "last_error": str(state.get("blocker") or exc), "grid_lifecycle_status": state.get("status"), "next_action": state.get("next_action") or "notify_park_and_wait"}
+            self._write_runtime(published)
+            append_control_event(self.output_root, build_control_event(cycle_id=cycle_id, action="testnet_grid_blocked", actor=actor, payload={"environment": "testnet", "plan_digest": plan.get("plan_digest")}, result="blocked", error=str(state.get("blocker") or exc), runtime=published, evidence={"lifecycle": state}, now=observed_at))
+            raise
+        terminal = str(state.get("status") or "") == "terminal"
+        published = {**runtime, "updated_at": observed_at, "actual_state": "stopped" if terminal else str(state.get("status") or "active"), "desired_state": "stopped" if terminal else "running", "last_action": action, "last_error": state.get("blocker"), "accepted_order_count": len([row for row in state.get("orders") or [] if row.get("state") == "accepted"]), "accepted_order_count_known": True, "grid_lifecycle_status": state.get("status"), "next_action": state.get("next_action")}
+        if state.get("park_notification_required"):
+            notification = self._queue_testnet_park_notification(plan, state)
+            published["park_notification"] = notification
+            if notification.get("status") == "blocked":
+                published["last_error"] = notification.get("reason")
+        self._write_runtime(published)
+        append_control_event(self.output_root, build_control_event(cycle_id=cycle_id, action=action, actor=actor, payload={"environment": "testnet", "plan_digest": plan.get("plan_digest")}, result="blocked" if state.get("blocker") or published.get("park_notification", {}).get("status") == "blocked" else "accepted", error=state.get("blocker") or published.get("park_notification", {}).get("reason"), runtime=published, evidence={"lifecycle": state}, now=observed_at))
+        return {"action": action, "runtime": published, "lifecycle": state}
 
     def _validate_durable_testnet_confirmation(
         self,
