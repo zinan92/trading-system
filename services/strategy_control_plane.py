@@ -6815,7 +6815,22 @@ class StrategyControlPlane:
                 **preview["grid"],
                 "actual_leverage": preview["risk"]["actual_leverage"],
                 "orders": [dict(order) for order in preview["orders"]],
+                "rungs": [
+                    {
+                        "rung": index,
+                        "price": float(order["price"]),
+                        "side": str(order["side"]),
+                        "take_profit": float(order.get("tp") or order.get("take_profit") or 0),
+                        "hard_stop": float(preview["range"]["low"] if str(order["side"]) == "buy" else preview["range"]["high"]),
+                        "quantity": float(order.get("quantity") or 0),
+                    }
+                    for index, order in enumerate(preview["orders"], start=1)
+                ],
+                "midpoint": float(preview["range"].get("split_price") or (float(preview["range"]["low"]) + float(preview["range"]["high"])) / 2.0),
             },
+            "upper_price_boundary": float(preview["range"]["high"]),
+            "lower_price_boundary": float(preview["range"]["low"]),
+            "midpoint": float(preview["range"].get("split_price") or (float(preview["range"]["low"]) + float(preview["range"]["high"])) / 2.0),
             "execution_context": {"market": dict(preview["market"])},
             "tp_sl": {
                 "mode": "per_grid",
@@ -6829,6 +6844,13 @@ class StrategyControlPlane:
                 "actual_leverage": preview["risk"]["actual_leverage"],
                 "max_loss": preview["risk"]["max_loss"],
                 "estimated_margin": preview["risk"]["estimated_margin"],
+                "equity": float(preview["risk"].get("equity") or preview["risk"].get("account_equity") or 0),
+                "maximum_loss_at_full_depth": float(preview["risk"].get("max_loss") or 0),
+                "max_notional": float(preview["risk"].get("absolute_notional_ceiling") or preview["risk"].get("capital_budget") or 0),
+                "max_open_orders": len(preview["orders"]),
+                "max_open_positions": len(preview["orders"]),
+                "max_slippage": float((current.get("risk_budget") or {}).get("max_slippage") or 0),
+                "leverage_limit": float(preview["grid"].get("leverage_limit") or preview["grid"].get("leverage") or 0),
             },
             "field_sources": {
                 **dict(current.get("field_sources") or {}),

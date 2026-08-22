@@ -197,6 +197,21 @@ def test_grid_hard_stop_recovery_fill_is_consumable_after_primary_submit_failure
     assert terminal["sealed"] is True
 
 
+def test_grid_late_cancelled_unfilled_rung_after_hard_stop_is_flattened(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=77), timestamp="2026-08-22T01:00:30+00:00")
+    lifecycle.on_market_event(plan, price=63000.0, timestamp="2026-08-22T01:01:00+00:00")
+    late_entry = started["orders"][1]
+    late = lifecycle.on_fill(plan, _fill(late_entry, price=64000.0, tid=76), timestamp="2026-08-22T01:02:00+00:00")
+
+    assert late["status"] == "hard_stop_triggered"
+    assert any(row["event"] == "hard_stop" for row in late["orders"])
+    assert not any(row["event"] == "tp" and row["state"] == "accepted" for row in late["orders"])
+
+
 def test_grid_neutral_keeps_both_entry_legs_and_hard_stop_is_net_covered(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
