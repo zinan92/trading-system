@@ -91,7 +91,7 @@ def _preflight(gate: LiveActivationGate) -> dict:
         strategy_scope="dca",
         readiness=_readiness(source)[0],
         capabilities={"operations": operations},
-        risk_limits={"max_acceptable_loss": 25, "max_notional": 100, "max_leverage": 2},
+        risk_limits={"max_acceptable_loss": 25, "max_notional": 100, "max_leverage": 2, "max_open_orders": 10, "max_positions": 1},
         source_attestation=source,
     )
 
