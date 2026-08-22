@@ -82,10 +82,12 @@ class StandardBrokerTestnetExecutionAdapter:
                 RuntimeFactLedger,
                 SignerKind,
                 SignerReference,
+                ProtectionGroup,
             )
             from standard_broker.adapters.hyperliquid import (
                 HyperliquidInstrumentAdapter,
                 HyperliquidRuntimeOrderAdapter,
+                HyperliquidRuntimeProtectionAdapter,
                 NautilusHyperliquidRuntime,
                 NautilusRuntimeConfig,
             )
@@ -114,6 +116,7 @@ class StandardBrokerTestnetExecutionAdapter:
             )
         if not isinstance(instrument_meta, Mapping):
             raise StandardBrokerTestnetHostError("Testnet instrument metadata is required")
+        self._protection_group_type = ProtectionGroup
 
         credential_source = validate_standard_broker_credential_source(
             credential_source,
@@ -184,6 +187,11 @@ class StandardBrokerTestnetExecutionAdapter:
                 instruments=instruments,
                 ledger=ledger,
             )
+            self._protection = (
+                HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+                if capabilities.supports("protection_order", "submit")
+                else None
+            )
             if ledger.session_key is None:
                 raise StandardBrokerTestnetHostError(
                     "Testnet runtime fact ledger did not bind a session"
@@ -207,6 +215,10 @@ class StandardBrokerTestnetExecutionAdapter:
     @property
     def canonical_order_adapter(self) -> Any:
         return self._orders
+
+    @property
+    def protection_adapter(self) -> Any:
+        return self._protection
 
     @property
     def fills(self) -> Mapping[str, object]:
@@ -246,6 +258,7 @@ class StandardBrokerTestnetExecutionAdapter:
             "environment_fingerprint": self.broker_config["environment_fingerprint"],
             "ledger_namespace": self.broker_config["ledger_namespace"],
             "capability_revision": result.capability_revision,
+            "protection_ready": self._protection is not None,
         }
 
     def submit_order(self, request: BrokerOrderRequest) -> Any:
@@ -271,8 +284,28 @@ class StandardBrokerTestnetExecutionAdapter:
 
     def request(self, port: str, operation: str, payload: object | None = None) -> Any:
         if port != "order_execution":
+            if port != "protection_order":
+                raise UnsupportedBrokerCapability(
+                    f"Testnet adapter does not expose {port}"
+                )
+            if self._protection is None:
+                raise UnsupportedBrokerCapability(
+                    "Testnet protection capability is not declared"
+                )
+            if not isinstance(payload, self._protection_group_type):
+                raise StandardBrokerTestnetHostError(
+                    "protection_order requests require canonical ProtectionGroup"
+                )
+            if operation == "submit":
+                return self._protection.submit(payload)
+            if operation == "replace":
+                return self._protection.replace(payload)
+            if operation == "cancel":
+                return self._protection.cancel(payload)
+            if operation in {"query", "reconcile"}:
+                return self._protection.reconcile(payload)
             raise UnsupportedBrokerCapability(
-                f"Testnet adapter only exposes order_execution, got {port}"
+                f"unsupported Testnet protection operation: {operation}"
             )
         if operation == "submit":
             if not self._is_order_intent(payload):
