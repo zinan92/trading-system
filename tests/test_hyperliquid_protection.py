@@ -1,18 +1,116 @@
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
-from standard_broker.adapters.hyperliquid import HyperliquidProtectionAdapter
+from standard_broker.adapters.hyperliquid import (
+    HyperliquidProtectionAdapter,
+    HyperliquidRuntimeProtectionAdapter,
+    NautilusAdapterMetadata,
+    NautilusHyperliquidRuntime,
+    NautilusRuntimeConfig,
+)
+from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import BrokerCapabilityError
+from standard_broker.models import BrokerEnvironment
 from standard_broker.orders import OrderSide
 from standard_broker.protection import (
     ProtectionExecution,
     ProtectionGroup,
     ProtectionLeg,
+    ProtectionLifecycleState,
     ProtectionQuantityPolicy,
     ProtectionType,
     TriggerReference,
 )
+from standard_broker.models import AccountScope, Provenance, SignerKind
+from standard_broker.runtime import (
+    AccountReference,
+    BrokerRuntimeSession,
+    ExternalEnvironmentApproval,
+    RuntimeActivationPolicy,
+    SignerReference,
+)
+
+
+class FixtureSignerProvider:
+    def sign(self, signer: SignerReference, payload: bytes) -> bytes:
+        return payload
+
+
+def _approved_testnet_runtime(capabilities, calls, *, accepted: bool):
+    class Backend:
+        local_only = True
+
+        def __init__(self) -> None:
+            self.metadata = NautilusAdapterMetadata(
+                package="nautilus-hyperliquid",
+                version="1.230.0",
+                commit="testnet-protection-commit",
+                capabilities=capabilities,
+            )
+
+        def invoke(self, port: str, operation: str, request: object):
+            calls.append((port, operation, request))
+            return SimpleNamespace(
+                accepted=accepted,
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                provenance=Provenance(
+                    source="testnet.fixture",
+                    execution_scope="hypercore:default",
+                    transport_state="local_fixture",
+                    mapping_revision="testnet-protection-v1",
+                    received_at=datetime.now(UTC),
+                ),
+            )
+
+    approval = ExternalEnvironmentApproval(
+        environment=BrokerEnvironment.TESTNET,
+        approval_id="protection-approval",
+        release_sha="a" * 40,
+        approved_by="park",
+        approved_at=datetime.now(UTC),
+        account_address="testnet-account",
+        lifecycle_id="protection-runtime",
+    )
+    runtime = NautilusHyperliquidRuntime(
+        session=BrokerRuntimeSession(
+            broker_id="hyperliquid",
+            environment=BrokerEnvironment.TESTNET,
+            account=AccountReference(AccountScope.MASTER, "testnet-account"),
+            signer=SignerReference(SignerKind.API_AGENT, "fixture", "fixture://signer"),
+            signer_provider=FixtureSignerProvider(),
+            capabilities=capabilities,
+            execution_scope="hypercore:default",
+            lifecycle_id="protection-runtime",
+        ),
+        backend=Backend(),
+        config=NautilusRuntimeConfig(
+            "1.230.0",
+            "testnet-protection-commit",
+            RuntimeActivationPolicy(testnet_approval=approval),
+            expected_release_sha="a" * 40,
+        ),
+    )
+    runtime.start()
+    if not accepted:
+        def rejected_invoke(port: str, operation: str, request: object):
+            return SimpleNamespace(
+                accepted=False,
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                provenance=Provenance(
+                    source="testnet.fixture",
+                    execution_scope="hypercore:default",
+                    transport_state="local_fixture",
+                    mapping_revision="testnet-protection-v1",
+                    received_at=datetime.now(UTC),
+                ),
+            )
+        runtime.invoke = rejected_invoke
+    return runtime
 
 
 class HyperliquidProtectionTests(unittest.TestCase):
@@ -122,6 +220,89 @@ class HyperliquidProtectionTests(unittest.TestCase):
         request = HyperliquidProtectionAdapter().build_group(group)
 
         self.assertTrue(all(leg.side is OrderSide.BUY for leg in request.legs))
+
+    def test_approved_testnet_runtime_protection_is_reduce_only_and_namespaced(self) -> None:
+        capabilities = CapabilityDescriptor(
+            broker_id="hyperliquid",
+            environment=BrokerEnvironment.TESTNET,
+            operations={
+                "order_execution": frozenset(
+                    {"submit", "cancel", "replace", "query", "open_orders"}
+                ),
+                "protection_order": frozenset(
+                    {
+                        "submit",
+                        "cancel",
+                        "replace",
+                        "query",
+                        "reduce_only",
+                        "mark_price_trigger",
+                        "grouped_tp_sl",
+                        "sibling_cancellation",
+                        "fixed_size",
+                        "take_profit_market",
+                        "stop_loss_limit",
+                    }
+                )
+            },
+            revision="testnet-protection-v1",
+        )
+        calls: list[tuple[str, str, object]] = []
+        adapter = HyperliquidRuntimeProtectionAdapter(
+            runtime=_approved_testnet_runtime(capabilities, calls, accepted=True)
+        )
+        receipt = adapter.submit(self.long_group())
+        confirmed = adapter.reconcile(self.long_group())
+        replaced = adapter.replace(self.long_group())
+        canceled = adapter.cancel(self.long_group())
+
+        self.assertEqual(receipt.environment, BrokerEnvironment.TESTNET)
+        self.assertEqual(confirmed.operation, "query")
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.CANCELED)
+        self.assertEqual(calls[0][0:2], ("protection_order", "submit"))
+        self.assertTrue(all(leg["reduceOnly"] for leg in calls[0][2]["legs"]))
+        self.assertEqual([call[1] for call in calls], ["submit", "query", "replace", "cancel"])
+        self.assertEqual(replaced.operation, "replace")
+
+        adapter.reconcile(self.long_group())
+        with self.assertRaises(BrokerCapabilityError) as raised:
+            adapter.reconcile_position_coverage(
+                self.long_group(),
+                owned_quantity=Decimal("0.04"),
+            )
+        self.assertIn("partial_fill_protection_gap", str(raised.exception))
+
+    def test_unaccepted_testnet_protection_receipt_freezes_before_coverage(self) -> None:
+        capabilities = CapabilityDescriptor(
+            broker_id="hyperliquid",
+            environment=BrokerEnvironment.TESTNET,
+            operations={
+                "order_execution": frozenset(
+                    {"submit", "cancel", "replace", "query", "open_orders"}
+                ),
+                "protection_order": frozenset(
+                    {
+                        "submit",
+                        "cancel",
+                        "reduce_only",
+                        "mark_price_trigger",
+                        "grouped_tp_sl",
+                        "sibling_cancellation",
+                        "fixed_size",
+                        "take_profit_market",
+                        "stop_loss_limit",
+                    }
+                ),
+            },
+            revision="testnet-protection-unaccepted-v1",
+        )
+        adapter = HyperliquidRuntimeProtectionAdapter(
+            runtime=_approved_testnet_runtime(capabilities, [], accepted=False)
+        )
+        with self.assertRaises(BrokerCapabilityError) as raised:
+            adapter.submit(self.long_group())
+        self.assertIn("not_accepted", str(raised.exception))
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
 
 
 if __name__ == "__main__":
