@@ -808,6 +808,11 @@ class HyperliquidRuntimeOrderAdapter:
 
         return self._runtime.session
 
+    def resolve_order_id(self, reference: str) -> str:
+        """Resolve one canonical, client, or broker order identity."""
+
+        return self._lifecycle.resolve_order_id(reference)
+
     def submit(self, intent: OrderIntent) -> OrderReceipt:
         self._validate_intent(intent)
         receipt = self._bind_receipt(self._lifecycle.submit(intent))
@@ -913,19 +918,25 @@ class HyperliquidRuntimeOrderAdapter:
                 raise ValueError("order notional is below instrument minimum notional")
 
     def _sync_order_fills(self, raw: Mapping[str, object]) -> None:
-        namespace = ":".join(
-            (
-                self._runtime.session.broker_id,
-                self._runtime.session.environment.value,
-                self._runtime.session.account.address,
-            )
-        ) + ":"
         for fill_id, raw_fill in self._lifecycle.fills.items():
             fill = self._bind_fill(raw_fill)
             if str(raw.get("tid") or raw.get("hash") or "") == fill_id:
-                self._ledger.record_order_fill(fill, raw)
+                raw_payload = raw
             else:
-                self._ledger.order_fills[namespace + fill_id] = fill
+                raw_payload = self._fill_raw(fill)
+            self._ledger.record_order_fill(fill, raw_payload)
+
+    def _fill_raw(self, fill: OrderFill) -> dict[str, object]:
+        return {
+            "tid": fill.fill_id,
+            "oid": fill.broker_order_id,
+            "cloid": fill.client_order_id,
+            "coin": self._instruments.get(fill.instrument_id).broker_symbol,
+            "side": "B" if fill.side is OrderSide.BUY else "A",
+            "px": str(fill.price),
+            "sz": str(fill.quantity),
+            "time": int(fill.occurred_at.timestamp() * 1000),
+        }
 
     def _sync_inline_fills(self) -> None:
         for fill in self._lifecycle.fills.values():
