@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from decimal import Decimal
 
 from standard_broker.adapters.hyperliquid.bridge import (
@@ -11,6 +12,9 @@ from standard_broker.errors import BrokerError
 from standard_broker.fees import FeeEvent, FeeKind, FeeSource, FeeState
 from standard_broker.host import (
     BrokerRegistry,
+    CanonicalHostRequest,
+    CanonicalBrokerHost,
+    CanonicalPortQuery,
     BrokerSelection,
     HostRole,
     HostSafetyPolicy,
@@ -23,7 +27,7 @@ from standard_broker.models import (
     Provenance,
     SignerKind,
 )
-from standard_broker.paper import PaperBrokerAdapter
+from standard_broker.paper import PaperBrokerAdapter, PaperPreflight
 
 
 class HostContractTests(unittest.TestCase):
@@ -65,6 +69,137 @@ class HostContractTests(unittest.TestCase):
         self.assertFalse(binding.real_money_eligible)
         self.assertEqual(binding.control_plane, "telegram")
 
+    def test_canonical_host_invokes_only_the_explicit_paper_binding(self) -> None:
+        registry = BrokerRegistry()
+        adapter = self.adapter()
+        selection = BrokerSelection("hyperliquid", BrokerEnvironment.PAPER, HostRole.AUTHORITATIVE)
+        registry.register(selection, factory=lambda: adapter, capabilities=adapter.capabilities)
+        registry.freeze()
+        host = CanonicalBrokerHost(registry=registry, policy=HostSafetyPolicy())
+
+        binding = host.resolve(selection)
+        receipt = host.invoke(binding, request=CanonicalHostRequest("market_data", "read"))
+
+        self.assertEqual(receipt.broker_id, "hyperliquid")
+        self.assertEqual(receipt.environment, BrokerEnvironment.PAPER)
+        self.assertFalse(receipt.network_io)
+        self.assertEqual(adapter.transport.calls[0].port, "market_data")
+        host.record(RecordingEvent("receipt-1", "receipt", receipt, receipt.provenance))
+        self.assertEqual(host.recording.events[0].payload, receipt)
+
+        for port in PORT_NAMES:
+            host.invoke(
+                binding,
+                request=CanonicalHostRequest(
+                    port,
+                    "read",
+                    CanonicalPortQuery(subject="BTC-USD-PERP", kind="read"),
+                ),
+            )
+
+    def test_canonical_host_has_no_automatic_broker_fallback(self) -> None:
+        registry = BrokerRegistry()
+        adapter = self.adapter()
+        selection = BrokerSelection("hyperliquid", BrokerEnvironment.PAPER, HostRole.AUTHORITATIVE)
+        registry.register(selection, factory=lambda: adapter, capabilities=adapter.capabilities)
+        registry.freeze()
+        host = CanonicalBrokerHost(registry=registry, policy=HostSafetyPolicy())
+
+        with self.assertRaises(BrokerError):
+            host.resolve(BrokerSelection("binance", BrokerEnvironment.PAPER, HostRole.AUTHORITATIVE))
+
+    def test_canonical_host_rejects_a_raw_provider_shaped_receipt(self) -> None:
+        registry = BrokerRegistry()
+        adapter = self.adapter()
+        adapter.request = lambda port, operation, payload=None: {"coin": "BTC", "oid": 1}  # type: ignore[method-assign]
+        selection = BrokerSelection("hyperliquid", BrokerEnvironment.PAPER, HostRole.AUTHORITATIVE)
+        registry.register(selection, factory=lambda: adapter, capabilities=adapter.capabilities)
+        registry.freeze()
+        host = CanonicalBrokerHost(registry=registry, policy=HostSafetyPolicy())
+
+        with self.assertRaises(BrokerError):
+            CanonicalHostRequest("market_data", "read", {"coin": "BTC"})
+        with self.assertRaises(BrokerError):
+            host.invoke(
+                host.resolve(selection),
+                request=CanonicalHostRequest("market_data", "read"),
+            )
+
+    def test_canonical_host_rejects_a_forged_binding(self) -> None:
+        registry = BrokerRegistry()
+        adapter = self.adapter()
+        selection = BrokerSelection("hyperliquid", BrokerEnvironment.PAPER, HostRole.AUTHORITATIVE)
+        registry.register(selection, factory=lambda: adapter, capabilities=adapter.capabilities)
+        registry.freeze()
+        host = CanonicalBrokerHost(registry=registry, policy=HostSafetyPolicy())
+        forged = replace(host.resolve(selection), real_money_eligible=True)
+
+        with self.assertRaises(BrokerError):
+            host.invoke(forged, request=CanonicalHostRequest("market_data", "read"))
+
+    def test_registry_rejects_a_credential_required_paper_preflight(self) -> None:
+        registry = BrokerRegistry()
+        adapter = self.adapter()
+        adapter.preflight = lambda: PaperPreflight(  # type: ignore[method-assign]
+            broker_id="hyperliquid",
+            environment=BrokerEnvironment.PAPER,
+            network_io=False,
+            real_money_eligible=False,
+            credential_required=True,
+            ports=PORT_NAMES,
+        )
+        selection = BrokerSelection("hyperliquid", BrokerEnvironment.PAPER, HostRole.AUTHORITATIVE)
+        registry.register(selection, factory=lambda: adapter, capabilities=adapter.capabilities)
+        registry.freeze()
+
+        with self.assertRaises(BrokerError):
+            registry.resolve(selection, policy=HostSafetyPolicy())
+
+    def test_canonical_host_rejects_receipt_with_wrong_operation_or_scope(self) -> None:
+        registry = BrokerRegistry()
+        adapter = self.adapter()
+        original_request = adapter.request
+        adapter.request = lambda port, operation, payload=None: replace(  # type: ignore[method-assign]
+            original_request(port, operation, payload),
+            operation="wrong",
+        )
+        selection = BrokerSelection("hyperliquid", BrokerEnvironment.PAPER, HostRole.AUTHORITATIVE)
+        registry.register(selection, factory=lambda: adapter, capabilities=adapter.capabilities)
+        registry.freeze()
+        host = CanonicalBrokerHost(registry=registry, policy=HostSafetyPolicy())
+
+        with self.assertRaises(BrokerError):
+            host.invoke(
+                host.resolve(selection),
+                request=CanonicalHostRequest("market_data", "read"),
+            )
+
+    def test_non_authoritative_role_rejects_unknown_operation_fail_closed(self) -> None:
+        adapter = PaperBrokerAdapter(
+            identity=BrokerIdentity(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.PAPER,
+                signer_kind=SignerKind.NONE,
+            ),
+            capabilities=CapabilityDescriptor(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.PAPER,
+                operations={"market_data": frozenset({"mystery"})},
+                revision="host-unknown-operation-v1",
+            ),
+        )
+        registry = BrokerRegistry()
+        selection = BrokerSelection("hyperliquid", BrokerEnvironment.PAPER, HostRole.SHADOW)
+        registry.register(selection, factory=lambda: adapter, capabilities=adapter.capabilities)
+        registry.freeze()
+        host = CanonicalBrokerHost(registry=registry, policy=HostSafetyPolicy())
+
+        with self.assertRaises(BrokerError):
+            host.invoke(
+                host.resolve(selection),
+                request=CanonicalHostRequest("market_data", "mystery"),
+            )
+
     def test_registry_composes_the_paper_nautilus_bridge(self) -> None:
         capabilities = CapabilityDescriptor(
             broker_id="hyperliquid",
@@ -104,6 +239,13 @@ class HostContractTests(unittest.TestCase):
 
         self.assertIs(binding.adapter, bridge)
         self.assertFalse(binding.real_money_eligible)
+        host = CanonicalBrokerHost(registry=registry, policy=HostSafetyPolicy())
+        host_binding = host.resolve(selection)
+        receipt = host.invoke(
+            host_binding,
+            request=CanonicalHostRequest("market_data", "read", "BTC-USD-PERP"),
+        )
+        self.assertEqual(receipt.provenance.execution_scope, "hypercore:default")
 
     def test_unknown_selection_has_no_fallback_authority(self) -> None:
         registry = BrokerRegistry()

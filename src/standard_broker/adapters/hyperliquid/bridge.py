@@ -103,6 +103,7 @@ class NautilusBridgeConfig:
     account_address: str | None
     signer_kind: SignerKind = SignerKind.NONE
     environment: BrokerEnvironment = BrokerEnvironment.PAPER
+    execution_scope: str = "hypercore:default"
 
     def __post_init__(self) -> None:
         if not self.expected_version or not self.expected_version.strip():
@@ -113,6 +114,8 @@ class NautilusBridgeConfig:
             raise NautilusCompatibilityError("Paper bridge only accepts the paper environment")
         if self.signer_kind is not SignerKind.NONE:
             raise NautilusCompatibilityError("Paper bridge cannot accept a signer")
+        if not self.execution_scope or self.execution_scope != self.execution_scope.strip():
+            raise ValueError("execution_scope is required")
 
 
 @dataclass(frozen=True)
@@ -194,6 +197,7 @@ class NautilusHyperliquidBridge:
             environment=self._config.environment,
             account_address=self._config.account_address,
             signer_kind=self._config.signer_kind,
+            execution_scope=self._config.execution_scope,
         )
 
     @property
@@ -218,6 +222,12 @@ class NautilusHyperliquidBridge:
             real_money_eligible=False,
             adapter_version=self._metadata.version,
             adapter_commit=self._metadata.commit,
+            provenance=Provenance(
+                source="nautilus-hyperliquid.bridge",
+                execution_scope=self._config.execution_scope,
+                transport_state="local_fixture",
+                mapping_revision=self._capabilities.revision,
+            ),
         )
 
     def preflight(self) -> PaperPreflight:
