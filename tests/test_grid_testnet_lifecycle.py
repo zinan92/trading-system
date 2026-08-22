@@ -139,6 +139,20 @@ def test_grid_late_entry_fill_after_deadline_is_reconciled_into_tp(tmp_path: Pat
     assert any(event["event"] == "late_entry_fill_reconciled" for event in late["rungs"][0]["line"]["transitions"])
 
 
+def test_grid_crossed_unfilled_rung_is_cancelled_and_skipped(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+
+    skipped = lifecycle.on_market_event(plan, price=63900.0, timestamp="2026-08-22T01:01:00+00:00")
+
+    rung = skipped["rungs"][1]
+    assert rung["missed"] is True
+    assert rung["line"]["state"] == "cancelled"
+    assert any(event["event"] == "rung_missed_skipped" for event in skipped["events"])
+
+
 def test_grid_hard_stop_cancels_tp_and_flattens_before_sealing(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)

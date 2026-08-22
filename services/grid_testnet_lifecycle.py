@@ -207,6 +207,19 @@ class GridTestnetLifecycle:
             if slippage_breached:
                 self._block(state, "exit_fill_slippage_exceeded", timestamp=timestamp)
                 self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
+                if line.open_quantity > 1e-9 or any(GridLineLifecycle.from_snapshot(item["line"]).open_quantity > 1e-9 for item in state["rungs"]):
+                    self._hard_stop(plan, state, timestamp=timestamp, reason="exit_slippage")
+                else:
+                    state["reconciliation"] = self._terminal_reconciliation(state, timestamp)
+                    if state["reconciliation"].get("status") == "ok":
+                        state["status"] = "terminal"
+                        state["sealed"] = True
+                        state["terminal_reason"] = "exit_fill_slippage_exceeded"
+                        state["closure_blocker"] = "exit_fill_slippage_exceeded"
+                        state["park_notification_required"] = True
+                        state["park_notification"] = {"notification_id": f"grid-terminal:{state['strategy_plan_id']}:{state['plan_digest']}", "channel": "telegram", "status": "queued", "reason": "exit_fill_slippage_exceeded", "strategy_session_id": state["strategy_session_id"], "strategy_revision_id": state["strategy_revision_id"], "plan_digest": state["plan_digest"], "next_action": "notify_park_and_wait"}
+                        state["next_action"] = "notify_park_and_wait"
+                        self._record_event(state, "revision_sealed", timestamp=timestamp, reason="exit_fill_slippage_exceeded")
         else:
             self._block(state, "unknown_grid_order_event", timestamp=timestamp)
         self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
@@ -228,6 +241,7 @@ class GridTestnetLifecycle:
         if float(price) >= upper or float(price) <= lower:
             self._hard_stop(plan, state, timestamp=timestamp, reason="grid_boundary")
         else:
+            self._skip_missed_rungs(plan, state, price=float(price), timestamp=timestamp)
             self._expire_partial_entries(plan, state, timestamp=timestamp)
         state["updated_at"] = timestamp
         self._save(state)
@@ -305,7 +319,7 @@ class GridTestnetLifecycle:
                 existing_tp["state"] = "cancelled"
                 existing_tp["cancel_receipt_state"] = str(getattr(receipt.state, "value", receipt.state))
             except Exception as exc:  # noqa: BLE001 - never leave competing TP legs unresolved.
-                self._block(state, f"tp_replace_cancel_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+                self._submission_failure(plan, state, timestamp=timestamp, reason=f"tp_replace_cancel_failed:{type(exc).__name__}:{exc}")
                 return
         command = self._command(
             plan,
@@ -377,7 +391,30 @@ class GridTestnetLifecycle:
                 self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
                 self._record_event(state, "partial_entry_deadline", timestamp=timestamp, rung_id=rung["rung_id"], cancel_state=str(getattr(receipt.state, "value", receipt.state)))
             except Exception as exc:  # noqa: BLE001 - cancellation uncertainty blocks.
-                self._block(state, f"partial_entry_cancel_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+                self._submission_failure(plan, state, timestamp=timestamp, reason=f"partial_entry_cancel_failed:{type(exc).__name__}:{exc}")
+
+    def _skip_missed_rungs(self, plan: dict[str, Any], state: dict[str, Any], *, price: float, timestamp: str) -> None:
+        for rung in state["rungs"]:
+            line = GridLineLifecycle.from_snapshot(rung["line"])
+            if not line.can_enter:
+                continue
+            crossed = price < float(rung["price"]) if rung["side"] == "buy" else price > float(rung["price"])
+            if not crossed:
+                continue
+            row = next((item for item in state["orders"] if item.get("order_id") == rung.get("entry_order_id") and item.get("state") == "accepted"), None)
+            if row is None:
+                continue
+            try:
+                receipt = self.broker.cancel_order(BrokerCancelRequest(run_date=state["cycle_id"], asset=row["instrument_id"], client_order_id=row.get("client_order_id") or "", broker_order_id=row.get("broker_order_id") or ""))
+                self._require_cancel_receipt(receipt)
+                row["state"] = "cancelled"
+                row["cancel_reason"] = "missed_rung"
+                line.cancel(at=timestamp, reason="market_crossed_without_fill")
+                rung["line"] = line.snapshot()
+                rung["missed"] = True
+                self._record_event(state, "rung_missed_skipped", timestamp=timestamp, rung_id=rung["rung_id"], market_price=price, rung_price=rung["price"])
+            except Exception as exc:  # noqa: BLE001 - unresolved cancellation cannot be silently chased.
+                self._submission_failure(plan, state, timestamp=timestamp, reason=f"missed_rung_cancel_failed:{type(exc).__name__}:{exc}")
 
     def _hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str) -> None:
         if state["status"] in {"terminal", "sealed"}:
