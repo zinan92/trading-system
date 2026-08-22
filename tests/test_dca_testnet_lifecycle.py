@@ -24,6 +24,7 @@ def _plan() -> dict:
             "stop_price": 64000.0,
         },
         "risk_budget": {
+            "equity": 10000.0,
             "maximum_loss_at_full_depth": 1000.0,
             "leverage_limit": 10.0,
             "max_notional": 20000.0,

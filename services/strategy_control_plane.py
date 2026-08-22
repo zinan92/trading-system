@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping
 
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dca_execution_lifecycle import DcaPaperLifecycle
+from services.dca_testnet_lifecycle import DcaTestnetLifecycle
 from services.dca_plan import (
     build_dca_entry_commands,
     build_dca_preview,
@@ -6876,6 +6877,114 @@ class StrategyControlPlane:
                 identity=identity,
             )
         )
+
+    def start_testnet_dca(
+        self,
+        plan: dict[str, Any],
+        *,
+        confirmation: Mapping[str, Any],
+        market: Mapping[str, Any],
+        adapter: Any,
+        actor: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Start an explicitly Park-confirmed DCA deal on approved Testnet."""
+
+        timestamp = str(now or self._authorization_clock())
+        cycle_id = str(plan.get("cycle_id") or "")
+        digest = str(plan.get("plan_digest") or "")
+        confirmation_digest = str(confirmation.get("plan_digest") or "")
+        if (
+            not digest
+            or confirmation.get("execution_authorized") is not True
+            or confirmation_digest != digest
+            or str(confirmation.get("source") or "").lower() not in {"park", "telegram"}
+            or str(confirmation.get("strategy_session_id") or "")
+            != str(plan.get("strategy_session_id") or "")
+            or str(confirmation.get("strategy_revision_id") or "")
+            != str(plan.get("strategy_revision_id") or "")
+        ):
+            raise StrategyControlMachineError(
+                "testnet_confirmation_blocked",
+                {"plan_digest": digest, "confirmation_digest": confirmation_digest},
+            )
+        market_dict = dict(market)
+        if (
+            market_dict.get("execution_ready") is not True
+            or market_dict.get("fresh") is not True
+            or market_dict.get("is_synthetic") is True
+            or market_dict.get("fallback_policy") not in {"none", None}
+        ):
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")},
+            )
+        if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+            raise StrategyControlMachineError(
+                "testnet_adapter_required",
+                {"adapter": str(getattr(adapter, "name", ""))},
+            )
+        preflight = adapter.preflight()
+        if (
+            preflight.get("ready") is not True
+            or preflight.get("environment") != "testnet"
+            or preflight.get("network_io") is not False
+            or preflight.get("real_money_eligible") is not False
+        ):
+            raise StrategyControlMachineError("testnet_preflight_blocked", dict(preflight))
+        runtime = self.runtime_state(cycle_id)
+        if runtime.get("desired_state") == "running":
+            raise StrategyControlMachineError("testnet_strategy_already_running", runtime)
+        self._activate_plan(plan)
+        lifecycle = DcaTestnetLifecycle(self.output_root, adapter)
+        try:
+            state = lifecycle.start(plan, timestamp=timestamp)
+        except Exception as exc:
+            append_control_event(
+                self.output_root,
+                build_control_event(
+                    cycle_id=cycle_id,
+                    action="start_testnet_dca",
+                    actor=actor,
+                    payload={"plan_digest": digest, "environment": "testnet"},
+                    result="blocked",
+                    error=str(exc),
+                    runtime=runtime,
+                    now=timestamp,
+                ),
+            )
+            raise
+        published = {
+            **runtime,
+            "cycle_id": cycle_id,
+            "desired_state": "running",
+            "actual_state": "running",
+            "updated_at": timestamp,
+            "last_action": "start_testnet_dca",
+            "last_error": None,
+            "strategy_type": "dca",
+            "strategy_plan_id": plan.get("strategy_plan_id"),
+            "strategy_plan_version": plan.get("version"),
+            "execution_environment": "testnet",
+            "accepted_order_count": len([row for row in state.get("orders") or [] if row.get("state") == "accepted"]),
+            "accepted_order_count_known": True,
+        }
+        self._write_runtime(published)
+        append_control_event(
+            self.output_root,
+            build_control_event(
+                cycle_id=cycle_id,
+                action="start_testnet_dca",
+                actor=actor,
+                payload={"plan_digest": digest, "environment": "testnet"},
+                result="accepted",
+                error=None,
+                runtime=published,
+                evidence={"preflight": preflight, "lifecycle": state},
+                now=timestamp,
+            ),
+        )
+        return {"action": "start_testnet_dca", "runtime": published, "lifecycle": state}
 
     def advance_dca_market_event(
         self,

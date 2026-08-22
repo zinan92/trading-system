@@ -186,14 +186,18 @@ class DcaTestnetLifecycle:
                     if group_before_exit is not None and state.get("protection") is not None:
                         self.broker.request("protection_order", "cancel", group_before_exit)
                     state["positions"] = []
-                    state["status"] = "terminal"
-                    state["terminal_reason"] = order["event"]
-                    state["protection"] = None
-                    state["sealed"] = True
-                    state["park_notification_required"] = True
-                    state["next_action"] = "notify_park_and_wait"
-                    state["reconciliation"] = self._terminal_reconciliation(state, timestamp)
-                    self._record_event(state, "terminal_closed", timestamp=timestamp, reason=order["event"])
+                    reconciliation = self._terminal_reconciliation(state, timestamp)
+                    state["reconciliation"] = reconciliation
+                    if reconciliation["status"] != "ok":
+                        self._block(state, "terminal_reconciliation_blocked", timestamp=timestamp)
+                    else:
+                        state["status"] = "terminal"
+                        state["terminal_reason"] = order["event"]
+                        state["protection"] = None
+                        state["sealed"] = True
+                        state["park_notification_required"] = True
+                        state["next_action"] = "notify_park_and_wait"
+                        self._record_event(state, "terminal_closed", timestamp=timestamp, reason=order["event"])
                 except Exception as exc:  # noqa: BLE001 - terminal protection close remains blocked.
                     self._block(
                         state,
@@ -213,7 +217,16 @@ class DcaTestnetLifecycle:
     ) -> dict[str, Any]:
         identity = self._identity(plan)
         state = self._state(plan)
-        if state["status"] in {"terminal", "blocked_protection", "stopped"}:
+        if state["status"] in {
+            "terminal",
+            "blocked_protection",
+            "blocked_reconciliation",
+            "blocked_risk",
+            "target_triggered",
+            "protection_blocked_flattening",
+            "stopping",
+            "stopped",
+        }:
             return self.snapshot(plan)
         target = float(plan["dca"]["target_price"])
         stop = float(plan["dca"]["stop_price"])
@@ -390,6 +403,7 @@ class DcaTestnetLifecycle:
         risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), dict) else {}
         required_positive = (
             "maximum_loss_at_full_depth",
+            "equity",
             "leverage_limit",
             "max_notional",
             "max_open_orders",
@@ -415,11 +429,18 @@ class DcaTestnetLifecycle:
             for position in state["positions"]
         )
         max_notional = float(risk.get("max_notional") or 0.0)
+        leverage_limit = float(risk.get("leverage_limit") or 0.0)
         exposure = sum(
             float(position["entry_price"]) * float(position["quantity"])
             for position in state["positions"]
         )
-        return loss <= max_loss + 1e-9 and exposure <= max_notional + 1e-9
+        equity = float(risk.get("equity") or 0.0)
+        actual_leverage = exposure / equity if equity > 0 else float("inf")
+        return (
+            loss <= max_loss + 1e-9
+            and exposure <= max_notional + 1e-9
+            and actual_leverage <= leverage_limit + 1e-9
+        )
 
     def _submit_next_entry(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         index = int(state["next_entry_index"])
@@ -441,14 +462,19 @@ class DcaTestnetLifecycle:
                 raise DcaTestnetLifecycleError(state["blocker"])
         price = float(state["entry_levels"][index])
         command = self._command(plan, state, price=price, quantity=self._entry_quantity(plan, price), event="entry", index=index, timestamp=timestamp)
-        receipt = self.broker.submit_order(
-            BrokerOrderRequest(
-                run_date=state["cycle_id"],
-                ticket=command,
-                latest_price=price,
-                actual_size=command["quantity"],
+        try:
+            receipt = self.broker.submit_order(
+                BrokerOrderRequest(
+                    run_date=state["cycle_id"],
+                    ticket=command,
+                    latest_price=price,
+                    actual_size=command["quantity"],
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001 - ambiguous submit must persist a blocker.
+            self._block(state, f"entry_submit_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+            self._save(state)
+            raise DcaTestnetLifecycleError(state["blocker"]) from exc
         try:
             order = self._order_row(command, receipt)
         except DcaTestnetLifecycleError as exc:
@@ -460,14 +486,19 @@ class DcaTestnetLifecycle:
 
     def _submit_exit(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, price: float, quantity: float, event: str) -> None:
         command = self._command(plan, state, price=price, quantity=quantity, event=event, index=len(state["orders"]), timestamp=timestamp, reduce_only=True)
-        receipt = self.broker.submit_order(
-            BrokerOrderRequest(
-                run_date=state["cycle_id"],
-                ticket=command,
-                latest_price=price,
-                actual_size=quantity,
+        try:
+            receipt = self.broker.submit_order(
+                BrokerOrderRequest(
+                    run_date=state["cycle_id"],
+                    ticket=command,
+                    latest_price=price,
+                    actual_size=quantity,
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001 - ambiguous submit must persist a blocker.
+            self._block(state, f"exit_submit_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+            self._save(state)
+            raise DcaTestnetLifecycleError(state["blocker"]) from exc
         try:
             order = self._order_row(command, receipt)
         except DcaTestnetLifecycleError as exc:
