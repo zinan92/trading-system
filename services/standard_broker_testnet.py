@@ -254,8 +254,8 @@ class StandardBrokerTestnetExecutionAdapter:
     def cancel_order(self, request: BrokerCancelRequest) -> Any:
         if request.client_order_id and request.broker_order_id:
             try:
-                client_owner = self._orders._lifecycle.resolve_order_id(request.client_order_id)
-                broker_owner = self._orders._lifecycle.resolve_order_id(request.broker_order_id)
+                client_owner = self._orders.resolve_order_id(request.client_order_id)
+                broker_owner = self._orders.resolve_order_id(request.broker_order_id)
             except KeyError as exc:
                 raise StandardBrokerTestnetHostError(
                     "contradictory or unknown client and broker order identities"
