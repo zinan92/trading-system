@@ -253,6 +253,8 @@ class TestnetSoakReadiness:
         if created and reference - _parse_timestamp(str(created)) > timedelta(hours=24):
             return False
         latest_end = max((_parse_timestamp(str(row.get("ends_at"))) for row in rows if row.get("ends_at")), default=reference)
+        if latest_end > reference:
+            return False
         return reference - latest_end <= timedelta(hours=24)
 
     @staticmethod
@@ -263,8 +265,7 @@ class TestnetSoakReadiness:
         payload = {key: value for key, value in receipt.items() if key != "receipt_digest"}
         return supplied == _digest(payload)
 
-    @staticmethod
-    def _gate_blockers(observation: Mapping[str, Any], evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
+    def _gate_blockers(self, observation: Mapping[str, Any], evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
         blockers: list[dict[str, Any]] = []
         if str(observation.get("environment") or "") != "testnet":
             blockers.append({"code": "observation_environment_not_testnet"})
@@ -272,6 +273,15 @@ class TestnetSoakReadiness:
             value = evidence.get(key)
             if not isinstance(value, Mapping) or value.get("status") not in {"pass", "ready", "ok"} or not str(value.get("source") or "").strip() or not str(value.get("observed_at") or "").strip() or not str(value.get("artifact_ref") or "").strip():
                 blockers.append({"code": f"gate_{key}_not_ready", "evidence": value})
+            if isinstance(value, Mapping):
+                reference = str(value.get("artifact_ref") or "")
+                artifact_path = Path(reference) if Path(reference).is_absolute() else self.output_root / reference
+                if not reference or not artifact_path.exists() or not artifact_path.is_file():
+                    blockers.append({"code": f"artifact_{key}_missing", "artifact_ref": reference})
+                elif value.get("artifact_sha256"):
+                    actual = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+                    if actual != str(value.get("artifact_sha256") or "").lower():
+                        blockers.append({"code": f"artifact_{key}_digest_mismatch", "artifact_ref": reference})
         identity_evidence = evidence.get("release_account_environment_identity")
         if isinstance(identity_evidence, Mapping):
             for field in ("release_sha", "account_fingerprint", "environment", "broker_id"):
@@ -297,6 +307,10 @@ class TestnetSoakReadiness:
         attestation_tree = str(attestation.get("tree_sha") or attestation.get("source_tree_sha") or "")
         attestation_release = str(attestation.get("release_sha") or attestation.get("source_sha") or "")
         valid_hex = lambda value: len(value) in {40, 64} and all(char in "0123456789abcdefABCDEF" for char in value)
-        if attestation.get("tracked_tree_clean") is not True or not valid_hex(attestation_tree) or not valid_hex(attestation_release) or attestation_release != str(observation.get("release_sha") or ""):
+        try:
+            current = current_source_attestation(Path(__file__).resolve().parents[1])
+        except Exception:
+            current = {}
+        if attestation.get("tracked_tree_clean") is not True or not valid_hex(attestation_tree) or not valid_hex(attestation_release) or attestation_release != str(observation.get("release_sha") or "") or (current and (str(current.get("source_sha") or "") != str(attestation.get("source_sha") or attestation.get("release_sha") or "") or str(current.get("source_tree_sha") or "") != attestation_tree or current.get("tracked_tree_clean") is not True)):
             blockers.append({"code": "source_attestation_tree_or_release_invalid"})
         return blockers

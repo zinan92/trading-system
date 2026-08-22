@@ -1,8 +1,11 @@
 from datetime import UTC, datetime, timedelta
+import hashlib
+import json
 from pathlib import Path
 
 from services.testnet_soak_readiness import TestnetSoakReadiness
 from services.park_recording_track import REQUIRED_CATEGORIES
+from services.paper_release_receipt import current_source_attestation
 
 
 def _evidence(observed_at: str = "2026-01-01T01:00:00+00:00") -> dict:
@@ -25,6 +28,14 @@ def _evidence(observed_at: str = "2026-01-01T01:00:00+00:00") -> dict:
 
 def _observation(index: int, *, evidence=None, mutations=None) -> dict:
     start = datetime(2026, 1, 1, 1, tzinfo=UTC) + timedelta(hours=12 * index)
+    attestation = current_source_attestation()
+    evidence_payload = evidence or _evidence((start + timedelta(hours=12)).isoformat())
+    for category, payload in evidence_payload.items():
+        path = Path(f"/tmp/testnet-soak-{index}-{category}.json")
+        path.write_text(json.dumps({"category": category, "window": index}), encoding="utf-8")
+        payload["artifact_ref"] = str(path)
+        payload["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    evidence_payload["release_account_environment_identity"]["release_sha"] = attestation["source_sha"]
     return {
         "window_index": index,
         "record_window_id": f"soak-window-{index:02d}",
@@ -34,16 +45,16 @@ def _observation(index: int, *, evidence=None, mutations=None) -> dict:
         "strategy_revision_id": "revision-dca-1",
         "plan_digest": "sha256:" + "a" * 64,
         "broker_id": "hyperliquid",
-        "release_sha": "b" * 40,
+        "release_sha": attestation["source_sha"],
         "account_fingerprint": "testnet-account-fingerprint",
         "environment": "testnet",
-        "source_attestation": {"status": "verified", "source_sha": "c" * 40, "tree_sha": "d" * 40, "tracked_tree_clean": True, "release_sha": "b" * 40, "environment": "testnet"},
+        "source_attestation": attestation,
         "fresh": True,
         "trusted": True,
         "network_io": False,
         "real_money_eligible": False,
         "positions_open": 0,
-        "evidence": evidence or _evidence((start + timedelta(hours=12)).isoformat()),
+        "evidence": evidence_payload,
         "execution_mutations": mutations or [],
     }
 
