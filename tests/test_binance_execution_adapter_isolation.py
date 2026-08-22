@@ -284,7 +284,7 @@ def test_legacy_facade_preserves_binance_real_money_activation_gate_parity(
     for adapter in adapters:
         with pytest.raises(
             RuntimeError,
-            match="live activation gate is not real_money_ready",
+            match="source-bound Live activation/canary",
         ) as exc_info:
             adapter.submit_order(_request())
         messages.append(str(exc_info.value))
