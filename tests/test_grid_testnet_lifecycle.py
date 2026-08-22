@@ -100,6 +100,7 @@ def test_grid_entry_tp_and_original_price_rearm(tmp_path: Path) -> None:
     entry = started["orders"][0]
     opened = lifecycle.on_fill(plan, _fill(entry, price=65000.0, tid=1), timestamp="2026-08-22T01:01:00+00:00")
     tp = next(row for row in opened["orders"] if row["event"] == "tp")
+    assert tp["trigger_price"] == 65500.0
     closed = lifecycle.on_fill(plan, _fill(tp, price=65500.0, tid=2), timestamp="2026-08-22T01:02:00+00:00")
 
     assert closed["status"] == "active"

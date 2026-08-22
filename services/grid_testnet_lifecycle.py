@@ -374,6 +374,7 @@ class GridTestnetLifecycle:
             time_in_force="ioc",
             planned_price=float(rung["tp"]),
             attempt=tp_attempt,
+            trigger_price=float(rung["tp"]),
         )
         receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
         row = self._order_row(command, receipt)
@@ -640,7 +641,7 @@ class GridTestnetLifecycle:
             quantity += line.open_quantity
         return total / quantity if quantity > 1e-9 else float(state["lower_boundary"])
 
-    def _command(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False, order_type: str = "limit", time_in_force: str = "gtc", planned_price: float | None = None, attempt: int | None = None, market_price: float | None = None) -> dict[str, Any]:
+    def _command(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False, order_type: str = "limit", time_in_force: str = "gtc", planned_price: float | None = None, attempt: int | None = None, market_price: float | None = None, trigger_price: float | None = None) -> dict[str, Any]:
         suffix = f":a{attempt}" if attempt is not None else ""
         ticket_id = f"{state['strategy_plan_id']}:{rung['rung_id']}:{event}:g{index}{suffix}"
         side = rung["side"] if not reduce_only else ("sell" if rung["side"] == "buy" else "buy")
@@ -659,6 +660,7 @@ class GridTestnetLifecycle:
             "time_in_force": time_in_force,
             "price": execution_price,
             "planned_price": planned_price if planned_price is not None else price,
+            "trigger_price": trigger_price,
             "execution_semantics": "aggressive_ioc_market" if order_type == "market" else "resting_limit",
             "quantity": quantity,
             "idempotency_key": ticket_id,
