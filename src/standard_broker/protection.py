@@ -5,6 +5,7 @@ from decimal import Decimal
 from enum import Enum
 
 from .orders import OrderSide
+from .models import BrokerEnvironment, Provenance
 
 
 class ProtectionType(str, Enum):
@@ -22,8 +23,35 @@ class ProtectionQuantityPolicy(str, Enum):
     POSITION_FOLLOWING = "position_following"
 
 
+class ProtectionLifecycleState(str, Enum):
+    UNKNOWN = "unknown"
+    SUBMITTED = "submitted"
+    ACTIVE = "active"
+    FROZEN = "frozen"
+    CANCELED = "canceled"
+
+
 class TriggerReference(str, Enum):
     MARK = "mark"
+
+
+@dataclass(frozen=True)
+class ProtectionLifecycleStatus:
+    protection_id: str
+    state: ProtectionLifecycleState
+    reason: str | None
+    attempts: int
+
+
+@dataclass(frozen=True)
+class ProtectionReceipt:
+    protection_id: str
+    parent_order_id: str
+    operation: str
+    accepted: bool
+    broker_id: str
+    environment: BrokerEnvironment
+    provenance: Provenance
 
 
 @dataclass(frozen=True)

@@ -1,18 +1,27 @@
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
-from standard_broker.adapters.hyperliquid import HyperliquidProtectionAdapter
+from standard_broker.adapters.hyperliquid import (
+    HyperliquidProtectionAdapter,
+    HyperliquidRuntimeProtectionAdapter,
+)
+from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import BrokerCapabilityError
+from standard_broker.models import BrokerEnvironment
 from standard_broker.orders import OrderSide
 from standard_broker.protection import (
     ProtectionExecution,
     ProtectionGroup,
     ProtectionLeg,
+    ProtectionLifecycleState,
     ProtectionQuantityPolicy,
     ProtectionType,
     TriggerReference,
 )
+from standard_broker.models import Provenance
 
 
 class HyperliquidProtectionTests(unittest.TestCase):
@@ -122,6 +131,60 @@ class HyperliquidProtectionTests(unittest.TestCase):
         request = HyperliquidProtectionAdapter().build_group(group)
 
         self.assertTrue(all(leg.side is OrderSide.BUY for leg in request.legs))
+
+    def test_approved_testnet_runtime_protection_is_reduce_only_and_namespaced(self) -> None:
+        capabilities = CapabilityDescriptor(
+            broker_id="hyperliquid",
+            environment=BrokerEnvironment.TESTNET,
+            operations={
+                "protection_order": frozenset(
+                    {
+                        "submit",
+                        "cancel",
+                        "replace",
+                        "reduce_only",
+                        "mark_price_trigger",
+                        "grouped_tp_sl",
+                        "sibling_cancellation",
+                        "fixed_size",
+                        "take_profit_market",
+                        "stop_loss_limit",
+                    }
+                )
+            },
+            revision="testnet-protection-v1",
+        )
+        calls: list[tuple[str, str, object]] = []
+
+        class Runtime:
+            session = SimpleNamespace(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                capabilities=capabilities,
+            )
+
+            def invoke(self, port: str, operation: str, request: object):
+                calls.append((port, operation, request))
+                return SimpleNamespace(
+                    accepted=True,
+                    broker_id="hyperliquid",
+                    environment=BrokerEnvironment.TESTNET,
+                    provenance=Provenance(
+                        source="testnet.fixture",
+                        execution_scope="hypercore:default",
+                        transport_state="local_fixture",
+                        mapping_revision="testnet-protection-v1",
+                        received_at=datetime.now(UTC),
+                    ),
+                )
+
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=Runtime())
+        receipt = adapter.submit(self.long_group())
+
+        self.assertEqual(receipt.environment, BrokerEnvironment.TESTNET)
+        self.assertEqual(calls[0][0:2], ("protection_order", "submit"))
+        self.assertTrue(all(leg["reduceOnly"] for leg in calls[0][2]["legs"]))
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.SUBMITTED)
 
 
 if __name__ == "__main__":
