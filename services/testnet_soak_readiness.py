@@ -151,7 +151,7 @@ class TestnetSoakReadiness:
                 package = self.recording.mark_review_complete(record_window_id=window_id)
         except (ParkRecordingError, json.JSONDecodeError, OSError) as exc:
             blockers.append({"code": getattr(exc, "code", "recording_review_failed"), "detail": str(exc)})
-            package = {"status": "blocked", "error": exc.code}
+            package = {"status": "blocked", "error": getattr(exc, "code", "recording_review_failed")}
         row = {
             "schema_version": SOAK_SCHEMA,
             "event": "window_recorded",
