@@ -37,7 +37,7 @@ def _plan(*, direction: str = "long", lower: float = 63000.0, upper: float = 660
             "leverage_limit": 10.0,
             "max_notional": 20000.0,
             "max_open_orders": 8,
-            "max_open_positions": 1,
+            "max_open_positions": 2,
             "max_slippage": 50.0,
             "max_submit_retries": 3,
         },
@@ -157,6 +157,30 @@ def test_grid_hard_stop_cancels_tp_and_flattens_before_sealing(tmp_path: Path) -
     assert terminal["sealed"] is True
     assert terminal["reconciliation"]["status"] == "ok"
     assert terminal["park_notification"]["status"] == "queued"
+
+
+def test_grid_hard_stop_recovery_fill_is_consumable_after_primary_submit_failure(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    original_submit = broker.submit_order
+    failed = {"value": 0}
+
+    def fail_primary(request):
+        if request.ticket.get("event") == "hard_stop" and failed["value"] < 3:
+            failed["value"] += 1
+            raise TimeoutError("primary hard stop unavailable")
+        return original_submit(request)
+
+    broker.submit_order = fail_primary
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=74), timestamp="2026-08-22T01:01:00+00:00")
+    triggered = lifecycle.on_market_event(plan, price=63000.0, timestamp="2026-08-22T01:02:00+00:00")
+    recovery = next(row for row in triggered["orders"] if row["event"] == "hard_stop_recovery")
+    terminal = lifecycle.on_fill(plan, _fill(recovery, price=63000.0, tid=75), timestamp="2026-08-22T01:03:00+00:00")
+
+    assert terminal["status"] == "terminal"
+    assert terminal["sealed"] is True
 
 
 def test_grid_neutral_keeps_both_entry_legs_and_hard_stop_is_net_covered(tmp_path: Path) -> None:

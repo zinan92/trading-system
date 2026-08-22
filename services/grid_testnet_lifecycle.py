@@ -88,7 +88,7 @@ class GridTestnetLifecycle:
             self._block(state, "unknown_fill_order", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
-        if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"} or (state["status"] == "hard_stop_triggered" and order.get("event") != "hard_stop"):
+        if state["status"] in {"terminal", "sealed"} or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") != "hard_stop_recovery") or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"}):
             self._block(state, "late_fill_after_block_or_terminal", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
@@ -163,7 +163,12 @@ class GridTestnetLifecycle:
             if receipt_state == "partially_filled":
                 rung["partial_deadline"] = rung.get("partial_deadline") or self._deadline(timestamp, plan)
                 if was_cancelled:
-                    self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
+                    try:
+                        self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
+                    except Exception as exc:  # noqa: BLE001
+                        self._submission_failure(plan, state, timestamp=timestamp, reason=f"tp_submit_failed:{type(exc).__name__}:{exc}")
+                        self._save(state)
+                        return self.snapshot(plan)
             else:
                 rung["partial_deadline"] = None
             if not self._risk_within_budget(plan, state):
@@ -172,9 +177,14 @@ class GridTestnetLifecycle:
             else:
                 self._ensure_hard_stop(plan, state, timestamp=timestamp)
                 if receipt_state != "partially_filled":
-                    self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
+                    try:
+                        self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
+                    except Exception as exc:  # noqa: BLE001
+                        self._submission_failure(plan, state, timestamp=timestamp, reason=f"tp_submit_failed:{type(exc).__name__}:{exc}")
+                        self._save(state)
+                        return self.snapshot(plan)
         elif order.get("event") in {"tp", "hard_stop", "hard_stop_recovery"}:
-            rearm = order.get("event") == "tp" and state.get("status") not in {"stopping", "hard_stop_triggered"}
+            rearm = order.get("event") == "tp" and not slippage_breached and state.get("status") not in {"stopping", "hard_stop_triggered"}
             try:
                 line.apply_close_fill(fill_id=fill_id, quantity=quantity, at=timestamp, rearm=rearm, terminal_state="stopped" if not rearm else "closed")
             except Exception as exc:  # noqa: BLE001 - unresolved partial/late exits must persist a blocker.
@@ -183,7 +193,12 @@ class GridTestnetLifecycle:
                 raise GridTestnetLifecycleError(state["blocker"]) from exc
             rung["line"] = line.snapshot()
             if order.get("event") == "tp" and line.state == "rearmed":
-                self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
+                try:
+                    self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
+                except Exception as exc:  # noqa: BLE001
+                    self._submission_failure(plan, state, timestamp=timestamp, reason=f"rearm_submit_failed:{type(exc).__name__}:{exc}")
+                    self._save(state)
+                    return self.snapshot(plan)
             elif order.get("event") in {"hard_stop", "hard_stop_recovery"} and line.open_quantity <= 1e-9:
                 rung["hard_stop_closed"] = True
             self._ensure_hard_stop(plan, state, timestamp=timestamp)
@@ -390,9 +405,14 @@ class GridTestnetLifecycle:
         try:
             receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
             state["orders"].append(self._order_row(command, receipt))
+            state["status"] = "hard_stop_triggered"
             self._record_event(state, "emergency_flatten_submitted", timestamp=timestamp, rung_id=rung["rung_id"], reason=reason)
         except GridTestnetLifecycleError as exc:
             self._block(state, f"emergency_flatten_failed:{exc}", timestamp=timestamp)
+
+    def _submission_failure(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str) -> None:
+        self._block(state, reason, timestamp=timestamp)
+        self._hard_stop(plan, state, timestamp=timestamp, reason="grid_submission_failure")
 
     def _cancel_all_open_orders(self, state: dict[str, Any], *, timestamp: str, reason: str) -> None:
         for row in state["orders"]:
@@ -664,6 +684,9 @@ class GridTestnetLifecycle:
         max_open_orders = int(risk.get("max_open_orders") or 0)
         if max_open_orders < len(rungs):
             raise GridTestnetLifecycleError("max_open_orders_exceeded_at_initial_ladder")
+        max_open_positions = int(risk.get("max_open_positions") or 0)
+        if max_open_positions < len(rungs):
+            raise GridTestnetLifecycleError("max_open_positions_exceeded_at_full_depth")
         total_notional = sum(float(rung["price"]) * float(rung["quantity"]) for rung in rungs)
         if total_notional > float(risk.get("max_notional") or 0.0) + 1e-9:
             raise GridTestnetLifecycleError("max_notional_exceeded_at_full_depth")
@@ -696,7 +719,8 @@ class GridTestnetLifecycle:
         )
         exposure = sum(float(rung["price"]) * GridLineLifecycle.from_snapshot(rung["line"]).open_quantity for rung in state["rungs"])
         equity = float(risk.get("equity") or 0.0)
-        return stop_loss <= float(risk.get("maximum_loss_at_full_depth") or 0.0) + 1e-9 and exposure <= float(risk.get("max_notional") or 0.0) + 1e-9 and exposure / equity <= float(risk.get("leverage_limit") or 0.0) + 1e-9
+        open_rung_count = sum(1 for rung in state["rungs"] if GridLineLifecycle.from_snapshot(rung["line"]).open_quantity > 1e-9)
+        return open_rung_count <= int(risk.get("max_open_positions") or 0) and stop_loss <= float(risk.get("maximum_loss_at_full_depth") or 0.0) + 1e-9 and exposure <= float(risk.get("max_notional") or 0.0) + 1e-9 and exposure / equity <= float(risk.get("leverage_limit") or 0.0) + 1e-9
 
     def _state(self, plan: Mapping[str, Any]) -> dict[str, Any]:
         identity = self._identity(plan)
