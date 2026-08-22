@@ -19,12 +19,12 @@
 - Runtime RT-05 is merged in PR #35: runtime lifecycle and fact integration.
 - Runtime RT-06 is merged in PR #36 at `d83812f`: Paper-only reconciliation/resilience seam with cursor-bound snapshots, transactional rollback, and fail-closed retry leases.
 - Runtime RT-07 is merged in PR #39 at `006512a`: ProtectionOrderPort lifecycle with explicit mark/sibling capabilities, reduce-only enforcement, fixed/position-following coverage gaps, Paper SUBMITTED/FROZEN states, and auditable bounded retry plans.
+- Runtime RT-08 is merged in PR #46 at `c0ee74c`: typed canonical host requests/queries across six ports, explicit binding provenance and safety validation, canonical receipt normalization, and Recording Track raw-payload rejection.
 - Decision A is recorded in `docs/adr/0005-rt06-reconciliation-seam.md`: RT-06 is not a second order lifecycle owner; RT-08 will compose the unique lifecycle.
 
 ## Next
 
-- RT-08 (#28): compose the canonical host binding and Recording Track contract; this is the next step toward external execution but does not authorize it. ACTIVE protection evidence remains reserved for Broker/ledger observations.
-- RT-09 (#29): conformance/security/Paper-only proof for the runtime composition.
+- RT-09 (#29): conformance/security/Paper-only proof for the runtime composition; ACTIVE protection evidence remains reserved for Broker/ledger observations.
 - TESTNET-01 (#30): separate human-gated external testnet proof; local Testnet fixtures exist, but external proof is not started and not authorized.
 - No live/testnet milestone is implied; future external environments require a separate approved plan.
 
