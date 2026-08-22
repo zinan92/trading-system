@@ -13,8 +13,8 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-22)
-- #862 / PR #877 plus boundary follow-up PR #879 merged as
-  `main@01bb307f58c4ee77fe526d3569072279a4f8cb8e`. The attended Live DCA
+- #862 / PR #877 plus boundary follow-ups #879 and #881 merged as
+  `main@9e546604c9116fe3e2873fb6cf461d982fae2d67`. The attended Live DCA
   canary contract now admits only the exact #861 activation prerequisite and
   its canonical approved DCA plan. A reviewed transport must declare matching
   Hyperliquid/Mainnet/account/release identity and explicit capabilities;
@@ -35,8 +35,8 @@
   The follow-up freezes explicit transport identity/network mode on every
   operation, lets Stop cancel entries while protection remains until Flatten,
   preserves Rollback as a distinct terminal state, and revalidates the
-  source-bound activation before resumed exposure. The final focused suite
-  passed 151 cases.
+  source-bound activation before resumed exposure or protection repair. The
+  final focused suite passed 151 cases.
 - #861 / PR #875 merged as
   `main@26f980c0ebab5dc5a2c446d9da47e5333afc31ea`. Live activation is now a
   source-bound, read-only proposal/confirmation protocol for Hyperliquid
