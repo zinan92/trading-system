@@ -36,12 +36,28 @@ _RELEASE_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 
 
+def _is_environment_bound(value: str, environment: str) -> bool:
+    if environment == "paper" and value.lower() == "none":
+        return True
+    tokens = [environment]
+    if environment == "mainnet":
+        tokens.append("live")
+    return any(
+        re.search(
+            rf"(?:^|[^a-z0-9]){re.escape(token)}(?:$|[^a-z0-9])",
+            value.lower(),
+        )
+        for token in tokens
+    )
+
+
 @dataclass(frozen=True)
 class StandardBrokerEnvironmentIdentity:
     """Public, non-secret identity for one standard-broker environment."""
 
     broker_id: str
     environment: str
+    environment_fingerprint: str
     execution_scope: str
     account_id: str
     credential_source: str
@@ -60,19 +76,27 @@ class StandardBrokerEnvironmentIdentity:
             raise ValueError(f"unsupported standard-broker environment: {environment!r}")
         object.__setattr__(self, "broker_id", broker_id)
         object.__setattr__(self, "environment", environment)
-        for name in (
-            "execution_scope",
-            "account_id",
-            "credential_source",
-            "runtime_id",
-            "ledger_namespace",
-        ):
+        environment_fingerprint = str(self.environment_fingerprint or "").strip().lower()
+        if not environment_fingerprint:
+            raise ValueError("environment_fingerprint is required for environment identity")
+        if not _IDENTIFIER_RE.fullmatch(environment_fingerprint):
+            raise ValueError("environment_fingerprint contains unsafe identity characters")
+        object.__setattr__(self, "environment_fingerprint", environment_fingerprint)
+        for name in ("account_id", "credential_source", "runtime_id", "ledger_namespace"):
             value = str(getattr(self, name) or "").strip()
             if not value:
                 raise ValueError(f"{name} is required for standard-broker environment identity")
             if not _IDENTIFIER_RE.fullmatch(value):
                 raise ValueError(f"{name} contains unsafe identity characters")
+            if not _is_environment_bound(value, environment):
+                raise ValueError(f"{name} is not environment-bound")
             object.__setattr__(self, name, value)
+        execution_scope = str(self.execution_scope or "").strip()
+        if not execution_scope or not _IDENTIFIER_RE.fullmatch(execution_scope):
+            raise ValueError("execution_scope is required for standard-broker environment identity")
+        object.__setattr__(self, "execution_scope", execution_scope)
+        if not _is_environment_bound(environment_fingerprint, environment):
+            raise ValueError("environment_fingerprint is not environment-bound")
         if self.execution_scope != "hypercore:default":
             raise ValueError("unsupported standard-broker execution_scope")
         release_sha = str(self.release_sha or "").strip().lower()
@@ -84,6 +108,7 @@ class StandardBrokerEnvironmentIdentity:
         return {
             "broker_id": self.broker_id,
             "environment": self.environment,
+            "environment_fingerprint": self.environment_fingerprint,
             "execution_scope": self.execution_scope,
             "account_id": self.account_id,
             "credential_source": self.credential_source,
@@ -109,6 +134,7 @@ class StandardBrokerEnvironmentGateAdapter:
             "provider": self.provider,
             "broker_id": identity.broker_id,
             "environment": identity.environment,
+            "environment_fingerprint": identity.environment_fingerprint,
             "execution_scope": identity.execution_scope,
             "account_id": identity.account_id,
             "credential_source": identity.credential_source,
@@ -164,6 +190,7 @@ def build_standard_broker_environment_gate(
     *,
     broker_id: str,
     environment: str,
+    environment_fingerprint: str,
     account_id: str,
     credential_source: str,
     runtime_id: str,
@@ -180,6 +207,7 @@ def build_standard_broker_environment_gate(
     identity = StandardBrokerEnvironmentIdentity(
         broker_id=broker_id,
         environment=environment,
+        environment_fingerprint=environment_fingerprint,
         execution_scope=execution_scope,
         account_id=account_id,
         credential_source=credential_source,
@@ -221,6 +249,7 @@ class StandardBrokerPaperExecutionAdapter:
         self.identity = StandardBrokerEnvironmentIdentity(
             broker_id=self.broker_config["broker_id"],
             environment="paper",
+            environment_fingerprint="standard-broker:paper:paper-local",
             execution_scope="hypercore:default",
             account_id="paper-local",
             credential_source="none",

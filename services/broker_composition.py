@@ -305,6 +305,9 @@ def _standard_broker_environment_gate(context: BrokerBuildContext) -> BrokerExec
         adapter = build_standard_broker_environment_gate(
             broker_id=str(context.broker_config.get("broker_id") or ""),
             environment=context.environment,
+            environment_fingerprint=str(
+                context.broker_config.get("environment_fingerprint") or ""
+            ),
             execution_scope=str(
                 context.broker_config.get("execution_scope") or "hypercore:default"
             ),
@@ -580,11 +583,14 @@ def build_configured_live_broker_execution_port(
 
     provider = str(broker_config.get("provider") or "").strip().lower()
     environment = str(broker_config.get("environment") or "").strip().lower()
-    selection_environment = (
-        "paper"
-        if provider == "tiger_openapi" and environment == "paper"
-        else "standard"
-    )
+    if provider == "standard_broker":
+        selection_environment = environment
+    else:
+        selection_environment = (
+            "paper"
+            if provider == "tiger_openapi" and environment == "paper"
+            else "standard"
+        )
     return build_broker_execution_port(
         BrokerBuildContext(
             output_root=output_root,

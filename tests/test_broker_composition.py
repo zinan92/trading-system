@@ -229,6 +229,7 @@ def test_standard_broker_environment_gate_is_explicit_and_non_networked(
             environment=environment,
             broker_config={
                 "broker_id": "hyperliquid",
+                "environment_fingerprint": f"hyperliquid:{environment}:fingerprint",
                 "account_id": f"{environment}-account",
                 "credential_source": f"HL_{environment.upper()}_CREDENTIAL",
                 "runtime_id": f"runtime-{environment}",
@@ -257,6 +258,33 @@ def test_standard_broker_requires_explicit_environment_identity(tmp_path: Path):
                 "broker_id": "hyperliquid",
             },
         )
+
+
+@pytest.mark.parametrize("environment", ["testnet", "mainnet", "live"])
+def test_configured_standard_broker_preserves_environment_selection(
+    tmp_path: Path,
+    environment: str,
+):
+    adapter = build_configured_live_broker_execution_port(
+        tmp_path / "outputs",
+        live_trading_enabled=False,
+        broker_config={
+            "provider": "standard_broker",
+            "broker_id": "hyperliquid",
+            "environment": environment,
+            "environment_fingerprint": f"hyperliquid:{environment}:fingerprint",
+            "account_id": f"{environment}-account",
+            "credential_source": f"HL_{environment.upper()}_CREDENTIAL",
+            "runtime_id": f"runtime-{environment}",
+            "ledger_namespace": f"ledger.standard-broker.{environment}",
+            "release_sha": "a" * 40,
+            "dry_run": True,
+        },
+    )
+
+    assert adapter.preflight()["environment"] == (
+        "mainnet" if environment == "live" else environment
+    )
 
 
 def test_demo_and_testnet_are_distinct_plugins_with_matched_reconciliation_endpoint(tmp_path: Path):

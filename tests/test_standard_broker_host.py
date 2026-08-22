@@ -168,6 +168,7 @@ def _environment_identity_kwargs(environment: str = "testnet") -> dict[str, str]
         "broker_id": "hyperliquid",
         "environment": environment,
         "execution_scope": "hypercore:default",
+        "environment_fingerprint": f"hyperliquid:{environment}:fingerprint",
         "account_id": f"{environment}-account",
         "credential_source": f"HL_{environment.upper()}_CREDENTIAL",
         "runtime_id": f"runtime-{environment}",
@@ -182,6 +183,7 @@ def test_environment_identity_requires_explicit_nonpaper_fields() -> None:
             broker_id="hyperliquid",
             environment="testnet",
             execution_scope="hypercore:default",
+            environment_fingerprint="hyperliquid:testnet:fingerprint",
             account_id="",
             credential_source="HL_TESTNET_CREDENTIAL",
             runtime_id="runtime-testnet",
@@ -240,3 +242,19 @@ def test_environment_gate_capability_gap_receipt_preserves_public_identity(tmp_p
     assert event["payload"]["environment"] == "testnet"
     assert event["payload"]["execution_scope"] == "hypercore:default"
     assert "credential_value" not in event["payload"]
+
+
+def test_environment_identity_rejects_shared_boundary_identifiers() -> None:
+    identity = _environment_identity_kwargs()
+    identity.update(
+        {
+            "account_id": "shared-account",
+            "credential_source": "SHARED_CREDENTIAL",
+            "runtime_id": "shared-runtime",
+            "ledger_namespace": "ledger.shared",
+            "environment_fingerprint": "shared-fingerprint",
+        }
+    )
+
+    with pytest.raises(ValueError, match="environment-bound"):
+        build_standard_broker_environment_gate(**identity)
