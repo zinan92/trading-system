@@ -1,5 +1,41 @@
 # Decision Log
 
+## Consume the protected sequential DCA Testnet lifecycle (Issue #858 / PR #867)
+
+Date: 2026-08-22
+
+### Decision
+
+- DCA Testnet uses sequential entries: the next ladder order is not submitted
+  until the prior entry is confirmed. Every owned position is covered by one
+  aggregate position-following TP/SL group, and every protective leg is
+  reduce-only. Partial entry and exit fills update authoritative quantity and
+  replace protection before the ladder can continue.
+- Actual fill price is the risk input. A slippage or full-depth loss breach is
+  recorded before recovery; remaining entries are cancelled and a reduce-only
+  recovery leg is submitted. Crossed entries use a bounded IOC limit (the
+  venue's market-equivalent primitive) with a unique attempt identity; an
+  unsafe or ambiguous catch-up blocks rather than retrying silently.
+- Terminal TP/SL, pre-entry stop, and recovery closure query both broker
+  open-orders and account positions before sealing. A sealed revision records
+  `revision_sealed`, immutable session/revision/digest provenance, and a
+  durable Telegram notification handoff. Missing Telegram binding remains a
+  visible blocker; no transport success is fabricated.
+- Testnet writes require a durable Park confirmation proposal/decision bound to
+  `execution_environment=testnet`, exact plan digest, session/revision,
+  expiry, and a one-shot consumed receipt. Paper confirmations cannot authorize
+  Testnet. The Telegram router labels Testnet confirmations correctly and
+  offers an attended Testnet start handler; no handler means explicit
+  `confirmed_pending_testnet_start`, never an implicit order write.
+
+### Verification
+
+- Merged source: `main@12393b7a0f6d11206fa9de7aa490c4c2a4467d27`.
+- Trading-system focused DCA/control/broker/Telegram/plan tests: 152 passed;
+  final lifecycle/control subset: 97 passed.
+- Compile, diff, and gitleaks checks passed. No network, credential value,
+  Live activation, order write, or deployment occurred; #859 is next.
+
 ## Consume the approved Hyperliquid Testnet order lifecycle (Issue #857 / PR #865)
 
 Date: 2026-08-22
