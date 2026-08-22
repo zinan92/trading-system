@@ -13,6 +13,20 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-22)
+- #859 / PR #869 merged as
+  `main@43e70f80d043a56a176e558f3315e081bbf90126`. The Grid Testnet path
+  now consumes explicit Long, Short, and Neutral fixed geometry through the
+  canonical fixture: complete-or-rollback ladder placement with bounded
+  retries, missed-rung skip, five-minute partial-entry closure and late-fill
+  reconciliation, per-rung reduce-only IOC TP with original-price re-arm, and
+  aggregate reduce-only Hard Stop coverage. Boundary Hard Stop wins over local
+  TP, cancels competing legs, flattens Grid-owned exposure, reconciles broker
+  open orders/account positions, seals the revision, and queues Telegram
+  notification evidence. Geometry, midpoint, spacing, quantity, leverage,
+  notional, order-count, position-count, slippage, identity, replay, and
+  cancellation uncertainty all fail closed. No network, Testnet credential
+  value, Live path, order write, or deployment was used. Focused Grid/DCA/
+  control/broker/Park tests passed 142 cases; #860 is next.
 - #858 / PR #867 merged as
   `main@12393b7a0f6d11206fa9de7aa490c4c2a4467d27`. The DCA Testnet path
   now runs one sequential entry ladder through the canonical Testnet fixture,
@@ -26,7 +40,7 @@
   Testnet-bound, expiry-checked, one-shot, and never accepted from a Paper
   confirmation. No network, Testnet credential value, Live path, order write,
   or deployment was used. Focused DCA/control/broker/Telegram tests passed
-  152 cases; #859 is next.
+  152 cases; #859 followed by #860 is next.
 - #857 / PR #865 merged as
   `main@b8a942d2faa2dc3603e91abd17682e12e6fe2194`, consuming
   `standard-broker@8dfd8bba1d072b389b6639b7c7051b937535d061`. The selected
@@ -48,7 +62,7 @@
   no order lifecycle, credential, deployment, or environment connection was
   enabled. Focused host/composition tests passed 56 cases; #857 is next.
 - #855 is the staged Testnet-to-Live execution spec. Its remaining tickets are
-  #859 → #860 → #861 → #862. Live writes remain
+  #860 → #861 → #862. Live writes remain
   disabled; the current user's dirty checkout was not modified.
 
 ## 现在在哪里(2026-08-21)
