@@ -142,7 +142,7 @@ def test_live_dca_canary_blocks_grid_and_risk_budget_before_transport(tmp_path: 
         canary.start(grid, timestamp="2026-08-22T00:00:00+00:00")
     oversized = _plan()
     oversized["risk_limits"]["max_acceptable_loss"] = 1
-    with pytest.raises(LiveDcaCanaryError, match="maximum acceptable loss"):
+    with pytest.raises(LiveDcaCanaryError, match="risk limits differ"):
         canary.start(oversized, timestamp="2026-08-22T00:00:00+00:00")
     assert transport.calls == []
 
