@@ -349,9 +349,10 @@ class LiveDcaCanary:
 
     def flatten(self, *, timestamp: str, reason: str = "attended_flatten") -> dict[str, Any]:
         state = self._state()
-        key = "flatten"
-        if state["idempotency"].get(key):
+        if state["idempotency"].get("flatten_confirmed"):
             return dict(state)
+        state["idempotency"]["flatten_requested"] = True
+        self._save(state)
         try:
             response = self._call("flatten_reduce_only", {"activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "reduce_only": True, "cancel_protection": True, "reason": str(reason), "idempotency_key": f"{state['activation_digest']}:flatten"}, timestamp=timestamp)
             self._require(response.get("status") not in {"unknown", "error", "rejected"}, "flatten_unknown", response)
@@ -361,9 +362,9 @@ class LiveDcaCanary:
             self._block(state, exc.code, timestamp=timestamp)
             self._save(state)
             raise
-        state["idempotency"][key] = True
         self._event(state, "flatten_requested", timestamp=timestamp, reason=reason)
         self._reconcile(state, timestamp=timestamp, require_flat=True, require_no_open_orders=True)
+        state["idempotency"]["flatten_confirmed"] = True
         if reason == "completed":
             self._require(self._open_quantity(state) > 0 and isinstance(state.get("protection"), Mapping), "canary_completion_proof_missing", {"open_quantity": self._open_quantity(state), "protection": bool(state.get("protection"))})
         state["status"] = "rolled_back" if reason != "completed" else "completed"
