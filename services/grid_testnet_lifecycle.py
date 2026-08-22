@@ -141,6 +141,18 @@ class GridTestnetLifecycle:
         rung = self._rung(state, str(order.get("rung_id") or ""))
         line = GridLineLifecycle.from_snapshot(rung["line"])
         if order.get("event") in {"entry", "entry_rearm"}:
+            if was_cancelled and state["status"] in {"hard_stop_triggered", "blocked_reconciliation", "blocked_protection", "blocked_risk"}:
+                try:
+                    self._apply_late_entry_fill(line, fill_id=fill_id, quantity=quantity, at=timestamp)
+                except Exception as exc:  # noqa: BLE001
+                    self._block(state, f"late_entry_fill_reconciliation_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+                    self._save(state)
+                    raise GridTestnetLifecycleError(state["blocker"]) from exc
+                rung["line"] = line.snapshot()
+                self._hard_stop(plan, state, timestamp=timestamp, reason="late_fill_after_hard_stop")
+                state["updated_at"] = timestamp
+                self._save(state)
+                return self.snapshot(plan)
             if was_cancelled and line.state == "open":
                 try:
                     self._apply_late_entry_fill(line, fill_id=fill_id, quantity=quantity, at=timestamp)
@@ -283,7 +295,7 @@ class GridTestnetLifecycle:
         requested = float(line.requested_quantity or 0.0)
         if quantity <= 0 or float(line.entry_filled_quantity) + quantity > requested + 1e-9:
             raise GridTestnetLifecycleError("late_entry_fill_exceeds_requested_quantity")
-        if line.state == "cancelled":
+        if line.state in {"cancelled", "armed", "rearmed", "entry_partially_filled"}:
             line.state = "open_cancelled"
             line.active = False
             line.entry_order_open = False
