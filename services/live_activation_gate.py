@@ -551,6 +551,21 @@ class LiveActivationGate:
                 return False
             if str(item.get("review_digest") or "") != str(review.get("review_digest") or ""):
                 return False
+            evidence = item.get("gate_evidence") if isinstance(item.get("gate_evidence"), Mapping) else {}
+            for category in REQUIRED_READINESS_CATEGORIES:
+                payload = evidence.get(category) if isinstance(evidence.get(category), Mapping) else {}
+                artifact_ref = str(payload.get("artifact_ref") or "")
+                artifact_sha = str(payload.get("artifact_sha256") or "").lower()
+                if not artifact_ref or not re.fullmatch(r"[0-9a-f]{64}", artifact_sha):
+                    return False
+                artifact_path = Path(artifact_ref)
+                if not artifact_path.is_absolute():
+                    artifact_path = self.output_root / artifact_path
+                try:
+                    if not artifact_path.is_file() or hashlib.sha256(artifact_path.read_bytes()).hexdigest() != artifact_sha:
+                        return False
+                except OSError:
+                    return False
         return True
 
     def _default_readiness_receipt(self) -> Mapping[str, Any]:

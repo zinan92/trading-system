@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 from services.paper_release_receipt import current_source_attestation
@@ -7,7 +8,7 @@ from services.broker_adapter import LiveBrokerAdapter
 from services.broker_port import BrokerOrderRequest
 
 
-def _readiness(source: dict) -> tuple[dict, list[dict], list[dict]]:
+def _readiness(source: dict, artifact_root: Path | None = None) -> tuple[dict, list[dict], list[dict]]:
     rows = []
     reviews = []
     required_categories = {
@@ -21,13 +22,22 @@ def _readiness(source: dict) -> tuple[dict, list[dict], list[dict]]:
         "recording_package": {"observed_at": "2026-08-20T01:00:00+00:00"},
     }
     for index in range(14):
+        evidence = {category: dict(payload) for category, payload in required_categories.items()}
+        if artifact_root is not None:
+            for category, payload in evidence.items():
+                path = artifact_root / f"{index:02d}-{category}.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({"category": category, "window_index": index}), encoding="utf-8")
+                payload["artifact_ref"] = str(path)
+                payload["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+                payload["artifact_kind"] = category
         row = {
             "window_index": index,
             "record_window_id": f"soak-window-{index:02d}",
             "status": "pass",
             "blockers": [],
             "package_status": "complete",
-            "gate_evidence": required_categories,
+            "gate_evidence": evidence,
         }
         review = {"status": "pass", "window_index": index}
         review_digest = _digest(review)
@@ -57,7 +67,7 @@ def _readiness(source: dict) -> tuple[dict, list[dict], list[dict]]:
 
 def _ready_gate(tmp_path: Path) -> tuple[LiveActivationGate, dict, list[dict]]:
     source = current_source_attestation(Path(__file__).resolve().parents[1])
-    readiness, rows, reviews = _readiness(source)
+    readiness, rows, reviews = _readiness(source, tmp_path / "artifacts")
     gate = LiveActivationGate(
         tmp_path / "outputs",
         park_user_id="park",
@@ -99,7 +109,7 @@ def _preflight(gate: LiveActivationGate) -> dict:
         credential_source="HL_MAINNET_CREDENTIAL",
         instrument_scope="default_perpetuals",
         strategy_scope="dca",
-        readiness=_readiness(source)[0],
+        readiness=gate._readiness_receipt_resolver(),
         capabilities={"operations": operations},
         risk_limits={"max_acceptable_loss": 25, "max_notional": 100, "max_leverage": 2, "max_open_orders": 10, "max_positions": 1},
         source_attestation=source,
