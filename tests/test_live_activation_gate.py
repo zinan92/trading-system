@@ -38,7 +38,7 @@ def _readiness(source: dict, artifact_root: Path | None = None) -> tuple[dict, l
             for category, payload in evidence.items():
                 path = artifact_root / f"{index:02d}-{category}.json"
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps({"artifact_kind": category, "category": category, "window_index": index, "environment": "testnet", "broker_id": "hyperliquid", "release_sha": source["source_sha"], "account_fingerprint": "testnet-account", "starts_at": start.isoformat(), "ends_at": end.isoformat(), "observed_at": (start + timedelta(hours=6)).isoformat(), "status": "pass"}), encoding="utf-8")
+                path.write_text(json.dumps({"artifact_kind": category, "category": category, "window_index": index, "record_window_id": f"soak-window-{index:02d}", "strategy_session_id": "session-continuous", "strategy_revision_id": "revision-dca", "plan_digest": "sha256:" + "a" * 64, "environment": "testnet", "broker_id": "hyperliquid", "release_sha": source["source_sha"], "account_fingerprint": "testnet-account", "starts_at": start.isoformat(), "ends_at": end.isoformat(), "observed_at": (start + timedelta(hours=6)).isoformat(), "status": "pass"}), encoding="utf-8")
                 payload["artifact_ref"] = str(path)
                 payload["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
                 payload["artifact_kind"] = category
@@ -51,6 +51,9 @@ def _readiness(source: dict, artifact_root: Path | None = None) -> tuple[dict, l
             "broker_id": "hyperliquid",
             "release_sha": source["source_sha"],
             "account_fingerprint": "testnet-account",
+            "strategy_session_id": "session-continuous",
+            "strategy_revision_id": "revision-dca",
+            "plan_digest": "sha256:" + "a" * 64,
             "status": "pass",
             "blockers": [],
             "package_status": "complete",
@@ -74,7 +77,16 @@ def _readiness(source: dict, artifact_root: Path | None = None) -> tuple[dict, l
         "live_writes_enabled": False,
         "blockers": [],
         "source_attestation": source,
-        "critical_gate_results": {"orders": "pass", "protection": "pass", "reconciliation": "pass"},
+        "critical_gate_results": {category: "pass" for category in (
+            "orders_fills_positions_reconciliation",
+            "protection_coverage",
+            "capability_status",
+            "market_freshness_trust",
+            "runtime_health",
+            "retry_outcomes",
+            "release_account_environment_identity",
+            "recording_package",
+        )},
         "created_at": now.isoformat(),
     }
     receipt["window_digests"] = [row["row_digest"] for row in rows]
@@ -94,6 +106,13 @@ def _ready_gate(tmp_path: Path) -> tuple[LiveActivationGate, dict, list[dict]]:
         readiness_windows_resolver=lambda: rows,
         readiness_reviews_resolver=lambda: reviews,
         credential_presence_resolver=lambda _: True,
+        approved_plan_resolver=lambda: {
+            "status": "approved",
+            "strategy_scope": "dca",
+            "plan_digest": "sha256:" + "c" * 64,
+            "approval_receipt_digest": "sha256:" + "f" * 64,
+            "canonical_plan": {"strategy_type": "dca", "plan_digest": "sha256:" + "c" * 64},
+        },
     )
     return gate, readiness, rows
 

@@ -84,6 +84,7 @@ class LiveActivationGate:
         readiness_windows_resolver: Any | None = None,
         readiness_reviews_resolver: Any | None = None,
         credential_presence_resolver: Any | None = None,
+        approved_plan_resolver: Any | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "live_activation"
@@ -98,6 +99,7 @@ class LiveActivationGate:
         self._readiness_windows_resolver = readiness_windows_resolver or self._default_readiness_windows
         self._readiness_reviews_resolver = readiness_reviews_resolver or self._default_readiness_reviews
         self._credential_presence_resolver = credential_presence_resolver or (lambda name: bool(os.getenv(name)))
+        self._approved_plan_resolver = approved_plan_resolver or self._default_approved_plan
 
     def rows(self) -> list[dict[str, Any]]:
         return [dict(row) for row in load_json(self.path) if isinstance(row, dict)]
@@ -187,6 +189,8 @@ class LiveActivationGate:
                 blockers.append("testnet_readiness_source_dirty")
         critical = readiness.get("critical_gate_results")
         if isinstance(critical, Mapping):
+            if not REQUIRED_READINESS_CATEGORIES.issubset(set(str(key) for key in critical)):
+                blockers.append("critical_gate_results_incomplete")
             blockers.extend(
                 f"critical_gate_failed:{name}"
                 for name, value in sorted(critical.items())
@@ -260,12 +264,16 @@ class LiveActivationGate:
             raise LiveActivationError("live_preflight_blocked", "Live preflight is not ready", preflight)
         if not _HEX.fullmatch(str(plan_digest or "").removeprefix("sha256:")):
             raise LiveActivationError("plan_digest_invalid", "exact DCA plan digest is required")
+        approved_plan = self._approved_plan(plan_digest)
+        if approved_plan is None:
+            raise LiveActivationError("approved_dca_plan_missing_or_mismatch", "the plan digest is not bound to an approved canonical DCA plan")
         if float(expires_at) <= time.time():
             raise LiveActivationError("activation_expired", "activation expiry must be in the future")
         payload = {
             "preflight": dict(preflight),
             "preflight_digest": str(preflight.get("preflight_digest") or ""),
             "plan_digest": str(plan_digest),
+            "approved_plan": approved_plan,
             "expires_at": float(expires_at),
         }
         activation_digest = _digest(payload)
@@ -315,6 +323,8 @@ class LiveActivationGate:
             return self._record_rejected("preflight_recheck_failed", activation_digest)
         if str(current_preflight.get("preflight_digest") or "") != str(proposal.get("preflight_digest") or ""):
             return self._record_rejected("preflight_changed", activation_digest)
+        if self._approved_plan(str(proposal.get("plan_digest") or "")) is None:
+            return self._record_rejected("approved_dca_plan_changed", activation_digest)
         existing = next((row for row in reversed(self.rows()) if row.get("event") == "activation_confirmed" and row.get("activation_digest") == activation_digest), None)
         if existing:
             return dict(existing)
@@ -383,6 +393,8 @@ class LiveActivationGate:
         preflight = preflight_row.get("preflight") if isinstance(preflight_row, Mapping) else None
         if not isinstance(preflight, Mapping) or not self._preflight_is_current(preflight):
             return {"ready": False, "status": "blocked", "blockers": ["activation_preflight_not_current"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        if self._approved_plan(str(confirmed.get("plan_digest") or "")) is None:
+            return {"ready": False, "status": "blocked", "blockers": ["approved_dca_plan_missing_or_changed"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         canary = next(
             (
                 row
@@ -397,6 +409,8 @@ class LiveActivationGate:
         identity_fields = ("preflight_digest", "plan_digest", "release_sha", "account_id", "environment_fingerprint", "strategy_scope")
         if any(canary.get(field) != confirmed.get(field) for field in identity_fields):
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_identity_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        if canary.get("environment") != "mainnet" or canary.get("broker_id") != "hyperliquid":
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_environment_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         if canary.get("execution_authorized") is not True or canary.get("live_writes_enabled") is not True:
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_not_authorized"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         canary_digest = str(canary.get("canary_receipt_digest") or "")
@@ -548,6 +562,17 @@ class LiveActivationGate:
         ordered = sorted((item for item in windows if isinstance(item, Mapping)), key=lambda item: int(item.get("window_index") or 0))
         if len(ordered) != 14 or [str(item.get("row_digest") or "") for item in ordered] != window_digests:
             return False
+        if [int(item.get("window_index") or -1) for item in ordered] != list(range(14)):
+            return False
+        window_ids = [str(item.get("record_window_id") or "") for item in ordered]
+        if any(not item for item in window_ids) or len(set(window_ids)) != 14:
+            return False
+        identity_keys = ("strategy_session_id", "strategy_revision_id", "plan_digest")
+        identity = tuple(str(ordered[0].get(key) or "") for key in identity_keys)
+        if any(not value for value in identity) or any(tuple(str(item.get(key) or "") for key in identity_keys) != identity for item in ordered):
+            return False
+        if tuple(str(current.get(key) or "") for key in identity_keys) != identity:
+            return False
         try:
             created_at = datetime.fromisoformat(str(current.get("created_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
             now = datetime.now(timezone.utc)
@@ -609,7 +634,7 @@ class LiveActivationGate:
                     if not artifact_path.is_file() or hashlib.sha256(artifact_path.read_bytes()).hexdigest() != artifact_sha:
                         return False
                     artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-                    if not isinstance(artifact_payload, Mapping) or artifact_payload.get("artifact_kind") not in {None, category} or artifact_payload.get("status") not in {"pass", "ready"} or artifact_payload.get("environment") not in {None, "testnet"} or artifact_payload.get("broker_id") not in {None, "hyperliquid"} or artifact_payload.get("release_sha") not in {None, item.get("release_sha")}:
+                    if not isinstance(artifact_payload, Mapping) or artifact_payload.get("artifact_kind") not in {None, category} or artifact_payload.get("status") not in {"pass", "ready"} or artifact_payload.get("environment") not in {None, "testnet"} or artifact_payload.get("broker_id") not in {None, "hyperliquid"} or artifact_payload.get("release_sha") not in {None, item.get("release_sha")} or any(str(artifact_payload.get(key) or "") != str(item.get(key) or "") for key in (*identity_keys, "record_window_id", "window_index", "account_fingerprint")):
                         return False
                     for source_payload in (payload, artifact_payload):
                         observed = datetime.fromisoformat(str(source_payload.get("observed_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
@@ -632,6 +657,29 @@ class LiveActivationGate:
 
     def _default_readiness_reviews(self) -> list[Mapping[str, Any]]:
         return load_json(self.output_root / "dualtrack" / "testnet_soak" / "reviews.json")
+
+    def _default_approved_plan(self) -> Mapping[str, Any]:
+        rows = load_json(self.output_root / "dualtrack" / "live_activation" / "approved_dca_plan.json")
+        return rows[-1] if rows and isinstance(rows[-1], Mapping) else {}
+
+    def _approved_plan(self, plan_digest: str) -> dict[str, Any] | None:
+        try:
+            value = self._approved_plan_resolver()
+        except Exception:
+            return None
+        if not isinstance(value, Mapping):
+            return None
+        if (
+            str(value.get("status") or "") != "approved"
+            or str(value.get("strategy_scope") or "").lower() != "dca"
+            or str(value.get("plan_digest") or "") != str(plan_digest)
+            or not _SHA256.fullmatch(str(value.get("approval_receipt_digest") or ""))
+        ):
+            return None
+        canonical = value.get("canonical_plan")
+        if not isinstance(canonical, Mapping) or str(canonical.get("strategy_type") or canonical.get("strategy_scope") or "").lower() != "dca" or str(canonical.get("plan_digest") or "") != str(plan_digest):
+            return None
+        return dict(value)
 
     @staticmethod
     def _declared_capabilities(capabilities: Mapping[str, Any]) -> set[str]:

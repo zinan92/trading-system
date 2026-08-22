@@ -258,6 +258,22 @@ class TestnetSoakReadiness:
                 blockers.append({"window_index": row.get("window_index"), "code": "recording_package_incomplete"})
             if not row.get("review_digest"):
                 blockers.append({"window_index": row.get("window_index"), "code": "recording_review_missing"})
+        critical_gate_results = {
+            category: (
+                "pass"
+                if rows
+                and all(
+                    row.get("status") == "pass"
+                    and not row.get("blockers")
+                    and isinstance(row.get("gate_evidence"), Mapping)
+                    and isinstance(row.get("gate_evidence", {}).get(category), Mapping)
+                    and row.get("gate_evidence", {}).get(category, {}).get("status") in {"pass", "ready"}
+                    for row in rows
+                )
+                else "blocked"
+            )
+            for category in REQUIRED_GATE_EVIDENCE
+        }
         receipt = {
             "schema_version": SOAK_SCHEMA,
             "event": "readiness_receipt",
@@ -277,6 +293,7 @@ class TestnetSoakReadiness:
             "created_at": str(now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
             "receipt_revision": len(existing),
             "window_digests": [str(row.get("row_digest") or "") for row in rows],
+            "critical_gate_results": critical_gate_results,
             "next_action": "await_manual_live_activation" if not blockers else "notify_park_and_wait",
             "receipt_digest": "",
         }
@@ -304,7 +321,7 @@ class TestnetSoakReadiness:
                 age = _parse_timestamp(now) - _parse_timestamp(str(receipt.get("created_at") or now))
                 if age > timedelta(hours=24):
                     status = "stale"
-            return {"status": status, "environment": "testnet", "broker_id": receipt.get("broker_id"), "release_sha": receipt.get("release_sha"), "account_fingerprint": receipt.get("account_fingerprint"), "source_attestation": dict(receipt.get("source_attestation") or {}), "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": list(receipt.get("blockers") or []), "live_enabled": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait" if status == "blocked" else "refresh_soak_evidence" if status == "stale" else receipt.get("next_action")}
+            return {"status": status, "environment": "testnet", "broker_id": receipt.get("broker_id"), "release_sha": receipt.get("release_sha"), "account_fingerprint": receipt.get("account_fingerprint"), "source_attestation": dict(receipt.get("source_attestation") or {}), "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": list(receipt.get("blockers") or []), "critical_gate_results": dict(receipt.get("critical_gate_results") or {}), "live_enabled": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait" if status == "blocked" else "refresh_soak_evidence" if status == "stale" else receipt.get("next_action")}
         return {"status": "incomplete" if rows else "missing", "environment": "testnet", "broker_id": None, "release_sha": None, "account_fingerprint": None, "source_attestation": {}, "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": [], "live_enabled": False, "live_writes_enabled": False, "next_action": "continue_soak" if rows else "start_attended_testnet_soak"}
 
     @staticmethod
