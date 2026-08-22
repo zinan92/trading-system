@@ -39,7 +39,10 @@ class LiveSubmissionSafetySmoke:
             adapter.submit_order(BrokerOrderRequest(run_date, self._ticket(), latest_price=4530.0, actual_size=0.01))
         except RuntimeError as exc:
             error = str(exc)
-            blocked = "live activation gate is not real_money_ready" in error
+            blocked = (
+                "source-bound Live activation/canary is not ready" in error
+                or "live activation gate is not real_money_ready" in error
+            )
         finally:
             self._restore_env("OANDA_API_TOKEN", original_token)
             self._restore_env("OANDA_ACCOUNT_ID", original_account)
