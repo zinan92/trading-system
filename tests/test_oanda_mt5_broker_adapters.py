@@ -147,56 +147,10 @@ def test_oanda_real_submission_preserves_wire_contract_and_redacts_bearer_token(
         opener=opener,
     )
 
-    receipt = adapter.submit_order(_request())
-
-    expected_hash = hashlib.sha256(
-        b"ticket-gold-a14:2026-07-18:oanda_rest:entry"
-    ).hexdigest()[:10]
-    assert receipt.order_id == f"live_dryrun_{expected_hash}"
-    assert receipt.status == "submitted_to_oanda"
-    assert receipt.rejection_reason == "broker-order-42"
-    assert seen == {
-        "method": "POST",
-        "url": (
-            "https://api-fxpractice.oanda.com/v3/accounts/"
-            f"{urllib.parse.quote(account_id, safe='')}/orders"
-        ),
-        "headers": {
-            "Authorization": f"Bearer {token}",
-            "Accept-datetime-format": "RFC3339",
-            "Content-type": "application/json",
-            "User-agent": "TradingOrchestrator/1.0",
-        },
-        "body": {
-            "order": {
-                "type": "LIMIT",
-                "instrument": "XAU_USD",
-                "units": "0.25",
-                "timeInForce": "GFD",
-                "positionFill": "DEFAULT",
-                "clientExtensions": {
-                    "id": receipt.order_id,
-                    "tag": "trading_orchestrator",
-                    "comment": "ticket-gold-a14",
-                },
-                "price": "4000",
-                "stopLossOnFill": {"price": "3990"},
-                "takeProfitOnFill": {"price": "4010"},
-            }
-        },
-        "timeout": 17,
-    }
-    durable_text = (
-        output_root / "oanda_requests" / "2026-07-18.json"
-    ).read_text(encoding="utf-8")
-    assert token not in durable_text
+    with pytest.raises(RuntimeError, match="source-bound Live activation/canary"):
+        adapter.submit_order(_request())
+    assert seen == {}
     assert token not in json.dumps(adapter.descriptor.to_dict(), sort_keys=True)
-    durable_record = load_json(
-        output_root / "oanda_requests" / "2026-07-18.json"
-    )[0]
-    assert durable_record["broker_response"]["orderCreateTransaction"][
-        "accountID"
-    ] == account_id
 
 
 @pytest.mark.parametrize("with_credentials", [False, True])
@@ -231,7 +185,7 @@ def test_oanda_fail_closed_gates_run_before_network(
     )
 
     expected = (
-        "live activation gate is not real_money_ready"
+        "source-bound Live activation/canary"
         if with_credentials
         else "missing OANDA environment variables"
     )
@@ -260,7 +214,7 @@ def test_mt5_activation_gate_never_writes_an_executable_order(
 
     with pytest.raises(
         RuntimeError,
-        match="live activation gate is not real_money_ready",
+        match="source-bound Live activation/canary",
     ):
         adapter.submit_order(_request())
 

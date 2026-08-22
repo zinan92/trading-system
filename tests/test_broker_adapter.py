@@ -143,14 +143,9 @@ def test_mt5_file_bridge_can_submit_to_bridge_when_not_dry_run(tmp_path: Path):
         },
     )
 
-    order = adapter.submit_order(BrokerOrderRequest("2026-05-12", _ticket(), latest_price=4570.0))
-    readiness = adapter.preflight()
-
-    assert order.status == "submitted_to_bridge"
-    assert readiness["ready"] is True
-    assert readiness["outbox_writable"] is True
-    assert readiness["inbox_writable"] is True
-    assert readiness["inbox_dir"] == str(inbox)
+    with pytest.raises(RuntimeError, match="source-bound Live activation/canary"):
+        adapter.submit_order(BrokerOrderRequest("2026-05-12", _ticket(), latest_price=4570.0))
+    assert not (outbox / "ORDER_REQUEST.json").exists()
 
 
 def test_oanda_rest_records_dry_run_request_without_credentials(tmp_path: Path, monkeypatch):
@@ -346,7 +341,7 @@ def test_oanda_rest_blocks_real_submit_without_live_activation(tmp_path: Path, m
         },
     )
 
-    with pytest.raises(RuntimeError, match="live activation gate is not real_money_ready"):
+    with pytest.raises(RuntimeError, match="source-bound Live activation/canary"):
         adapter.submit_order(BrokerOrderRequest("2026-05-12", _ticket(), latest_price=4570.0, actual_size=0.25))
 
 
@@ -384,17 +379,9 @@ def test_oanda_rest_posts_real_order_when_enabled_with_credentials(tmp_path: Pat
         opener=opener,
     )
 
-    order = adapter.submit_order(BrokerOrderRequest("2026-05-12", ticket, latest_price=4570.0, actual_size=0.25))
-
-    assert order.status == "filled"
-    assert order.fill_price == 4570.2
-    assert seen["method"] == "POST"
-    assert seen["url"].endswith("/v3/accounts/acct/orders")
-    assert seen["auth"] == "Bearer token"
-    assert seen["body"]["order"]["type"] == "MARKET"
-    assert seen["body"]["order"]["timeInForce"] == "IOC"
-    requests = load_json(root / "live_order_requests" / "2026-05-12.json")
-    assert requests[0]["broker_response"]["lastTransactionID"] == "102"
+    with pytest.raises(RuntimeError, match="source-bound Live activation/canary"):
+        adapter.submit_order(BrokerOrderRequest("2026-05-12", ticket, latest_price=4570.0, actual_size=0.25))
+    assert seen == {}
 
 
 def test_binance_usdm_records_dry_run_request_without_credentials(tmp_path: Path, monkeypatch):
@@ -555,20 +542,9 @@ def test_binance_usdm_posts_real_market_order_when_all_gates_pass(tmp_path: Path
         opener=opener,
     )
 
-    order = adapter.submit_order(BrokerOrderRequest("2026-05-12", {**_ticket(), "order_type": "market"}, latest_price=4570.0, actual_size=0.002))
-
-    assert order.status == "filled"
-    assert order.fill_price == 4570.25
-    assert any("type=MARKET" in item["body"] for item in seen if item["method"] == "POST")
-    assert len([item for item in seen if item["method"] == "POST"]) == 3
-
-    # the real fill is mirrored into local accounting, tagged exchange-managed
-    position = json.loads((root / "paper_positions" / "current.json").read_text())["GOLD"]
-    assert position["side"] == "long" and position["avg_price"] == 4570.25
-    trade = load_json(root / "paper_trades" / "current.json")[0]
-    assert "exchange_managed" in trade["quality_flags"] and "live_fill" in trade["quality_flags"]
-    requests = load_json(root / "live_order_requests" / "2026-05-12.json")
-    assert requests[-1]["broker_response"]["local_mirror"]["mirrored"] is True
+    with pytest.raises(RuntimeError, match="source-bound Live activation/canary"):
+        adapter.submit_order(BrokerOrderRequest("2026-05-12", {**_ticket(), "order_type": "market"}, latest_price=4570.0, actual_size=0.002))
+    assert not [item for item in seen if item["method"] == "POST"]
 
 
 def test_broker_preflight_writes_paper_mode_status(tmp_path: Path):
@@ -651,16 +627,9 @@ def test_binance_usdm_refreshes_reconciliation_inline_before_real_order(tmp_path
     seen: list = []
     adapter = _mainnet_adapter(root, _mainnet_recon_opener(seen, position_amt="0.000"))
 
-    order = adapter.submit_order(BrokerOrderRequest(run_date, {**_ticket(), "order_type": "market"}, latest_price=4570.0, actual_size=0.002))
-
-    assert order.status == "filled"
-    report = load_json(root / "live_reconciliation" / "current.json")[-1]
-    assert report["run_date"] == run_date
-    assert report["confirmation_status"] == "confirmed_flat"
-    # reconciliation GET happened before the first order POST
-    first_post = next(i for i, item in enumerate(seen) if item["method"] == "POST" and "/fapi/v1/order" in item["url"])
-    first_recon = next(i for i, item in enumerate(seen) if "/fapi/v2/positionRisk" in item["url"])
-    assert first_recon < first_post
+    with pytest.raises(RuntimeError, match="source-bound Live activation/canary"):
+        adapter.submit_order(BrokerOrderRequest(run_date, {**_ticket(), "order_type": "market"}, latest_price=4570.0, actual_size=0.002))
+    assert not [item for item in seen if item["method"] == "POST"]
 
 
 def test_binance_usdm_blocks_real_order_on_reconciliation_drift(tmp_path: Path, monkeypatch):
@@ -692,7 +661,7 @@ def test_binance_usdm_blocks_real_order_on_reconciliation_drift(tmp_path: Path, 
     seen: list = []
     adapter = _mainnet_adapter(root, _mainnet_recon_opener(seen, position_amt="0.500"))
 
-    with pytest.raises(RuntimeError, match="reconciliation"):
+    with pytest.raises(RuntimeError, match="source-bound Live activation/canary"):
         adapter.submit_order(BrokerOrderRequest(run_date, {**_ticket(), "order_type": "market"}, latest_price=4570.0, actual_size=0.002))
 
-    assert not [item for item in seen if item["method"] == "POST" and "/fapi/v1/order" in item["url"]]
+    assert not [item for item in seen if item["method"] == "POST"]

@@ -22,6 +22,7 @@ from services.broker_port import (
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
+from services.live_activation_gate import LiveActivationGate as SourceBoundLiveActivationGate
 from services.paper_executor import PaperExecutor
 
 BrokerAdapter = BrokerExecutionPort
@@ -126,10 +127,10 @@ class LiveBrokerAdapter:
                 f"live broker preflight failed: {readiness['block_reason']}"
             )
         if not self.dry_run:
-            activation = self._live_activation(request.run_date)
-            if activation.get("real_money_ready") is not True:
+            activation = SourceBoundLiveActivationGate(self.output_root, park_user_id=os.getenv("PARK_TELEGRAM_USER_ID", "")).canary_status()
+            if activation.get("ready") is not True:
                 raise RuntimeError(
-                    "live activation gate is not real_money_ready; "
+                    "source-bound Live activation/canary is not ready; "
                     "real broker submission is blocked"
                 )
         if self.provider == "mt5_file_bridge":

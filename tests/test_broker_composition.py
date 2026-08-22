@@ -439,7 +439,7 @@ def test_live_binance_registry_path_keeps_real_money_activation_gate(tmp_path: P
     )
     from services.broker_port import BrokerOrderRequest
 
-    with pytest.raises(RuntimeError, match="live activation gate is not real_money_ready"):
+    with pytest.raises(RuntimeError, match="source-bound Live activation/canary"):
         adapter.submit_order(
             BrokerOrderRequest(
                 "2026-07-18",
@@ -519,7 +519,7 @@ def test_configured_live_path_does_not_treat_stored_binance_environment_as_autho
     assert type(adapter) is BinanceUsdmBrokerAdapter
     with pytest.raises(
         RuntimeError,
-        match="live activation gate is not real_money_ready",
+            match="source-bound Live activation/canary",
     ):
         adapter.submit_order(
             BrokerOrderRequest(

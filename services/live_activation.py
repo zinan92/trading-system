@@ -10,13 +10,23 @@ from services.live_env import LiveEnvStatus
 from services.live_approval import LiveApprovalStore
 from services.official_market_data_gate import official_broker_ohlc_status
 from services.schedule_profiles import is_focus_profile
+from services.live_activation_gate import LiveActivationGate as SourceBoundLiveActivationGate
 
 
-class LiveActivationGate:
-    def __init__(self, output_root: Path | None = None) -> None:
+class LiveActivationGate(SourceBoundLiveActivationGate):
+    """Compatibility runner plus the source-bound attended activation protocol.
+
+    ``run`` preserves the repository's legacy read-only readiness artifact for
+    existing callers.  The inherited ``preflight``/``prepare_activation``/
+    ``confirm`` methods are the only source-bound Hyperliquid Live activation
+    protocol; neither path enables network writes.
+    """
+
+    def __init__(self, output_root: Path | None = None, *, park_user_id: str = "", park_chat_id: str | int | None = None) -> None:
         config = load_pipeline_config()
         self.config = config
         self.output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
+        super().__init__(self.output_root, park_user_id=park_user_id, park_chat_id=park_chat_id, repo_root=ROOT)
 
     def run(self, run_date: str) -> dict:
         live_env = LiveEnvStatus(self.output_root).run(run_date)
@@ -44,6 +54,7 @@ class LiveActivationGate:
             self._check_bool("broker_not_dry_run", bool(broker.get("ready")) and broker.get("dry_run") is False, "Broker preflight is ready and dry_run=false.", broker),
             self._check_bool("live_readiness", live_readiness.get("live_ready") is True, "All live readiness checks pass.", live_readiness),
             self._check_bool("human_approval", approval.get("approved") is True, "Human approval artifact exists for this run date.", approval),
+            self._source_bound_canary_check(),
         ]
         real_money_ready = all(item["status"] == "pass" for item in real_money_checks)
         status = "real_money_ready" if real_money_ready else ("dry_run_ready" if dry_run_ready else "blocked")
@@ -62,6 +73,29 @@ class LiveActivationGate:
         write_json(self.output_root / "live_activation" / "current.json", [payload])
         write_json(self.output_root / "live_activation" / f"{run_date}.json", [payload])
         return payload
+
+    def _source_bound_canary_check(self) -> dict:
+        """Make the source-bound attended protocol the only Live authority.
+
+        The legacy ``run`` artifact is still emitted for old read models, but
+        it can never become ``real_money_ready`` from timer/provider checks.
+        A future attended canary must append a source-bound ``canary_passed``
+        receipt to the inherited journal before this check can pass.
+        """
+
+        status = self.canary_status()
+        passed = status.get("ready") is True
+        return self._check_bool(
+            "source_bound_attended_canary",
+            passed,
+            "Only a source-bound Telegram activation followed by an attended canary may authorize Live writes.",
+            {
+                "activation_digest": status.get("activation_digest"),
+                "canary_receipt_digest": status.get("canary_receipt_digest"),
+                "blockers": list(status.get("blockers") or []),
+                "live_writes_enabled": bool(status.get("live_writes_enabled")),
+            },
+        )
 
     def _latest(self, name: str, run_date: str) -> dict:
         rows = load_json(self.output_root / name / f"{run_date}.json")
