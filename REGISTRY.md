@@ -13,6 +13,26 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-22)
+- #861 / PR #875 merged as
+  `main@26f980c0ebab5dc5a2c446d9da47e5333afc31ea`. Live activation is now a
+  source-bound, read-only proposal/confirmation protocol for Hyperliquid
+  default perpetuals and DCA only: the preflight binds the current release
+  tree, mainnet account/environment fingerprint, credential-variable presence
+  (name only), complete risk ceilings, canonical capabilities, the exact
+  seven-day/fourteen-window Testnet receipt, and a Park-confirmed Testnet DCA
+  plan. The readiness check reopens and hashes the receipt, contiguous window
+  rows, reviews, and gate artifacts, including freshness, provenance, and
+  critical-gate results. `pipelines.live_activation_protocol` creates the
+  local proposal without network or Live writes; `ParkTelegramRouter` accepts
+  only the exact `confirm live ...` command from the configured inbound
+  Telegram receipt. All non-dry-run adapters call the source-bound canary
+  gate; legacy `real_money_ready` JSON cannot authorize a write. Confirmation
+  records intent only (`execution_authorized=false`); a separately attended
+  DCA canary is still required before any Live write. Focused activation,
+  proposal, adapter, readiness, broker, and Telegram tests pass; no Testnet or
+  Live credential, network connection, order write, or deployment was used.
+  Full-suite evidence reached 993 passed; one existing browser drag test
+  remains flaky and is unrelated to this backend-only change. #862 is next.
 - #860 / PR #873 merged as
   `main@0f04ae1364d47f52d696ed056dd6c43747b98a37`. The Testnet soak/readiness
   contract now records one continuous strategy identity across fourteen
@@ -76,9 +96,9 @@
   Mainnet currently resolve only to non-network, read-only identity gates;
   no order lifecycle, credential, deployment, or environment connection was
   enabled. Focused host/composition tests passed 56 cases; #857 is next.
-- #855 is the staged Testnet-to-Live execution spec. Its remaining tickets are
-  #860 → #861 → #862. Live writes remain
-  disabled; the current user's dirty checkout was not modified.
+- #855 is the staged Testnet-to-Live execution spec. #860 and #861 are merged;
+  #862 is the remaining attended DCA canary/kill-control story. Live writes
+  remain disabled; the current user's dirty checkout was not modified.
 
 ## 现在在哪里(2026-08-21)
 - #852 / PR #853 consumes the merged `standard-broker` Paper host contract at
