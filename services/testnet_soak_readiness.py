@@ -102,6 +102,8 @@ class TestnetSoakReadiness:
                 raise TestnetSoakError("broker_release_account_changed_across_soak")
         evidence = observation.get("evidence") if isinstance(observation.get("evidence"), Mapping) else {}
         blockers = self._gate_blockers(observation, evidence)
+        if observation.get("_collection_blocker"):
+            blockers.append({"code": "artifact_collection_blocked", "detail": str(observation["_collection_blocker"])})
         for category, payload in evidence.items():
             if isinstance(payload, Mapping) and payload.get("observed_at"):
                 observed_at = _parse_timestamp(str(payload["observed_at"]))
@@ -174,25 +176,23 @@ class TestnetSoakReadiness:
         """
 
         evidence = dict(observation.get("evidence") or {})
-        for category in sorted(set(REQUIRED_CATEGORIES) | set(REQUIRED_GATE_EVIDENCE)):
-            reference = artifact_paths.get(category)
-            if reference is None:
-                raise TestnetSoakError(f"artifact_reference_missing:{category}")
-            path = Path(reference)
-            if not path.exists() or not path.is_file():
-                raise TestnetSoakError(f"artifact_missing:{category}")
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except Exception as exc:  # noqa: BLE001
-                raise TestnetSoakError(f"artifact_unreadable:{category}") from exc
-            if not isinstance(payload, Mapping):
-                raise TestnetSoakError(f"artifact_shape_invalid:{category}")
-            evidence[category] = {
-                **dict(payload),
-                "artifact_ref": str(path),
-                "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "artifact_kind": category,
-            }
+        try:
+            for category in sorted(set(REQUIRED_CATEGORIES) | set(REQUIRED_GATE_EVIDENCE)):
+                reference = artifact_paths.get(category)
+                if reference is None:
+                    raise TestnetSoakError(f"artifact_reference_missing:{category}")
+                path = Path(reference)
+                if not path.exists() or not path.is_file():
+                    raise TestnetSoakError(f"artifact_missing:{category}")
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except Exception as exc:  # noqa: BLE001
+                    raise TestnetSoakError(f"artifact_unreadable:{category}") from exc
+                if not isinstance(payload, Mapping):
+                    raise TestnetSoakError(f"artifact_shape_invalid:{category}")
+                evidence[category] = {**dict(payload), "artifact_ref": str(path), "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "artifact_kind": category}
+        except TestnetSoakError as exc:
+            return self.record_window({**dict(observation), "evidence": evidence, "_collection_blocker": str(exc)})
         return self.record_window({**dict(observation), "evidence": evidence})
 
     def finalize(self, *, now: str | None = None) -> dict[str, Any]:
