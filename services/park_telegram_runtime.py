@@ -622,7 +622,15 @@ class ParkTelegramRouter:
     def _handle_live_activation_confirmation(self, text: str, *, received: Mapping[str, Any]) -> dict[str, Any]:
         """Route the exact Live activation command through the source-bound gate."""
 
-        proposals = [row for row in self.live_activation.rows() if row.get("event") == "activation_proposed"]
+        try:
+            proposals = [row for row in self.live_activation.rows() if row.get("event") == "activation_proposed"]
+        except Exception as exc:  # activation journal uncertainty is fail-closed.
+            return self._block(
+                code="live_activation_journal_unreadable",
+                message=f"Live activation journal is unreadable: {type(exc).__name__}",
+                binding=None,
+                idempotency_key=f"live-activation-journal:{received.get('update_id')}",
+            )
         proposal = proposals[-1] if proposals else None
         tokens = str(text or "").strip().split()
         activation_digest = tokens[2] if len(tokens) > 2 else ""
