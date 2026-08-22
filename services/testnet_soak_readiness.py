@@ -256,7 +256,7 @@ class TestnetSoakReadiness:
             if not self._receipt_integrity_ok(receipt, rows):
                 status = "blocked"
                 receipt = {**receipt, "blockers": [*list(receipt.get("blockers") or []), {"code": "readiness_receipt_integrity_invalid"}]}
-            elif not self._receipt_is_fresh(receipt, rows, now=now):
+            elif status == "ready" and not self._receipt_is_fresh(receipt, rows, now=now):
                 status = "stale"
             if status == "ready" and now is not None:
                 age = _parse_timestamp(now) - _parse_timestamp(str(receipt.get("created_at") or now))
