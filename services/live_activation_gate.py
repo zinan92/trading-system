@@ -154,7 +154,7 @@ class LiveActivationGate:
             blockers.extend(
                 f"critical_gate_failed:{name}"
                 for name, value in sorted(critical.items())
-                if value not in {True, "pass", "ready"}
+                if not self._gate_passes(value)
             )
         elif not isinstance(readiness.get("gate_evidence"), Mapping):
             blockers.append("critical_gate_results_missing")
@@ -228,11 +228,11 @@ class LiveActivationGate:
         proposal = next((row for row in reversed(self.rows()) if row.get("event") == "activation_proposed" and row.get("activation_digest") == activation_digest), None)
         if proposal is None:
             return self._record_rejected("activation_missing", activation_digest)
+        if str(park_user_id) != self.park_user_id:
+            return self._record_rejected("unauthorized_user", activation_digest)
         existing = next((row for row in reversed(self.rows()) if row.get("event") == "activation_confirmed" and row.get("activation_digest") == activation_digest), None)
         if existing:
             return dict(existing)
-        if str(park_user_id) != self.park_user_id:
-            return self._record_rejected("unauthorized_user", activation_digest)
         if not self._telegram_receipt_is_complete(telegram_update_id, telegram_message_id):
             return self._record_rejected("telegram_receipt_incomplete", activation_digest)
         expected = self._confirmation_tokens(proposal)
@@ -351,6 +351,10 @@ class LiveActivationGate:
     @staticmethod
     def _telegram_receipt_is_complete(update_id: str | int | None, message_id: str | int | None) -> bool:
         return bool(str(update_id or "").strip()) and bool(str(message_id or "").strip())
+
+    @staticmethod
+    def _gate_passes(value: Any) -> bool:
+        return value is True or value in {"pass", "ready"}
 
     @staticmethod
     def _confirmation_tokens(proposal: Mapping[str, Any]) -> list[str]:
