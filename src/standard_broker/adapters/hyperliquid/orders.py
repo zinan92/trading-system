@@ -532,39 +532,46 @@ class HyperliquidRuntimeOrderAdapter:
 
     def submit(self, intent: OrderIntent) -> OrderReceipt:
         self._validate_intent(intent)
-        return self._lifecycle.submit(intent)
+        return self._bind_receipt(self._lifecycle.submit(intent))
 
     def cancel(self, order_id: str) -> OrderReceipt:
-        return self._lifecycle.cancel(order_id)
+        return self._bind_receipt(self._lifecycle.cancel(order_id))
 
     def modify(self, order_id: str, intent: OrderIntent) -> OrderReceipt:
         self._validate_intent(intent)
-        return self._lifecycle.modify(order_id, intent)
+        return self._bind_receipt(self._lifecycle.modify(order_id, intent))
 
     def query(self, order_id: str) -> OrderReceipt:
-        return self._lifecycle.query(order_id)
+        return self._bind_receipt(self._lifecycle.query(order_id))
 
     def open_orders(self, instrument_id: str | None = None) -> tuple[OrderReceipt, ...]:
-        return self._lifecycle.open_orders(instrument_id)
+        return tuple(self._bind_receipt(item) for item in self._lifecycle.open_orders(instrument_id))
 
     def apply_fill(self, raw: Mapping[str, object]) -> OrderReceipt:
-        result = self._lifecycle.apply_fill(raw)
+        result = self._bind_receipt(self._lifecycle.apply_fill(raw))
         self._sync_order_fills(raw)
         return result
 
     def apply_order_update(self, raw: Mapping[str, object]) -> OrderReceipt:
-        result = self._lifecycle.apply_order_update(raw)
+        result = self._bind_receipt(self._lifecycle.apply_order_update(raw))
         self._sync_order_fills(raw)
         return result
 
     def reconcile(self, raw: Mapping[str, object]) -> OrderReceipt:
         normalized = self._lifecycle.normalize_reconcile_event(raw)
-        result = self._lifecycle.apply_order_update(normalized)
+        result = self._bind_receipt(self._lifecycle.apply_order_update(normalized))
         self._sync_order_fills(normalized)
         return result
 
     def get(self, order_id: str) -> OrderReceipt:
-        return self._lifecycle.get(order_id)
+        return self._bind_receipt(self._lifecycle.get(order_id))
+
+    def _bind_receipt(self, receipt: OrderReceipt) -> OrderReceipt:
+        return replace(
+            receipt,
+            account_address=self._runtime.session.account.address,
+            lifecycle_id=self._runtime.session.lifecycle_id,
+        )
 
     @property
     def fills(self) -> Mapping[str, OrderFill]:

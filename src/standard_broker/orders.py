@@ -117,6 +117,8 @@ class OrderReceipt:
     broker_updated_at: datetime | None = None
     broker_order_lineage: tuple[str, ...] = ()
     client_order_lineage: tuple[str, ...] = ()
+    account_address: str | None = None
+    lifecycle_id: str | None = None
 
 
 @dataclass(frozen=True)

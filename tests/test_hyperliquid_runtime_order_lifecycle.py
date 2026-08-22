@@ -182,6 +182,8 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
             release_sha="a" * 40,
             approved_by="park",
             approved_at=datetime.now(UTC),
+            account_address="testnet-account",
+            lifecycle_id="testnet-order-runtime-1",
         )
         runtime = NautilusHyperliquidRuntime(
             session=BrokerRuntimeSession(
@@ -203,6 +205,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
                 "1.230.0",
                 "order-lifecycle-commit",
                 RuntimeActivationPolicy(testnet_approval=approval),
+                expected_release_sha="a" * 40,
             ),
         )
 
@@ -221,6 +224,39 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(receipt.state, OrderState.RESTING)
         self.assertTrue(adapter.local_only)
         self.assertEqual([call[1] for call in backend.calls], ["submit"])
+
+        queried = adapter.query(receipt.order_id)
+        self.assertEqual(queried.state, OrderState.RESTING)
+        self.assertEqual(adapter.open_orders("BTC-USD-PERP")[0].order_id, receipt.order_id)
+        pending_replace = adapter.modify(
+            receipt.order_id,
+            self.intent(order_id=receipt.order_id, key="testnet-replace"),
+        )
+        self.assertEqual(pending_replace.state, OrderState.MODIFY_PENDING)
+        promoted = adapter.apply_order_update(
+            {
+                "status": "accepted",
+                "oid": 202,
+                "cloid": pending_replace.client_order_id,
+                "timestamp": 1787313661000,
+            }
+        )
+        self.assertEqual(promoted.broker_order_id, "202")
+        pending_cancel = adapter.cancel(receipt.order_id)
+        self.assertEqual(pending_cancel.state, OrderState.CANCEL_PENDING)
+        canceled = adapter.reconcile(
+            {
+                "status": "canceled",
+                "oid": 202,
+                "cloid": pending_cancel.client_order_id,
+                "timestamp": 1787313661000,
+            }
+        )
+        self.assertEqual(canceled.state, OrderState.CANCELED)
+        self.assertEqual(
+            [call[1] for call in backend.calls],
+            ["submit", "query", "open_orders", "replace", "cancel"],
+        )
 
     def test_testnet_runtime_without_approval_fails_before_backend_invocation(self) -> None:
         profile = capabilities_for(BrokerEnvironment.TESTNET, "submit")
@@ -248,6 +284,48 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
             runtime.start()
 
         self.assertEqual(raised.exception.reason_code, "external_environment_denied")
+        self.assertEqual(backend.calls, [])
+
+    def test_testnet_runtime_rejects_mismatched_release_approval(self) -> None:
+        profile = capabilities_for(BrokerEnvironment.TESTNET, "submit")
+        backend = FakeOrderBackend(profile)
+        approval = ExternalEnvironmentApproval(
+            environment=BrokerEnvironment.TESTNET,
+            approval_id="testnet-approval-mismatch",
+            release_sha="b" * 40,
+            approved_by="park",
+            approved_at=datetime.now(UTC),
+            account_address="testnet-account",
+            lifecycle_id="testnet-order-runtime-3",
+        )
+        runtime = NautilusHyperliquidRuntime(
+            session=BrokerRuntimeSession(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                account=AccountReference(AccountScope.MASTER, "testnet-account"),
+                signer=SignerReference(
+                    SignerKind.API_AGENT,
+                    "fixture",
+                    "fixture://testnet-signer",
+                ),
+                signer_provider=FixtureSignerProvider(),
+                capabilities=profile,
+                execution_scope="hypercore:default",
+                lifecycle_id="testnet-order-runtime-3",
+            ),
+            backend=backend,
+            config=NautilusRuntimeConfig(
+                "1.230.0",
+                "order-lifecycle-commit",
+                RuntimeActivationPolicy(testnet_approval=approval),
+                expected_release_sha="a" * 40,
+            ),
+        )
+
+        with self.assertRaises(NautilusRuntimeError) as raised:
+            runtime.start()
+
+        self.assertEqual(raised.exception.reason_code, "testnet_release_mismatch")
         self.assertEqual(backend.calls, [])
 
     def test_submit_returns_canonical_receipt_and_native_request_stays_internal(self) -> None:

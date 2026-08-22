@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
+import re
 
 from ...capabilities import PORT_NAMES, CapabilityDescriptor
 from ...errors import BrokerCapabilityError, BrokerError, RuntimeBoundaryError
@@ -51,12 +52,16 @@ class NautilusRuntimeConfig:
     expected_version: str
     expected_commit: str
     policy: RuntimeActivationPolicy = field(default_factory=RuntimeActivationPolicy)
+    expected_release_sha: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         for name in ("expected_version", "expected_commit"):
             value = getattr(self, name)
             if not value or value != value.strip():
                 raise ValueError(f"{name} is required")
+        if self.expected_release_sha is not None:
+            if not re.fullmatch(r"[0-9a-f]{40}", self.expected_release_sha):
+                raise ValueError("expected_release_sha must be a full lowercase 40-character SHA-1")
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,8 @@ class NautilusRuntimeReceipt:
     adapter_version: str
     adapter_commit: str
     invocation_performed: bool
+    account_address: str
+    lifecycle_id: str
     provenance: Provenance
 
 
@@ -272,6 +279,8 @@ class NautilusHyperliquidRuntime:
             raise NautilusRuntimeError("capability_mismatch", "backend capability profile does not match session")
         if session.environment is BrokerEnvironment.PAPER and getattr(backend, "local_only", False) is not True:
             raise NautilusRuntimeError("paper_backend_not_local", "Paper runtime requires a local-only backend")
+        if session.environment is BrokerEnvironment.TESTNET and getattr(backend, "local_only", False) is not True:
+            raise NautilusRuntimeError("testnet_backend_not_local", "Testnet fixture runtime requires a local-only backend")
         if not callable(getattr(backend, "invoke", None)):
             raise NautilusRuntimeError("backend_invoke_missing", "backend must expose invoke(port, operation, request)")
 
@@ -304,11 +313,32 @@ class NautilusHyperliquidRuntime:
         if self._state is NautilusRuntimeState.CLOSED:
             raise NautilusRuntimeError("runtime_closed", "closed runtime cannot be preflighted")
         try:
-            return preflight_runtime_session(
+            result = preflight_runtime_session(
                 self._session,
                 required_operations=required_operations or {},
                 policy=self._config.policy,
             )
+            if self._session.environment is BrokerEnvironment.TESTNET:
+                approval = self._config.policy.testnet_approval
+                if self._config.expected_release_sha is None:
+                    raise RuntimeBoundaryError(
+                        "testnet_release_binding_required",
+                        "Testnet runtime requires an expected release SHA",
+                    )
+                if approval is None or approval.release_sha != self._config.expected_release_sha:
+                    raise RuntimeBoundaryError(
+                        "testnet_release_mismatch",
+                        "Testnet approval does not match the expected release SHA",
+                    )
+                if (
+                    approval.account_address != self._session.account.address
+                    or approval.lifecycle_id != self._session.lifecycle_id
+                ):
+                    raise RuntimeBoundaryError(
+                        "testnet_identity_mismatch",
+                        "Testnet approval does not match the runtime account/lifecycle",
+                    )
+            return result
         except (BrokerCapabilityError, RuntimeBoundaryError) as exc:
             self._state = NautilusRuntimeState.FAULTED
             reason_code = getattr(exc, "reason_code", "runtime_preflight_failed")
@@ -349,6 +379,8 @@ class NautilusHyperliquidRuntime:
             adapter_version=self._metadata.version,
             adapter_commit=self._metadata.commit,
             invocation_performed=self._invocation_performed,
+            account_address=self._session.account.address,
+            lifecycle_id=self._session.lifecycle_id,
             provenance=Provenance(
                 source="nautilus-hyperliquid.runtime",
                 execution_scope=self._session.execution_scope,
