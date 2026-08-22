@@ -637,7 +637,7 @@ class LiveDcaCanary:
 
     def _receipt(self, state: dict[str, Any], operation: str, request: Mapping[str, Any], response: Mapping[str, Any], *, timestamp: str) -> str:
         safe_request_keys = ("activation_digest", "plan_digest", "broker_id", "environment", "account_id", "release_sha", "event", "index", "side", "price", "quantity", "notional", "reduce_only", "cancel_protection", "reason", "idempotency_key", "require_flat", "require_no_open_orders")
-        safe_response_keys = ("status", "order_id", "client_order_id", "group_id", "protection_order_id", "reduce_only", "covered_quantity", "take_profit", "stop_loss", "protection_canceled", "open_quantity", "open_orders", "error_type")
+        safe_response_keys = ("status", "order_id", "client_order_id", "group_id", "protection_order_id", "reduce_only", "covered_quantity", "take_profit", "stop_loss", "protection_canceled", "open_quantity", "open_orders", "open_positions", "notional", "leverage", "loss", "error_type")
         safe_request = {key: request.get(key) for key in safe_request_keys if key in request}
         safe_response = {key: response.get(key) for key in safe_response_keys if key in response}
         receipt = {

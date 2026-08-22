@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from services.live_dca_canary import LiveDcaCanary, LiveDcaCanaryError, REQUIRED_TRANSPORT_CAPABILITIES
+from services.live_dca_canary import LiveDcaCanary, LiveDcaCanaryError, REQUIRED_TRANSPORT_CAPABILITIES, _digest
 from tests.test_live_activation_gate import _preflight, _ready_gate
 
 
@@ -129,6 +129,8 @@ def test_attended_dca_canary_keeps_fixture_non_network_and_distinguishes_stop_ca
     assert stopped["status"] == "stopped"
     assert stopped["receipts"]
     assert sum(row["operation"] == "account_snapshot" for row in stopped["receipts"]) >= 2
+    account_receipt = next(row for row in stopped["receipts"] if row["operation"] == "account_snapshot")
+    assert account_receipt["response_digest"] == _digest({"status": "ok", "open_orders": 0, "open_positions": 0, "notional": 0, "leverage": 0, "loss": 0})
     assert all(row.get("request_digest", "").startswith("sha256:") and row.get("response_digest", "").startswith("sha256:") for row in stopped["receipts"])
     assert stopped["receipt_chain_digest"].startswith("sha256:")
     assert any(name == "cancel_order" for name, _ in transport.calls)
