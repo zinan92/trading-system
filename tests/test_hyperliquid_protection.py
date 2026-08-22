@@ -234,6 +234,7 @@ class HyperliquidProtectionTests(unittest.TestCase):
                         "submit",
                         "cancel",
                         "replace",
+                        "query",
                         "reduce_only",
                         "mark_price_trigger",
                         "grouped_tp_sl",
@@ -251,11 +252,25 @@ class HyperliquidProtectionTests(unittest.TestCase):
             runtime=_approved_testnet_runtime(capabilities, calls, accepted=True)
         )
         receipt = adapter.submit(self.long_group())
+        confirmed = adapter.reconcile(self.long_group())
+        replaced = adapter.replace(self.long_group())
+        canceled = adapter.cancel(self.long_group())
 
         self.assertEqual(receipt.environment, BrokerEnvironment.TESTNET)
+        self.assertEqual(confirmed.operation, "query")
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.CANCELED)
         self.assertEqual(calls[0][0:2], ("protection_order", "submit"))
         self.assertTrue(all(leg["reduceOnly"] for leg in calls[0][2]["legs"]))
-        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.SUBMITTED)
+        self.assertEqual([call[1] for call in calls], ["submit", "query", "replace", "cancel"])
+        self.assertEqual(replaced.operation, "replace")
+
+        adapter.reconcile(self.long_group())
+        with self.assertRaises(BrokerCapabilityError) as raised:
+            adapter.reconcile_position_coverage(
+                self.long_group(),
+                owned_quantity=Decimal("0.04"),
+            )
+        self.assertIn("partial_fill_protection_gap", str(raised.exception))
 
     def test_unaccepted_testnet_protection_receipt_freezes_before_coverage(self) -> None:
         capabilities = CapabilityDescriptor(

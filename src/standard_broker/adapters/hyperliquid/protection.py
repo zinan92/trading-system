@@ -164,6 +164,46 @@ class HyperliquidRuntimeProtectionAdapter:
     def cancel(self, group: ProtectionGroup) -> ProtectionReceipt:
         return self._run(group, operation="cancel")
 
+    def reconcile(self, group: ProtectionGroup) -> ProtectionReceipt:
+        with self._lock:
+            self._require("query")
+            runtime_receipt = self._runtime.invoke(
+                "protection_order",
+                "query",
+                {"protectionId": group.protection_id},
+            )
+            if runtime_receipt.accepted is not True:
+                self._statuses[group.protection_id] = ProtectionLifecycleStatus(
+                    protection_id=group.protection_id,
+                    state=ProtectionLifecycleState.FROZEN,
+                    reason="protection_query_not_accepted",
+                    attempts=1,
+                )
+                raise BrokerCapabilityError(
+                    "protection_order",
+                    "query",
+                    "protection_query_not_accepted",
+                )
+            self._statuses[group.protection_id] = ProtectionLifecycleStatus(
+                protection_id=group.protection_id,
+                state=ProtectionLifecycleState.ACTIVE,
+                reason=None,
+                attempts=0,
+            )
+            self._groups[group.protection_id] = group
+            return ProtectionReceipt(
+                protection_id=group.protection_id,
+                parent_order_id=group.parent_order_id,
+                operation="query",
+                accepted=True,
+                broker_id=runtime_receipt.broker_id,
+                environment=runtime_receipt.environment,
+                provenance=runtime_receipt.provenance,
+                account_address=self._runtime.session.account.address,
+                lifecycle_id=self._runtime.session.lifecycle_id,
+                release_sha=self._runtime._config.expected_release_sha,
+            )
+
     def reconcile_position_coverage(
         self,
         group: ProtectionGroup,
@@ -183,10 +223,9 @@ class HyperliquidRuntimeProtectionAdapter:
                 )
             return self.replace(replace(group, quantity=owned_quantity))
         status = self._statuses.get(group.protection_id)
-        if status is None or status.state not in {
-            ProtectionLifecycleState.SUBMITTED,
-            ProtectionLifecycleState.ACTIVE,
-        }:
+        if status is not None and status.state is ProtectionLifecycleState.SUBMITTED:
+            status = self.reconcile(group)
+        if status is None or status.state is not ProtectionLifecycleState.ACTIVE:
             raise BrokerCapabilityError(
                 "protection_order",
                 "position_coverage",
