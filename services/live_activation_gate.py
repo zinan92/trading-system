@@ -360,9 +360,10 @@ class LiveActivationGate:
         rows = self.rows()
         if not rows:
             return {"status": "missing", "environment": "mainnet", "live_writes_enabled": False, "next_action": "run_read_only_live_preflight"}
+        confirmed = next((row for row in reversed(rows) if row.get("event") == "activation_confirmed"), None)
+        if confirmed is not None:
+            return {"status": "activated_pending_canary", "environment": "mainnet", "activation_digest": confirmed.get("activation_digest"), "plan_digest": confirmed.get("plan_digest"), "release_sha": confirmed.get("release_sha"), "account_id": confirmed.get("account_id"), "live_writes_enabled": False, "next_action": confirmed.get("next_action")}
         latest = rows[-1]
-        if latest.get("event") == "activation_confirmed":
-            return {"status": "activated_pending_canary", "environment": "mainnet", "activation_digest": latest.get("activation_digest"), "plan_digest": latest.get("plan_digest"), "release_sha": latest.get("release_sha"), "account_id": latest.get("account_id"), "live_writes_enabled": False, "next_action": latest.get("next_action")}
         return {"status": str(latest.get("status") or "blocked"), "environment": "mainnet", "activation_digest": latest.get("activation_digest"), "blockers": list(latest.get("blockers") or []), "live_writes_enabled": False, "next_action": latest.get("next_action")}
 
     def canary_status(self) -> dict[str, Any]:
