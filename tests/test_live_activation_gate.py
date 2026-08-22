@@ -68,6 +68,9 @@ def _readiness(source: dict, artifact_root: Path | None = None) -> tuple[dict, l
     receipt = {
         "status": "ready",
         "environment": "testnet",
+        "strategy_session_id": "session-continuous",
+        "strategy_revision_id": "revision-dca",
+        "plan_digest": "sha256:" + "a" * 64,
         "window_count": 14,
         "required_window_count": 14,
         "day_count": 7,
