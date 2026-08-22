@@ -114,6 +114,7 @@ class LiveDcaCanary:
         self._require(not missing, "capability_gap", {"missing": missing})
         existing = self.snapshot()
         if existing:
+            self._validate_state_integrity(existing)
             if existing.get("activation_digest") != admission.get("activation_digest") or existing.get("plan_digest") != normalized["plan_digest"]:
                 raise LiveDcaCanaryError("canary_immutable", "a different canary is already recorded")
             return existing
@@ -379,6 +380,7 @@ class LiveDcaCanary:
         state = self.snapshot()
         if not state:
             raise LiveDcaCanaryError("canary_not_started", "start the attended canary first")
+        self._validate_state_integrity(state)
         return state
 
     @staticmethod
@@ -404,6 +406,18 @@ class LiveDcaCanary:
         if isinstance(state, dict):
             state["state_digest"] = _digest({key: value for key, value in state.items() if key != "state_digest"})
         write_json(self.path, [dict(state)])
+
+    @staticmethod
+    def _validate_state_integrity(state: Mapping[str, Any]) -> None:
+        supplied = str(state.get("state_digest") or "")
+        if not supplied or supplied != _digest({key: value for key, value in state.items() if key != "state_digest"}):
+            raise LiveDcaCanaryError("canary_state_integrity_invalid", "canary state digest does not match")
+        for event in state.get("events") or []:
+            if not isinstance(event, Mapping):
+                raise LiveDcaCanaryError("canary_event_shape_invalid", "canary event is not an object")
+            digest = str(event.get("event_digest") or "")
+            if not digest or digest != _digest({key: value for key, value in event.items() if key != "event_digest"}):
+                raise LiveDcaCanaryError("canary_event_integrity_invalid", "canary event digest does not match")
 
     def _record_canary_passed(self, state: Mapping[str, Any], *, timestamp: str) -> None:
         """Publish a canary receipt to the activation journal after flat proof."""
