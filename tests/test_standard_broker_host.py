@@ -6,7 +6,9 @@ import pytest
 
 from services.standard_broker_host import (
     STANDARD_BROKER_COMMIT,
+    StandardBrokerEnvironmentIdentity,
     StandardBrokerHostError,
+    build_standard_broker_environment_gate,
     build_paper_broker_binding,
     record_paper_broker_receipt,
     request_paper_broker,
@@ -159,3 +161,82 @@ def test_paper_host_does_not_read_legacy_state(tmp_path, monkeypatch) -> None:
     binding = build_paper_broker_binding()
 
     assert binding.adapter.transport.calls == []
+
+
+def _environment_identity_kwargs(environment: str = "testnet") -> dict[str, str]:
+    return {
+        "broker_id": "hyperliquid",
+        "environment": environment,
+        "execution_scope": "hypercore:default",
+        "account_id": f"{environment}-account",
+        "credential_source": f"HL_{environment.upper()}_CREDENTIAL",
+        "runtime_id": f"runtime-{environment}",
+        "ledger_namespace": f"ledger.standard-broker.{environment}",
+        "release_sha": "a" * 40,
+    }
+
+
+def test_environment_identity_requires_explicit_nonpaper_fields() -> None:
+    with pytest.raises(ValueError, match="account_id"):
+        StandardBrokerEnvironmentIdentity(
+            broker_id="hyperliquid",
+            environment="testnet",
+            execution_scope="hypercore:default",
+            account_id="",
+            credential_source="HL_TESTNET_CREDENTIAL",
+            runtime_id="runtime-testnet",
+            ledger_namespace="ledger.testnet",
+            release_sha="a" * 40,
+        )
+
+
+@pytest.mark.parametrize("environment", ["testnet", "mainnet", "live"])
+def test_environment_gate_resolves_distinct_identity_without_transport(environment: str) -> None:
+    gate = build_standard_broker_environment_gate(**_environment_identity_kwargs(environment))
+
+    assert isinstance(gate.identity, StandardBrokerEnvironmentIdentity)
+    assert gate.identity.broker_id == "hyperliquid"
+    assert gate.identity.environment == ("mainnet" if environment == "live" else environment)
+    assert gate.identity.account_id == f"{environment}-account"
+    assert gate.capabilities.names == ("preflight",)
+    assert gate.preflight()["ready"] is False
+    assert gate.preflight()["network_io"] is False
+    assert gate.preflight()["real_money_eligible"] is False
+    assert gate.preflight()["blocker"] == "capability_gate_pending"
+
+
+def test_environment_gate_never_reads_credential_value_or_submits() -> None:
+    gate = build_standard_broker_environment_gate(**_environment_identity_kwargs())
+
+    assert "credential_value" not in gate.broker_config
+    assert gate.broker_config["credential_source"] == "HL_TESTNET_CREDENTIAL"
+    with pytest.raises(RuntimeError, match="capability gate"):
+        gate.submit_order(object())
+
+
+def test_environment_gate_rejects_non_default_execution_scope() -> None:
+    with pytest.raises(ValueError, match="execution_scope"):
+        identity = _environment_identity_kwargs()
+        identity["execution_scope"] = "hip3:custom"
+        build_standard_broker_environment_gate(
+            **identity,
+        )
+
+
+def test_environment_gate_capability_gap_receipt_preserves_public_identity(tmp_path) -> None:
+    gate = build_standard_broker_environment_gate(**_environment_identity_kwargs())
+    event = gate.record_capability_gap(
+        ParkRecordingTrack(tmp_path / "outputs"),
+        record_window_id="2026-08-22_DAY",
+        strategy_session_id="session-testnet",
+        strategy_revision_id="revision-testnet",
+        occurred_at="2026-08-22T01:00:00+00:00",
+        port="order_execution",
+        operation="submit",
+        reason="capability_gate_pending",
+    )
+
+    assert event["source"] == "standard-broker.testnet"
+    assert event["payload"]["environment"] == "testnet"
+    assert event["payload"]["execution_scope"] == "hypercore:default"
+    assert "credential_value" not in event["payload"]

@@ -216,6 +216,49 @@ def test_standard_broker_demo_composition_cannot_fall_back_to_legacy(tmp_path: P
         )
 
 
+@pytest.mark.parametrize("environment", ["testnet", "mainnet", "live"])
+def test_standard_broker_environment_gate_is_explicit_and_non_networked(
+    tmp_path: Path,
+    environment: str,
+):
+    adapter = build_broker_execution_port(
+        _context(
+            tmp_path,
+            mode="live",
+            provider="standard_broker",
+            environment=environment,
+            broker_config={
+                "broker_id": "hyperliquid",
+                "account_id": f"{environment}-account",
+                "credential_source": f"HL_{environment.upper()}_CREDENTIAL",
+                "runtime_id": f"runtime-{environment}",
+                "ledger_namespace": f"ledger.standard-broker.{environment}",
+                "release_sha": "a" * 40,
+            },
+        )
+    )
+
+    assert adapter.provider == "standard_broker"
+    assert adapter.preflight()["ready"] is False
+    assert adapter.preflight()["network_io"] is False
+    assert adapter.preflight()["real_money_eligible"] is False
+    assert adapter.preflight()["blocker"] == "capability_gate_pending"
+    assert adapter.descriptor.environment == ("mainnet" if environment == "live" else environment)
+
+
+def test_standard_broker_requires_explicit_environment_identity(tmp_path: Path):
+    with pytest.raises(ValueError, match="explicit environment"):
+        BrokerBuildContext(
+            output_root=tmp_path / "outputs",
+            execution_mode="live",
+            live_trading_enabled=False,
+            broker_config={
+                "provider": "standard_broker",
+                "broker_id": "hyperliquid",
+            },
+        )
+
+
 def test_demo_and_testnet_are_distinct_plugins_with_matched_reconciliation_endpoint(tmp_path: Path):
     for environment in ("demo", "testnet"):
         context = _context(
