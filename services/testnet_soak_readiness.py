@@ -154,6 +154,7 @@ class TestnetSoakReadiness:
             "next_action": "notify_park_and_wait" if blockers else "continue_soak",
             "evidence_digest": _digest({"identity": identity, "evidence": evidence, "package": package, "blockers": blockers, "source_attestation": attestation}),
         }
+        row["row_digest"] = _digest({key: value for key, value in row.items() if key != "row_digest"})
         rows = [row for row in self.windows() if row.get("window_index") != index]
         rows.append(row)
         write_json(self.windows_path, rows)
@@ -162,7 +163,7 @@ class TestnetSoakReadiness:
     def finalize(self, *, now: str | None = None) -> dict[str, Any]:
         rows = sorted(self.windows(), key=lambda row: int(row.get("window_index") or 0))
         existing = self.receipts()
-        if existing and existing[-1].get("status") == "ready" and self._receipt_integrity_ok(existing[-1]) and self._receipt_is_fresh(existing[-1], rows, now=now):
+        if existing and existing[-1].get("status") == "ready" and self._receipt_integrity_ok(existing[-1], rows) and self._receipt_is_fresh(existing[-1], rows, now=now):
             return dict(existing[-1])
         blockers: list[dict[str, Any]] = []
         if len(rows) != WINDOW_COUNT or [int(row.get("window_index")) if row.get("window_index") is not None else -1 for row in rows] != list(range(WINDOW_COUNT)):
@@ -203,6 +204,7 @@ class TestnetSoakReadiness:
             "automatic_promotion": False,
             "created_at": str(now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
             "receipt_revision": len(existing),
+            "window_digests": [str(row.get("row_digest") or "") for row in rows],
             "next_action": "await_manual_live_activation" if not blockers else "notify_park_and_wait",
             "receipt_digest": "",
         }
@@ -216,7 +218,7 @@ class TestnetSoakReadiness:
         rows = self.windows()
         if receipt is not None:
             status = str(receipt.get("status") or "incomplete")
-            if not self._receipt_integrity_ok(receipt):
+            if not self._receipt_integrity_ok(receipt, rows):
                 status = "blocked"
                 receipt = {**receipt, "blockers": [*list(receipt.get("blockers") or []), {"code": "readiness_receipt_integrity_invalid"}]}
             if status == "ready" and now is not None:
@@ -258,12 +260,17 @@ class TestnetSoakReadiness:
         return reference - latest_end <= timedelta(hours=24)
 
     @staticmethod
-    def _receipt_integrity_ok(receipt: Mapping[str, Any]) -> bool:
+    def _receipt_integrity_ok(receipt: Mapping[str, Any], rows: Sequence[Mapping[str, Any]] | None = None) -> bool:
         supplied = str(receipt.get("receipt_digest") or "")
         if not supplied:
             return False
         payload = {key: value for key, value in receipt.items() if key != "receipt_digest"}
-        return supplied == _digest(payload)
+        if supplied != _digest(payload):
+            return False
+        if rows is None:
+            return True
+        expected = [str(row.get("row_digest") or "") for row in sorted(rows, key=lambda item: int(item.get("window_index") or 0))]
+        return int(receipt.get("window_count") or 0) == len(rows) and expected == list(receipt.get("window_digests") or []) and all(expected)
 
     def _gate_blockers(self, observation: Mapping[str, Any], evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
         blockers: list[dict[str, Any]] = []
@@ -301,8 +308,15 @@ class TestnetSoakReadiness:
                 blockers.append({"code": f"safety_{key}_invalid", "actual": observation.get(key)})
         for category in REQUIRED_CATEGORIES:
             payload = evidence.get(category)
-            if not isinstance(payload, Mapping) or not payload:
+            if not isinstance(payload, Mapping) or not payload or payload.get("status") not in {"pass", "ready", "ok"} or not str(payload.get("source") or "").strip() or not str(payload.get("observed_at") or "").strip() or not str(payload.get("artifact_ref") or "").strip():
                 blockers.append({"code": f"recording_{category}_payload_missing"})
+                continue
+            reference = str(payload["artifact_ref"])
+            artifact_path = Path(reference) if Path(reference).is_absolute() else self.output_root / reference
+            if not artifact_path.exists() or not artifact_path.is_file():
+                blockers.append({"code": f"recording_{category}_artifact_missing", "artifact_ref": reference})
+            elif payload.get("artifact_sha256") and hashlib.sha256(artifact_path.read_bytes()).hexdigest() != str(payload["artifact_sha256"]).lower():
+                blockers.append({"code": f"recording_{category}_artifact_digest_mismatch", "artifact_ref": reference})
         attestation = observation.get("source_attestation") if isinstance(observation.get("source_attestation"), Mapping) else {}
         attestation_tree = str(attestation.get("tree_sha") or attestation.get("source_tree_sha") or "")
         attestation_release = str(attestation.get("release_sha") or attestation.get("source_sha") or "")
@@ -310,7 +324,7 @@ class TestnetSoakReadiness:
         try:
             current = current_source_attestation(Path(__file__).resolve().parents[1])
         except Exception:
-            current = {}
-        if attestation.get("tracked_tree_clean") is not True or not valid_hex(attestation_tree) or not valid_hex(attestation_release) or attestation_release != str(observation.get("release_sha") or "") or (current and (str(current.get("source_sha") or "") != str(attestation.get("source_sha") or attestation.get("release_sha") or "") or str(current.get("source_tree_sha") or "") != attestation_tree or current.get("tracked_tree_clean") is not True)):
+            current = {"attestation_error": True}
+        if current.get("attestation_error") or attestation.get("tracked_tree_clean") is not True or not valid_hex(attestation_tree) or not valid_hex(attestation_release) or attestation_release != str(observation.get("release_sha") or "") or (current and (str(current.get("source_sha") or "") != str(attestation.get("source_sha") or attestation.get("release_sha") or "") or str(current.get("source_tree_sha") or "") != attestation_tree or current.get("tracked_tree_clean") is not True)):
             blockers.append({"code": "source_attestation_tree_or_release_invalid"})
         return blockers
