@@ -330,7 +330,7 @@ class TestnetSoakReadiness:
                     artifact = json.loads(path.read_text(encoding="utf-8"))
                 except Exception:
                     return False
-                if not isinstance(artifact, Mapping) or str(artifact.get("artifact_kind") or "") != str(payload.get("artifact_kind") or category):
+                if not isinstance(artifact, Mapping) or (artifact.get("artifact_kind") not in (None, "") and str(artifact.get("artifact_kind")) != str(payload.get("artifact_kind") or category)):
                     return False
         return True
 
