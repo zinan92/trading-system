@@ -1466,12 +1466,13 @@ class ParkTelegramRouter:
                 now=time.time(),
             )
             event = str(decision.get("event") or "decision")
+            confirmation_environment = str(decision.get("execution_environment") or "paper").capitalize()
             self.telegram.queue_outbound(
                 idempotency_key=f"park-confirmation:{proposal['proposal_id']}:{event}",
                 message_type="confirmation_receipt",
                 text=(
                     f"Park {event}: {proposal['plan_digest']}. "
-                    + ("Paper execution is authorized for the next trusted fresh tick; no live order will be sent." if event == "confirmed" else "No execution will be attempted; send a new clean-slate strategy after closure.")
+                    + (f"{confirmation_environment} execution is authorized for the next trusted fresh tick; no other environment will be touched." if event == "confirmed" else "No execution will be attempted; send a new clean-slate strategy after closure.")
                 ),
                 binding=active,
             )
