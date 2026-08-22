@@ -438,6 +438,19 @@ def test_dca_testnet_crossed_entry_uses_bounded_market_catch_up(tmp_path: Path) 
     assert catch_up["state"] == "accepted"
 
 
+def test_dca_testnet_stop_before_first_fill_reconciles_before_sealing(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+
+    stopped = lifecycle.on_market_event(plan, price=64000.0, timestamp="2026-08-22T01:01:00+00:00")
+
+    assert stopped["status"] == "stopped"
+    assert stopped["sealed"] is True
+    assert stopped["reconciliation"]["status"] == "ok"
+
+
 def test_dca_testnet_hash_only_fill_is_idempotent(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path, protection=True)
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)

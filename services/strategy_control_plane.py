@@ -7074,6 +7074,7 @@ class StrategyControlPlane:
                 "partial_entry",
                 "target_triggered",
                 "stopping",
+                "budget_exhausted",
                 "blocked_risk_flattening",
                 "protection_blocked_flattening",
             }

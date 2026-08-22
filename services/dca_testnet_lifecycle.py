@@ -339,12 +339,18 @@ class DcaTestnetLifecycle:
                 state["updated_at"] = timestamp
                 self._save(state)
                 return self.snapshot(plan)
-            state["status"] = "stopped"
-            state["sealed"] = True
-            state["terminal_reason"] = "strategy_stop_before_entry"
-            self._queue_park_notification(state, timestamp=timestamp, reason="strategy_stop_before_entry")
-            state["next_action"] = "notify_park_and_wait"
-            self._record_event(state, "revision_sealed", timestamp=timestamp, reason="strategy_stop_before_entry")
+            state["positions"] = []
+            reconciliation = self._terminal_reconciliation(state, timestamp)
+            state["reconciliation"] = reconciliation
+            if reconciliation["status"] != "ok":
+                self._block(state, "terminal_reconciliation_blocked", timestamp=timestamp)
+            else:
+                state["status"] = "stopped"
+                state["sealed"] = True
+                state["terminal_reason"] = "strategy_stop_before_entry"
+                self._queue_park_notification(state, timestamp=timestamp, reason="strategy_stop_before_entry")
+                state["next_action"] = "notify_park_and_wait"
+                self._record_event(state, "revision_sealed", timestamp=timestamp, reason="strategy_stop_before_entry")
             state["updated_at"] = timestamp
             self._save(state)
             return self.snapshot(plan)
@@ -553,7 +559,7 @@ class DcaTestnetLifecycle:
             broker_open_orders = self.broker.request(
                 "order_execution",
                 "open_orders",
-                str(state["orders"][0].get("instrument_id") or ""),
+                str(state.get("instrument_id") or (state["orders"][0].get("instrument_id") if state["orders"] else "")),
             )
             broker_open_count = len(tuple(broker_open_orders or ()))
         except Exception as exc:  # noqa: BLE001 - venue truth is required before sealing.
