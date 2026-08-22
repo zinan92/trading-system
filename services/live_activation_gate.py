@@ -465,6 +465,13 @@ class LiveActivationGate:
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_receipt_missing"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         if canary.get("risk_limits_digest") != _digest(preflight.get("risk_limits") or {}):
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_risk_limits_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        try:
+            state_rows = load_json(self.output_root / "dualtrack" / "live_dca_canary" / "current.json")
+            state = state_rows[-1] if state_rows and isinstance(state_rows[-1], Mapping) else None
+        except Exception:
+            state = None
+        if not isinstance(state, Mapping) or state.get("status") != "completed" or state.get("activation_digest") != confirmed.get("activation_digest") or state.get("plan_digest") != confirmed.get("plan_digest") or state.get("state_digest") != _digest({key: value for key, value in state.items() if key != "state_digest"}) or state.get("reconciliation", {}).get("status") not in {"ok", "pass", "reconciled"} or canary.get("state_digest") != state.get("state_digest") or canary.get("reconciliation_digest") != _digest(state.get("reconciliation") or {}):
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_state_missing_or_invalid"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         source = canary.get("source_attestation") if isinstance(canary.get("source_attestation"), Mapping) else {}
         try:
             current = dict(self._source_attestation_resolver())
@@ -485,6 +492,69 @@ class LiveActivationGate:
             "live_writes_enabled": True,
             "execution_authorized": True,
             "canary_receipt_digest": canary.get("canary_receipt_digest"),
+            "blockers": [],
+        }
+
+    def activation_prerequisite_status(self) -> dict[str, Any]:
+        """Validate the exact activation receipt before the attended canary.
+
+        Unlike :meth:`canary_status`, this intentionally stops before looking
+        for a ``canary_passed`` event.  It is the admission gate used by the
+        one attended canary which will create that event later.
+        """
+
+        try:
+            rows = self.rows()
+        except Exception as exc:
+            return {"ready": False, "status": "blocked", "blockers": [f"activation_journal_unreadable:{type(exc).__name__}"], "live_writes_enabled": False}
+        confirmed = next((row for row in reversed(rows) if row.get("event") == "activation_confirmed"), None)
+        if not isinstance(confirmed, Mapping):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_confirmation_missing"], "live_writes_enabled": False}
+        proposal = next((row for row in reversed(rows) if row.get("event") == "activation_proposed" and row.get("activation_digest") == confirmed.get("activation_digest")), None)
+        if not isinstance(proposal, Mapping):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_proposal_missing"], "live_writes_enabled": False}
+        payload = {key: proposal.get(key) for key in ("preflight", "preflight_digest", "approved_plan", "plan_digest", "expires_at")}
+        if _digest(payload) != str(proposal.get("activation_digest") or ""):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_proposal_integrity_invalid"], "live_writes_enabled": False}
+        preflight_row = next((row for row in reversed(rows) if row.get("event") == "preflight_completed" and row.get("preflight_digest") == confirmed.get("preflight_digest")), None)
+        preflight = preflight_row.get("preflight") if isinstance(preflight_row, Mapping) else None
+        if not isinstance(preflight, Mapping) or not self._preflight_is_current(preflight):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_preflight_not_current"], "live_writes_enabled": False}
+        plan_digest = str(confirmed.get("plan_digest") or "")
+        approved = self._approved_plan(plan_digest)
+        if approved is None or proposal.get("approved_plan") != approved:
+            return {"ready": False, "status": "blocked", "blockers": ["approved_dca_plan_missing_or_changed"], "live_writes_enabled": False}
+        identity_mismatch = (
+            confirmed.get("preflight_digest") != preflight.get("preflight_digest")
+            or confirmed.get("release_sha") != preflight.get("release_sha")
+            or confirmed.get("account_id") != preflight.get("account_id")
+            or confirmed.get("environment_fingerprint") != preflight.get("environment_fingerprint")
+            or confirmed.get("strategy_scope") != "dca"
+            or confirmed.get("environment") != "mainnet"
+            or confirmed.get("park_user_id") != self.park_user_id
+            or confirmed.get("execution_authorized") is not False
+            or confirmed.get("live_writes_enabled") is not False
+            or proposal.get("plan_digest") != plan_digest
+        )
+        if identity_mismatch:
+            return {"ready": False, "status": "blocked", "blockers": ["activation_confirmation_identity_mismatch"], "live_writes_enabled": False}
+        confirmation_digest = str(confirmed.get("confirmation_digest") or "")
+        if not _SHA256.fullmatch(confirmation_digest) or confirmation_digest != _digest({key: value for key, value in confirmed.items() if key != "confirmation_digest"}):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_confirmation_integrity_invalid"], "live_writes_enabled": False}
+        return {
+            "ready": True,
+            "status": "activated_pending_canary",
+            "activation_digest": confirmed.get("activation_digest"),
+            "preflight_digest": confirmed.get("preflight_digest"),
+            "plan_digest": plan_digest,
+            "release_sha": confirmed.get("release_sha"),
+            "account_id": confirmed.get("account_id"),
+            "environment_fingerprint": confirmed.get("environment_fingerprint"),
+            "strategy_scope": "dca",
+            "approved_plan": approved,
+            "preflight": dict(preflight),
+            "live_writes_enabled": False,
+            "execution_authorized": False,
             "blockers": [],
         }
 
@@ -800,7 +870,7 @@ class LiveActivationGate:
         if not isinstance(value, Mapping):
             return None
         result: dict[str, float] = {}
-        for key in ("max_acceptable_loss", "max_notional", "max_leverage", "max_open_orders", "max_positions"):
+        for key in ("max_acceptable_loss", "max_notional", "max_leverage", "max_open_orders", "max_positions", "max_slippage"):
             try:
                 number = float(value.get(key))
             except (TypeError, ValueError):
