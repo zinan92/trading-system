@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from services.journal_store import load_json, write_json
 from services.park_recording_track import ParkRecordingError, ParkRecordingTrack, REQUIRED_CATEGORIES
+from services.paper_release_receipt import current_source_attestation
 
 
 SOAK_SCHEMA = "testnet-soak-readiness-v1"
@@ -107,7 +108,13 @@ class TestnetSoakReadiness:
                 if not start <= observed_at <= end:
                     blockers.append({"code": "evidence_timestamp_outside_window", "category": category})
         attestation = observation.get("source_attestation") if isinstance(observation.get("source_attestation"), Mapping) else {}
-        if attestation.get("status") != "verified" or not str(attestation.get("source_sha") or "").strip() or str(attestation.get("environment") or "") != "testnet":
+        if not attestation:
+            try:
+                attestation = current_source_attestation()
+            except Exception:
+                attestation = {}
+        attestation_verified = attestation.get("status") == "verified" or (attestation.get("tracked_tree_clean") is True and str(attestation.get("source_sha") or "").strip() and str(attestation.get("source_tree_sha") or attestation.get("tree_sha") or "").strip())
+        if not attestation_verified:
             blockers.append({"code": "source_attestation_missing_or_unverified", "evidence": attestation})
         mutations = observation.get("execution_mutations") or []
         if mutations:
@@ -117,7 +124,7 @@ class TestnetSoakReadiness:
             self.recording.start_window(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], starts_at=starts_at, ends_at=ends_at)
             for category in REQUIRED_CATEGORIES:
                 payload = dict(evidence.get(category) or {})
-                self.recording.record_event(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], category=category, event_type="soak_observation", source=str(payload.get("source") or ""), occurred_at=str(payload.get("observed_at") or ends_at), payload=payload)
+                self.recording.record_event(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], category=category, event_type="soak_observation", source=str(payload.get("source") or ""), occurred_at=str(payload.get("observed_at") or ""), payload=payload)
             package = self.recording.close_package(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], strategy_open=True, positions_open=int(observation.get("positions_open") or 0))
             if package.get("status") == "complete":
                 package = self.recording.mark_review_complete(record_window_id=window_id)
@@ -155,7 +162,7 @@ class TestnetSoakReadiness:
     def finalize(self, *, now: str | None = None) -> dict[str, Any]:
         rows = sorted(self.windows(), key=lambda row: int(row.get("window_index") or 0))
         existing = self.receipts()
-        if existing and existing[-1].get("status") == "ready" and self._receipt_is_fresh(existing[-1], rows, now=now):
+        if existing and existing[-1].get("status") == "ready" and self._receipt_integrity_ok(existing[-1]) and self._receipt_is_fresh(existing[-1], rows, now=now):
             return dict(existing[-1])
         blockers: list[dict[str, Any]] = []
         if len(rows) != WINDOW_COUNT or [int(row.get("window_index")) if row.get("window_index") is not None else -1 for row in rows] != list(range(WINDOW_COUNT)):
@@ -197,8 +204,9 @@ class TestnetSoakReadiness:
             "created_at": str(now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
             "receipt_revision": len(existing),
             "next_action": "await_manual_live_activation" if not blockers else "notify_park_and_wait",
-            "receipt_digest": _digest({"identity": identity, "rows": rows, "blockers": blockers, "provenance": provenance}),
+            "receipt_digest": "",
         }
+        receipt["receipt_digest"] = _digest({key: value for key, value in receipt.items() if key != "receipt_digest"})
         write_json(self.receipts_path, [receipt])
         return dict(receipt)
 
@@ -208,11 +216,14 @@ class TestnetSoakReadiness:
         rows = self.windows()
         if receipt is not None:
             status = str(receipt.get("status") or "incomplete")
+            if not self._receipt_integrity_ok(receipt):
+                status = "blocked"
+                receipt = {**receipt, "blockers": [*list(receipt.get("blockers") or []), {"code": "readiness_receipt_integrity_invalid"}]}
             if status == "ready" and now is not None:
                 age = _parse_timestamp(now) - _parse_timestamp(str(receipt.get("created_at") or now))
                 if age > timedelta(hours=24):
                     status = "stale"
-            return {"status": status, "environment": "testnet", "broker_id": receipt.get("broker_id"), "release_sha": receipt.get("release_sha"), "account_fingerprint": receipt.get("account_fingerprint"), "source_attestation": dict(receipt.get("source_attestation") or {}), "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": list(receipt.get("blockers") or []), "live_enabled": False, "live_writes_enabled": False, "next_action": "refresh_soak_evidence" if status == "stale" else receipt.get("next_action")}
+            return {"status": status, "environment": "testnet", "broker_id": receipt.get("broker_id"), "release_sha": receipt.get("release_sha"), "account_fingerprint": receipt.get("account_fingerprint"), "source_attestation": dict(receipt.get("source_attestation") or {}), "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": list(receipt.get("blockers") or []), "live_enabled": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait" if status == "blocked" else "refresh_soak_evidence" if status == "stale" else receipt.get("next_action")}
         return {"status": "incomplete" if rows else "missing", "environment": "testnet", "broker_id": None, "release_sha": None, "account_fingerprint": None, "source_attestation": {}, "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": [], "live_enabled": False, "live_writes_enabled": False, "next_action": "continue_soak" if rows else "start_attended_testnet_soak"}
 
     @staticmethod
@@ -237,18 +248,29 @@ class TestnetSoakReadiness:
 
     @staticmethod
     def _receipt_is_fresh(receipt: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, now: str | None) -> bool:
-        if now is None:
-            return True
-        reference = _parse_timestamp(now)
+        reference = _parse_timestamp(now or datetime.now(timezone.utc).isoformat())
         created = receipt.get("created_at")
-        return not created or reference - _parse_timestamp(str(created)) <= timedelta(hours=24)
+        if created and reference - _parse_timestamp(str(created)) > timedelta(hours=24):
+            return False
+        latest_end = max((_parse_timestamp(str(row.get("ends_at"))) for row in rows if row.get("ends_at")), default=reference)
+        return reference - latest_end <= timedelta(hours=24)
+
+    @staticmethod
+    def _receipt_integrity_ok(receipt: Mapping[str, Any]) -> bool:
+        supplied = str(receipt.get("receipt_digest") or "")
+        if not supplied:
+            return False
+        payload = {key: value for key, value in receipt.items() if key != "receipt_digest"}
+        return supplied == _digest(payload)
 
     @staticmethod
     def _gate_blockers(observation: Mapping[str, Any], evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
         blockers: list[dict[str, Any]] = []
+        if str(observation.get("environment") or "") != "testnet":
+            blockers.append({"code": "observation_environment_not_testnet"})
         for key in REQUIRED_GATE_EVIDENCE:
             value = evidence.get(key)
-            if not isinstance(value, Mapping) or value.get("status") not in {"pass", "ready", "ok"} or not str(value.get("source") or "").strip() or not str(value.get("observed_at") or "").strip():
+            if not isinstance(value, Mapping) or value.get("status") not in {"pass", "ready", "ok"} or not str(value.get("source") or "").strip() or not str(value.get("observed_at") or "").strip() or not str(value.get("artifact_ref") or "").strip():
                 blockers.append({"code": f"gate_{key}_not_ready", "evidence": value})
         identity_evidence = evidence.get("release_account_environment_identity")
         if isinstance(identity_evidence, Mapping):
@@ -272,6 +294,9 @@ class TestnetSoakReadiness:
             if not isinstance(payload, Mapping) or not payload:
                 blockers.append({"code": f"recording_{category}_payload_missing"})
         attestation = observation.get("source_attestation") if isinstance(observation.get("source_attestation"), Mapping) else {}
-        if attestation.get("tracked_tree_clean") is not True or not str(attestation.get("tree_sha") or "").strip() or str(attestation.get("release_sha") or "") != str(observation.get("release_sha") or ""):
+        attestation_tree = str(attestation.get("tree_sha") or attestation.get("source_tree_sha") or "")
+        attestation_release = str(attestation.get("release_sha") or attestation.get("source_sha") or "")
+        valid_hex = lambda value: len(value) in {40, 64} and all(char in "0123456789abcdefABCDEF" for char in value)
+        if attestation.get("tracked_tree_clean") is not True or not valid_hex(attestation_tree) or not valid_hex(attestation_release) or attestation_release != str(observation.get("release_sha") or ""):
             blockers.append({"code": "source_attestation_tree_or_release_invalid"})
         return blockers

@@ -6,7 +6,7 @@ from services.park_recording_track import REQUIRED_CATEGORIES
 
 
 def _evidence(observed_at: str = "2026-01-01T01:00:00+00:00") -> dict:
-    evidence = {key: {"status": "pass", "source": "testnet-runtime-receipt", "observed_at": observed_at} for key in (
+    evidence = {key: {"status": "pass", "source": "testnet-runtime-receipt", "observed_at": observed_at, "artifact_ref": f"outputs/testnet/{key}.json"} for key in (
         "orders_fills_positions_reconciliation",
         "protection_coverage",
         "capability_status",
@@ -19,7 +19,7 @@ def _evidence(observed_at: str = "2026-01-01T01:00:00+00:00") -> dict:
     evidence["release_account_environment_identity"].update({"release_sha": "b" * 40, "account_fingerprint": "testnet-account-fingerprint", "environment": "testnet", "broker_id": "hyperliquid"})
     evidence["market_freshness_trust"].update({"fresh": True, "trusted": True})
     for category in REQUIRED_CATEGORIES:
-        evidence.setdefault(category, {"source": "testnet-runtime-receipt", "observed_at": observed_at, "status": "pass", "fact": True})
+        evidence.setdefault(category, {"source": "testnet-runtime-receipt", "observed_at": observed_at, "artifact_ref": f"outputs/testnet/{category}.json", "status": "pass", "fact": True})
     return evidence
 
 
@@ -69,7 +69,7 @@ def test_soak_failure_is_durable_blocker_not_a_pass(tmp_path: Path) -> None:
     for index in range(14):
         evidence = _evidence()
         if index == 6:
-            evidence["protection_coverage"] = {"status": "blocked", "source": "testnet-runtime-receipt", "observed_at": "2026-01-04T01:00:00+00:00", "reason": "coverage_unknown"}
+            evidence["protection_coverage"] = {"status": "blocked", "source": "testnet-runtime-receipt", "observed_at": "2026-01-04T01:00:00+00:00", "artifact_ref": "outputs/testnet/protection.json", "reason": "coverage_unknown"}
         soak.record_window(_observation(index, evidence=evidence))
 
     receipt = soak.finalize()
