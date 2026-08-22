@@ -61,22 +61,29 @@ def run_attended_canary(
                 raise LiveDcaCanaryError("plan_missing", "DCA plan is required for start")
             result = canary.start(plan, timestamp=observed_at)
         elif action == "entry":
+            canary.resume()
             if entry_index is None:
                 raise LiveDcaCanaryError("entry_index_missing", "entry index is required")
             result = canary.submit_entry(entry_index, timestamp=observed_at)
         elif action == "protection":
+            canary.resume()
             if quantity is None:
                 raise LiveDcaCanaryError("protection_quantity_missing", "protection quantity is required")
             result = canary.replace_protection(quantity=quantity, timestamp=observed_at)
         elif action == "cancel":
+            canary.resume()
             result = canary.cancel(str(order_id or ""), timestamp=observed_at)
         elif action == "flatten":
+            canary.resume()
             result = canary.flatten(timestamp=observed_at)
         elif action == "stop":
+            canary.resume()
             result = canary.stop(timestamp=observed_at)
         elif action == "kill":
+            canary.resume()
             result = canary.kill(timestamp=observed_at)
         elif action == "rollback":
+            canary.resume()
             result = canary.rollback(timestamp=observed_at)
         else:
             raise LiveDcaCanaryError("action_invalid", f"unsupported attended action: {action}")

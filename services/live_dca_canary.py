@@ -123,6 +123,18 @@ class LiveDcaCanary:
         rows = load_json(self.path)
         return dict(rows[-1]) if rows and isinstance(rows[-1], Mapping) else {}
 
+    def resume(self) -> dict[str, Any]:
+        """Rebind a fresh process to the persisted canary identity."""
+
+        state = self._state()
+        persisted_identity = state.get("transport_identity")
+        current_identity = getattr(self.transport, "identity", None)
+        current_network_io = getattr(self.transport, "network_io", None)
+        if not isinstance(persisted_identity, Mapping) or not isinstance(current_identity, Mapping) or dict(current_identity) != dict(persisted_identity) or current_network_io is not self._transport_network_io:
+            raise LiveDcaCanaryError("transport_identity_changed", "fresh operator process does not match persisted canary transport identity")
+        self._transport_identity = dict(persisted_identity)
+        return state
+
     def start(self, plan: Mapping[str, Any], *, timestamp: str) -> dict[str, Any]:
         admission = self.gate.activation_prerequisite_status()
         self._require(admission.get("ready") is True, "activation_prerequisite_blocked", admission)
