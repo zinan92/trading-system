@@ -222,12 +222,45 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
 
         self.assertEqual(receipt.environment, BrokerEnvironment.TESTNET)
         self.assertEqual(receipt.state, OrderState.RESTING)
+        self.assertEqual(receipt.account_address, "testnet-account")
+        self.assertEqual(receipt.lifecycle_id, "testnet-order-runtime-1")
         self.assertTrue(adapter.local_only)
-        self.assertEqual([call[1] for call in backend.calls], ["submit"])
+        self.assertEqual(adapter.submit(self.intent()), receipt)
+
+        fill_receipt = adapter.submit(
+            self.intent(order_id="testnet-fill", key="testnet-fill")
+        )
+        partial = adapter.apply_fill(
+            {
+                "coin": "BTC",
+                "px": "65000",
+                "sz": "0.04",
+                "side": "B",
+                "time": 1787313659000,
+                "oid": 101,
+                "cloid": fill_receipt.client_order_id,
+                "tid": 601,
+            }
+        )
+        self.assertEqual(partial.state, OrderState.PARTIALLY_FILLED)
+        self.assertEqual(partial.account_address, "testnet-account")
+        self.assertEqual(partial.lifecycle_id, "testnet-order-runtime-1")
+        self.assertEqual(adapter.apply_fill(
+            {
+                "coin": "BTC",
+                "px": "65000",
+                "sz": "0.04",
+                "side": "B",
+                "time": 1787313659001,
+                "oid": 101,
+                "cloid": fill_receipt.client_order_id,
+                "tid": 601,
+            }
+        ), partial)
 
         queried = adapter.query(receipt.order_id)
         self.assertEqual(queried.state, OrderState.RESTING)
-        self.assertEqual(adapter.open_orders("BTC-USD-PERP")[0].order_id, receipt.order_id)
+        self.assertEqual(adapter.open_orders("BTC-USD-PERP")[0].order_id, fill_receipt.order_id)
         pending_replace = adapter.modify(
             receipt.order_id,
             self.intent(order_id=receipt.order_id, key="testnet-replace"),
@@ -255,7 +288,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(canceled.state, OrderState.CANCELED)
         self.assertEqual(
             [call[1] for call in backend.calls],
-            ["submit", "query", "open_orders", "replace", "cancel"],
+            ["submit", "submit", "query", "open_orders", "replace", "cancel"],
         )
 
     def test_testnet_runtime_without_approval_fails_before_backend_invocation(self) -> None:
