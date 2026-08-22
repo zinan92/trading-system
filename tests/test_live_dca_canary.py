@@ -180,3 +180,13 @@ def test_fresh_operator_process_can_resume_persisted_transport_identity(tmp_path
     first.start(_plan(), timestamp="2026-08-22T00:00:00+00:00")
     resumed = LiveDcaCanary(tmp_path / "outputs", transport=transport, park_user_id="park", park_chat_id="chat", gate=first.gate)
     assert resumed.resume()["status"] == "prepared"
+
+
+def test_entry_rechecks_activation_after_start(tmp_path: Path) -> None:
+    transport = FixtureTransport()
+    canary = _make_canary(tmp_path, transport)
+    canary.start(_plan(), timestamp="2026-08-22T00:00:00+00:00")
+    canary.gate._approved_plan_resolver = lambda: {}
+    with pytest.raises(LiveDcaCanaryError, match="activation"):
+        canary.submit_entry(0, timestamp="2026-08-22T00:01:00+00:00")
+    assert not [name for name, _ in transport.calls if name == "submit_entry"]

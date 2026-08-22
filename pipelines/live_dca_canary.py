@@ -71,19 +71,19 @@ def run_attended_canary(
                 raise LiveDcaCanaryError("protection_quantity_missing", "protection quantity is required")
             result = canary.replace_protection(quantity=quantity, timestamp=observed_at)
         elif action == "cancel":
-            canary.resume()
+            canary.resume(require_activation=False)
             result = canary.cancel(str(order_id or ""), timestamp=observed_at)
         elif action == "flatten":
-            canary.resume()
+            canary.resume(require_activation=False)
             result = canary.flatten(timestamp=observed_at)
         elif action == "stop":
-            canary.resume()
+            canary.resume(require_activation=False)
             result = canary.stop(timestamp=observed_at)
         elif action == "kill":
-            canary.resume()
+            canary.resume(require_activation=False)
             result = canary.kill(timestamp=observed_at)
         elif action == "rollback":
-            canary.resume()
+            canary.resume(require_activation=False)
             result = canary.rollback(timestamp=observed_at)
         else:
             raise LiveDcaCanaryError("action_invalid", f"unsupported attended action: {action}")
