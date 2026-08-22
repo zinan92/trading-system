@@ -363,6 +363,9 @@ class LiveDcaCanary:
     def kill(self, *, timestamp: str, reason: str = "kill_switch") -> dict[str, Any]:
         return self.stop(timestamp=timestamp, reason=reason)
 
+    def rollback(self, *, timestamp: str, reason: str = "attended_rollback") -> dict[str, Any]:
+        return self.stop(timestamp=timestamp, reason=reason)
+
     def _validate_plan(self, plan: Mapping[str, Any], admission: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(plan, Mapping):
             raise LiveDcaCanaryError("plan_shape_invalid", "DCA plan must be an object")

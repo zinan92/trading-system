@@ -76,6 +76,8 @@ def run_attended_canary(
             result = canary.stop(timestamp=observed_at)
         elif action == "kill":
             result = canary.kill(timestamp=observed_at)
+        elif action == "rollback":
+            result = canary.rollback(timestamp=observed_at)
         else:
             raise LiveDcaCanaryError("action_invalid", f"unsupported attended action: {action}")
         return dict(result)
@@ -132,7 +134,7 @@ def run_attended_canary(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one attended DCA canary action; no default transport is provided.")
     parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--action", choices=("start", "entry", "protection", "cancel", "flatten", "stop", "kill"), required=True)
+    parser.add_argument("--action", choices=("start", "entry", "protection", "cancel", "flatten", "stop", "kill", "rollback"), required=True)
     parser.add_argument("--plan-file", type=Path)
     parser.add_argument("--park-user-id", required=True)
     parser.add_argument("--park-chat-id", required=True)
