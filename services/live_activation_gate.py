@@ -360,6 +360,7 @@ class LiveActivationGate:
             "canary_required": True,
             "next_action": "await_attended_live_dca_canary",
         }
+        row["confirmation_digest"] = _digest(row)
         self._append(row)
         return dict(row)
 
@@ -389,6 +390,26 @@ class LiveActivationGate:
         confirmed = next((row for row in reversed(rows) if row.get("event") == "activation_confirmed"), None)
         if confirmed is None:
             return {"ready": False, "status": "blocked", "blockers": ["activation_confirmation_missing"], "live_writes_enabled": False}
+        proposal = next(
+            (
+                row
+                for row in reversed(rows)
+                if row.get("event") == "activation_proposed"
+                and row.get("activation_digest") == confirmed.get("activation_digest")
+            ),
+            None,
+        )
+        if not isinstance(proposal, Mapping):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_proposal_missing"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        proposal_payload = {
+            "preflight": proposal.get("preflight"),
+            "preflight_digest": proposal.get("preflight_digest"),
+            "approved_plan": proposal.get("approved_plan"),
+            "plan_digest": proposal.get("plan_digest"),
+            "expires_at": proposal.get("expires_at"),
+        }
+        if _digest(proposal_payload) != str(proposal.get("activation_digest") or ""):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_proposal_integrity_invalid"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         preflight_row = next(
             (
                 row
@@ -403,6 +424,24 @@ class LiveActivationGate:
             return {"ready": False, "status": "blocked", "blockers": ["activation_preflight_not_current"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         if self._approved_plan(str(confirmed.get("plan_digest") or "")) is None:
             return {"ready": False, "status": "blocked", "blockers": ["approved_dca_plan_missing_or_changed"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        approved_plan = self._approved_plan(str(confirmed.get("plan_digest") or ""))
+        if (
+            confirmed.get("preflight_digest") != preflight.get("preflight_digest")
+            or confirmed.get("release_sha") != preflight.get("release_sha")
+            or confirmed.get("account_id") != preflight.get("account_id")
+            or confirmed.get("environment_fingerprint") != preflight.get("environment_fingerprint")
+            or confirmed.get("strategy_scope") != preflight.get("strategy_scope")
+            or confirmed.get("environment") != "mainnet"
+            or confirmed.get("park_user_id") != self.park_user_id
+            or confirmed.get("execution_authorized") is not False
+            or confirmed.get("live_writes_enabled") is not False
+            or proposal.get("approved_plan") != approved_plan
+            or proposal.get("plan_digest") != confirmed.get("plan_digest")
+        ):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_confirmation_identity_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        confirmation_digest = str(confirmed.get("confirmation_digest") or "")
+        if not _SHA256.fullmatch(confirmation_digest) or confirmation_digest != _digest({key: value for key, value in confirmed.items() if key != "confirmation_digest"}):
+            return {"ready": False, "status": "blocked", "blockers": ["activation_confirmation_integrity_invalid"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         canary = next(
             (
                 row
