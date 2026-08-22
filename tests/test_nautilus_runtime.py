@@ -164,7 +164,7 @@ class NautilusRuntimeTests(unittest.TestCase):
                 config=NautilusRuntimeConfig("1.230.0", "nautilus-commit"),
             )
 
-    def test_testnet_remains_human_gated_and_has_no_network_call_by_start(self) -> None:
+    def test_testnet_requires_human_approval_and_has_no_network_call_by_start(self) -> None:
         runtime, backend = self.runtime(environment=BrokerEnvironment.TESTNET)
 
         with self.assertRaises(NautilusRuntimeError):
@@ -183,11 +183,10 @@ class NautilusRuntimeTests(unittest.TestCase):
                 )
             ),
         )
-        with self.assertRaises(NautilusRuntimeError) as raised:
-            runtime.start()
+        health = runtime.start()
 
-        self.assertEqual(raised.exception.reason_code, "external_environment_requires_testnet_ticket")
-        self.assertEqual(runtime.state, NautilusRuntimeState.FAULTED)
+        self.assertEqual(health.environment, BrokerEnvironment.TESTNET)
+        self.assertEqual(runtime.state, NautilusRuntimeState.READY)
         self.assertEqual(backend.calls, [])
 
 
