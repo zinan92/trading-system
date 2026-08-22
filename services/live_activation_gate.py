@@ -557,11 +557,13 @@ class LiveActivationGate:
             for item in ordered:
                 start = datetime.fromisoformat(str(item.get("starts_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
                 end = datetime.fromisoformat(str(item.get("ends_at") or "").replace("Z", "+00:00")).astimezone(timezone.utc)
-                if end - start != timedelta(hours=12) or end > now or now - end > timedelta(hours=24):
+                if end - start != timedelta(hours=12) or end > now:
                     return False
                 if previous_end is not None and start != previous_end:
                     return False
                 previous_end = end
+            if previous_end is None or now - previous_end > timedelta(hours=24):
+                return False
         except (TypeError, ValueError, OverflowError):
             return False
         try:
