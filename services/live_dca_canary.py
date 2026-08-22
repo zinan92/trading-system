@@ -267,9 +267,10 @@ class LiveDcaCanary:
         if state["idempotency"].get(key):
             return dict(state)
         try:
-            response = self._call("flatten_reduce_only", {"activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "reduce_only": True, "reason": str(reason), "idempotency_key": f"{state['activation_digest']}:flatten"}, timestamp=timestamp)
+            response = self._call("flatten_reduce_only", {"activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "reduce_only": True, "cancel_protection": True, "reason": str(reason), "idempotency_key": f"{state['activation_digest']}:flatten"}, timestamp=timestamp)
             self._require(response.get("status") not in {"unknown", "error", "rejected"}, "flatten_unknown", response)
             self._require(response.get("reduce_only") is True, "flatten_not_reduce_only", response)
+            self._require(response.get("protection_canceled") is True, "flatten_protection_cancel_unknown", response)
         except LiveDcaCanaryError as exc:
             self._block(state, exc.code, timestamp=timestamp)
             self._save(state)

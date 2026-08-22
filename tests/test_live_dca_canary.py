@@ -45,7 +45,7 @@ class FixtureTransport:
 
     def flatten_reduce_only(self, request):
         self.calls.append(("flatten_reduce_only", dict(request)))
-        return {"status": "accepted", "reduce_only": True}
+        return {"status": "accepted", "reduce_only": True, "protection_canceled": True}
 
 
 def _activated_gate(tmp_path: Path):
@@ -121,6 +121,7 @@ def test_attended_dca_canary_keeps_fixture_non_network_and_distinguishes_stop_ca
     assert any(name == "cancel_order" for name, _ in transport.calls)
     flatten = [request for name, request in transport.calls if name == "flatten_reduce_only"]
     assert flatten and flatten[-1]["reduce_only"] is True
+    assert flatten[-1]["cancel_protection"] is True
     assert canary.snapshot()["live_writes_enabled"] is False
 
 
