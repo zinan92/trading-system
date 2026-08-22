@@ -21,7 +21,7 @@ def _evidence(observed_at: str = "2026-01-01T01:00:00+00:00") -> dict:
     )}
     evidence["release_account_environment_identity"].update({"release_sha": "b" * 40, "account_fingerprint": "testnet-account-fingerprint", "environment": "testnet", "broker_id": "hyperliquid"})
     evidence["market_freshness_trust"].update({"fresh": True, "trusted": True})
-    for category in REQUIRED_CATEGORIES:
+    for category in sorted(set(REQUIRED_CATEGORIES) | {"orders_fills_positions_reconciliation", "protection_coverage", "capability_status", "market_freshness_trust", "runtime_health", "retry_outcomes", "release_account_environment_identity", "recording_package"}):
         evidence.setdefault(category, {"source": "testnet-runtime-receipt", "observed_at": observed_at, "artifact_ref": f"outputs/testnet/{category}.json", "status": "pass", "fact": True})
         evidence[category]["artifact_kind"] = category
     return evidence
@@ -33,7 +33,7 @@ def _observation(index: int, *, evidence=None, mutations=None) -> dict:
     evidence_payload = evidence or _evidence((start + timedelta(hours=12)).isoformat())
     for category, payload in evidence_payload.items():
         path = Path(f"/tmp/testnet-soak-{index}-{category}.json")
-        path.write_text(json.dumps({"category": category, "window": index}), encoding="utf-8")
+        path.write_text(json.dumps({"artifact_kind": category, "category": category, "window": index}), encoding="utf-8")
         payload["artifact_ref"] = str(path)
         payload["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
         payload["artifact_kind"] = category
@@ -108,9 +108,9 @@ def test_soak_can_collect_canonical_category_artifacts(tmp_path: Path) -> None:
     soak = TestnetSoakReadiness(tmp_path / "outputs")
     observation = _observation(0)
     artifact_paths = {}
-    for category in REQUIRED_CATEGORIES:
+    for category in sorted(set(REQUIRED_CATEGORIES) | {"orders_fills_positions_reconciliation", "protection_coverage", "capability_status", "market_freshness_trust", "runtime_health", "retry_outcomes", "release_account_environment_identity", "recording_package"}):
         path = tmp_path / f"{category}.json"
-        payload = {"status": "pass", "source": "runtime-receipt", "observed_at": observation["ends_at"], "artifact_ref": str(path), "artifact_sha256": "pending"}
+        payload = {"status": "pass", "source": "runtime-receipt", "observed_at": observation["ends_at"], "artifact_ref": str(path), "artifact_sha256": "pending", "artifact_kind": category}
         if category == "release_account_environment_identity":
             payload.update({"release_sha": observation["release_sha"], "account_fingerprint": observation["account_fingerprint"], "environment": "testnet", "broker_id": observation["broker_id"]})
         if category == "market_freshness_trust":

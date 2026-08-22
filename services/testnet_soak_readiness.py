@@ -174,7 +174,7 @@ class TestnetSoakReadiness:
         """
 
         evidence = dict(observation.get("evidence") or {})
-        for category in REQUIRED_CATEGORIES:
+        for category in sorted(set(REQUIRED_CATEGORIES) | set(REQUIRED_GATE_EVIDENCE)):
             reference = artifact_paths.get(category)
             if reference is None:
                 raise TestnetSoakError(f"artifact_reference_missing:{category}")
@@ -301,6 +301,13 @@ class TestnetSoakReadiness:
         payload = {key: value for key, value in receipt.items() if key != "receipt_digest"}
         if supplied != _digest(payload):
             return False
+        try:
+            current = current_source_attestation(Path(__file__).resolve().parents[1])
+        except Exception:
+            return False
+        attestation = receipt.get("source_attestation") if isinstance(receipt.get("source_attestation"), Mapping) else {}
+        if current.get("source_sha") != attestation.get("source_sha") or current.get("source_tree_sha") != (attestation.get("source_tree_sha") or attestation.get("tree_sha")) or current.get("tracked_tree_clean") is not True:
+            return False
         if rows is None:
             return True
         ordered = sorted(rows, key=lambda item: int(item.get("window_index") or 0))
@@ -318,6 +325,12 @@ class TestnetSoakReadiness:
                 expected = str(payload.get("artifact_sha256") or "")
                 path = Path(reference) if Path(reference).is_absolute() else self.output_root / reference
                 if not reference or not path.exists() or not path.is_file() or not expected or hashlib.sha256(path.read_bytes()).hexdigest() != expected.lower():
+                    return False
+                try:
+                    artifact = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    return False
+                if not isinstance(artifact, Mapping) or str(artifact.get("artifact_kind") or "") != str(payload.get("artifact_kind") or category):
                     return False
         return True
 
