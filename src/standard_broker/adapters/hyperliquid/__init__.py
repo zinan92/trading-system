@@ -20,6 +20,22 @@ from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter, HyperliquidRuntimeReadAdapter
 from .orders import HyperliquidOrderAdapter, HyperliquidRuntimeOrderAdapter
 from .protection import HyperliquidProtectionAdapter
+from .resilience import (
+    HyperliquidRuntimeReconciliationAdapter,
+    RateLimitError,
+    ObservationSource,
+    OrderLifecyclePort,
+    ReconciliationFacts,
+    ReconciliationSnapshot,
+    RecoveryDecision,
+    RetryPlan,
+    RetryPolicy,
+    RuntimeConnectionState,
+    RuntimeRecoveryError,
+    TransportDisposition,
+    classify_transport_error,
+    plan_retry,
+)
 
 __all__ = [
     "HyperliquidAccountAdapter",
@@ -32,6 +48,20 @@ __all__ = [
     "HyperliquidOrderAdapter",
     "HyperliquidRuntimeOrderAdapter",
     "HyperliquidProtectionAdapter",
+    "HyperliquidRuntimeReconciliationAdapter",
+    "RateLimitError",
+    "ObservationSource",
+    "OrderLifecyclePort",
+    "ReconciliationFacts",
+    "ReconciliationSnapshot",
+    "RecoveryDecision",
+    "RetryPlan",
+    "RetryPolicy",
+    "RuntimeConnectionState",
+    "RuntimeRecoveryError",
+    "TransportDisposition",
+    "classify_transport_error",
+    "plan_retry",
     "NautilusAdapterMetadata",
     "NautilusBridgeConfig",
     "NautilusBridgeReceipt",

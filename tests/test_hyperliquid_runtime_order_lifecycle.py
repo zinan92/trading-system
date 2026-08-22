@@ -1,4 +1,5 @@
 import unittest
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -228,10 +229,6 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(receipt.release_sha, "a" * 40)
         self.assertTrue(adapter.local_only)
         self.assertEqual(adapter.submit(self.intent()), receipt)
-
-        fill_receipt = adapter.submit(
-            self.intent(order_id="testnet-fill", key="testnet-fill")
-        )
         partial = adapter.apply_fill(
             {
                 "coin": "BTC",
@@ -240,7 +237,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
                 "side": "B",
                 "time": 1787313659000,
                 "oid": 101,
-                "cloid": fill_receipt.client_order_id,
+                "cloid": receipt.client_order_id,
                 "tid": 601,
             }
         )
@@ -260,14 +257,14 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
                 "side": "B",
                 "time": 1787313659001,
                 "oid": 101,
-                "cloid": fill_receipt.client_order_id,
+                "cloid": receipt.client_order_id,
                 "tid": 601,
             }
         ), partial)
 
         queried = adapter.query(receipt.order_id)
         self.assertEqual(queried.state, OrderState.RESTING)
-        self.assertEqual(adapter.open_orders("BTC-USD-PERP")[0].order_id, fill_receipt.order_id)
+        self.assertEqual(adapter.open_orders("BTC-USD-PERP")[0].order_id, receipt.order_id)
         pending_replace = adapter.modify(
             receipt.order_id,
             self.intent(order_id=receipt.order_id, key="testnet-replace"),
@@ -295,7 +292,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(canceled.state, OrderState.CANCELED)
         self.assertEqual(
             [call[1] for call in backend.calls],
-            ["submit", "submit", "query", "open_orders", "replace", "cancel"],
+            ["submit", "query", "open_orders", "replace", "cancel"],
         )
 
         preflight = runtime.preflight(
@@ -636,6 +633,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
                 "status": "filled",
                 "oid": 101,
                 "cloid": submitted.client_order_id,
+                "coin": "BTC",
                 "tid": 503,
                 "side": "B",
                 "px": "65000",
@@ -673,6 +671,49 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         )
 
         self.assertEqual(len(ledger.order_fills), 1)
+
+    def test_runtime_transaction_preserves_shared_fee_enricher_identity_on_rollback(self) -> None:
+        runtime, _ = self.runtime()
+        ledger = RuntimeFactLedger()
+        adapter = HyperliquidRuntimeOrderAdapter(
+            runtime=runtime,
+            instruments=self.instruments(),
+            ledger=ledger,
+        )
+        submitted = adapter.submit(self.intent())
+
+        class Enricher:
+            def __init__(self) -> None:
+                self.calls: list[Mapping[str, object]] = []
+
+            def enrich(self, fill, raw: Mapping[str, object]):
+                self.calls.append(raw)
+                return None
+
+        enricher = Enricher()
+        ledger.register_fill_enricher(enricher.enrich)
+        original_callback = ledger.fill_enricher
+
+        with self.assertRaises(ValueError):
+            with adapter.transaction():
+                adapter.apply_fill(
+                    {
+                        "coin": "BTC",
+                        "px": "65000",
+                        "sz": "0.1",
+                        "side": "B",
+                        "time": 1787313663000,
+                        "oid": 101,
+                        "cloid": submitted.client_order_id,
+                        "tid": 504,
+                    }
+                )
+                raise ValueError("rollback")
+
+        self.assertIs(ledger.fill_enricher, original_callback)
+        self.assertIs(ledger.fill_enricher.__self__, enricher)
+        self.assertEqual(ledger.order_fills, {})
+        self.assertEqual(ledger.order_fill_raw, {})
 
     def test_quantity_step_and_minimum_notional_are_checked_before_backend(self) -> None:
         adapter, backend = self.adapter()

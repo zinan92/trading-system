@@ -104,6 +104,13 @@ The current next phase is Hyperliquid external execution runtime integration. It
 
 `standard-broker` owns the Hyperliquid Runtime Adapter, canonical lifecycle mapping, capability preflight, Broker-facing account/signer binding, and reconciliation correlation. The low-level REST, WebSocket, signing, nonce, and execution-engine behavior remains in the pinned compatible Nautilus Hyperliquid implementation. `trading-system` owns host composition, strategy, risk, Park authorization, Paper/testnet/live gates, Recording Track, Supervisor, and Telegram control.
 
+RT-06 is specifically the Paper reconciliation/resilience seam, not a second
+order-lifecycle owner. It consumes an injected canonical lifecycle and
+authoritative account/position snapshots with a Broker watermark. RT-08 must
+compose the one canonical lifecycle owner and route all observations through
+this seam; retry facts arrive as one cursor-bound snapshot; `trading-system`
+must not create a parallel submit/cancel/query path.
+
 External credentials are supplied through an out-of-band secret provider. Private keys, signatures, signed payloads, and raw credentials never enter the canonical model, logs, Recording Track, issue text, or test fixtures. An ambiguous external result enters an unknown lifecycle state and must be queried/reconciled before retry; blind retry is forbidden.
 
 This decision does not authorize testnet or Live network access. It only defines the next implementation contract; each external environment requires its own approval and evidence boundary.
