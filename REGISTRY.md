@@ -12,10 +12,20 @@
 - T06 is merged in PR #16: Nautilus Hyperliquid compatibility bridge.
 - T07 is merged in PR #17: Broker conformance, security, and Paper proof.
 - T08 is merged in PR #18: trading-system host integration contract.
+- Runtime RT-01 is merged in PR #31: explicit Hyperliquid runtime session and environment boundary.
+- Runtime RT-02 is merged in PR #32: Paper-safe runtime read path.
+- Runtime RT-03 is merged in PR #33: Paper-safe runtime order lifecycle.
+- Runtime RT-04 is merged in PR #34: runtime account, position, fee, and funding facts.
+- Runtime RT-05 is merged in PR #35: runtime lifecycle and fact integration.
+- Runtime RT-06 is merged in PR #36 at `d83812f`: Paper-only reconciliation/resilience seam with cursor-bound snapshots, transactional rollback, and fail-closed retry leases.
+- Decision A is recorded in `docs/adr/0005-rt06-reconciliation-seam.md`: RT-06 is not a second order lifecycle owner; RT-08 will compose the unique lifecycle.
 
 ## Next
 
-- T01–T08 are complete and merged; the final full-suite and requirement audit passed.
+- RT-07 (#27): connect ProtectionOrderPort to the unique Paper lifecycle; keep reduce-only, TP/SL quantity policy, partial-fill gaps, and capability failures explicit.
+- RT-08 (#28): compose the canonical host binding and Recording Track contract after RT-07; this is the next step toward external execution but does not authorize it.
+- RT-09 (#29): conformance/security/Paper-only proof for the runtime composition.
+- TESTNET-01 (#30): separate human-gated external testnet proof; not started and not authorized.
 - No live/testnet milestone is implied; future external environments require a separate approved plan.
 
 ## Safety boundary
