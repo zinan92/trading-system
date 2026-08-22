@@ -197,6 +197,7 @@ class RuntimePreflight:
     external_network: bool
     credential_required: bool
     real_money_eligible: bool
+    release_sha: str | None = None
 
 
 def preflight_runtime_session(

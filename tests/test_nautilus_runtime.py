@@ -20,12 +20,15 @@ from standard_broker.runtime import (
 
 
 def capabilities(environment: BrokerEnvironment, revision: str = "nautilus-runtime-v1") -> CapabilityDescriptor:
+    order_operations = {"submit"}
+    if environment is BrokerEnvironment.TESTNET:
+        order_operations.update({"cancel", "replace", "query", "open_orders"})
     return CapabilityDescriptor(
         broker_id="hyperliquid",
         environment=environment,
         operations={
             "market_data": frozenset({"read"}),
-            "order_execution": frozenset({"submit"}),
+            "order_execution": frozenset(order_operations),
         },
         revision=revision,
     )

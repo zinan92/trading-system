@@ -571,6 +571,7 @@ class HyperliquidRuntimeOrderAdapter:
             receipt,
             account_address=self._runtime.session.account.address,
             lifecycle_id=self._runtime.session.lifecycle_id,
+            release_sha=self._runtime._config.expected_release_sha,
         )
 
     @property

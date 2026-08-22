@@ -123,6 +123,7 @@ class OrderReceipt:
     client_order_lineage: tuple[str, ...] = ()
     account_address: str | None = None
     lifecycle_id: str | None = None
+    release_sha: str | None = None
 
 
 @dataclass(frozen=True)

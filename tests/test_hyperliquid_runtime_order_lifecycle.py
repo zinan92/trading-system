@@ -9,6 +9,7 @@ from standard_broker.adapters.hyperliquid import (
     NautilusHyperliquidRuntime,
     NautilusRuntimeConfig,
     NautilusRuntimeError,
+    NautilusRuntimeState,
 )
 from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import OrderIdempotencyError
@@ -224,6 +225,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(receipt.state, OrderState.RESTING)
         self.assertEqual(receipt.account_address, "testnet-account")
         self.assertEqual(receipt.lifecycle_id, "testnet-order-runtime-1")
+        self.assertEqual(receipt.release_sha, "a" * 40)
         self.assertTrue(adapter.local_only)
         self.assertEqual(adapter.submit(self.intent()), receipt)
 
@@ -296,8 +298,65 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
             ["submit", "submit", "query", "open_orders", "replace", "cancel"],
         )
 
+        preflight = runtime.preflight(
+            required_operations={
+                "order_execution": {"submit", "cancel", "replace", "query", "open_orders"}
+            }
+        )
+        self.assertEqual(preflight.release_sha, "a" * 40)
+
+    def test_testnet_runtime_rejects_empty_capability_profile_before_ready(self) -> None:
+        profile = capabilities_for(BrokerEnvironment.TESTNET)
+        backend = FakeOrderBackend(profile)
+        approval = ExternalEnvironmentApproval(
+            environment=BrokerEnvironment.TESTNET,
+            approval_id="testnet-approval-empty-profile",
+            release_sha="a" * 40,
+            approved_by="park",
+            approved_at=datetime.now(UTC),
+            account_address="testnet-account",
+            lifecycle_id="testnet-order-runtime-empty",
+        )
+        runtime = NautilusHyperliquidRuntime(
+            session=BrokerRuntimeSession(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                account=AccountReference(AccountScope.MASTER, "testnet-account"),
+                signer=SignerReference(
+                    SignerKind.API_AGENT,
+                    "fixture",
+                    "fixture://testnet-signer",
+                ),
+                signer_provider=FixtureSignerProvider(),
+                capabilities=profile,
+                execution_scope="hypercore:default",
+                lifecycle_id="testnet-order-runtime-empty",
+            ),
+            backend=backend,
+            config=NautilusRuntimeConfig(
+                "1.230.0",
+                "order-lifecycle-commit",
+                RuntimeActivationPolicy(testnet_approval=approval),
+                expected_release_sha="a" * 40,
+            ),
+        )
+
+        with self.assertRaises(NautilusRuntimeError) as raised:
+            runtime.start()
+
+        self.assertEqual(raised.exception.reason_code, "capability_gap")
+        self.assertEqual(runtime.state, NautilusRuntimeState.FAULTED)
+        self.assertEqual(backend.calls, [])
+
     def test_testnet_runtime_without_approval_fails_before_backend_invocation(self) -> None:
-        profile = capabilities_for(BrokerEnvironment.TESTNET, "submit")
+        profile = capabilities_for(
+            BrokerEnvironment.TESTNET,
+            "submit",
+            "cancel",
+            "replace",
+            "query",
+            "open_orders",
+        )
         backend = FakeOrderBackend(profile)
         runtime = NautilusHyperliquidRuntime(
             session=BrokerRuntimeSession(
@@ -325,7 +384,14 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(backend.calls, [])
 
     def test_testnet_runtime_rejects_mismatched_release_approval(self) -> None:
-        profile = capabilities_for(BrokerEnvironment.TESTNET, "submit")
+        profile = capabilities_for(
+            BrokerEnvironment.TESTNET,
+            "submit",
+            "cancel",
+            "replace",
+            "query",
+            "open_orders",
+        )
         backend = FakeOrderBackend(profile)
         approval = ExternalEnvironmentApproval(
             environment=BrokerEnvironment.TESTNET,

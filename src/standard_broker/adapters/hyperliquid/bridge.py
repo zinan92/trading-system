@@ -1,6 +1,6 @@
 """Paper-safe compatibility boundary for the Nautilus Hyperliquid adapter."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
 import re
@@ -92,6 +92,7 @@ class NautilusRuntimeReceipt:
     invocation_performed: bool
     account_address: str
     lifecycle_id: str
+    release_sha: str | None
     provenance: Provenance
 
 
@@ -338,6 +339,7 @@ class NautilusHyperliquidRuntime:
                         "testnet_identity_mismatch",
                         "Testnet approval does not match the runtime account/lifecycle",
                     )
+                result = replace(result, release_sha=self._config.expected_release_sha)
             return result
         except (BrokerCapabilityError, RuntimeBoundaryError) as exc:
             self._state = NautilusRuntimeState.FAULTED
@@ -349,7 +351,20 @@ class NautilusHyperliquidRuntime:
 
         if self._state is NautilusRuntimeState.CLOSED:
             raise NautilusRuntimeError("runtime_closed", "closed runtime cannot be started")
-        self.preflight()
+        required_operations = (
+            {
+                "order_execution": {
+                    "submit",
+                    "cancel",
+                    "replace",
+                    "query",
+                    "open_orders",
+                }
+            }
+            if self._session.environment is BrokerEnvironment.TESTNET
+            else {}
+        )
+        self.preflight(required_operations=required_operations)
         self._state = NautilusRuntimeState.READY
         return self.health
 
@@ -381,6 +396,7 @@ class NautilusHyperliquidRuntime:
             invocation_performed=self._invocation_performed,
             account_address=self._session.account.address,
             lifecycle_id=self._session.lifecycle_id,
+            release_sha=self._config.expected_release_sha,
             provenance=Provenance(
                 source="nautilus-hyperliquid.runtime",
                 execution_scope=self._session.execution_scope,
