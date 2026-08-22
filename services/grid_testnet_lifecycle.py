@@ -83,7 +83,7 @@ class GridTestnetLifecycle:
             self._block(state, "unknown_fill_order", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
-        if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"}:
+        if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"} or (state["status"] == "hard_stop_triggered" and order.get("event") != "hard_stop"):
             self._block(state, "late_fill_after_block_or_terminal", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
@@ -128,12 +128,7 @@ class GridTestnetLifecycle:
         self._record_event(state, "fill_received", timestamp=timestamp, fill_id=fill_id, order_id=order_id, rung_id=order.get("rung_id"))
 
         max_slippage = float((plan.get("risk_budget") or {}).get("max_slippage") or 0.0)
-        if max_slippage <= 0 or slippage > max_slippage:
-            self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
-            self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
-            self._hard_stop(plan, state, timestamp=timestamp, reason="slippage")
-            self._save(state)
-            return self.snapshot(plan)
+        slippage_breached = max_slippage <= 0 or slippage > max_slippage
 
         rung = self._rung(state, str(order.get("rung_id") or ""))
         line = GridLineLifecycle.from_snapshot(rung["line"])
@@ -143,18 +138,26 @@ class GridTestnetLifecycle:
             else:
                 line.apply_entry_fill(fill_id=fill_id, quantity=quantity, at=timestamp)
             rung["line"] = line.snapshot()
+            if slippage_breached:
+                self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
+                self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
+                self._hard_stop(plan, state, timestamp=timestamp, reason="slippage")
+                state["updated_at"] = timestamp
+                self._save(state)
+                return self.snapshot(plan)
             if receipt_state == "partially_filled":
                 rung["partial_deadline"] = rung.get("partial_deadline") or self._deadline(timestamp, plan)
                 if was_cancelled:
                     self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
             else:
                 rung["partial_deadline"] = None
-                self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
             if not self._risk_within_budget(plan, state):
                 self._block(state, "maximum_loss_budget_exceeded", timestamp=timestamp)
                 self._hard_stop(plan, state, timestamp=timestamp, reason="risk_budget")
             else:
                 self._ensure_hard_stop(plan, state, timestamp=timestamp)
+                if receipt_state != "partially_filled":
+                    self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
         elif order.get("event") in {"tp", "hard_stop"}:
             rearm = order.get("event") == "tp" and state.get("status") not in {"stopping", "hard_stop_triggered"}
             line.apply_close_fill(fill_id=fill_id, quantity=quantity, at=timestamp, rearm=rearm, terminal_state="stopped" if not rearm else "closed")
@@ -164,6 +167,9 @@ class GridTestnetLifecycle:
             elif order.get("event") == "hard_stop" and line.open_quantity <= 1e-9:
                 rung["hard_stop_closed"] = True
             self._ensure_hard_stop(plan, state, timestamp=timestamp)
+            if slippage_breached:
+                self._block(state, "exit_fill_slippage_exceeded", timestamp=timestamp)
+                self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
         else:
             self._block(state, "unknown_grid_order_event", timestamp=timestamp)
         self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
@@ -193,6 +199,9 @@ class GridTestnetLifecycle:
     def _submit_initial_ladder(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         accepted: list[str] = []
         for rung in state["rungs"]:
+            max_open_orders = int((plan.get("risk_budget") or {}).get("max_open_orders") or 0)
+            if max_open_orders > 0 and len([row for row in state["orders"] if row.get("state") == "accepted"]) >= max_open_orders:
+                raise GridTestnetLifecycleError("max_open_orders_exceeded")
             try:
                 self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry")
                 accepted.append(str(rung["entry_order_id"]))
@@ -300,6 +309,7 @@ class GridTestnetLifecycle:
                 continue
             try:
                 receipt = self.broker.cancel_order(BrokerCancelRequest(run_date=state["cycle_id"], asset=row["instrument_id"], client_order_id=row.get("client_order_id") or "", broker_order_id=row.get("broker_order_id") or ""))
+                self._require_cancel_receipt(receipt)
                 row["state"] = "cancelled"
                 row["cancel_receipt_state"] = str(getattr(receipt.state, "value", receipt.state))
             except Exception as exc:  # noqa: BLE001 - unresolved rollback blocks.
@@ -321,6 +331,7 @@ class GridTestnetLifecycle:
                 continue
             try:
                 receipt = self.broker.cancel_order(BrokerCancelRequest(run_date=state["cycle_id"], asset=row["instrument_id"], client_order_id=row.get("client_order_id") or "", broker_order_id=row.get("broker_order_id") or ""))
+                self._require_cancel_receipt(receipt)
                 row["state"] = "cancelled"
                 line.confirm_entry_cancelled(at=timestamp, reason="five_minute_deadline")
                 rung["line"] = line.snapshot()
@@ -355,6 +366,7 @@ class GridTestnetLifecycle:
                 continue
             try:
                 receipt = self.broker.cancel_order(BrokerCancelRequest(run_date=state["cycle_id"], asset=row["instrument_id"], client_order_id=row.get("client_order_id") or "", broker_order_id=row.get("broker_order_id") or ""))
+                self._require_cancel_receipt(receipt)
                 row["state"] = "cancelled"
                 row["cancel_reason"] = reason
                 row["cancel_receipt_state"] = str(getattr(receipt.state, "value", receipt.state))
@@ -391,6 +403,7 @@ class GridTestnetLifecycle:
         except Exception as exc:  # noqa: BLE001
             self._block(state, f"hard_stop_coverage_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
             self._cancel_all_open_orders(state, timestamp=timestamp, reason="hard_stop_coverage_failure")
+            self._hard_stop(plan, state, timestamp=timestamp, reason="hard_stop_coverage_failure")
 
     def _cancel_hard_stop_protection(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         del plan
@@ -399,7 +412,9 @@ class GridTestnetLifecycle:
             return
         group = self._hard_stop_group_from_state(state, protection)
         try:
-            self.broker.request("protection_order", "cancel", group)
+            receipt = self.broker.request("protection_order", "cancel", group)
+            if getattr(receipt, "accepted", True) is not True:
+                raise GridTestnetLifecycleError("hard_stop_protection_cancel_unconfirmed")
             state["hard_stop_protection"] = None
         except Exception as exc:  # noqa: BLE001
             self._block(state, f"hard_stop_protection_cancel_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
@@ -543,13 +558,30 @@ class GridTestnetLifecycle:
             quantity = float(item.get("quantity") or risk.get("per_order_quantity") or 0)
             if side not in {"buy", "sell"} or price <= 0 or tp <= 0 or hard_stop <= 0 or quantity <= 0:
                 raise GridTestnetLifecycleError("grid_geometry_invalid")
+            if not identity["lower_boundary"] < price < identity["upper_boundary"]:
+                raise GridTestnetLifecycleError("grid_rung_outside_boundary")
+            if side == "buy" and (tp <= price or abs(hard_stop - identity["lower_boundary"]) > 1e-9):
+                raise GridTestnetLifecycleError("grid_buy_geometry_invalid")
+            if side == "sell" and (tp >= price or abs(hard_stop - identity["upper_boundary"]) > 1e-9):
+                raise GridTestnetLifecycleError("grid_sell_geometry_invalid")
+            if identity["direction"] == "long" and side != "buy":
+                raise GridTestnetLifecycleError("long_grid_requires_buy_rungs")
+            if identity["direction"] == "short" and side != "sell":
+                raise GridTestnetLifecycleError("short_grid_requires_sell_rungs")
+            if identity["direction"] == "neutral" and ((side == "buy" and price >= identity["midpoint"]) or (side == "sell" and price <= identity["midpoint"])):
+                raise GridTestnetLifecycleError("neutral_grid_midpoint_geometry_invalid")
             line_id = str(item.get("grid_line_id") or item.get("level_id") or f"{identity['revision_id']}:grid:{index}")
             line = GridLineLifecycle(line_id=line_id, armed_at=identity["created_at"], requested_quantity=quantity)
             rungs.append({"rung_id": line_id, "rung": int(item.get("rung") or index), "side": side, "price": price, "tp": tp, "hard_stop": hard_stop, "quantity": quantity, "generation": 1, "line": line.snapshot(), "entry_order_id": None, "tp_order_id": None, "partial_deadline": None})
+        if len({rung["price"] for rung in rungs}) != len(rungs):
+            raise GridTestnetLifecycleError("grid_rung_prices_not_unique")
+        if identity["direction"] == "neutral" and {rung["side"] for rung in rungs} != {"buy", "sell"}:
+            raise GridTestnetLifecycleError("neutral_grid_requires_two_legs")
         return rungs
 
     def _new_state(self, identity: dict[str, Any], rungs: list[dict[str, Any]], timestamp: str, *, status: str, blocker: str | None = None) -> dict[str, Any]:
         state = {"schema_version": self.schema_version, "strategy_plan_id": identity["plan_id"], "strategy_plan_version": identity["version"], "cycle_id": identity["cycle_id"], "strategy_session_id": identity["session_id"], "strategy_revision_id": identity["revision_id"], "plan_digest": identity["plan_digest"], "instrument_id": identity["instrument_id"], "direction": identity["direction"], "lower_boundary": identity["lower_boundary"], "upper_boundary": identity["upper_boundary"], "rungs": rungs, "orders": [], "fills": [], "hard_stop_protection": None, "events": [], "retry_events": [], "status": status, "created_at": timestamp}
+        state["midpoint"] = identity["midpoint"]
         if blocker:
             state["blocker"] = blocker
         return state
@@ -567,7 +599,16 @@ class GridTestnetLifecycle:
         lower = float(plan.get("lower_price_boundary") or normalized.get("lower_price_boundary") or (plan.get("grid") or {}).get("lower_boundary") or 0)
         if lower <= 0 or upper <= lower:
             raise ValueError("Grid boundaries are invalid")
-        return {"plan_id": str(plan["strategy_plan_id"]), "version": int(plan.get("version") or 0), "cycle_id": str(plan["cycle_id"]), "session_id": str(plan["strategy_session_id"]), "revision_id": str(plan["strategy_revision_id"]), "plan_digest": str(plan["plan_digest"]), "instrument_id": str(plan.get("instrument_id") or (plan.get("execution_context") or {}).get("instrument_id") or "BTC-USD-PERP"), "direction": str(plan.get("direction") or (normalized.get("direction") or "neutral")), "lower_boundary": lower, "upper_boundary": upper, "created_at": str(plan.get("locked_at") or "")}
+        direction = str(plan.get("direction") or normalized.get("direction") or "").lower()
+        if direction not in {"long", "short", "neutral"}:
+            raise ValueError("Grid direction must be long, short, or neutral")
+        midpoint = float(plan.get("midpoint") or normalized.get("midpoint") or (plan.get("grid") or {}).get("midpoint") or (lower + upper) / 2.0)
+        if not lower < midpoint < upper:
+            raise ValueError("Grid midpoint must be strictly inside its boundaries")
+        instrument_id = str(plan.get("instrument_id") or (plan.get("execution_context") or {}).get("instrument_id") or "").strip()
+        if not instrument_id:
+            raise ValueError("Grid instrument identity is required")
+        return {"plan_id": str(plan["strategy_plan_id"]), "version": int(plan.get("version") or 0), "cycle_id": str(plan["cycle_id"]), "session_id": str(plan["strategy_session_id"]), "revision_id": str(plan["strategy_revision_id"]), "plan_digest": str(plan["plan_digest"]), "instrument_id": instrument_id, "direction": direction, "lower_boundary": lower, "upper_boundary": upper, "midpoint": midpoint, "created_at": str(plan.get("locked_at") or "")}
 
     @staticmethod
     def _validate_risk_inputs(plan: Mapping[str, Any]) -> None:
@@ -586,6 +627,12 @@ class GridTestnetLifecycle:
             else (float(rung["hard_stop"]) - float(rung["price"])) * float(rung["quantity"])
             for rung in rungs
         )
+        max_open_orders = int(risk.get("max_open_orders") or 0)
+        if max_open_orders < len(rungs):
+            raise GridTestnetLifecycleError("max_open_orders_exceeded_at_initial_ladder")
+        total_notional = sum(float(rung["price"]) * float(rung["quantity"]) for rung in rungs)
+        if total_notional > float(risk.get("max_notional") or 0.0) + 1e-9:
+            raise GridTestnetLifecycleError("max_notional_exceeded_at_full_depth")
         if modeled_loss > maximum_loss + 1e-9:
             raise GridTestnetLifecycleError("maximum_loss_budget_exceeded_at_full_depth")
 
@@ -615,7 +662,7 @@ class GridTestnetLifecycle:
 
     @staticmethod
     def _assert_state_identity(state: Mapping[str, Any], identity: Mapping[str, Any]) -> None:
-        expected = {"strategy_plan_id": identity["plan_id"], "strategy_plan_version": identity["version"], "cycle_id": identity["cycle_id"], "strategy_session_id": identity["session_id"], "strategy_revision_id": identity["revision_id"], "plan_digest": identity["plan_digest"], "instrument_id": identity["instrument_id"], "lower_boundary": identity["lower_boundary"], "upper_boundary": identity["upper_boundary"]}
+        expected = {"strategy_plan_id": identity["plan_id"], "strategy_plan_version": identity["version"], "cycle_id": identity["cycle_id"], "strategy_session_id": identity["session_id"], "strategy_revision_id": identity["revision_id"], "plan_digest": identity["plan_digest"], "instrument_id": identity["instrument_id"], "direction": identity["direction"], "midpoint": identity["midpoint"], "lower_boundary": identity["lower_boundary"], "upper_boundary": identity["upper_boundary"]}
         if any(state.get(key) != value for key, value in expected.items()):
             raise GridTestnetLifecycleError("strategy_revision_mismatch")
 
@@ -643,6 +690,14 @@ class GridTestnetLifecycle:
 
     def _identity_metadata(self) -> dict[str, Any]:
         return {"broker_id": self.broker.broker_config["broker_id"], "environment": self.broker.broker_config["environment"], "account_id": self.broker.broker_config["account_id"], "release_sha": self.broker.broker_config["release_sha"], "ledger_namespace": self.broker.broker_config["ledger_namespace"], "source": "standard-broker.testnet", "mapping_revision": self.broker.broker_config["release_sha"]}
+
+    @staticmethod
+    def _require_cancel_receipt(receipt: Any) -> None:
+        status = str(getattr(receipt, "state", "") or "").lower()
+        if hasattr(getattr(receipt, "state", None), "value"):
+            status = str(receipt.state.value).lower()
+        if status not in {"cancel_pending", "canceled", "cancelled"}:
+            raise GridTestnetLifecycleError(f"cancel_receipt_{status or 'unknown'}")
 
     def _provenance_dict(self, receipt: Any) -> dict[str, Any]:
         provenance = getattr(receipt, "provenance", None)

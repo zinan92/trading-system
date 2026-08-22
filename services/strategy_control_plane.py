@@ -7057,8 +7057,17 @@ class StrategyControlPlane:
             if foreign_active:
                 raise StrategyControlMachineError("testnet_existing_active_strategy", {"active_strategy_plan_ids": [str(row.get("strategy_plan_id") or "") for row in foreign_active]})
             lifecycle = GridTestnetLifecycle(self.output_root, adapter)
-            state = lifecycle.start(plan, timestamp=timestamp)
+            try:
+                state = lifecycle.start(plan, timestamp=timestamp)
+            except Exception as exc:
+                runtime_blocked = {**runtime, "cycle_id": cycle_id, "desired_state": "stopped", "actual_state": "blocked_reconciliation", "updated_at": timestamp, "last_action": "start_testnet_grid_blocked", "last_error": str(exc), "strategy_type": "grid", "strategy_plan_id": plan.get("strategy_plan_id"), "execution_environment": "testnet"}
+                self._write_runtime(runtime_blocked)
+                append_control_event(self.output_root, build_control_event(cycle_id=cycle_id, action="start_testnet_grid_blocked", actor=actor, payload={"plan_digest": plan.get("plan_digest"), "environment": "testnet"}, result="blocked", error=str(exc), runtime=runtime_blocked, evidence={"preflight": preflight}, now=timestamp))
+                raise
             if state.get("status") != "active":
+                runtime_blocked = {**runtime, "cycle_id": cycle_id, "desired_state": "stopped", "actual_state": str(state.get("status") or "blocked"), "updated_at": timestamp, "last_action": "start_testnet_grid_blocked", "last_error": str(state.get("blocker") or state.get("status")), "strategy_type": "grid", "strategy_plan_id": plan.get("strategy_plan_id"), "execution_environment": "testnet"}
+                self._write_runtime(runtime_blocked)
+                append_control_event(self.output_root, build_control_event(cycle_id=cycle_id, action="start_testnet_grid_blocked", actor=actor, payload={"plan_digest": plan.get("plan_digest"), "environment": "testnet"}, result="blocked", error=str(state.get("blocker") or state.get("status")), runtime=runtime_blocked, evidence={"preflight": preflight, "lifecycle": state}, now=timestamp))
                 raise StrategyControlMachineError("testnet_lifecycle_blocked", {"status": state.get("status"), "blocker": state.get("blocker")})
             self._activate_plan(plan)
             published = {
