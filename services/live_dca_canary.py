@@ -101,7 +101,7 @@ class LiveDcaCanary:
         if bool(getattr(transport, "network_io", False)) and not allow_network:
             raise LiveDcaCanaryError("network_transport_not_allowed", "the default attended harness accepts only a no-network transport")
         if allow_network and not bool(getattr(transport, "network_io", False)):
-            raise LiveDcaCanaryError("network_transport_mismatch", "allow_network requires a transport that declares network_io=true")
+            raise LiveDcaCanaryError("network_transport_mismatch", "network_transport_mismatch: allow_network requires a transport that declares network_io=true")
         self.allow_network = bool(allow_network)
 
     def snapshot(self) -> dict[str, Any]:
