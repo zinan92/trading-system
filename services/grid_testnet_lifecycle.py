@@ -121,6 +121,7 @@ class GridTestnetLifecycle:
             raise GridTestnetLifecycleError(state["blocker"])
         quantity = float(raw_fill.get("sz") or raw_fill.get("quantity") or 0.0)
         price = float(receipt.average_fill_price or raw_fill.get("px") or 0.0)
+        state["last_market_price"] = price
         planned = float(order.get("planned_price") or order.get("price") or 0.0)
         slippage = abs(price - planned)
         fill_id = fill_identities[0] if fill_identities else ""
@@ -176,7 +177,7 @@ class GridTestnetLifecycle:
                     self._save(state)
                     raise GridTestnetLifecycleError(state["blocker"]) from exc
                 rung["line"] = line.snapshot()
-                self._hard_stop(plan, state, timestamp=timestamp, reason="late_fill_after_cancel")
+                self._hard_stop(plan, state, timestamp=timestamp, reason="late_fill_after_cancel", market_price=price)
                 state["updated_at"] = timestamp
                 self._save(state)
                 return self.snapshot(plan)
@@ -269,6 +270,7 @@ class GridTestnetLifecycle:
             self._block(state, "market_price_invalid", timestamp=timestamp)
             self._save(state)
             return self.snapshot(plan)
+        state["last_market_price"] = float(price)
         upper = float(state["upper_boundary"])
         lower = float(state["lower_boundary"])
         if float(price) >= upper or float(price) <= lower:
@@ -456,6 +458,7 @@ class GridTestnetLifecycle:
     def _hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str, market_price: float | None = None) -> None:
         if state["status"] in {"terminal", "sealed"}:
             return
+        market_price = market_price if market_price is not None else state.get("last_market_price")
         state["status"] = "hard_stop_triggered"
         self._cancel_all_open_orders(state, timestamp=timestamp, reason=reason)
         self._cancel_hard_stop_protection(plan, state, timestamp=timestamp)
