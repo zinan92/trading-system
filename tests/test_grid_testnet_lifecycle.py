@@ -212,6 +212,20 @@ def test_grid_late_cancelled_unfilled_rung_after_hard_stop_is_flattened(tmp_path
     assert not any(row["event"] == "tp" and row["state"] == "accepted" for row in late["orders"])
 
 
+def test_grid_post_terminal_late_entry_reopens_only_for_hard_stop_recovery(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    sealed = lifecycle.on_market_event(plan, price=63000.0, timestamp="2026-08-22T01:01:00+00:00")
+    late = lifecycle.on_fill(plan, _fill(started["orders"][1], price=64000.0, tid=78), timestamp="2026-08-22T01:02:00+00:00")
+
+    assert sealed["sealed"] is True
+    assert late["status"] == "hard_stop_triggered"
+    assert late["post_terminal_late_fill"] is True
+    assert any(row["event"] == "hard_stop" for row in late["orders"])
+
+
 def test_grid_neutral_keeps_both_entry_legs_and_hard_stop_is_net_covered(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)

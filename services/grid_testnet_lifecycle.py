@@ -92,13 +92,18 @@ class GridTestnetLifecycle:
         if any(set(fill_identities).intersection(set(row.get("fill_identities") or [str(row.get("fill_id") or "")])) for row in state["fills"]):
             return self.snapshot(plan)
         was_cancelled = order.get("state") == "cancelled"
-        late_cancelled_entry_allowed = was_cancelled and order.get("event") in {"entry", "entry_rearm"} and state["status"] in {"active", "hard_stop_triggered", "blocked_reconciliation", "blocked_protection", "blocked_risk"}
-        if state["status"] in {"terminal", "sealed"} or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed) or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed):
+        late_cancelled_entry_allowed = was_cancelled and order.get("event") in {"entry", "entry_rearm"} and state["status"] in {"active", "terminal", "sealed", "hard_stop_triggered", "blocked_reconciliation", "blocked_protection", "blocked_risk"}
+        if (state["status"] in {"terminal", "sealed"} and not late_cancelled_entry_allowed) or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed) or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed):
             self._block(state, "late_fill_after_block_or_terminal", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
-        if state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") in {"hard_stop", "hard_stop_recovery"}:
+        if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") in {"hard_stop", "hard_stop_recovery"}:
             state["status"] = "hard_stop_triggered"
+        if state["status"] in {"terminal", "sealed"} and late_cancelled_entry_allowed:
+            state["status"] = "hard_stop_triggered"
+            state["sealed"] = False
+            state["post_terminal_late_fill"] = True
+            self._record_event(state, "post_terminal_late_fill", timestamp=timestamp, order_id=order_id)
 
         try:
             receipt = self.broker.canonical_order_adapter.apply_fill(raw_fill)
@@ -632,14 +637,21 @@ class GridTestnetLifecycle:
     def _command(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False, order_type: str = "limit", time_in_force: str = "gtc", planned_price: float | None = None, attempt: int | None = None) -> dict[str, Any]:
         suffix = f":a{attempt}" if attempt is not None else ""
         ticket_id = f"{state['strategy_plan_id']}:{rung['rung_id']}:{event}:g{index}{suffix}"
+        side = rung["side"] if not reduce_only else ("sell" if rung["side"] == "buy" else "buy")
+        execution_price = float(price)
+        if order_type == "market":
+            bound = float((plan.get("risk_budget") or {}).get("max_slippage") or 0.0)
+            if bound <= 0:
+                raise GridTestnetLifecycleError("market_order_slippage_bound_missing")
+            execution_price = execution_price + bound if side == "sell" else max(0.00000001, execution_price - bound)
         return {
             "ticket_id": ticket_id,
             "instrument_id": state["instrument_id"],
-            "side": rung["side"] if not reduce_only else ("sell" if rung["side"] == "buy" else "buy"),
+            "side": side,
             "order_type": "market" if order_type == "market" else "limit",
-            "limit_price": price,
+            "limit_price": execution_price,
             "time_in_force": time_in_force,
-            "price": price,
+            "price": execution_price,
             "planned_price": planned_price if planned_price is not None else price,
             "execution_semantics": "aggressive_ioc_market" if order_type == "market" else "resting_limit",
             "quantity": quantity,
