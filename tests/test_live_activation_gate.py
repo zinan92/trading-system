@@ -116,7 +116,7 @@ def _ready_gate(tmp_path: Path) -> tuple[LiveActivationGate, dict, list[dict]]:
             "strategy_revision_id": "revision-dca",
             "plan_digest": "sha256:" + "c" * 64,
             "approval_receipt_digest": "sha256:" + "f" * 64,
-            "canonical_plan": {"strategy_type": "dca", "plan_digest": "sha256:" + "c" * 64},
+            "canonical_plan": {"strategy_type": "dca", "direction": "long", "target_price": 4500, "stop_price": 3700, "account_equity": 2000, "plan_digest": "sha256:" + "c" * 64, "risk_limits": {"max_acceptable_loss": 1000, "max_notional": 10000, "max_leverage": 5, "max_open_orders": 2, "max_positions": 2, "max_slippage": 10}, "entries": [{"price": 4000, "quantity": 1, "notional": 4000}, {"price": 3900, "quantity": 1, "notional": 3900}]},
         },
         park_approval_resolver=lambda _plan_digest, _receipt_digest: True,
     )
