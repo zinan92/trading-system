@@ -277,6 +277,7 @@ class LiveDcaCanary:
 
     def replace_protection(self, *, quantity: float, timestamp: str) -> dict[str, Any]:
         state = self._state()
+        self._require_activation_current(state)
         quantity = _number(quantity, "protection quantity")
         open_quantity = self._open_quantity(state)
         self._require(open_quantity > 0, "protection_without_position", {"open_quantity": open_quantity})

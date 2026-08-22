@@ -190,3 +190,14 @@ def test_entry_rechecks_activation_after_start(tmp_path: Path) -> None:
     with pytest.raises(LiveDcaCanaryError, match="activation"):
         canary.submit_entry(0, timestamp="2026-08-22T00:01:00+00:00")
     assert not [name for name, _ in transport.calls if name == "submit_entry"]
+
+
+def test_protection_rechecks_activation_after_start(tmp_path: Path) -> None:
+    transport = FixtureTransport()
+    canary = _make_canary(tmp_path, transport)
+    canary.start(_plan(), timestamp="2026-08-22T00:00:00+00:00")
+    canary.submit_entry(0, timestamp="2026-08-22T00:01:00+00:00")
+    canary.gate._approved_plan_resolver = lambda: {}
+    with pytest.raises(LiveDcaCanaryError, match="activation"):
+        canary.replace_protection(quantity=1, timestamp="2026-08-22T00:02:00+00:00")
+    assert not [name for name, _ in transport.calls if name == "replace_protection"]
