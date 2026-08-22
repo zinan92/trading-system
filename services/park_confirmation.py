@@ -163,19 +163,24 @@ class ParkConfirmationLedger:
         plan_digest: str,
         risk_digest: str,
         expires_at: float,
+        execution_environment: str = "paper",
     ) -> dict[str, Any]:
         proposal_key = _text(proposal_id, "proposal_id")
         session_id, revision_id = _binding({"strategy_session_id": strategy_session_id, "strategy_revision_id": strategy_revision_id})
         digest = _text(plan_digest, "plan_digest")
         risk = _text(risk_digest, "risk_digest")
+        environment = _text(execution_environment, "execution_environment").lower()
+        if environment not in {"paper", "testnet"}:
+            raise ParkConfirmationError("environment_invalid", "confirmation environment must be Paper or Testnet")
         if float(expires_at) <= 0:
             raise ParkConfirmationError("invalid_expiry", "confirmation expiry is required")
         existing = self._proposal(proposal_key)
         if existing:
-            expected = (session_id, revision_id, digest, risk, float(expires_at))
+            expected = (session_id, revision_id, digest, risk, float(expires_at), environment)
             actual = (
                 existing.get("strategy_session_id"), existing.get("strategy_revision_id"),
                 existing.get("plan_digest"), existing.get("risk_digest"), float(existing.get("expires_at")),
+                existing.get("execution_environment", "paper"),
             )
             if actual != expected:
                 raise ParkConfirmationError("proposal_immutable", "proposal identity or digest cannot be changed")
@@ -188,6 +193,7 @@ class ParkConfirmationLedger:
             "strategy_revision_id": revision_id,
             "plan_digest": digest,
             "risk_digest": risk,
+            "execution_environment": environment,
             "expires_at": float(expires_at),
             "execution_authorized": False,
             "next_action": "await_exact_park_confirmation",
@@ -232,6 +238,7 @@ class ParkConfirmationLedger:
             "strategy_revision_id": proposal["strategy_revision_id"],
             "plan_digest": proposal["plan_digest"],
             "risk_digest": proposal["risk_digest"],
+            "execution_environment": proposal.get("execution_environment", "paper"),
             "park_user_id": self.park_user_id,
             "confirmed_at": timestamp,
             "execution_authorized": event == "confirmed",

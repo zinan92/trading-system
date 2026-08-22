@@ -13,6 +13,7 @@ import json
 import math
 import os
 import threading
+import time
 from bisect import bisect_right
 from collections import Counter
 from contextlib import contextmanager
@@ -22,6 +23,7 @@ from typing import Any, Callable, Mapping
 
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dca_execution_lifecycle import DcaPaperLifecycle
+from services.dca_testnet_lifecycle import DcaTestnetLifecycle
 from services.dca_plan import (
     build_dca_entry_commands,
     build_dca_preview,
@@ -81,6 +83,7 @@ from services.paper_supervisor_recovery import (
     paper_continuity_proposal_digest,
     verified_ai_source_proposal,
 )
+from services.park_telegram_control import ParkTelegramLedger
 from services.production_accounting import normalize_nautilus_snapshot_for_accounting
 from services.risk_policy_composition import (
     build_risk_decision_store,
@@ -6876,6 +6879,361 @@ class StrategyControlPlane:
                 identity=identity,
             )
         )
+
+    def start_testnet_dca(
+        self,
+        plan: dict[str, Any],
+        *,
+        confirmation: Mapping[str, Any],
+        market: Mapping[str, Any],
+        adapter: Any,
+        actor: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Start an explicitly Park-confirmed DCA deal on approved Testnet."""
+
+        timestamp = str(now or self._authorization_clock())
+        cycle_id = str(plan.get("cycle_id") or "")
+        digest = str(plan.get("plan_digest") or "")
+        with production_mutation_lock(self.output_root):
+            confirmation_evidence = self._validate_durable_testnet_confirmation(plan, confirmation)
+            # Reserve the one-time durable receipt before any lifecycle write.
+            # A failed lifecycle therefore fails closed and requires a fresh Park confirmation.
+            self._record_testnet_confirmation_consumed(confirmation_evidence)
+        market_dict = dict(market)
+        if (
+            market_dict.get("execution_ready") is not True
+            or market_dict.get("fresh") is not True
+            or market_dict.get("is_synthetic") is True
+            or market_dict.get("fallback_policy") not in {"none", None}
+        ):
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")},
+            )
+        if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+            raise StrategyControlMachineError(
+                "testnet_adapter_required",
+                {"adapter": str(getattr(adapter, "name", ""))},
+            )
+        preflight = adapter.preflight()
+        if (
+            preflight.get("ready") is not True
+            or preflight.get("environment") != "testnet"
+            or preflight.get("network_io") is not False
+            or preflight.get("real_money_eligible") is not False
+            or preflight.get("protection_ready") is not True
+            or preflight.get("account_read_ready") is not True
+        ):
+            raise StrategyControlMachineError("testnet_preflight_blocked", dict(preflight))
+        runtime = self.runtime_state(cycle_id)
+        if runtime.get("desired_state") == "running":
+            raise StrategyControlMachineError("testnet_strategy_already_running", runtime)
+        foreign_active = [
+            row
+            for row in self._all_active_plans()
+            if str(row.get("strategy_plan_id") or "") != str(plan.get("strategy_plan_id") or "")
+        ]
+        if foreign_active:
+            raise StrategyControlMachineError(
+                "testnet_existing_active_strategy",
+                {"active_strategy_plan_ids": [str(row.get("strategy_plan_id") or "") for row in foreign_active]},
+            )
+        lifecycle = DcaTestnetLifecycle(self.output_root, adapter)
+        try:
+            with production_mutation_lock(self.output_root):
+                state = lifecycle.start(plan, timestamp=timestamp)
+        except Exception as exc:
+            append_control_event(
+                self.output_root,
+                build_control_event(
+                    cycle_id=cycle_id,
+                    action="start_testnet_dca",
+                    actor=actor,
+                    payload={"plan_digest": digest, "environment": "testnet"},
+                    result="blocked",
+                    error=str(exc),
+                    runtime=runtime,
+                    now=timestamp,
+                ),
+            )
+            raise
+        if state.get("status") not in {"waiting_entry", "open", "partial_entry"}:
+            append_control_event(
+                self.output_root,
+                build_control_event(
+                    cycle_id=cycle_id,
+                    action="start_testnet_dca",
+                    actor=actor,
+                    payload={"plan_digest": digest, "environment": "testnet"},
+                    result="blocked",
+                    error=str(state.get("blocker") or state.get("status") or "lifecycle_blocked"),
+                    runtime=runtime,
+                    evidence={"preflight": preflight, "lifecycle": state},
+                    now=timestamp,
+                ),
+            )
+            raise StrategyControlMachineError(
+                "testnet_lifecycle_blocked",
+                {"status": state.get("status"), "blocker": state.get("blocker")},
+            )
+        self._activate_plan(plan)
+        published = {
+            **runtime,
+            "cycle_id": cycle_id,
+            "desired_state": "running",
+            "actual_state": "running",
+            "updated_at": timestamp,
+            "last_action": "start_testnet_dca",
+            "last_error": None,
+            "strategy_type": "dca",
+            "strategy_plan_id": plan.get("strategy_plan_id"),
+            "strategy_plan_version": plan.get("version"),
+            "execution_environment": "testnet",
+            "accepted_order_count": len([row for row in state.get("orders") or [] if row.get("state") == "accepted"]),
+            "accepted_order_count_known": True,
+        }
+        self._write_runtime(published)
+        append_control_event(
+            self.output_root,
+            build_control_event(
+                cycle_id=cycle_id,
+                action="start_testnet_dca",
+                actor=actor,
+                payload={"plan_digest": digest, "environment": "testnet"},
+                result="accepted",
+                error=None,
+                runtime=published,
+                evidence={"preflight": preflight, "lifecycle": state},
+                now=timestamp,
+            ),
+        )
+        return {"action": "start_testnet_dca", "runtime": published, "lifecycle": state}
+
+    def _validate_durable_testnet_confirmation(
+        self,
+        plan: Mapping[str, Any],
+        confirmation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        digest = str(plan.get("plan_digest") or "")
+        if not digest or confirmation.get("execution_authorized") is not True:
+            raise StrategyControlMachineError("testnet_confirmation_blocked", {"plan_digest": digest})
+        proposal_id = str(confirmation.get("proposal_id") or "").strip()
+        receipt_digest = str(confirmation.get("receipt_digest") or "").strip()
+        if not proposal_id or not receipt_digest:
+            raise StrategyControlMachineError("testnet_confirmation_blocked", {"plan_digest": digest, "reason": "durable_receipt_required"})
+        confirmation_path = self.output_root / "park_strategy" / "confirmations.jsonl"
+        rows = [
+            json.loads(line)
+            for line in confirmation_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ] if confirmation_path.exists() else []
+        proposal = next((row for row in rows if isinstance(row, dict) and row.get("event") == "proposal" and row.get("proposal_id") == proposal_id), None)
+        decision = next((row for row in reversed(rows) if isinstance(row, dict) and row.get("event") == "confirmed" and row.get("proposal_id") == proposal_id), None)
+        if not proposal or not decision:
+            raise StrategyControlMachineError("testnet_confirmation_blocked", {"plan_digest": digest, "reason": "durable_receipt_missing"})
+        if (
+            decision.get("execution_authorized") is not True
+            or str(decision.get("plan_digest") or "") != digest
+            or str(proposal.get("plan_digest") or "") != digest
+            or str(proposal.get("execution_environment") or "paper") != "testnet"
+            or str(decision.get("execution_environment") or "paper") != "testnet"
+            or str(decision.get("receipt_digest") or "") != receipt_digest
+            or str(decision.get("strategy_session_id") or "") != str(plan.get("strategy_session_id") or "")
+            or str(decision.get("strategy_revision_id") or "") != str(plan.get("strategy_revision_id") or "")
+            or float(proposal.get("expires_at") or 0) <= time.time()
+        ):
+            raise StrategyControlMachineError("testnet_confirmation_blocked", {"plan_digest": digest, "reason": "durable_receipt_mismatch_or_expired"})
+        consumed = load_json(self.output_root / "dualtrack" / "testnet_confirmation_consumed.json")
+        if any(isinstance(row, dict) and row.get("proposal_id") == proposal_id for row in consumed):
+            raise StrategyControlMachineError("testnet_confirmation_replay", {"proposal_id": proposal_id})
+        return {
+            "proposal_id": proposal_id,
+            "receipt_digest": receipt_digest,
+            "execution_environment": "testnet",
+            "plan_digest": digest,
+            "strategy_session_id": str(plan.get("strategy_session_id") or ""),
+            "strategy_revision_id": str(plan.get("strategy_revision_id") or ""),
+        }
+
+    def _record_testnet_confirmation_consumed(self, evidence: Mapping[str, Any]) -> None:
+        path = self.output_root / "dualtrack" / "testnet_confirmation_consumed.json"
+        rows = load_json(path)
+        rows.append({"event": "testnet_confirmation_consumed", **dict(evidence), "consumed_at": time.time()})
+        write_json(path, rows)
+
+    def advance_testnet_dca(
+        self,
+        cycle_id: str,
+        *,
+        adapter: Any,
+        fill: dict[str, Any] | None = None,
+        price: float | None = None,
+        market: Mapping[str, Any] | None = None,
+        timestamp: str | None = None,
+        actor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Advance the durable Testnet DCA lifecycle through the control plane."""
+
+        plan = self.active_plan(cycle_id)
+        runtime = self.runtime_state(cycle_id)
+        if (
+            not plan
+            or plan.get("strategy_type") != "dca"
+            or runtime.get("execution_environment") != "testnet"
+            or runtime.get("actual_state") not in {
+                "running",
+                "partial_entry",
+                "target_triggered",
+                "stopping",
+                "budget_exhausted",
+                "blocked_reconciliation",
+                "blocked_risk_flattening",
+                "protection_blocked_flattening",
+            }
+        ):
+            raise StrategyControlMachineError(
+                "testnet_dca_not_running",
+                {"cycle_id": cycle_id, "runtime": runtime},
+            )
+        if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+            raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
+        if price is not None:
+            market_dict = dict(market or {})
+            if (
+                market_dict.get("execution_ready") is not True
+                or market_dict.get("fresh") is not True
+                or market_dict.get("is_synthetic") is True
+                or market_dict.get("fallback_policy") not in {"none", None}
+                or not isinstance(price, (int, float))
+                or not math.isfinite(float(price))
+                or float(price) <= 0
+            ):
+                raise StrategyControlMachineError(
+                    "testnet_market_not_authoritative",
+                    {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")},
+                )
+        lifecycle = DcaTestnetLifecycle(self.output_root, adapter)
+        observed_at = str(timestamp or self._authorization_clock())
+        try:
+            with production_mutation_lock(self.output_root):
+                if fill is not None:
+                    state = lifecycle.on_fill(plan, fill, timestamp=observed_at)
+                    action = "testnet_dca_fill"
+                elif price is not None:
+                    state = lifecycle.on_market_event(plan, price=float(price), timestamp=observed_at)
+                    action = "testnet_dca_market_event"
+                else:
+                    raise StrategyControlMachineError("testnet_dca_event_required", {"cycle_id": cycle_id})
+        except Exception as exc:
+            try:
+                state = lifecycle.snapshot(plan)
+            except Exception as snapshot_exc:
+                state = {
+                    "status": "blocked_reconciliation",
+                    "blocker": f"lifecycle_snapshot_failed:{type(snapshot_exc).__name__}:{snapshot_exc}",
+                    "plan_digest": plan.get("plan_digest"),
+                }
+            published = {
+                **runtime,
+                "updated_at": observed_at,
+                "actual_state": str(state.get("status") or "blocked"),
+                "desired_state": "stopped",
+                "last_action": "testnet_dca_blocked",
+                "last_error": str(state.get("blocker") or exc),
+                "dca_lifecycle_status": state.get("status"),
+                "next_action": state.get("next_action") or "notify_park_and_wait",
+            }
+            self._write_runtime(published)
+            append_control_event(
+                self.output_root,
+                build_control_event(
+                    cycle_id=cycle_id,
+                    action="testnet_dca_blocked",
+                    actor=actor,
+                    payload={"environment": "testnet", "plan_digest": plan.get("plan_digest")},
+                    result="blocked",
+                    error=str(state.get("blocker") or exc),
+                    runtime=published,
+                    evidence={"lifecycle": state},
+                    now=observed_at,
+                ),
+            )
+            raise
+        terminal = str(state.get("status") or "") == "terminal"
+        published = {
+            **runtime,
+            "updated_at": observed_at,
+            "actual_state": "stopped" if terminal else str(state.get("status") or "running"),
+            "desired_state": "stopped" if terminal else "running",
+            "last_action": action,
+            "last_error": state.get("blocker"),
+            "accepted_order_count": len([row for row in state.get("orders") or [] if row.get("state") == "accepted"]),
+            "accepted_order_count_known": True,
+            "dca_lifecycle_status": state.get("status"),
+            "next_action": state.get("next_action"),
+        }
+        if state.get("park_notification_required"):
+            notification = self._queue_testnet_park_notification(plan, state)
+            published["park_notification"] = notification
+            if notification.get("status") == "blocked":
+                published["last_error"] = notification.get("reason")
+        self._write_runtime(published)
+        append_control_event(
+            self.output_root,
+            build_control_event(
+                cycle_id=cycle_id,
+                action=action,
+                actor=actor,
+                payload={"environment": "testnet", "plan_digest": plan.get("plan_digest")},
+                result="blocked" if state.get("blocker") or published.get("park_notification", {}).get("status") == "blocked" else "accepted",
+                error=state.get("blocker") or published.get("park_notification", {}).get("reason"),
+                runtime=published,
+                evidence={"lifecycle": state},
+                now=observed_at,
+            ),
+        )
+        return {"action": action, "runtime": published, "lifecycle": state}
+
+    def _queue_testnet_park_notification(
+        self,
+        plan: Mapping[str, Any],
+        state: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Hand terminal state to the durable Telegram outbox without transport I/O."""
+
+        telegram = self.config.get("telegram") if isinstance(self.config.get("telegram"), Mapping) else {}
+        park_user_id = str(telegram.get("park_user_id") or os.getenv("PARK_TELEGRAM_USER_ID") or "").strip()
+        chat_id = str(telegram.get("chat_id") or os.getenv("PARK_TELEGRAM_CHAT_ID") or "").strip()
+        if not park_user_id or not chat_id:
+            return {
+                "status": "blocked",
+                "reason": "telegram_notification_binding_missing",
+                "next_action": "notify_park_and_wait",
+            }
+        notification = dict(state.get("park_notification") or {})
+        key = str(notification.get("notification_id") or "").strip()
+        if not key:
+            return {"status": "blocked", "reason": "telegram_notification_identity_missing", "next_action": "notify_park_and_wait"}
+        ledger = ParkTelegramLedger(self.output_root, park_user_id=park_user_id, chat_id=chat_id)
+        row = ledger.queue_outbound(
+            idempotency_key=key,
+            message_type="dca_testnet_terminal",
+            text=(
+                f"DCA Testnet revision terminal: {state.get('terminal_reason')}; "
+                f"plan={plan.get('plan_digest')}; next_action=notify_park_and_wait"
+            ),
+            binding={
+                "strategy_session_id": state.get("strategy_session_id"),
+                "strategy_revision_id": state.get("strategy_revision_id"),
+            },
+        )
+        return {
+            "status": "outbox_queued",
+            "message_id": row.get("message_id"),
+            "idempotency_key": row.get("idempotency_key"),
+            "next_action": row.get("next_action"),
+        }
 
     def advance_dca_market_event(
         self,

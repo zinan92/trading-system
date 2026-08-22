@@ -573,6 +573,7 @@ class ParkAiChatService:
                 plan_digest=expected,
                 risk_digest=_digest(plan.get("risk") or {}),
                 expires_at=confirmation_now + self.draft_ttl_seconds,
+                execution_environment="paper",
             )
             expected_receipt = _confirmation_receipt_digest(proposal_id, expected, confirmation_now)
             snapshot = self._snapshot(

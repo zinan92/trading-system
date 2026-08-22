@@ -262,6 +262,12 @@ def build_dca_preview(
             "risk_flags": risk_flags,
         },
     }
+    for limit_name in ("max_notional", "max_open_orders", "max_open_positions", "max_slippage"):
+        if limit_name in risk_budget:
+            preview["risk"][limit_name] = _positive_number(
+                risk_budget[limit_name],
+                f"DCA {limit_name}",
+            )
     if body.get("start_facts_digest") is not None:
         preview["start_facts_digest"] = str(
             body["start_facts_digest"]
@@ -276,12 +282,18 @@ def build_dca_strategy_plan(
     strategy_plan_id: str,
     version: int,
     locked_at: str,
+    strategy_session_id: str | None = None,
+    strategy_revision_id: str | None = None,
 ) -> dict[str, Any]:
     """Project a preview into a serializable StrategyPlan without persistence."""
 
     if preview.get("schema_version") != DCA_PREVIEW_SCHEMA:
         raise ValueError("DCA StrategyPlan requires a versioned DCA preview")
-    return {
+    risk = dict(preview["risk"])
+    risk.setdefault("max_notional", preview["dca"].get("total_possible_notional"))
+    risk.setdefault("max_open_orders", int(preview["dca"].get("max_additions") or len(preview.get("entries") or [])))
+    risk.setdefault("max_open_positions", 1)
+    plan = {
         "schema_version": DCA_PLAN_SCHEMA,
         "strategy_type": "dca",
         "strategy_plan_id": _required_text(strategy_plan_id, "strategy_plan_id"),
@@ -296,7 +308,7 @@ def build_dca_strategy_plan(
             "aggregate_take_profit": dict(preview["aggregate_take_profit"]),
         },
         "execution_context": {"market": dict(preview["market"])},
-        "risk_budget": dict(preview["risk"]),
+        "risk_budget": risk,
         "preview_id": preview["preview_id"],
         "field_sources": {
             "direction": "confirmed",
@@ -304,6 +316,29 @@ def build_dca_strategy_plan(
             "risk_budget": "confirmed",
         },
     }
+    if strategy_session_id is None and not preview.get("strategy_session_id"):
+        session_material = {
+            key: value
+            for key, value in preview.items()
+            if key not in {"cycle_id", "market", "preview_id", "start_facts_digest"}
+        }
+        session_suffix = hashlib.sha256(
+            json.dumps(session_material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:24]
+        strategy_session_id = f"session:dca:{session_suffix}"
+    plan["strategy_session_id"] = _required_text(
+        strategy_session_id or str(preview.get("strategy_session_id") or ""),
+        "strategy_session_id",
+    )
+    plan["strategy_revision_id"] = _required_text(
+        strategy_revision_id or f"revision:{strategy_plan_id}:v{version}",
+        "strategy_revision_id",
+    )
+    digest_payload = {key: value for key, value in plan.items() if key != "plan_digest"}
+    plan["plan_digest"] = "sha256:" + hashlib.sha256(
+        json.dumps(digest_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return plan
 
 
 def build_dca_entry_commands(
