@@ -163,6 +163,8 @@ class ExternalEnvironmentApproval:
     release_sha: str
     approved_by: str
     approved_at: datetime
+    account_address: str | None = None
+    lifecycle_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.environment is not BrokerEnvironment.TESTNET:
@@ -176,6 +178,10 @@ class ExternalEnvironmentApproval:
                 raise RuntimeBoundaryError("external_approval_required", f"{name} is required")
         if self.approved_at.tzinfo is None:
             raise RuntimeBoundaryError("external_approval_invalid", "approved_at must include timezone information")
+        for name in ("account_address", "lifecycle_id"):
+            value = getattr(self, name)
+            if value is not None and (not value or value != value.strip()):
+                raise RuntimeBoundaryError("external_approval_invalid", f"{name} must be non-empty when provided")
 
 
 @dataclass(frozen=True)
@@ -191,6 +197,7 @@ class RuntimePreflight:
     external_network: bool
     credential_required: bool
     real_money_eligible: bool
+    release_sha: str | None = None
 
 
 def preflight_runtime_session(

@@ -20,12 +20,15 @@ from standard_broker.runtime import (
 
 
 def capabilities(environment: BrokerEnvironment, revision: str = "nautilus-runtime-v1") -> CapabilityDescriptor:
+    order_operations = {"submit"}
+    if environment is BrokerEnvironment.TESTNET:
+        order_operations.update({"cancel", "replace", "query", "open_orders"})
     return CapabilityDescriptor(
         broker_id="hyperliquid",
         environment=environment,
         operations={
             "market_data": frozenset({"read"}),
-            "order_execution": frozenset({"submit"}),
+            "order_execution": frozenset(order_operations),
         },
         revision=revision,
     )
@@ -87,6 +90,7 @@ class NautilusRuntimeTests(unittest.TestCase):
         environment: BrokerEnvironment = BrokerEnvironment.PAPER,
         backend: FakeNautilusBackend | None = None,
         policy: RuntimeActivationPolicy | None = None,
+        expected_release_sha: str | None = None,
     ) -> tuple[NautilusHyperliquidRuntime, FakeNautilusBackend]:
         selected_backend = backend or FakeNautilusBackend(self.metadata(environment=environment))
         runtime = NautilusHyperliquidRuntime(
@@ -96,6 +100,7 @@ class NautilusRuntimeTests(unittest.TestCase):
                 expected_version="1.230.0",
                 expected_commit="nautilus-commit",
                 policy=policy or RuntimeActivationPolicy(),
+                expected_release_sha=expected_release_sha,
             ),
         )
         return runtime, selected_backend
@@ -164,7 +169,33 @@ class NautilusRuntimeTests(unittest.TestCase):
                 config=NautilusRuntimeConfig("1.230.0", "nautilus-commit"),
             )
 
-    def test_testnet_remains_human_gated_and_has_no_network_call_by_start(self) -> None:
+    def test_testnet_runtime_rejects_non_local_backend(self) -> None:
+        backend = FakeNautilusBackend(self.metadata(environment=BrokerEnvironment.TESTNET))
+        backend.local_only = False
+        policy = RuntimeActivationPolicy(
+            testnet_approval=ExternalEnvironmentApproval(
+                environment=BrokerEnvironment.TESTNET,
+                approval_id="approval-runtime-nonlocal",
+                release_sha="a" * 40,
+                approved_by="park",
+                approved_at=datetime.now(UTC),
+                account_address="0xmaster",
+                lifecycle_id="runtime-1",
+            )
+        )
+
+        with self.assertRaises(NautilusRuntimeError) as raised:
+            self.runtime(
+                environment=BrokerEnvironment.TESTNET,
+                backend=backend,
+                policy=policy,
+                expected_release_sha="a" * 40,
+            )
+
+        self.assertEqual(raised.exception.reason_code, "testnet_backend_not_local")
+        self.assertEqual(backend.calls, [])
+
+    def test_testnet_requires_human_approval_and_has_no_network_call_by_start(self) -> None:
         runtime, backend = self.runtime(environment=BrokerEnvironment.TESTNET)
 
         with self.assertRaises(NautilusRuntimeError):
@@ -177,17 +208,19 @@ class NautilusRuntimeTests(unittest.TestCase):
                 testnet_approval=ExternalEnvironmentApproval(
                     environment=BrokerEnvironment.TESTNET,
                     approval_id="approval-runtime-1",
-                    release_sha="release-sha-1",
+                    release_sha="a" * 40,
                     approved_by="park",
                     approved_at=datetime.now(UTC),
+                    account_address="0xmaster",
+                    lifecycle_id="runtime-1",
                 )
             ),
+            expected_release_sha="a" * 40,
         )
-        with self.assertRaises(NautilusRuntimeError) as raised:
-            runtime.start()
+        health = runtime.start()
 
-        self.assertEqual(raised.exception.reason_code, "external_environment_requires_testnet_ticket")
-        self.assertEqual(runtime.state, NautilusRuntimeState.FAULTED)
+        self.assertEqual(health.environment, BrokerEnvironment.TESTNET)
+        self.assertEqual(runtime.state, NautilusRuntimeState.READY)
         self.assertEqual(backend.calls, [])
 
 

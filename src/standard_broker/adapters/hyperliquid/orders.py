@@ -1,4 +1,4 @@
-"""Paper-safe Hyperliquid order lifecycle and reconciliation mapping."""
+"""Local-fixture Hyperliquid order lifecycle for Paper and approved Testnet."""
 
 from contextlib import contextmanager
 from copy import deepcopy
@@ -47,9 +47,9 @@ class HyperliquidOrderAdapter:
         mapping_revision: str = "order-lifecycle-v1",
     ) -> None:
         if getattr(transport, "local_only", False) is not True:
-            raise ValueError("T04 Paper order adapter requires a local-only transport")
-        if environment is not BrokerEnvironment.PAPER:
-            raise ValueError("fixture order adapter is Paper-only")
+            raise ValueError("Paper/Testnet order adapter requires a local-only transport")
+        if environment not in {BrokerEnvironment.PAPER, BrokerEnvironment.TESTNET}:
+            raise ValueError("fixture order adapter supports Paper and approved Testnet only")
         self._transport = transport
         self._environment = environment
         self._execution_scope = execution_scope
@@ -724,7 +724,7 @@ class _RuntimeOrderTransport:
 
 
 class HyperliquidRuntimeOrderAdapter:
-    """Canonical order lifecycle backed by a Paper-safe Nautilus runtime."""
+    """Canonical order lifecycle backed by a local-fixture Nautilus runtime."""
 
     name = "hyperliquid_runtime_order_execution"
 
@@ -752,7 +752,7 @@ class HyperliquidRuntimeOrderAdapter:
 
     @contextmanager
     def transaction(self):
-        """Rollback lifecycle and staged ledger mutations for one Paper snapshot."""
+        """Rollback lifecycle and staged ledger mutations for one local-fixture snapshot."""
 
         dictionary_fields = (
             "fills",
@@ -784,9 +784,9 @@ class HyperliquidRuntimeOrderAdapter:
 
     @property
     def local_only(self) -> bool:
-        """Expose the runtime environment as the Paper-only injection boundary."""
+        """Expose whether the injected runtime backend is local-only."""
 
-        return self._runtime.session.environment is BrokerEnvironment.PAPER
+        return bool(getattr(self._runtime._backend, "local_only", False))
 
     @property
     def runtime_session(self) -> BrokerRuntimeSession:
@@ -796,30 +796,33 @@ class HyperliquidRuntimeOrderAdapter:
 
     def submit(self, intent: OrderIntent) -> OrderReceipt:
         self._validate_intent(intent)
-        receipt = self._lifecycle.submit(intent)
+        receipt = self._bind_receipt(self._lifecycle.submit(intent))
         self._sync_inline_fills()
         return receipt
 
     def cancel(self, order_id: str) -> OrderReceipt:
-        return self._lifecycle.cancel(order_id)
+        return self._bind_receipt(self._lifecycle.cancel(order_id))
 
     def modify(self, order_id: str, intent: OrderIntent) -> OrderReceipt:
         self._validate_intent(intent)
-        return self._lifecycle.modify(order_id, intent)
+        return self._bind_receipt(self._lifecycle.modify(order_id, intent))
 
     def query(self, order_id: str) -> OrderReceipt:
-        result = self._lifecycle.query(order_id)
+        result = self._bind_receipt(self._lifecycle.query(order_id))
         self._sync_inline_fills()
         return result
 
     def open_orders(self, instrument_id: str | None = None) -> tuple[OrderReceipt, ...]:
-        result = self._lifecycle.open_orders(instrument_id)
+        result = tuple(
+            self._bind_receipt(item)
+            for item in self._lifecycle.open_orders(instrument_id)
+        )
         self._sync_inline_fills()
         return result
 
     def apply_fill(self, raw: Mapping[str, object]) -> OrderReceipt:
         self.validate_fill(raw)
-        result = self._lifecycle.apply_fill(raw)
+        result = self._bind_receipt(self._lifecycle.apply_fill(raw))
         self._sync_order_fills(raw)
         return result
 
@@ -837,7 +840,7 @@ class HyperliquidRuntimeOrderAdapter:
             raw.get(field) is not None for field in ("coin", "tid", "side", "px", "sz", "time")
         ):
             self.validate_fill(raw)
-        result = self._lifecycle.apply_order_update(raw)
+        result = self._bind_receipt(self._lifecycle.apply_order_update(raw))
         self._sync_order_fills(raw)
         return result
 
@@ -848,16 +851,36 @@ class HyperliquidRuntimeOrderAdapter:
             normalized.get(field) is not None for field in ("coin", "tid", "side", "px", "sz", "time")
         ):
             self.validate_fill(normalized)
-        result = self._lifecycle.apply_order_update(normalized)
+        result = self._bind_receipt(self._lifecycle.apply_order_update(normalized))
         self._sync_order_fills(normalized)
         return result
 
     def get(self, order_id: str) -> OrderReceipt:
-        return self._lifecycle.get(order_id)
+        return self._bind_receipt(self._lifecycle.get(order_id))
+
+    def _bind_receipt(self, receipt: OrderReceipt) -> OrderReceipt:
+        return replace(
+            receipt,
+            account_address=self._runtime.session.account.address,
+            lifecycle_id=self._runtime.session.lifecycle_id,
+            release_sha=self._runtime._config.expected_release_sha,
+        )
 
     @property
     def fills(self) -> Mapping[str, OrderFill]:
-        return self._lifecycle.fills
+        return {
+            fill_id: self._bind_fill(fill)
+            for fill_id, fill in self._lifecycle.fills.items()
+        }
+
+    def _bind_fill(self, fill: OrderFill) -> OrderFill:
+        return replace(
+            fill,
+            environment=self._runtime.session.environment,
+            account_address=self._runtime.session.account.address,
+            lifecycle_id=self._runtime.session.lifecycle_id,
+            release_sha=self._runtime._config.expected_release_sha,
+        )
 
     def _validate_intent(self, intent: OrderIntent) -> None:
         instrument = self._instruments.get(intent.instrument_id)
@@ -881,7 +904,8 @@ class HyperliquidRuntimeOrderAdapter:
                 self._runtime.session.account.address,
             )
         ) + ":"
-        for fill_id, fill in self._lifecycle.fills.items():
+        for fill_id, raw_fill in self._lifecycle.fills.items():
+            fill = self._bind_fill(raw_fill)
             if str(raw.get("tid") or raw.get("hash") or "") == fill_id:
                 self._ledger.record_order_fill(fill, raw)
             else:
