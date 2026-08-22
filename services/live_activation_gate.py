@@ -152,12 +152,14 @@ class LiveActivationGate:
             blockers.append("release_sha_invalid")
         if normalized_release_sha != current_sha or normalized_release_sha != source_sha:
             blockers.append("release_sha_does_not_match_source")
-        credential_name_valid = _ENV_NAME.fullmatch(str(credential_source or "")) is not None
+        raw_credential_source = str(credential_source or "")
+        credential_name_valid = _ENV_NAME.fullmatch(raw_credential_source) is not None
+        safe_credential_source = raw_credential_source if credential_name_valid else "<invalid-env-name>"
         if not credential_name_valid:
             blockers.append("credential_source_must_be_env_name")
         else:
             try:
-                credential_present = bool(self._credential_presence_resolver(str(credential_source)))
+                credential_present = bool(self._credential_presence_resolver(raw_credential_source))
             except Exception:
                 credential_present = False
                 blockers.append("credential_source_probe_failed")
@@ -216,7 +218,7 @@ class LiveActivationGate:
             "account_id": normalized_account,
             "environment_fingerprint": normalized_fingerprint,
             "release_sha": normalized_release_sha,
-            "credential_source": str(credential_source),
+            "credential_source": safe_credential_source,
             "instrument_scope": str(instrument_scope),
             "strategy_scope": str(strategy_scope),
             "capabilities": {"operations": sorted(declared), "required": sorted(REQUIRED_CAPABILITIES)},

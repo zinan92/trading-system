@@ -215,6 +215,7 @@ def test_live_preflight_blocks_grid_and_missing_soak_or_capabilities(tmp_path: P
     assert result["status"] == "blocked"
     assert "live_scope_must_be_dca" in result["blockers"]
     assert result["live_writes_enabled"] is False
+    assert "raw-secret" not in str(result)
 
 
 def test_prepare_rejects_self_consistent_forged_preflight(tmp_path: Path) -> None:
