@@ -1,4 +1,4 @@
-"""Paper-safe Hyperliquid order lifecycle and reconciliation mapping."""
+"""Local-fixture Hyperliquid order lifecycle for Paper and approved Testnet."""
 
 import hashlib
 from collections.abc import Mapping
@@ -500,7 +500,7 @@ class _RuntimeOrderTransport:
 
 
 class HyperliquidRuntimeOrderAdapter:
-    """Canonical order lifecycle backed by a Paper-safe Nautilus runtime."""
+    """Canonical order lifecycle backed by a local-fixture Nautilus runtime."""
 
     name = "hyperliquid_runtime_order_execution"
 
