@@ -128,6 +128,11 @@ class TestnetSoakReadiness:
                 payload = dict(evidence.get(category) or {})
                 self.recording.record_event(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], category=category, event_type="soak_observation", source=str(payload.get("source") or ""), occurred_at=str(payload.get("observed_at") or ""), payload=payload)
             package = self.recording.close_package(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], strategy_open=True, positions_open=int(observation.get("positions_open") or 0))
+            review = self.recording.review(record_window_id=window_id)
+            reviews = load_json(self.root / "reviews.json")
+            if not any(isinstance(item, Mapping) and item.get("record_window_id") == window_id and item.get("review_digest") == _digest(review) for item in reviews):
+                reviews.append({"schema_version": SOAK_SCHEMA, "event": "window_review", "record_window_id": window_id, "review": review, "review_digest": _digest(review)})
+                write_json(self.root / "reviews.json", reviews)
             if package.get("status") == "complete":
                 package = self.recording.mark_review_complete(record_window_id=window_id)
         except ParkRecordingError as exc:
@@ -147,6 +152,7 @@ class TestnetSoakReadiness:
             "account_fingerprint": str(observation.get("account_fingerprint") or ""),
             "package_status": package.get("status"),
             "package_revision": package.get("revision"),
+            "review_digest": _digest(review) if "review" in locals() else None,
             "gate_evidence": dict(evidence),
             "source_attestation": dict(attestation),
             "observation_digest": self._observation_digest(observation),
@@ -231,6 +237,8 @@ class TestnetSoakReadiness:
                 blockers.append({"window_index": row.get("window_index"), "code": "window_not_pass"})
             if row.get("package_status") != "complete":
                 blockers.append({"window_index": row.get("window_index"), "code": "recording_package_incomplete"})
+            if not row.get("review_digest"):
+                blockers.append({"window_index": row.get("window_index"), "code": "recording_review_missing"})
         receipt = {
             "schema_version": SOAK_SCHEMA,
             "event": "readiness_receipt",
