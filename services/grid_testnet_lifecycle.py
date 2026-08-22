@@ -472,15 +472,15 @@ class GridTestnetLifecycle:
                 state["orders"].append(self._order_row(command, receipt))
             except GridTestnetLifecycleError as exc:
                 self._block(state, f"hard_stop_submit_failed:{exc}", timestamp=timestamp)
-                self._submit_emergency_flatten(plan, state, rung, timestamp=timestamp, reason="hard_stop_submit_failed")
+                self._submit_emergency_flatten(plan, state, rung, timestamp=timestamp, reason="hard_stop_submit_failed", market_price=market_price)
         self._record_event(state, "hard_stop_triggered", timestamp=timestamp, reason=reason)
         self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
 
-    def _submit_emergency_flatten(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, timestamp: str, reason: str) -> None:
+    def _submit_emergency_flatten(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, timestamp: str, reason: str, market_price: float | None = None) -> None:
         line = GridLineLifecycle.from_snapshot(rung["line"])
         if line.open_quantity <= 1e-9:
             return
-        command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop_recovery", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), attempt=int(rung.get("tp_attempt") or 0) + 1)
+        command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop_recovery", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), attempt=int(rung.get("tp_attempt") or 0) + 1, market_price=market_price if market_price is not None else state.get("last_market_price"))
         try:
             receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
             state["orders"].append(self._order_row(command, receipt))
