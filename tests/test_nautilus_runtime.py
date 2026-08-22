@@ -41,6 +41,7 @@ class FakeSignerProvider:
 
 class FakeNautilusBackend:
     local_only = True
+    external_network = False
 
     def __init__(self, metadata: NautilusAdapterMetadata) -> None:
         self.metadata = metadata
@@ -192,7 +193,7 @@ class NautilusRuntimeTests(unittest.TestCase):
                 expected_release_sha="a" * 40,
             )
 
-        self.assertEqual(raised.exception.reason_code, "testnet_backend_not_local")
+        self.assertEqual(raised.exception.reason_code, "testnet_backend_boundary_invalid")
         self.assertEqual(backend.calls, [])
 
     def test_testnet_requires_human_approval_and_has_no_network_call_by_start(self) -> None:
@@ -222,6 +223,37 @@ class NautilusRuntimeTests(unittest.TestCase):
         self.assertEqual(health.environment, BrokerEnvironment.TESTNET)
         self.assertEqual(runtime.state, NautilusRuntimeState.READY)
         self.assertEqual(backend.calls, [])
+
+    def test_approved_external_testnet_backend_can_be_invoked_after_start(self) -> None:
+        backend = FakeNautilusBackend(self.metadata(environment=BrokerEnvironment.TESTNET))
+        backend.local_only = False
+        backend.external_network = True
+        policy = RuntimeActivationPolicy(
+            testnet_approval=ExternalEnvironmentApproval(
+                environment=BrokerEnvironment.TESTNET,
+                approval_id="approval-runtime-external-1",
+                release_sha="a" * 40,
+                approved_by="park",
+                approved_at=datetime.now(UTC),
+                account_address="0xmaster",
+                lifecycle_id="runtime-1",
+            )
+        )
+
+        runtime, _ = self.runtime(
+            environment=BrokerEnvironment.TESTNET,
+            backend=backend,
+            policy=policy,
+            expected_release_sha="a" * 40,
+        )
+
+        health = runtime.start()
+        receipt = runtime.invoke("market_data", "read", {"instrument_id": "HYPE-USD-PERP"})
+
+        self.assertTrue(health.external_network)
+        self.assertTrue(receipt.invocation_performed)
+        self.assertEqual(receipt.provenance.transport_state, "external_testnet")
+        self.assertEqual(len(backend.calls), 1)
 
 
 if __name__ == "__main__":

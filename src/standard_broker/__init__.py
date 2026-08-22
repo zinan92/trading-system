@@ -1,6 +1,15 @@
 """Canonical broker contracts and Paper-safe adapter foundations."""
 
 from .account import AccountSnapshot, LiquidationFact, PositionFact, PositionSide
+from .adapters.hyperliquid import (
+    HyperliquidTestnetBackendConfig,
+    LocalFileSecretProvider,
+    NautilusHyperliquidTestnetBackend,
+    TestnetProofPlan,
+    TestnetProofResult,
+    default_testnet_capabilities,
+    run_testnet_lifecycle,
+)
 from .capabilities import PORT_NAMES, CapabilityDescriptor
 from .conformance import ConformanceReport, EvidenceKind, run_paper_conformance
 from .errors import (
@@ -17,6 +26,8 @@ from .evidence import (
     EvidenceIdentity,
     ReconciliationEvidence,
     RuntimeReadinessReport,
+    TESTNET_LIFECYCLE_STEPS,
+    ExternalTestnetLifecycleEvidence,
     run_paper_runtime_readiness,
 )
 from .fees import (
@@ -104,6 +115,7 @@ __all__ = [
     "AccountPort",
     "AccountScope",
     "AccountSnapshot",
+    "HyperliquidTestnetBackendConfig",
     "BrokerCapabilityError",
     "BrokerEnvironment",
     "BrokerError",
@@ -135,8 +147,12 @@ __all__ = [
     "InMemoryPaperTransport",
     "InstrumentPort",
     "LiquidationFact",
+    "LocalFileSecretProvider",
     "MarketDataPort",
     "MarketDataGateError",
+    "NautilusHyperliquidTestnetBackend",
+    "TestnetProofPlan",
+    "TestnetProofResult",
     "OrderExecutionPort",
     "OrderIdempotencyError",
     "OrderFill",
@@ -173,6 +189,8 @@ __all__ = [
     "RuntimeFactLedger",
     "RuntimeReadinessReport",
     "ReconciliationEvidence",
+    "TESTNET_LIFECYCLE_STEPS",
+    "ExternalTestnetLifecycleEvidence",
     "RecordingEvent",
     "RecordingTrack",
     "SignerKind",
@@ -184,4 +202,6 @@ __all__ = [
     "run_paper_conformance",
     "preflight_runtime_session",
     "run_paper_runtime_readiness",
+    "default_testnet_capabilities",
+    "run_testnet_lifecycle",
 ]

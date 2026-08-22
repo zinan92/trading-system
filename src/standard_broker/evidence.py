@@ -22,6 +22,16 @@ EVIDENCE_IDENTITY_FIELDS = (
     "reconciliation_ids",
 )
 
+TESTNET_LIFECYCLE_STEPS = (
+    "submit",
+    "query",
+    "cancel_or_replace",
+    "fill",
+    "fee",
+    "position",
+    "reconciliation",
+)
+
 
 class EvidenceClass(str, Enum):
     PAPER = "paper"
@@ -110,6 +120,43 @@ class ReconciliationEvidence:
                 raise ValueError(f"{name} is required")
         if not isinstance(self.provenance, Provenance):
             raise TypeError("provenance must be a Provenance")
+
+
+@dataclass(frozen=True)
+class ExternalTestnetLifecycleEvidence:
+    """Non-secret evidence contract for one approved external lifecycle."""
+
+    identity: EvidenceIdentity
+    completed_steps: tuple[str, ...]
+    final_reconciliation_id: str
+    reconciliation: ReconciliationEvidence
+    provenance: Provenance
+
+    def __post_init__(self) -> None:
+        if self.identity.evidence_class is not EvidenceClass.TESTNET:
+            raise ValueError("Testnet lifecycle evidence requires the Testnet evidence class")
+        if not isinstance(self.completed_steps, tuple) or any(
+            step not in TESTNET_LIFECYCLE_STEPS for step in self.completed_steps
+        ):
+            raise ValueError("completed_steps contains an unknown lifecycle step")
+        if set(self.completed_steps) != set(TESTNET_LIFECYCLE_STEPS):
+            raise ValueError("Testnet lifecycle evidence requires every proof step")
+        if self.final_reconciliation_id not in self.identity.reconciliation_ids:
+            raise ValueError("final reconciliation ID must be part of the evidence identity")
+        if self.reconciliation.reconciliation_id != self.final_reconciliation_id:
+            raise ValueError("reconciliation fact does not match the final reconciliation ID")
+        if self.reconciliation.environment is not BrokerEnvironment.TESTNET:
+            raise ValueError("Testnet lifecycle evidence requires Testnet reconciliation")
+        if self.reconciliation.account_address != self.identity.account_address:
+            raise ValueError("reconciliation account does not match evidence identity")
+        if self.reconciliation.execution_scope != self.identity.execution_scope:
+            raise ValueError("reconciliation scope does not match evidence identity")
+        if not isinstance(self.provenance, Provenance):
+            raise TypeError("provenance must be a Provenance")
+        if self.provenance.execution_scope != self.identity.execution_scope:
+            raise ValueError("evidence provenance scope does not match identity")
+        if self.provenance.transport_state != "external_testnet":
+            raise ValueError("Testnet lifecycle evidence must use external_testnet provenance")
 
 
 @dataclass(frozen=True)

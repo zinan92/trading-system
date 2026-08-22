@@ -9,6 +9,9 @@ description = "Provider-neutral broker contracts and fail-closed adapters"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+testnet = ["nautilus_trader==1.230.0"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

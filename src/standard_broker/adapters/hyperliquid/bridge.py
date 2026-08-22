@@ -290,8 +290,14 @@ class NautilusHyperliquidRuntime:
             raise NautilusRuntimeError("capability_mismatch", "backend capability profile does not match session")
         if session.environment is BrokerEnvironment.PAPER and getattr(backend, "local_only", False) is not True:
             raise NautilusRuntimeError("paper_backend_not_local", "Paper runtime requires a local-only backend")
-        if session.environment is BrokerEnvironment.TESTNET and getattr(backend, "local_only", False) is not True:
-            raise NautilusRuntimeError("testnet_backend_not_local", "Testnet fixture runtime requires a local-only backend")
+        if session.environment is BrokerEnvironment.TESTNET and not (
+            getattr(backend, "local_only", False) is True
+            or getattr(backend, "external_network", False) is True
+        ):
+            raise NautilusRuntimeError(
+                "testnet_backend_boundary_invalid",
+                "Testnet runtime requires either a local fixture or an explicitly external backend",
+            )
         if not callable(getattr(backend, "invoke", None)):
             raise NautilusRuntimeError("backend_invoke_missing", "backend must expose invoke(port, operation, request)")
 
@@ -375,6 +381,14 @@ class NautilusHyperliquidRuntime:
             else {}
         )
         self.preflight(required_operations=required_operations)
+        activate = getattr(self._backend, "activate", None)
+        if self._session.environment is BrokerEnvironment.TESTNET and not getattr(
+            self._backend,
+            "local_only",
+            False,
+        ):
+            if callable(activate):
+                activate(release_sha=self._config.expected_release_sha)
         self._state = NautilusRuntimeState.READY
         return self.health
 
@@ -408,9 +422,17 @@ class NautilusHyperliquidRuntime:
             lifecycle_id=self._session.lifecycle_id,
             release_sha=self._config.expected_release_sha,
             provenance=Provenance(
-                source="nautilus-hyperliquid.runtime",
+                source=(
+                    "nautilus-hyperliquid.bridge"
+                    if getattr(self._backend, "local_only", False)
+                    else "nautilus-hyperliquid.testnet"
+                ),
                 execution_scope=self._session.execution_scope,
-                transport_state="local_fixture",
+                transport_state=(
+                    "local_fixture"
+                    if getattr(self._backend, "local_only", False)
+                    else "external_testnet"
+                ),
                 mapping_revision=self._session.capabilities.revision,
             ),
         )

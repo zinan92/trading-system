@@ -15,6 +15,13 @@ from .bridge import (
     NautilusRuntimeState,
 )
 from .errors import UnknownInstrumentError, UnsupportedProductError
+from .credentials import LocalFileSecretProvider
+from .external import (
+    HyperliquidTestnetBackendConfig,
+    NautilusHyperliquidTestnetBackend,
+    default_testnet_capabilities,
+)
+from .testnet_proof import TestnetProofPlan, TestnetProofResult, run_testnet_lifecycle
 from .fees import HyperliquidFeeAdapter, HyperliquidRuntimeFeeAdapter
 from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter, HyperliquidRuntimeReadAdapter
@@ -85,4 +92,11 @@ __all__ = [
     "NautilusRuntimeState",
     "UnknownInstrumentError",
     "UnsupportedProductError",
+    "LocalFileSecretProvider",
+    "HyperliquidTestnetBackendConfig",
+    "NautilusHyperliquidTestnetBackend",
+    "default_testnet_capabilities",
+    "TestnetProofPlan",
+    "TestnetProofResult",
+    "run_testnet_lifecycle",
 ]

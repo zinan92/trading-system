@@ -45,21 +45,35 @@ class HyperliquidOrderAdapter:
         environment: BrokerEnvironment = BrokerEnvironment.PAPER,
         execution_scope: str = "hypercore:default",
         mapping_revision: str = "order-lifecycle-v1",
+        transport_state: str | None = None,
     ) -> None:
-        if getattr(transport, "local_only", False) is not True:
-            raise ValueError("Paper/Testnet order adapter requires a local-only transport")
         if environment not in {BrokerEnvironment.PAPER, BrokerEnvironment.TESTNET}:
             raise ValueError("fixture order adapter supports Paper and approved Testnet only")
+        local_only = getattr(transport, "local_only", False) is True
+        external_network = getattr(transport, "external_network", False) is True
+        if environment is BrokerEnvironment.PAPER and not local_only:
+            raise ValueError("Paper order adapter requires a local-only transport")
+        if environment is BrokerEnvironment.TESTNET and not (local_only or external_network):
+            raise ValueError("Testnet order adapter requires a local fixture or external Testnet transport")
         self._transport = transport
         self._environment = environment
         self._execution_scope = execution_scope
         self._mapping_revision = mapping_revision
+        self._transport_state = transport_state or (
+            "local_fixture" if local_only else "external_testnet"
+        )
+        self._source = (
+            "hyperliquid.exchange.fixture"
+            if local_only
+            else "nautilus-hyperliquid.testnet"
+        )
         self._orders: dict[str, OrderReceipt] = {}
         self._by_key: dict[str, str] = {}
         self._intent_fingerprints: dict[str, tuple[object, ...]] = {}
         self._by_client: dict[str, str] = {}
         self._pending_modifies: dict[str, tuple[str, str]] = {}
         self._fills: dict[str, OrderFill] = {}
+        self._fill_raws: dict[str, Mapping[str, object]] = {}
         self._fill_aliases: dict[str, str] = {}
         self._instrument_ids: dict[str, str] = {}
         self._sides: dict[str, OrderSide] = {}
@@ -76,6 +90,7 @@ class HyperliquidOrderAdapter:
             "_by_client",
             "_pending_modifies",
             "_fills",
+            "_fill_raws",
             "_fill_aliases",
             "_instrument_ids",
             "_sides",
@@ -95,9 +110,9 @@ class HyperliquidOrderAdapter:
 
     def _provenance(self) -> Provenance:
         return Provenance(
-            source="hyperliquid.exchange.fixture",
+            source=self._source,
             execution_scope=self._execution_scope,
-            transport_state="local_fixture",
+            transport_state=self._transport_state,
             mapping_revision=self._mapping_revision,
         )
 
@@ -272,6 +287,7 @@ class HyperliquidOrderAdapter:
             occurred_at=_timestamp(raw["time"]),
         )
         self._fills[fill_id] = fill
+        self._fill_raws[fill_id] = dict(raw)
         for identity_key in identity_keys:
             self._fill_aliases[identity_key] = fill_id
         state = OrderState.FILLED if new_filled == receipt.original_quantity else OrderState.PARTIALLY_FILLED
@@ -421,6 +437,12 @@ class HyperliquidOrderAdapter:
     @property
     def fills(self) -> Mapping[str, OrderFill]:
         return dict(self._fills)
+
+    @property
+    def fill_raws(self) -> Mapping[str, Mapping[str, object]]:
+        """Return the provider facts retained for each canonical fill."""
+
+        return {fill_id: dict(raw) for fill_id, raw in self._fill_raws.items()}
 
     @staticmethod
     def _side(value: object) -> OrderSide:
@@ -576,6 +598,10 @@ class HyperliquidOrderAdapter:
                 quantity=quantity,
                 occurred_at=_timestamp(filled["time"]),
             )
+            raw_fill = dict(filled)
+            raw_fill.setdefault("px", filled.get("avgPx"))
+            raw_fill.setdefault("sz", filled.get("totalSz"))
+            self._fill_raws[str(fill_id)] = raw_fill
             return updated
         if status.get("error") is not None:
             return self._replace(
@@ -668,13 +694,23 @@ class HyperliquidOrderAdapter:
 class _RuntimeOrderTransport:
     """Adapter-internal transport that keeps native order payloads off canonical receipts."""
 
-    local_only = True
-
     def __init__(self, *, runtime: NautilusHyperliquidRuntime, instruments: HyperliquidInstrumentAdapter) -> None:
         self._runtime = runtime
         self._instruments = instruments
+        self._native_cloids: dict[str, str] = {}
+        self._instrument_ids: dict[str, str] = {}
+
+    @property
+    def local_only(self) -> bool:
+        return bool(getattr(self._runtime._backend, "local_only", False))
+
+    @property
+    def external_network(self) -> bool:
+        return bool(getattr(self._runtime._backend, "external_network", False))
 
     def submit(self, intent: OrderIntent, client_order_id: str) -> object:
+        self._native_cloids[intent.order_id] = client_order_id
+        self._instrument_ids[intent.order_id] = intent.instrument_id
         return self._runtime._invoke_native(
             "order_execution",
             "submit",
@@ -687,7 +723,11 @@ class _RuntimeOrderTransport:
         return self._runtime._invoke_native(
             "order_execution",
             "cancel",
-            {"oid": receipt.broker_order_id, "cloid": receipt.client_order_id},
+            {
+                "instrument_id": self._instrument_ids.get(receipt.order_id),
+                "oid": receipt.broker_order_id,
+                "cloid": self._native_client_order_id(receipt),
+            },
         )
 
     def modify(
@@ -699,17 +739,34 @@ class _RuntimeOrderTransport:
         if receipt.broker_order_id is None:
             raise ValueError("replace requires a Broker order identity")
         request = self._native_order(intent, replacement_client_order_id)
+        request["instrument_id"] = self._instrument_ids.get(receipt.order_id, intent.instrument_id)
         request["oid"] = receipt.broker_order_id
-        return self._runtime._invoke_native("order_execution", "replace", request)
+        request["cloid"] = self._native_client_order_id(receipt)
+        request["replacement_cloid"] = replacement_client_order_id
+        result = self._runtime._invoke_native("order_execution", "replace", request)
+        if isinstance(result, Mapping) and result.get("native_cloid"):
+            self._native_cloids[receipt.order_id] = str(result["native_cloid"])
+        return result
 
     def query(self, receipt: OrderReceipt) -> object:
-        request: dict[str, object] = {"cloid": receipt.client_order_id}
+        request: dict[str, object] = {
+            "instrument_id": self._instrument_ids.get(receipt.order_id),
+            "cloid": self._native_client_order_id(receipt),
+        }
         if receipt.broker_order_id is not None:
             request["oid"] = receipt.broker_order_id
         return self._runtime._invoke_native(
             "order_execution",
             "query",
             request,
+        )
+
+    def _native_client_order_id(self, receipt: OrderReceipt) -> str:
+        """Hyperliquid modify keeps the original CLOID across both OIDs."""
+
+        return self._native_cloids.get(
+            receipt.order_id,
+            receipt.client_order_lineage[0] if receipt.client_order_lineage else receipt.client_order_id,
         )
 
     def open_orders(self, instrument_id: str | None = None) -> object:
@@ -755,6 +812,11 @@ class HyperliquidRuntimeOrderAdapter:
             environment=runtime.session.environment,
             execution_scope=runtime.session.execution_scope,
             mapping_revision=runtime.session.capabilities.revision,
+            transport_state=(
+                "local_fixture"
+                if self._lifecycle_transport_is_local(runtime)
+                else "external_testnet"
+            ),
         )
         self._instruments = instruments
         self._ledger = ledger
@@ -763,6 +825,10 @@ class HyperliquidRuntimeOrderAdapter:
             environment=runtime.session.environment.value,
             account_address=runtime.session.account.address,
         )
+
+    @staticmethod
+    def _lifecycle_transport_is_local(runtime: NautilusHyperliquidRuntime) -> bool:
+        return bool(getattr(runtime._backend, "local_only", False))
 
     @contextmanager
     def transaction(self):
@@ -941,4 +1007,8 @@ class HyperliquidRuntimeOrderAdapter:
     def _sync_inline_fills(self) -> None:
         for fill in self._lifecycle.fills.values():
             bound_fill = self._bind_fill(fill)
-            self._ledger.record_order_fill(bound_fill, self._fill_raw(bound_fill))
+            raw = self._lifecycle.fill_raws.get(fill.fill_id, self._fill_raw(bound_fill))
+            if "provenance" not in raw:
+                raw = dict(raw)
+                raw["provenance"] = self._lifecycle.get(fill.order_id).provenance
+            self._ledger.record_order_fill(bound_fill, raw)
