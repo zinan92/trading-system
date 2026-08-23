@@ -339,3 +339,129 @@ def test_next_entry_submits_one_attended_level_and_reprotects(tmp_path: Path, mo
     assert calls[0:2] == ["submit_next_entry", "read_facts"]
     assert calls[2][0] == "facts"
     assert calls[-1] == "close"
+
+
+@pytest.mark.parametrize(
+    ("flag", "value", "reason"),
+    [
+        ("--acknowledge", "WRONG_NEXT_ENTRY_ACK", "exact_acknowledgement_required"),
+        ("--execute-testnet", None, "explicit_execute_flag_required"),
+    ],
+)
+def test_next_entry_has_its_own_exposure_gates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    flag: str,
+    value: str | None,
+    reason: str,
+) -> None:
+    plan_path, plan = _write_plan(tmp_path)
+    confirmation_path, _output_root = _write_confirmation(tmp_path, plan)
+    called = False
+
+    def fail_builder(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("next-entry builder must not run before its exact gate")
+
+    monkeypatch.setattr(cli, "_build_external_protection", fail_builder)
+    argv = _args(tmp_path, plan_path, confirmation_path, action="next-entry")
+    if flag == "--acknowledge":
+        index = argv.index(flag)
+        argv[index + 1] = value or ""
+    else:
+        index = argv.index(flag)
+        del argv[index]
+    assert cli.main(argv) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["reason_code"] == reason
+    assert called is False
+
+
+def test_next_entry_no_remaining_level_does_not_claim_signer_resolution_or_read_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan_path, plan = _write_plan(tmp_path)
+    confirmation_path, _output_root = _write_confirmation(tmp_path, plan)
+    calls: list[str] = []
+
+    class FakeLifecycle:
+        current_path = tmp_path / "outputs" / "standard_broker_external_dca" / "current.json"
+
+        def __init__(self) -> None:
+            self.state = {
+                "status": "PROTECTION_ACTIVE",
+                "entry_order_id": f"{plan.plan_id}:entry:1",
+                "next_action": "await_terminal_target_or_stop",
+            }
+
+        def snapshot(self):
+            return self.state
+
+        def submit_next_entry(self, *_args, **_kwargs):
+            calls.append("submit_next_entry")
+            return self.state
+
+    lifecycle = FakeLifecycle()
+    adapter = SimpleNamespace(read_facts=lambda **_kwargs: calls.append("read_facts"))
+    runtime = SimpleNamespace(close=lambda: calls.append("close"))
+    binding = SimpleNamespace(protection=object())
+    monkeypatch.setattr(cli, "_build_external_protection", lambda *_args, **_kwargs: (runtime, binding))
+    monkeypatch.setattr(cli, "_build_lifecycle", lambda *_args, **_kwargs: (lifecycle, adapter))
+
+    secret_path = str(tmp_path / "never-print-next-entry-secret")
+    argv = _args(tmp_path, plan_path, confirmation_path, action="next-entry")
+    argv[argv.index("--secret-file") + 1] = secret_path
+    assert cli.main(argv) == 0
+    result = json.loads(capsys.readouterr().out)
+    output = json.dumps(result)
+    assert result["status"] == "PROTECTION_ACTIVE"
+    assert result["secret_resolved"] is False
+    assert result["network_invoked"] is True
+    assert "read_facts" not in calls
+    assert secret_path not in output
+    assert calls == ["submit_next_entry", "close"]
+
+
+def test_next_entry_protection_gate_returns_redacted_blocker_without_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan_path, plan = _write_plan(tmp_path)
+    confirmation_path, _output_root = _write_confirmation(tmp_path, plan)
+    calls: list[str] = []
+
+    class FakeLifecycle:
+        current_path = tmp_path / "outputs" / "standard_broker_external_dca" / "current.json"
+
+        def __init__(self) -> None:
+            self.state = {
+                "status": "BLOCKED",
+                "blocker": "new_entry_requires_active_protection",
+                "next_action": "notify_park_and_wait",
+            }
+
+        def snapshot(self):
+            return self.state
+
+        def submit_next_entry(self, *_args, **_kwargs):
+            calls.append("submit_next_entry")
+            return self.state
+
+    lifecycle = FakeLifecycle()
+    adapter = SimpleNamespace(read_facts=lambda **_kwargs: calls.append("read_facts"))
+    runtime = SimpleNamespace(close=lambda: calls.append("close"))
+    binding = SimpleNamespace(protection=object())
+    monkeypatch.setattr(cli, "_build_external_protection", lambda *_args, **_kwargs: (runtime, binding))
+    monkeypatch.setattr(cli, "_build_lifecycle", lambda *_args, **_kwargs: (lifecycle, adapter))
+
+    assert cli.main(_args(tmp_path, plan_path, confirmation_path, action="next-entry")) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "BLOCKED"
+    assert result["blocker"] == "new_entry_requires_active_protection"
+    assert result["secret_resolved"] is False
+    assert "read_facts" not in calls

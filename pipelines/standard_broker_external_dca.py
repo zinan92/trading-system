@@ -379,6 +379,7 @@ def _state_result(
     plan: ExternalDcaPlan,
     state: Mapping[str, Any],
     lifecycle: ExternalDcaLifecycle,
+    secret_resolved: bool = False,
 ) -> dict[str, Any]:
     return {
         "status": str(state.get("status") or "BLOCKED"),
@@ -387,20 +388,39 @@ def _state_result(
         "plan_digest": plan.plan_digest,
         "profile_id": plan.profile_id,
         "network_invoked": True,
-        "secret_resolved": True,
+        "secret_resolved": secret_resolved,
         "next_action": state.get("next_action", "notify_park_and_wait"),
         "state_path": str(lifecycle.current_path),
         **({"blocker": state["blocker"]} if state.get("blocker") else {}),
     }
 
 
+def _exposure_operation_observed(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    *,
+    action: str,
+) -> bool:
+    """Conservatively report signer use only when this call adds evidence."""
+
+    if action == "start":
+        return not before and bool(after.get("entry_order_id"))
+    if action == "next-entry":
+        return bool(after.get("entry_order_id")) and after.get("entry_order_id") != before.get("entry_order_id")
+    if action == "flatten":
+        return len(after.get("receipts") or ()) > len(before.get("receipts") or ())
+    return False
+
+
 def _start_action(plan: ExternalDcaPlan, args: argparse.Namespace, confirmation: Mapping[str, Any]) -> dict[str, Any]:
     output_root = Path(args.output_root)
     runtime: object | None = None
     lifecycle: ExternalDcaLifecycle | None = None
+    before: Mapping[str, Any] = {}
     try:
         runtime, binding = _build_external_protection(plan, args, canary=True)
         lifecycle, adapter = _build_lifecycle(output_root, binding)
+        before = lifecycle.snapshot()
         state = lifecycle.prepare(plan, confirmation=confirmation, timestamp=_timestamp())
         if state.get("status") == "ENTRY_FILLED_PENDING_FACTS":
             order_id = str(state.get("entry_order_id") or "")
@@ -415,18 +435,36 @@ def _start_action(plan: ExternalDcaPlan, args: argparse.Namespace, confirmation:
                 confirmation=confirmation,
                 timestamp=_timestamp(),
             )
-        return _state_result(action="start", plan=plan, state=state, lifecycle=lifecycle)
+        return _state_result(
+            action="start",
+            plan=plan,
+            state=state,
+            lifecycle=lifecycle,
+            secret_resolved=_exposure_operation_observed(before, state, action="start"),
+        )
     except ExternalDcaError as exc:
         if lifecycle is not None:
             state = lifecycle.snapshot()
             if state:
-                return _state_result(action="start", plan=plan, state=state, lifecycle=lifecycle)
+                return _state_result(
+                    action="start",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=_exposure_operation_observed(before, state, action="start"),
+                )
         raise ExternalDcaCliError(_reason_code(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - provider details stay redacted.
         if lifecycle is not None:
             state = lifecycle.snapshot()
             if state:
-                return _state_result(action="start", plan=plan, state=state, lifecycle=lifecycle)
+                return _state_result(
+                    action="start",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=_exposure_operation_observed(before, state, action="start"),
+                )
         raise ExternalDcaCliError(_reason_code(type(exc).__name__)) from exc
     finally:
         _close_runtime(runtime)
@@ -436,26 +474,46 @@ def _flatten_action(plan: ExternalDcaPlan, args: argparse.Namespace, confirmatio
     output_root = Path(args.output_root)
     runtime: object | None = None
     lifecycle: ExternalDcaLifecycle | None = None
+    before: Mapping[str, Any] = {}
     try:
         runtime, binding = _build_external_protection(plan, args, canary=True)
         lifecycle, _adapter = _build_lifecycle(output_root, binding)
+        before = lifecycle.snapshot()
         state = lifecycle.flatten(
             plan,
             confirmation=confirmation,
             timestamp=_timestamp(),
         )
-        return _state_result(action="flatten", plan=plan, state=state, lifecycle=lifecycle)
+        return _state_result(
+            action="flatten",
+            plan=plan,
+            state=state,
+            lifecycle=lifecycle,
+            secret_resolved=_exposure_operation_observed(before, state, action="flatten"),
+        )
     except ExternalDcaError as exc:
         if lifecycle is not None:
             state = lifecycle.snapshot()
             if state:
-                return _state_result(action="flatten", plan=plan, state=state, lifecycle=lifecycle)
+                return _state_result(
+                    action="flatten",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=_exposure_operation_observed(before, state, action="flatten"),
+                )
         raise ExternalDcaCliError(_reason_code(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - provider details stay redacted.
         if lifecycle is not None:
             state = lifecycle.snapshot()
             if state:
-                return _state_result(action="flatten", plan=plan, state=state, lifecycle=lifecycle)
+                return _state_result(
+                    action="flatten",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=_exposure_operation_observed(before, state, action="flatten"),
+                )
         raise ExternalDcaCliError(_reason_code(type(exc).__name__)) from exc
     finally:
         _close_runtime(runtime)
@@ -471,9 +529,11 @@ def _next_entry_action(
     output_root = Path(args.output_root)
     runtime: object | None = None
     lifecycle: ExternalDcaLifecycle | None = None
+    before: Mapping[str, Any] = {}
     try:
         runtime, binding = _build_external_protection(plan, args, canary=True)
         lifecycle, adapter = _build_lifecycle(output_root, binding)
+        before = lifecycle.snapshot()
         state = lifecycle.submit_next_entry(
             plan,
             confirmation=confirmation,
@@ -492,18 +552,36 @@ def _next_entry_action(
                 confirmation=confirmation,
                 timestamp=_timestamp(),
             )
-        return _state_result(action="next-entry", plan=plan, state=state, lifecycle=lifecycle)
+        return _state_result(
+            action="next-entry",
+            plan=plan,
+            state=state,
+            lifecycle=lifecycle,
+            secret_resolved=_exposure_operation_observed(before, state, action="next-entry"),
+        )
     except ExternalDcaError as exc:
         if lifecycle is not None:
             state = lifecycle.snapshot()
             if state:
-                return _state_result(action="next-entry", plan=plan, state=state, lifecycle=lifecycle)
+                return _state_result(
+                    action="next-entry",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=_exposure_operation_observed(before, state, action="next-entry"),
+                )
         raise ExternalDcaCliError(_reason_code(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - provider details stay redacted.
         if lifecycle is not None:
             state = lifecycle.snapshot()
             if state:
-                return _state_result(action="next-entry", plan=plan, state=state, lifecycle=lifecycle)
+                return _state_result(
+                    action="next-entry",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=_exposure_operation_observed(before, state, action="next-entry"),
+                )
         raise ExternalDcaCliError(_reason_code(type(exc).__name__)) from exc
     finally:
         _close_runtime(runtime)
