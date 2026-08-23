@@ -156,9 +156,37 @@ def build_external_position_protection_binding(
             context=context,
             runtime=runtime,
         )
-        if getattr(binding, "protection_capabilities", None) is None:
+        matrix = getattr(binding, "protection_capabilities", None)
+        if matrix is None:
             raise StandardBrokerExternalProtectionError(
                 "external_protection_profile_missing"
+            )
+        if matrix.profile_id != "hyperliquid-testnet-position-protection-v1":
+            raise StandardBrokerExternalProtectionError(
+                "external_protection_profile_mismatch"
+            )
+        preflight = runtime.preflight(
+            required_operations={"protection_order": {"submit", "query"}}
+        )
+        if (
+            preflight.accepted is not True
+            or preflight.external_network is not True
+            or preflight.real_money_eligible is not False
+            or preflight.account_address != config.account_address
+            or preflight.lifecycle_id != config.runtime_id
+            or preflight.release_sha != config.release_sha
+            or preflight.capability_revision != config.capability_revision
+        ):
+            raise StandardBrokerExternalProtectionError(
+                "external_protection_preflight_identity_mismatch"
+            )
+        if (
+            binding.runtime_session.account.address != config.account_address
+            or binding.runtime_session.lifecycle_id != config.runtime_id
+            or binding.runtime_session.capability_revision != config.capability_revision
+        ):
+            raise StandardBrokerExternalProtectionError(
+                "external_protection_binding_identity_mismatch"
             )
         return runtime, binding
     except StandardBrokerExternalProtectionError:
