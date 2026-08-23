@@ -30,12 +30,13 @@
 - SB-EXT-01G is merged in PR #63 at `81fe9ed`: preflight-only external conformance report, exact-profile/no-fallback proof, full identity/digest checks, strict secret/raw rejection, complete protection-gap proof, and pinned trading-system handoff.
 - SB-EXT-02 is merged in PR #65 at `9f11651`: public attended Testnet canary order binding with enriched canonical request/receipt identity, idempotency surface, market/instrument capability preflight, and typed fill/fee/account/position/open-order/reconciliation contracts.
 - SB-EXT-03 is merged in PR #68 at `8cf99b4`: typed fact reads stay behind `ExternalBrokerHost.read_fact()`, consumer code cannot call private runtime/native methods, and the canary facts reader requires a real cursor-bound `ExternalReconciliationSnapshot` provider instead of manufacturing one from independent reads.
+- SB-EXT-04 is merged in PR #71 at `24a60cb`: the exact Testnet profile composes host-backed typed observations into a watermark-bound `ExternalReconciliationSnapshot` with freshness/skew/digest checks; missing or incoherent facts remain non-coherent.
 - Decision A is recorded in `docs/adr/0005-rt06-reconciliation-seam.md`: RT-06 is not a second order lifecycle owner; RT-08 will compose the unique lifecycle.
 
 ## Next
 
 - TESTNET-01 (#30) is merged in PR #48 at `f5dbf87`: human-gated Hyperliquid Testnet proof for one default validator-operated perpetual, including submit/query/cancel-replace/fill/fee/position/reconciliation evidence. The final account was flat with no open orders; evidence is stored outside the repository.
-- SB-EXT-01A–01G and SB-EXT-02/03 are complete in standard-broker. The next dependency is a separate `trading-system` wrapper and Park-attended #895 run. Without a real cursor-bound snapshot reader, the public canary binding fails closed; no strategy, ProtectionOrder, soak, or Mainnet/Live authority is implied.
+- SB-EXT-01A–01G and SB-EXT-02/03/04 are complete in standard-broker. The next dependency is a separate `trading-system` wrapper and Park-attended #895 run. No strategy, ProtectionOrder, soak, or Mainnet/Live authority is implied by these binding merges.
 - Mainnet/live remains a separate future milestone requiring its own specification, credentials, release identity, approval, and evidence.
 
 ## Safety boundary
