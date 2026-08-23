@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 import pytest
@@ -7,7 +8,9 @@ from standard_broker import (
     AccountScope,
     BrokerEnvironment,
     BrokerRuntimeSession,
+    CapabilityDescriptor,
     ExternalBrokerBuildContext,
+    ExternalBrokerHost,
     ExternalEnvironmentApproval,
     ExternalRuntimeIdentity,
     RuntimePreflight,
@@ -107,6 +110,42 @@ def _host():
     )
     runtime = _ExternalRuntime(session)
     return build_hyperliquid_testnet_host(context=context, runtime=runtime), runtime
+
+
+def _host_for_profile(profile):
+    session = BrokerRuntimeSession(
+        broker_id="hyperliquid",
+        environment=BrokerEnvironment.TESTNET,
+        account=AccountReference(AccountScope.MASTER, ACCOUNT),
+        signer=SignerReference(SignerKind.API_AGENT, "fixture", "fixture://api-agent"),
+        signer_provider=_SignerProvider(),
+        capabilities=profile.capabilities,
+        execution_scope=profile.execution_scope,
+        lifecycle_id="trading-system-external-host-1",
+    )
+    approval = ExternalEnvironmentApproval(
+        environment=BrokerEnvironment.TESTNET,
+        approval_id="trading-system-external-approval-1",
+        release_sha=RELEASE_SHA,
+        approved_by="park",
+        approved_at=datetime.now(UTC),
+        account_address=ACCOUNT,
+        lifecycle_id=session.lifecycle_id,
+    )
+    context = ExternalBrokerBuildContext(
+        session=session,
+        runtime_identity=ExternalRuntimeIdentity(
+            adapter_id=profile.adapter_id,
+            version=profile.version,
+            commit=profile.commit,
+            mapping_revision=profile.mapping_revision,
+            transport_state=profile.transport_state,
+        ),
+        release_sha=RELEASE_SHA,
+        approval=approval,
+    )
+    runtime = _ExternalRuntime(session)
+    return ExternalBrokerHost(context=context, runtime=runtime, profile=profile), runtime
 
 
 def _context(tmp_path, host) -> BrokerBuildContext:
@@ -247,5 +286,47 @@ def test_external_testnet_bridge_rejects_credential_configuration(tmp_path) -> N
                 broker_config=config,
             )
         )
+
+    assert runtime.invoke_calls == []
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        replace(
+            HYPERLIQUID_TESTNET_PROFILE,
+            adapter_id="different-adapter",
+            version="9.9.9",
+            commit="d" * 40,
+        ),
+        replace(
+            HYPERLIQUID_TESTNET_PROFILE,
+            mapping_revision="drift-v2",
+            capabilities=CapabilityDescriptor(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                operations=HYPERLIQUID_TESTNET_PROFILE.capabilities.operations,
+                revision="drift-v2",
+            ),
+        ),
+        replace(
+            HYPERLIQUID_TESTNET_PROFILE,
+            capabilities=CapabilityDescriptor(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                operations={"market_data": frozenset({"ticker"})},
+                revision=HYPERLIQUID_TESTNET_PROFILE.capabilities.revision,
+            ),
+        ),
+    ],
+)
+def test_external_testnet_bridge_rejects_runtime_or_capability_profile_drift(
+    tmp_path,
+    profile,
+) -> None:
+    host, runtime = _host_for_profile(profile)
+
+    with pytest.raises(RuntimeError, match="runtime|capability|identity"):
+        build_broker_execution_port(_context(tmp_path, host))
 
     assert runtime.invoke_calls == []

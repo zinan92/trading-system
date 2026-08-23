@@ -59,6 +59,15 @@ class BrokerBuildContext:
         transport_profile = str(
             self.broker_config.get("transport_profile") or ""
         ).strip().lower()
+        external_host_markers = (
+            "external_host" in self.broker_config
+            or "standard_broker_release_sha" in self.broker_config
+            or transport_profile == "hyperliquid-testnet-default"
+        )
+        if external_host_markers and provider != "standard_broker":
+            raise ValueError(
+                "external host markers require provider=standard_broker"
+            )
         if provider == "standard_broker" and not (
             self.selection_environment or configured_environment
         ):

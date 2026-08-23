@@ -16,6 +16,20 @@ from services.broker_port import (
 
 STANDARD_BROKER_EXTERNAL_RELEASE_SHA = "916b0eb241b50d5f46be08150eb3197996530552"
 STANDARD_BROKER_EXTERNAL_PROFILE = "hyperliquid-testnet-default"
+STANDARD_BROKER_RUNTIME_ADAPTER_ID = "nautilus-hyperliquid"
+STANDARD_BROKER_RUNTIME_VERSION = "1.230.0"
+STANDARD_BROKER_RUNTIME_COMMIT = "8160730c7c550480b0a439fb11086a4c4de15f0b"
+STANDARD_BROKER_CAPABILITY_REVISION = "hyperliquid-testnet-runtime-v1"
+STANDARD_BROKER_EXTERNAL_OPERATIONS = {
+    "market_data": frozenset({"ticker"}),
+    "instrument": frozenset({"read"}),
+    "account": frozenset({"read", "positions"}),
+    "order_execution": frozenset(
+        {"submit", "cancel", "replace", "query", "open_orders", "fills"}
+    ),
+    "fee": frozenset({"read", "schedule", "fill"}),
+}
+STANDARD_BROKER_PROTECTION_PROFILE = "hyperliquid-testnet-protection-v1"
 STANDARD_BROKER_EXTERNAL_TESTNET_CAPABILITIES = BrokerCapabilities(
     frozenset({BrokerCapability.PREFLIGHT})
 )
@@ -90,6 +104,7 @@ class StandardBrokerExternalTestnetExecutionAdapter:
         identity = external_host.identity
         context = external_host.context
         runtime_identity = external_host.runtime_identity
+        protection = external_host.protection_capabilities
         if (
             identity.broker_id != "hyperliquid"
             or identity.environment is not BrokerEnvironment.TESTNET
@@ -103,6 +118,31 @@ class StandardBrokerExternalTestnetExecutionAdapter:
         ):
             raise StandardBrokerExternalTestnetHostError(
                 "external host identity does not match the trading-system binding"
+            )
+        if (
+            runtime_identity.adapter_id != STANDARD_BROKER_RUNTIME_ADAPTER_ID
+            or runtime_identity.version != STANDARD_BROKER_RUNTIME_VERSION
+            or runtime_identity.commit != STANDARD_BROKER_RUNTIME_COMMIT
+            or runtime_identity.mapping_revision != STANDARD_BROKER_CAPABILITY_REVISION
+            or external_host.capabilities.revision != STANDARD_BROKER_CAPABILITY_REVISION
+            or dict(external_host.capabilities.operations)
+            != STANDARD_BROKER_EXTERNAL_OPERATIONS
+        ):
+            raise StandardBrokerExternalTestnetHostError(
+                "external host runtime or capability identity does not match the accepted handoff"
+            )
+        if (
+            protection is None
+            or protection.profile_id != STANDARD_BROKER_PROTECTION_PROFILE
+            or protection.supports("reduce_only_close") is not True
+            or any(
+                supported is True
+                for name, supported in protection.values.items()
+                if name != "reduce_only_close"
+            )
+        ):
+            raise StandardBrokerExternalTestnetHostError(
+                "external protection capability identity does not match the accepted gap profile"
             )
 
         self._host = external_host

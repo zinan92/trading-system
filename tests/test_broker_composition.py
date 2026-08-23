@@ -339,6 +339,32 @@ def test_standard_broker_testnet_requires_explicit_transport_profile(tmp_path: P
         )
 
 
+@pytest.mark.parametrize("provider", [None, "standard-borker"])
+def test_external_host_markers_require_exact_standard_broker_provider(
+    tmp_path: Path,
+    provider: str | None,
+):
+    broker_config = {
+        "broker_id": "hyperliquid",
+        "environment": "testnet",
+        "transport_profile": "hyperliquid-testnet-default",
+        "external_host": object(),
+        "standard_broker_release_sha": "916b0eb241b50d5f46be08150eb3197996530552",
+    }
+    if provider is not None:
+        broker_config["provider"] = provider
+
+    with pytest.raises(ValueError, match="provider=standard_broker"):
+        build_broker_execution_port(
+            BrokerBuildContext(
+                output_root=tmp_path / "outputs",
+                execution_mode="live",
+                live_trading_enabled=False,
+                broker_config=broker_config,
+            )
+        )
+
+
 @pytest.mark.parametrize(
     ("selection_environment", "configured_environment"),
     [("testnet", "mainnet"), ("paper", "mainnet")],
