@@ -107,7 +107,7 @@ def _enabled_host() -> ExternalBrokerHost:
     from standard_broker.models import SignerKind
 
     profile = ExternalTransportProfile(
-        profile_id="hyperliquid-testnet-protection-binding",
+        profile_id="hyperliquid-testnet-position-protection",
         broker_id="hyperliquid",
         environment=BrokerEnvironment.TESTNET,
         execution_scope="hypercore:default",

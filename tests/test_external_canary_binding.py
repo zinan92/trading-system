@@ -111,6 +111,33 @@ def test_binding_rejects_unknown_idempotency_without_fallback() -> None:
     assert lifecycle.calls == []
 
 
+def test_protected_canary_binding_composes_order_facts_and_protection_under_one_profile() -> None:
+    from standard_broker.external_canary import ExternalCanaryBinding
+    from standard_broker.external_protection import ExternalProtectionBinding
+    from test_external_protection_binding import _enabled_host
+
+    host = _enabled_host()
+    session = host.context.session
+    lifecycle = LifecycleStub(session)
+    from standard_broker.adapters.hyperliquid.orders import HyperliquidExternalOrderAdapter
+
+    order = HyperliquidExternalOrderAdapter(host=host, lifecycle=lifecycle)
+    binding = ExternalCanaryBinding(
+        host=host,
+        order=order,
+        facts=FakeFacts(session),
+        expected_profile_id="hyperliquid-testnet-position-protection",
+        protection=ExternalProtectionBinding(host=host),
+    )
+
+    preflight = binding.preflight()
+    assert binding.protection is not None
+    assert binding.profile_id == "hyperliquid-testnet-position-protection"
+    assert preflight["protection_ready"] is True
+    assert preflight["broker_operation_invoked"] is False
+    assert lifecycle.calls == []
+
+
 def test_binding_read_facts_is_typed_and_does_not_accept_raw_mapping() -> None:
     binding, _, _, facts = _binding()
     result = binding.read_facts(
