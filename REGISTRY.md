@@ -142,6 +142,15 @@
   were used. The remaining gate is still Park's exact DCA plan, durable
   confirmation, approved account/approval identity, and local pinned signer
   path for an attended Testnet run.
+- TS-DCA-EXT-09 / #928 merged in trading-system PR #929 as
+  `main@6cd3ad973557551f6fb1504261a0cc558a906a75`. The operator module
+  contract documentation now names `next-entry` alongside `start` and
+  `flatten`, and `decision-log.md` records the pinned standard-broker
+  worktree, verification, and intentional no-deploy/no-cloud boundary. This
+  is documentation/safety evidence only; no network, credentials, orders,
+  deployment, or Live/Mainnet action occurred. The exact DCA plan,
+  confirmation, account/approval identity, and local pinned signer remain the
+  next human inputs.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
