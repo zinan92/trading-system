@@ -1,5 +1,7 @@
 """Exact Hyperliquid external transport profiles."""
 
+from datetime import timedelta
+
 from ...external_host import (
     ExternalBrokerBuildContext,
     ExternalBrokerHost,
@@ -17,7 +19,12 @@ from .external import (
 from .bridge import NautilusHyperliquidRuntime
 from .instruments import HyperliquidInstrumentAdapter
 from .orders import HyperliquidExternalOrderAdapter, HyperliquidRuntimeOrderAdapter
+from .account import HyperliquidRuntimeAccountAdapter
+from .fees import HyperliquidRuntimeFeeAdapter
 from .protection import default_external_testnet_protection_capabilities
+from ...external_canary import ExternalCanaryBinding, ExternalCanaryRuntimeFactsReader
+from ...market_data import FreshnessPolicy
+from .read_facts import HyperliquidExternalFactAdapter
 
 
 HYPERLIQUID_TESTNET_PROFILE = ExternalTransportProfile(
@@ -75,3 +82,45 @@ def build_hyperliquid_testnet_order_adapter(
         ledger=ledger,
     )
     return HyperliquidExternalOrderAdapter(host=host, lifecycle=lifecycle)
+
+
+def build_hyperliquid_testnet_canary_binding(
+    *,
+    context: ExternalBrokerBuildContext,
+    runtime: NautilusHyperliquidRuntime,
+    instruments: HyperliquidInstrumentAdapter,
+    ledger: RuntimeFactLedger,
+) -> ExternalCanaryBinding:
+    """Build the public typed order/facts binding consumed by a canary host."""
+
+    host = build_hyperliquid_testnet_host(context=context, runtime=runtime)
+    lifecycle = HyperliquidRuntimeOrderAdapter(
+        runtime=runtime,
+        instruments=instruments,
+        ledger=ledger,
+    )
+    order = HyperliquidExternalOrderAdapter(host=host, lifecycle=lifecycle)
+    account = HyperliquidRuntimeAccountAdapter(
+        runtime=runtime,
+        instruments=instruments,
+        ledger=ledger,
+    )
+    fees = HyperliquidRuntimeFeeAdapter(
+        runtime=runtime,
+        instruments=instruments,
+        ledger=ledger,
+    )
+    facts = ExternalCanaryRuntimeFactsReader(
+        context=context,
+        order=lifecycle,
+        account=account,
+        fees=fees,
+        runtime=runtime,
+        instruments=instruments,
+        market=HyperliquidExternalFactAdapter(
+            context=context,
+            instruments=instruments,
+            freshness_policy=FreshnessPolicy(timedelta(minutes=2)),
+        ),
+    )
+    return ExternalCanaryBinding(host=host, order=order, facts=facts)

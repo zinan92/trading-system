@@ -44,6 +44,7 @@ from .profile import (
     HYPERLIQUID_TESTNET_PROFILE,
     build_hyperliquid_testnet_host,
     build_hyperliquid_testnet_order_adapter,
+    build_hyperliquid_testnet_canary_binding,
     resolve_external_profile,
 )
 from .resilience import (
@@ -85,6 +86,7 @@ __all__ = [
     "HYPERLIQUID_TESTNET_PROFILE",
     "build_hyperliquid_testnet_host",
     "build_hyperliquid_testnet_order_adapter",
+    "build_hyperliquid_testnet_canary_binding",
     "resolve_external_profile",
     "HyperliquidRuntimeReconciliationAdapter",
     "RateLimitError",
