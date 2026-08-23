@@ -37,6 +37,7 @@ from .external_host import (
     ExternalHostRequest,
     ExternalPreflightReceipt,
     ExternalRuntimeIdentity,
+    ExternalTransportProfile,
 )
 from .fees import (
     FeeEvent,
@@ -205,6 +206,7 @@ __all__ = [
     "ExternalHostRequest",
     "ExternalPreflightReceipt",
     "ExternalRuntimeIdentity",
+    "ExternalTransportProfile",
     "RecordingEvent",
     "RecordingTrack",
     "SignerKind",

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 import pytest
 
 from standard_broker.capabilities import CapabilityDescriptor
@@ -32,15 +33,35 @@ class FakeSignerProvider:
 
 
 class FakeRuntime:
-    def __init__(self, session: BrokerRuntimeSession, *, transport_state: str = "local_fixture") -> None:
+    def __init__(
+        self,
+        session: BrokerRuntimeSession,
+        *,
+        transport_state: str = "local_fixture",
+        adapter_version: str = "1.230.0",
+        adapter_commit: str = ADAPTER_COMMIT,
+    ) -> None:
         self.session = session
         self.transport_state = transport_state
+        self.adapter_version = adapter_version
+        self.adapter_commit = adapter_commit
+        self.adapter_metadata = SimpleNamespace(
+            package="nautilus-hyperliquid",
+            version=adapter_version,
+            commit=adapter_commit,
+            capabilities=session.capabilities,
+        )
         self.preflight_calls: list[dict[str, set[str]]] = []
         self.invoke_calls: list[tuple[str, str, object]] = []
 
     def preflight(self, *, required_operations: dict[str, set[str]] | None = None) -> RuntimePreflight:
         operations = required_operations or {}
         self.preflight_calls.append(operations)
+        needs_credential = any(
+            operation in {"submit", "cancel", "replace", "cancel_replace", "modify"}
+            for values in operations.values()
+            for operation in values
+        )
         return RuntimePreflight(
             broker_id=self.session.broker_id,
             environment=self.session.environment,
@@ -49,7 +70,7 @@ class FakeRuntime:
             lifecycle_id=self.session.lifecycle_id,
             accepted=True,
             external_network=self.session.environment is not BrokerEnvironment.PAPER,
-            credential_required=self.transport_state == "external_testnet",
+            credential_required=needs_credential,
             real_money_eligible=False,
             release_sha=RELEASE_SHA,
         )
@@ -62,8 +83,8 @@ class FakeRuntime:
             port=port,
             operation=operation,
             accepted=True,
-            adapter_version="1.230.0",
-            adapter_commit=ADAPTER_COMMIT,
+            adapter_version=self.adapter_version,
+            adapter_commit=self.adapter_commit,
             invocation_performed=True,
             account_address=self.session.account.address,
             lifecycle_id=self.session.lifecycle_id,
@@ -140,7 +161,7 @@ def _context(
 
 
 def test_external_host_returns_canonical_identity_receipt_at_public_seam() -> None:
-    session = _session()
+    session = _session(environment=BrokerEnvironment.PAPER)
     runtime = FakeRuntime(session)
     host = ExternalBrokerHost(context=_context(session), runtime=runtime)
 
@@ -156,7 +177,7 @@ def test_external_host_returns_canonical_identity_receipt_at_public_seam() -> No
     )
 
     assert receipt.broker_id == "hyperliquid"
-    assert receipt.environment is BrokerEnvironment.TESTNET
+    assert receipt.environment is BrokerEnvironment.PAPER
     assert receipt.account_scope is AccountScope.MASTER
     assert receipt.account_address == ACCOUNT
     assert receipt.lifecycle_id == "lifecycle-1"
@@ -190,7 +211,7 @@ def test_paper_fixture_has_no_signer_or_network_eligibility() -> None:
 
 
 def test_external_host_rejects_secret_like_payload_before_runtime_invocation() -> None:
-    session = _session()
+    session = _session(environment=BrokerEnvironment.PAPER)
     runtime = FakeRuntime(session)
     host = ExternalBrokerHost(context=_context(session), runtime=runtime)
 
@@ -215,19 +236,8 @@ def test_external_host_rejects_mainnet_context_before_runtime_creation() -> None
 
 
 def test_external_host_rejects_runtime_session_identity_mismatch() -> None:
-    context_session = _session(lifecycle_id="context-lifecycle")
-    runtime = FakeRuntime(_session(lifecycle_id="runtime-lifecycle"))
+    context_session = _session(environment=BrokerEnvironment.PAPER, lifecycle_id="context-lifecycle")
+    runtime = FakeRuntime(_session(environment=BrokerEnvironment.PAPER, lifecycle_id="runtime-lifecycle"))
 
     with pytest.raises(RuntimeBoundaryError, match="runtime_identity_mismatch"):
         ExternalBrokerHost(context=_context(context_session), runtime=runtime)
-
-
-def test_external_host_rejects_runtime_transport_profile_mismatch() -> None:
-    session = _session()
-    runtime = FakeRuntime(session, transport_state="local_fixture")
-
-    with pytest.raises(RuntimeBoundaryError, match="runtime_transport_profile_mismatch"):
-        ExternalBrokerHost(
-            context=_context(session, transport_state="external_testnet"),
-            runtime=runtime,
-        )

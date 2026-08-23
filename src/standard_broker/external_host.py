@@ -102,6 +102,83 @@ class ExternalRuntimeIdentity:
 
 
 @dataclass(frozen=True)
+class ExternalTransportProfile:
+    """One exact, non-wildcard external transport profile."""
+
+    profile_id: str
+    broker_id: str
+    environment: BrokerEnvironment
+    execution_scope: str
+    adapter_id: str
+    version: str
+    commit: str
+    mapping_revision: str
+    transport_state: str
+    signer_kind: SignerKind
+    capabilities: CapabilityDescriptor
+
+    def __post_init__(self) -> None:
+        for field in (
+            "profile_id",
+            "broker_id",
+            "execution_scope",
+            "adapter_id",
+            "version",
+            "mapping_revision",
+        ):
+            _safe_text(getattr(self, field), field)
+        _require_sha(self.commit, "profile commit")
+        if not isinstance(self.environment, BrokerEnvironment):
+            raise TypeError("profile environment must be a BrokerEnvironment")
+        if not isinstance(self.signer_kind, SignerKind):
+            raise TypeError("profile signer_kind must be a SignerKind")
+        if self.transport_state not in _ALLOWED_TRANSPORT_STATES:
+            raise RuntimeBoundaryError(
+                "external_profile_invalid",
+                "profile transport_state must be local_fixture or external_testnet",
+            )
+        if not isinstance(self.capabilities, CapabilityDescriptor):
+            raise TypeError("profile capabilities must be a CapabilityDescriptor")
+
+    def validate(
+        self,
+        *,
+        context: "ExternalBrokerBuildContext",
+        runtime: "_ExternalRuntimePort",
+        require_approval: bool,
+    ) -> None:
+        if (
+            context.identity.broker_id != self.broker_id
+            or context.identity.environment is not self.environment
+            or context.identity.execution_scope != self.execution_scope
+            or context.runtime_identity.adapter_id != self.adapter_id
+            or context.runtime_identity.version != self.version
+            or context.runtime_identity.commit != self.commit
+            or context.runtime_identity.mapping_revision != self.mapping_revision
+            or context.runtime_identity.transport_state != self.transport_state
+            or context.identity.signer_kind is not self.signer_kind
+            or context.capabilities != self.capabilities
+            or runtime.session != context.session
+            or runtime.transport_state != self.transport_state
+        ):
+            raise RuntimeBoundaryError(
+                "external_profile_mismatch",
+                "context or runtime does not match the exact external transport profile",
+            )
+        if require_approval:
+            if context.approval is None:
+                raise RuntimeBoundaryError(
+                    "external_approval_required",
+                    "exact external Testnet profile requires an approval artifact",
+                )
+            _validate_approval_identity(
+                approval=context.approval,
+                session=context.session,
+                release_sha=context.release_sha,
+            )
+
+
+@dataclass(frozen=True)
 class ExternalBrokerBuildContext:
     """Explicit, non-secret identity used to assemble an external host."""
 
@@ -243,11 +320,22 @@ class ExternalBrokerHost:
 
     name = "external_broker_host"
 
-    def __init__(self, *, context: ExternalBrokerBuildContext, runtime: _ExternalRuntimePort) -> None:
+    def __init__(
+        self,
+        *,
+        context: ExternalBrokerBuildContext,
+        runtime: _ExternalRuntimePort,
+        profile: ExternalTransportProfile | None = None,
+    ) -> None:
         if not isinstance(context, ExternalBrokerBuildContext):
             raise TypeError("ExternalBrokerHost requires an ExternalBrokerBuildContext")
         if not isinstance(runtime, _ExternalRuntimePort):
             raise TypeError("ExternalBrokerHost runtime must expose the public runtime port")
+        if context.session.environment is BrokerEnvironment.TESTNET and profile is None:
+            raise RuntimeBoundaryError(
+                "external_profile_required",
+                "Testnet hosts must be built through an exact external transport profile",
+            )
         if runtime.session != context.session:
             raise RuntimeBoundaryError(
                 "runtime_identity_mismatch",
@@ -258,8 +346,11 @@ class ExternalBrokerHost:
                 "runtime_transport_profile_mismatch",
                 "runtime transport profile does not match the external host context",
             )
+        if profile is not None:
+            profile.validate(context=context, runtime=runtime, require_approval=False)
         self._context = context
         self._runtime = runtime
+        self._profile = profile
 
     @property
     def identity(self) -> BrokerIdentity:
@@ -285,6 +376,8 @@ class ExternalBrokerHost:
     ) -> ExternalPreflightReceipt:
         request_id = _safe_text(request_id, "request_id")
         normalized = self._normalize_operations(required_operations or {})
+        if self._profile is not None:
+            self._profile.validate(context=self._context, runtime=self._runtime, require_approval=True)
         for port, operations in normalized:
             for operation in operations:
                 self.capabilities.require(port, operation)

@@ -33,6 +33,11 @@ from .protection import (
     ProtectionLifecycleStatus,
     ProtectionRetryPlan,
 )
+from .profile import (
+    HYPERLIQUID_TESTNET_PROFILE,
+    build_hyperliquid_testnet_host,
+    resolve_external_profile,
+)
 from .resilience import (
     HyperliquidRuntimeReconciliationAdapter,
     RateLimitError,
@@ -65,6 +70,9 @@ __all__ = [
     "ProtectionLifecycleState",
     "ProtectionLifecycleStatus",
     "ProtectionRetryPlan",
+    "HYPERLIQUID_TESTNET_PROFILE",
+    "build_hyperliquid_testnet_host",
+    "resolve_external_profile",
     "HyperliquidRuntimeReconciliationAdapter",
     "RateLimitError",
     "ObservationSource",
