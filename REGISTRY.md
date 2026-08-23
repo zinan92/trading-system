@@ -23,12 +23,13 @@
 - Runtime RT-09 is merged in PR #47 at `c689a29`: Paper runtime readiness evidence with distinct Paper/Testnet/Live identity, reconciliation evidence schema, provenance/secret checks, and explicit pending external gate.
 - SB-EXT-01A is merged in PR #57 at `043074b`: reusable typed external Broker host context and canonical receipt seam with runtime/transport attestation, digest/provenance binding, Mainnet fail-closed behavior, and fixture-only public-boundary tests.
 - SB-EXT-01B is merged in PR #58 at `c7d6841`: exact Hyperliquid Testnet profile resolution, API-agent signer binding, runtime metadata attestation, approval/release/lifecycle checks, capability preflight, and no-fallback tests.
+- SB-EXT-01F is merged in PR #59 at `f9cada9`: explicit protection capability matrix, reduce-only-close distinction, and ProtectionGroup fail-closed gating for unsupported external protection semantics.
 - Decision A is recorded in `docs/adr/0005-rt06-reconciliation-seam.md`: RT-06 is not a second order lifecycle owner; RT-08 will compose the unique lifecycle.
 
 ## Next
 
 - TESTNET-01 (#30) is merged in PR #48 at `f5dbf87`: human-gated Hyperliquid Testnet proof for one default validator-operated perpetual, including submit/query/cancel-replace/fill/fee/position/reconciliation evidence. The final account was flat with no open orders; evidence is stored outside the repository.
-- SB-EXT-01C–01G (#52–#56): remain blocked behind the merged read/fact, protection, lifecycle, reconciliation, and conformance work.
+- SB-EXT-01C–01E and 01G (#52–#54, #56): remain blocked behind the read/fact, order lifecycle, reconciliation, and conformance work.
 - Mainnet/live remains a separate future milestone requiring its own specification, credentials, release identity, approval, and evidence.
 
 ## Safety boundary
