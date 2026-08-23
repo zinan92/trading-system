@@ -2,9 +2,9 @@
 
 The command is deliberately small at the boundary.  ``digest`` is the
 default local-only action; ``preflight`` starts the exact opt-in protection
-runtime without resolving a signer or invoking a broker operation; ``start``
-and ``flatten`` are the only exposure-changing actions and require a durable
-Park confirmation plus an explicit operator acknowledgement.
+runtime without resolving a signer or invoking a broker operation; ``start``,
+``next-entry``, and ``flatten`` are the only exposure-changing actions and
+require a durable Park confirmation plus an explicit operator acknowledgement.
 
 This module owns no venue serialization and does not schedule or retry a
 strategy.  It composes the public standard-broker canary binding with the
