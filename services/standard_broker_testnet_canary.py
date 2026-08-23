@@ -1289,17 +1289,27 @@ class TestnetCanary:
         *,
         timestamp: str,
         operation: str,
+        request: TestnetCanaryOrderRequest | None = None,
     ) -> None:
         order_id = self._safe_identifier(getattr(receipt, "order_id", ""))
         if not order_id:
             raise TestnetCanaryError(f"{operation} receipt order identity is missing")
         expected_order_id = str(state.get("entry_order_id") or "").strip()
-        if expected_order_id and order_id != expected_order_id:
+        if (
+            expected_order_id
+            and order_id != expected_order_id
+            and not (request is not None and request.close_position)
+        ):
             raise TestnetCanaryError(
                 f"{operation} receipt order identity contradicts entry order"
             )
         self._validate_receipt_identity(state, receipt, operation=operation)
-        self._validate_receipt_payload(state, receipt, operation=operation)
+        self._validate_receipt_payload(
+            state,
+            receipt,
+            operation=operation,
+            request=request,
+        )
         provenance = getattr(receipt, "provenance", None)
         safe_provenance = {
             key: self._safe_identifier(getattr(provenance, key))
@@ -1389,6 +1399,7 @@ class TestnetCanary:
         receipt: object,
         *,
         operation: str,
+        request: TestnetCanaryOrderRequest | None = None,
     ) -> None:
         for field in ("client_order_id", "broker_order_id"):
             if not self._safe_identifier(getattr(receipt, field, "")):
@@ -1403,11 +1414,11 @@ class TestnetCanary:
             average_price = self._receipt_decimal_value(average, f"{operation} average_fill_price")
             if average_price <= 0:
                 raise TestnetCanaryError(f"{operation} receipt average_fill_price is invalid")
-        request = state.get("entry_intent") or {}
-        expected_instrument = str(request.get("instrument_id") or "")
-        expected_side = str(request.get("side") or "")
-        expected_order_type = str(request.get("order_type") or "")
-        expected_tif = str(request.get("time_in_force") or "")
+        request_data = self._safe_request(request) if request is not None else state.get("entry_intent") or {}
+        expected_instrument = str(request_data.get("instrument_id") or "")
+        expected_side = str(request_data.get("side") or "")
+        expected_order_type = str(request_data.get("order_type") or "")
+        expected_tif = str(request_data.get("time_in_force") or "")
         if (
             str(getattr(receipt, "instrument_id", "") or "") != expected_instrument
             or str(getattr(getattr(receipt, "side", ""), "value", getattr(receipt, "side", "")) or "") != expected_side
@@ -1416,10 +1427,10 @@ class TestnetCanary:
         ):
             raise TestnetCanaryError(f"{operation} receipt request identity mismatch")
         receipt_quantity = self._receipt_decimal_value(getattr(receipt, "quantity", None), f"{operation} quantity")
-        if receipt_quantity != self._receipt_decimal_value(request.get("quantity"), f"{operation} request quantity"):
+        if receipt_quantity != self._receipt_decimal_value(request_data.get("quantity"), f"{operation} request quantity"):
             raise TestnetCanaryError(f"{operation} receipt quantity identity mismatch")
         receipt_price = self._receipt_decimal_value(getattr(receipt, "limit_price", None), f"{operation} limit_price")
-        if receipt_price != self._receipt_decimal_value(request.get("limit_price"), f"{operation} request limit_price"):
+        if receipt_price != self._receipt_decimal_value(request_data.get("limit_price"), f"{operation} request limit_price"):
             raise TestnetCanaryError(f"{operation} receipt price identity mismatch")
 
     def _append_lineage(
