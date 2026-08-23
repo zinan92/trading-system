@@ -60,6 +60,11 @@
   and typed facts into CANARY-01/02, and reads the fresh market fact only
   after durable Park confirmation; no generic strategy adapter or fallback was
   changed.
+- TS-EXT-03 / #902 merged in trading-system PR #903 as
+  `main@b5777dc5bbf061f58858ded42a35c56075220040`. The declared deployment
+  dependency now pins standard-broker main at the reviewed public canary
+  binding/reconciliation SHA; the wrapper is no longer green only because of
+  a local source-path override.
 - The corresponding standard-broker consumer seam is merged in PR #65,
   hardened host-backed fact reads in PR #68, and watermark-bound snapshot
   reader in PR #71. #895 is now implementation-ready but still needs Park's
