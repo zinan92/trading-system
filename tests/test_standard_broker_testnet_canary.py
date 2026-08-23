@@ -60,6 +60,7 @@ class FakeCanaryBroker:
         self.preflight_overrides: dict[str, object] = {}
         self.active_request = None
         self.allow_recovery = False
+        self.market_fact_value = None
 
     def preflight(self) -> dict:
         self.calls.append(("preflight", None))
@@ -75,6 +76,7 @@ class FakeCanaryBroker:
             "mapping_revision": "hyperliquid-testnet-runtime-v1",
         }
         market_fact["fact_digest"] = market_fact_digest(market_fact)
+        self.market_fact_value = market_fact
         return {
             "canary_ready": True,
             "host_ready": True,
@@ -94,6 +96,12 @@ class FakeCanaryBroker:
             "market_fact": market_fact,
             **self.preflight_overrides,
         }
+
+    def market_fact(self, *, instrument_id: str, now):
+        del now
+        value = dict(self.market_fact_value or {})
+        value["instrument_id"] = instrument_id
+        return value
 
     def submit(self, request):
         self.calls.append(("submit", request))
