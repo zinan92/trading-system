@@ -367,3 +367,20 @@ def test_external_testnet_bridge_rejects_incomplete_or_extra_protection_gap_matr
         build_broker_execution_port(_context(tmp_path, host))
 
     assert runtime.invoke_calls == []
+
+
+def test_external_testnet_bridge_rejects_protection_profile_id_drift(tmp_path) -> None:
+    accepted = HYPERLIQUID_TESTNET_PROFILE.protection_capabilities
+    profile = replace(
+        HYPERLIQUID_TESTNET_PROFILE,
+        protection_capabilities=ProtectionCapabilityMatrix(
+            profile_id="drift-v2",
+            values=accepted.values,
+        ),
+    )
+    host, runtime = _host_for_profile(profile)
+
+    with pytest.raises(RuntimeError, match="protection capability identity"):
+        build_broker_execution_port(_context(tmp_path, host))
+
+    assert runtime.invoke_calls == []
