@@ -230,3 +230,76 @@ def build_hyperliquid_testnet_position_protection_binding_from_runtime(
         runtime=runtime,
     )
     return ExternalProtectionBinding(host=host)
+
+
+def build_hyperliquid_testnet_protected_canary_binding_from_runtime(
+    *,
+    context: ExternalBrokerBuildContext,
+    runtime: NautilusHyperliquidRuntime,
+    ledger: RuntimeFactLedger,
+    snapshot_reader: ExternalCanarySnapshotReader | None = None,
+) -> ExternalCanaryBinding:
+    """Compose order/facts/protection under one opt-in runtime profile."""
+
+    host = build_hyperliquid_testnet_position_protection_host(
+        context=context,
+        runtime=runtime,
+    )
+    mapper = HyperliquidExternalFactAdapter(
+        context=context,
+        instruments=None,
+        freshness_policy=FreshnessPolicy(timedelta(minutes=2)),
+    )
+    envelope = host.read_fact(
+        request=ExternalHostRequest(
+            request_id=f"protected-canary-instruments:{context.session.lifecycle_id}",
+            request=CanonicalHostRequest(port="instrument", operation="read"),
+        ),
+        mapper=lambda raw: mapper.map_instruments(
+            request_id=f"protected-canary-instruments:{context.session.lifecycle_id}",
+            raw=raw,
+        ),
+    )
+    mapped = envelope.data
+    if not mapped:
+        raise RuntimeBoundaryError(
+            "protected_canary_instrument_metadata_missing",
+            "typed instrument reader returned no instruments",
+        )
+    instruments = HyperliquidInstrumentAdapter(
+        InstrumentCatalog({item.canonical_symbol: item for item in mapped})
+    )
+    lifecycle = HyperliquidRuntimeOrderAdapter(
+        runtime=runtime,
+        instruments=instruments,
+        ledger=ledger,
+    )
+    facts_mapper = HyperliquidExternalFactAdapter(
+        context=context,
+        instruments=instruments,
+        freshness_policy=FreshnessPolicy(timedelta(minutes=2)),
+    )
+    snapshot_reader = snapshot_reader or HyperliquidExternalSnapshotReader(
+        context=context,
+        host=host,
+        order=lifecycle,
+        facts_mapper=facts_mapper,
+        instruments=instruments,
+    )
+    order = HyperliquidExternalOrderAdapter(host=host, lifecycle=lifecycle)
+    facts = ExternalCanaryRuntimeFactsReader(
+        context=context,
+        host=host,
+        order=lifecycle,
+        snapshot_reader=snapshot_reader,
+        instruments=instruments,
+        market=facts_mapper,
+    )
+    protection = ExternalProtectionBinding(host=host)
+    return ExternalCanaryBinding(
+        host=host,
+        order=order,
+        facts=facts,
+        expected_profile_id=HYPERLIQUID_TESTNET_POSITION_PROTECTION_PROFILE.profile_id,
+        protection=protection,
+    )

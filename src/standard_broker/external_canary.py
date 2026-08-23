@@ -28,6 +28,7 @@ from .external_reconciliation import (
     ExternalReconciliationObservation,
     ExternalReconciliationSnapshot,
 )
+from .external_protection import ExternalProtectionBinding
 from .fees import FeeEvent
 from .host import CanonicalHostRequest, CanonicalPortQuery
 from .models import BrokerEnvironment
@@ -407,6 +408,8 @@ class ExternalCanaryBinding:
         host: ExternalBrokerHost,
         order: object,
         facts: ExternalCanaryFactsReader,
+        expected_profile_id: str = "hyperliquid-testnet-default",
+        protection: ExternalProtectionBinding | None = None,
     ) -> None:
         if not isinstance(host, ExternalBrokerHost):
             raise TypeError("canary binding requires the public ExternalBrokerHost")
@@ -416,7 +419,7 @@ class ExternalCanaryBinding:
                 "canary_profile_invalid",
                 "canary binding requires Hyperliquid Testnet",
             )
-        if host.external_profile_id != "hyperliquid-testnet-default":
+        if host.external_profile_id != expected_profile_id:
             raise RuntimeBoundaryError(
                 "canary_profile_invalid",
                 "canary binding requires the exact external Testnet profile",
@@ -428,12 +431,21 @@ class ExternalCanaryBinding:
             )
         if not isinstance(facts, ExternalCanaryFactsReader):
             raise TypeError("canary binding requires a typed facts reader")
+        if protection is not None:
+            if not isinstance(protection, ExternalProtectionBinding):
+                raise TypeError("protected canary binding requires the public ExternalProtectionBinding")
+            if protection.runtime_session != context.session:
+                raise RuntimeBoundaryError(
+                    "canary_protection_identity_mismatch",
+                    "protected canary binding must share the exact runtime session",
+                )
         required_order_methods = ("submit", "query", "replace", "cancel", "fills", "open_orders")
         if any(not callable(getattr(order, method, None)) for method in required_order_methods):
             raise TypeError("canary binding requires the public external order facade")
         self._host = host
         self._order = order
         self._facts = facts
+        self._protection = protection
         self._context = context
         self._idempotency: dict[str, tuple[str, OrderIntent]] = {}
         self._intents: dict[str, OrderIntent] = {}
@@ -450,6 +462,14 @@ class ExternalCanaryBinding:
     def transport_state(self) -> str:
         return "external_testnet"
 
+    @property
+    def protection(self) -> ExternalProtectionBinding | None:
+        return self._protection
+
+    @property
+    def profile_id(self) -> str | None:
+        return self._host.external_profile_id
+
     def preflight(self) -> dict[str, Any]:
         receipt = self._host.preflight(
             request_id=f"canary-preflight:{self._context.session.lifecycle_id}",
@@ -457,10 +477,30 @@ class ExternalCanaryBinding:
         )
         protection = self._host.protection_capabilities
         protection_gap = "external_protection_unavailable"
-        if protection is not None:
+        protection_ready = False
+        if protection is not None and self._protection is not None:
             unsupported = sorted(
-                name for name, supported in protection.values.items() if supported is not True
+                name
+                for name in {
+                    "submit",
+                    "cancel",
+                    "replace",
+                    "query",
+                    "reduce_only",
+                    "mark_price_trigger",
+                    "grouped_tp_sl",
+                    "sibling_cancellation",
+                    "position_following",
+                    "position_level_tpsl",
+                    "take_profit_market",
+                    "stop_loss_market",
+                    "position_coverage",
+                    "partial_fill_repair",
+                    "cancel_replace",
+                }
+                if protection.supports(name) is not True
             )
+            protection_ready = not unsupported
             if unsupported:
                 protection_gap = "capability_gap:protection_order:" + ",".join(unsupported)
         result: dict[str, Any] = {
@@ -477,7 +517,7 @@ class ExternalCanaryBinding:
             "real_money_eligible": receipt.real_money_eligible,
             "broker_operation_invoked": False,
             "preflight_io_performed": False,
-            "protection_ready": False,
+            "protection_ready": protection_ready,
             "protection_gap": protection_gap,
             "upstream_receipt_digest": receipt.receipt_digest,
         }
