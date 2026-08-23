@@ -118,7 +118,7 @@ def _args(tmp_path: Path, plan_path: Path, confirmation_path: Path | None = None
     ]
     if confirmation_path is not None:
         values.extend(["--confirmation", str(confirmation_path)])
-    if action in {"start", "flatten"}:
+    if action in {"start", "next-entry", "flatten"}:
         values.extend(
             [
                 "--secret-file",
@@ -289,4 +289,53 @@ def test_flatten_reuses_durable_state_and_requires_flat_proof(tmp_path: Path, mo
     assert result["status"] == "FLAT_RECONCILED"
     assert calls[0]["confirmation"]["plan_digest"] == plan.plan_digest
     assert "bundle" not in calls[0]
+    assert calls[-1] == "close"
+
+
+def test_next_entry_submits_one_attended_level_and_reprotects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    plan_path, plan = _write_plan(tmp_path)
+    confirmation_path, _output_root = _write_confirmation(tmp_path, plan)
+    calls: list[object] = []
+
+    class FakeLifecycle:
+        current_path = tmp_path / "outputs" / "standard_broker_external_dca" / "current.json"
+
+        def __init__(self) -> None:
+            self.state = {
+                "status": "PROTECTION_ACTIVE",
+                "entry_order_id": f"{plan.plan_id}:entry:0",
+                "next_action": "submit_next_entry_only_after_attended_price_gate",
+            }
+
+        def submit_next_entry(self, *_args, **_kwargs):
+            calls.append("submit_next_entry")
+            self.state = {
+                **self.state,
+                "status": "ENTRY_FILLED_PENDING_FACTS",
+                "entry_order_id": f"{plan.plan_id}:entry:1",
+                "next_action": "read_entry_facts",
+            }
+            return self.state
+
+        def on_entry_facts(self, *_args, **kwargs):
+            calls.append(("facts", kwargs["bundle"]))
+            self.state = {**self.state, "status": "PROTECTION_ACTIVE", "next_action": "attended_next_entry"}
+            return self.state
+
+        def snapshot(self):
+            return self.state
+
+    adapter = SimpleNamespace(read_facts=lambda **_kwargs: calls.append("read_facts") or object())
+    lifecycle = FakeLifecycle()
+    runtime = SimpleNamespace(close=lambda: calls.append("close"))
+    binding = SimpleNamespace(protection=object())
+    monkeypatch.setattr(cli, "_build_external_protection", lambda _plan, _args, *, canary: (runtime, binding))
+    monkeypatch.setattr(cli, "_build_lifecycle", lambda _root, _binding: (lifecycle, adapter))
+
+    assert cli.main(_args(tmp_path, plan_path, confirmation_path, action="next-entry")) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "PROTECTION_ACTIVE"
+    assert result["action"] == "next-entry"
+    assert calls[0:2] == ["submit_next_entry", "read_facts"]
+    assert calls[2][0] == "facts"
     assert calls[-1] == "close"

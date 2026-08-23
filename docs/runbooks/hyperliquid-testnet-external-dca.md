@@ -56,6 +56,30 @@ is filled, and then submits/reconciles the position-following TP/SL group. It
 stops at `WAITING_ENTRY`, `PROTECTION_ACTIVE`, or durable `BLOCKED`. A further
 DCA level requires a new attended command and the same confirmation gate.
 
+## One attended next entry
+
+After `start` reaches `PROTECTION_ACTIVE`, one additional approved ladder level
+can be submitted manually:
+
+```bash
+python3 -m pipelines.standard_broker_external_dca \
+  --action next-entry \
+  --plan <path-to-external-dca-plan.json> \
+  --confirmation <path-to-confirmed-park-projection.json> \
+  --account-address <testnet-account-address> \
+  --secret-file <local-testnet-signer-file> \
+  --approval-id <human-testnet-approval-id> \
+  --approved-by park \
+  --output-root <output-root> \
+  --execute-testnet \
+  --acknowledge I_UNDERSTAND_ONE_ATTENDED_EXTERNAL_DCA_TESTNET_ACTION
+```
+
+This command submits exactly one next level, reads its canonical facts when it
+fills, and re-confirms position-following protection. It never loops or
+submits another level automatically. Repeat only while Park is present and the
+durable confirmation remains valid.
+
 ## One attended flatten
 
 Use the same plan, confirmation, account, approval, signer, output root, and
