@@ -19,10 +19,12 @@ from .external import (
 from .bridge import NautilusHyperliquidRuntime
 from .instruments import HyperliquidInstrumentAdapter
 from .orders import HyperliquidExternalOrderAdapter, HyperliquidRuntimeOrderAdapter
-from .account import HyperliquidRuntimeAccountAdapter
-from .fees import HyperliquidRuntimeFeeAdapter
 from .protection import default_external_testnet_protection_capabilities
-from ...external_canary import ExternalCanaryBinding, ExternalCanaryRuntimeFactsReader
+from ...external_canary import (
+    ExternalCanaryBinding,
+    ExternalCanaryRuntimeFactsReader,
+    ExternalCanarySnapshotReader,
+)
 from ...market_data import FreshnessPolicy
 from .read_facts import HyperliquidExternalFactAdapter
 
@@ -90,6 +92,7 @@ def build_hyperliquid_testnet_canary_binding(
     runtime: NautilusHyperliquidRuntime,
     instruments: HyperliquidInstrumentAdapter,
     ledger: RuntimeFactLedger,
+    snapshot_reader: ExternalCanarySnapshotReader,
 ) -> ExternalCanaryBinding:
     """Build the public typed order/facts binding consumed by a canary host."""
 
@@ -100,22 +103,11 @@ def build_hyperliquid_testnet_canary_binding(
         ledger=ledger,
     )
     order = HyperliquidExternalOrderAdapter(host=host, lifecycle=lifecycle)
-    account = HyperliquidRuntimeAccountAdapter(
-        runtime=runtime,
-        instruments=instruments,
-        ledger=ledger,
-    )
-    fees = HyperliquidRuntimeFeeAdapter(
-        runtime=runtime,
-        instruments=instruments,
-        ledger=ledger,
-    )
     facts = ExternalCanaryRuntimeFactsReader(
         context=context,
+        host=host,
         order=lifecycle,
-        account=account,
-        fees=fees,
-        runtime=runtime,
+        snapshot_reader=snapshot_reader,
         instruments=instruments,
         market=HyperliquidExternalFactAdapter(
             context=context,

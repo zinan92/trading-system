@@ -9,6 +9,9 @@ from standard_broker.external_canary import (
     ExternalCanaryFactBundle,
 )
 from standard_broker.models import BrokerEnvironment
+from standard_broker.models import Provenance
+from standard_broker.external_host import ExternalFactEnvelope, ExternalHostRequest
+from standard_broker.host import CanonicalHostRequest, CanonicalPortQuery
 from standard_broker.orders import OrderState
 from standard_broker.adapters.hyperliquid import (
     HyperliquidInstrumentAdapter,
@@ -48,6 +51,11 @@ class FakeFacts:
 
     def market_fact(self, *, instrument_id: str, now: datetime) -> dict[str, object]:
         return {"instrument_id": instrument_id, "freshness": "fresh"}
+
+
+class FakeSnapshotReader:
+    def read_reconciliation(self, *, order_id: str, instrument_id: str, now: datetime):
+        raise RuntimeError("fixture snapshot reader is not exercised by preflight")
 
 
 def _binding():
@@ -144,8 +152,47 @@ def test_public_factory_composes_external_canary_binding_without_network() -> No
         runtime=runtime,
         instruments=instruments,
         ledger=RuntimeFactLedger(),
+        snapshot_reader=FakeSnapshotReader(),
     )
 
     preflight = binding.preflight()
     assert preflight["canary_ready"] is True
     assert backend.calls == []
+
+
+def test_host_typed_fact_read_authorizes_without_exposing_internal_payload() -> None:
+    binding, _, runtime, _ = _binding()
+    calls = []
+    provenance = Provenance(
+        source="nautilus-hyperliquid.testnet",
+        execution_scope=binding.context.identity.execution_scope,
+        transport_state="external_testnet",
+        mapping_revision=binding.context.capabilities.revision,
+    )
+
+    def invoke_fact(port, operation, request):
+        calls.append((port, operation, request))
+        return {"data": {"ok": True}, "provenance": provenance}
+
+    runtime.invoke_fact = invoke_fact
+    request = ExternalHostRequest(
+        request_id="typed-fact-1",
+        request=CanonicalHostRequest(
+            port="account",
+            operation="read",
+            payload=CanonicalPortQuery(subject=binding.context.identity.account_address, kind="account"),
+        ),
+    )
+    envelope = binding._host.read_fact(
+        request=request,
+        mapper=lambda raw: ExternalFactEnvelope.create(
+            context=binding.context,
+            fact_type="test.account",
+            data=raw["data"],
+            request_id=request.request_id,
+            provenance=raw["provenance"],
+        ),
+    )
+    assert envelope.data == {"ok": True}
+    assert calls and calls[0][0:2] == ("account", "read")
+    assert runtime.invoke_calls == []

@@ -1,6 +1,6 @@
 """Public, provider-neutral external Broker host binding."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -656,6 +656,71 @@ class ExternalBrokerHost:
             raw_payload_digest=getattr(runtime_receipt, "raw_payload_digest", None),
         )
         return receipt
+
+    def read_fact(
+        self,
+        *,
+        request: ExternalHostRequest,
+        mapper: Callable[[Mapping[str, object]], ExternalFactEnvelope[T]],
+    ) -> ExternalFactEnvelope[T]:
+        """Read one typed fact through the host-owned authorization seam.
+
+        Runtime adapters may keep provider response mapping behind their
+        implementation boundary.  Consumers receive only the mapper's
+        canonical ``ExternalFactEnvelope``; they never receive the raw result.
+        """
+
+        if not isinstance(request, ExternalHostRequest):
+            raise TypeError("external host requires an ExternalHostRequest")
+        if not callable(mapper):
+            raise TypeError("external fact read requires a canonical mapper")
+        request_digest = _digest(request.request)
+        self.authorize(request)
+        invoke_fact = getattr(self._runtime, "invoke_fact", None)
+        if not callable(invoke_fact):
+            raise RuntimeBoundaryError(
+                "external_fact_reader_unavailable",
+                "the bound runtime does not expose the public typed fact seam",
+            )
+        raw = invoke_fact(
+            request.request.port,
+            request.request.operation,
+            request.request.payload,
+        )
+        if not isinstance(raw, Mapping):
+            raise RuntimeBoundaryError(
+                "external_fact_payload_invalid",
+                "typed fact seam returned a non-mapping internal payload",
+            )
+        envelope = mapper(raw)
+        if not isinstance(envelope, ExternalFactEnvelope):
+            raise RuntimeBoundaryError(
+                "external_fact_envelope_invalid",
+                "canonical mapper returned a non-canonical fact envelope",
+            )
+        if (
+            envelope.broker_id != self.identity.broker_id
+            or envelope.environment is not self.identity.environment
+            or envelope.account_address != (self.identity.account_address or "")
+            or envelope.lifecycle_id != self._context.session.lifecycle_id
+            or envelope.release_sha != self._context.release_sha
+            or envelope.runtime_identity != self.runtime_identity
+            or envelope.capability_revision != self.capabilities.revision
+            or envelope.request_digest != digest_canonical(
+                {
+                    "request_id": request.request_id,
+                    "fact_type": envelope.fact_type,
+                    "raw_payload_digest": envelope.raw_payload_digest,
+                    "lifecycle_id": self._context.session.lifecycle_id,
+                }
+            )
+        ):
+            raise RuntimeBoundaryError(
+                "external_fact_identity_mismatch",
+                "typed fact envelope does not match the authorized host context",
+            )
+        del request_digest
+        return envelope
 
     @staticmethod
     def _normalize_operations(

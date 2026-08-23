@@ -16,16 +16,17 @@ from typing import Any, Protocol, runtime_checkable
 
 from .account import AccountSnapshot, PositionFact
 from .errors import BrokerCapabilityError, RuntimeBoundaryError
-from .external_host import ExternalBrokerBuildContext, ExternalBrokerHost, ExternalFactEnvelope
-from .external_reconciliation import (
-    ExternalCursorKind,
-    ExternalReconciliationCursor,
-    ExternalReconciliationObservation,
-    ExternalReconciliationSnapshot,
+from .external_host import (
+    ExternalBrokerBuildContext,
+    ExternalBrokerHost,
+    ExternalFactEnvelope,
+    ExternalHostRequest,
 )
-from .fees import FeeEvent, FillFact
-from .models import BrokerEnvironment, Provenance
-from .orders import OrderFill, OrderIntent, OrderReceipt, OrderSide, OrderState
+from .external_reconciliation import ExternalReconciliationSnapshot
+from .fees import FeeEvent
+from .host import CanonicalHostRequest, CanonicalPortQuery
+from .models import BrokerEnvironment
+from .orders import OrderFill, OrderIntent, OrderReceipt
 
 
 _ACCOUNT_FINGERPRINT_PREFIX = "sha256:"
@@ -89,132 +90,93 @@ class ExternalCanaryFactsReader(Protocol):
         ...
 
 
-class ExternalCanaryRuntimeFactsReader:
-    """Compose existing typed runtime adapters into one cursor-bound bundle."""
+@runtime_checkable
+class ExternalCanarySnapshotReader(Protocol):
+    """Public provider of one already cursor-bound reconciliation snapshot."""
 
-    def __init__(self, *, context: ExternalBrokerBuildContext, order: object, account: object, fees: object, runtime: object | None = None, instruments: object | None = None, market: object | None = None) -> None:
+    def read_reconciliation(
+        self,
+        *,
+        order_id: str,
+        instrument_id: str,
+        now: datetime,
+    ) -> ExternalReconciliationSnapshot:
+        ...
+
+
+class ExternalCanaryRuntimeFactsReader:
+    """Project one public cursor-bound snapshot into canary facts.
+
+    It intentionally does not assemble a cursor by copying one account
+    timestamp over independent reads.  A real adapter must provide the
+    Broker-owned ``ExternalReconciliationSnapshot``.
+    """
+
+    def __init__(
+        self,
+        *,
+        context: ExternalBrokerBuildContext,
+        host: ExternalBrokerHost,
+        order: object,
+        snapshot_reader: ExternalCanarySnapshotReader,
+        instruments: object | None = None,
+        market: object | None = None,
+    ) -> None:
         self._context = context
+        self._host = host
         self._order = order
-        self._account = account
-        self._fees = fees
-        self._runtime = runtime
+        self._snapshot_reader = snapshot_reader
         self._instruments = instruments
         self._market = market
-        for owner, methods in (
-            (order, ("query_fills", "open_orders")),
-            (account, ("read_account",)),
-        ):
-            if any(not callable(getattr(owner, method, None)) for method in methods):
-                raise TypeError("runtime fact reader requires typed account/order adapters")
-        if not hasattr(fees, "fill_facts"):
-            raise TypeError("runtime fact reader requires the typed fee adapter")
+        if not callable(getattr(order, "query_fills", None)):
+            raise TypeError("runtime fact reader requires the public order fills facade")
+        if not isinstance(snapshot_reader, ExternalCanarySnapshotReader):
+            raise TypeError("runtime fact reader requires a public reconciliation snapshot reader")
 
     def read(self, *, order_id: str, instrument_id: str, now: datetime) -> ExternalCanaryFactBundle:
-        if now.tzinfo is None:
-            raise ValueError("fact read now must include timezone")
-        fills = tuple(self._order.query_fills(order_id=order_id))
-        account = self._account.read_account(self._context.identity.account_address or "")
-        positions = tuple(
-            position
-            for position in account.positions
-            if position.instrument_id == instrument_id
-        )
-        open_orders = tuple(self._order.open_orders(instrument_id))
-        fill_ids = {fill.fill_id for fill in fills}
-        fee_facts = tuple(
-            fact for fact in self._fees.fill_facts
-            if fact.fill_id in fill_ids
-        )
-        provenance = account.provenance
-        cursor_value = str(account.observation_id or "")
-        if not cursor_value:
-            raise RuntimeBoundaryError(
-                "canary_reconciliation_cursor_missing",
-                "account observation must provide a Broker cursor",
-            )
-        cursor = ExternalReconciliationCursor(
-            kind=ExternalCursorKind.CURSOR,
-            value=cursor_value,
-            observed_at=provenance.received_at,
-        )
-        account_observation = self._observation(
-            context=self._context,
-            fact_type="canary.account",
-            data=account,
-            provenance=provenance,
-            request_id=f"canary-account:{cursor_value}",
-            cursor=cursor,
-        )
-        position_observation = self._observation(
-            context=self._context,
-            fact_type="canary.positions",
-            data=positions,
-            provenance=provenance,
-            request_id=f"canary-positions:{cursor_value}",
-            cursor=cursor,
-        )
-        order_observation = self._observation(
-            context=self._context,
-            fact_type="canary.open_orders",
-            data=open_orders,
-            provenance=provenance,
-            request_id=f"canary-open-orders:{cursor_value}",
-            cursor=cursor,
-        )
-        fill_observation = self._observation(
-            context=self._context,
-            fact_type="canary.fills",
-            data=fills,
-            provenance=provenance,
-            request_id=f"canary-fills:{cursor_value}:{order_id}",
-            cursor=cursor,
-        )
-        fee_observation = self._observation(
-            context=self._context,
-            fact_type="canary.fees",
-            data=tuple(fact.fee for fact in fee_facts),
-            provenance=provenance,
-            request_id=f"canary-fees:{cursor_value}:{order_id}",
-            cursor=cursor,
-        )
-        reconciliation = ExternalReconciliationSnapshot.assemble(
-            account=account_observation,
-            positions=position_observation,
-            open_orders=order_observation,
-            fills=fill_observation,
-            fees=fee_observation,
-            funding=None,
-            funding_applicable=False,
+        snapshot = self._snapshot_reader.read_reconciliation(
+            order_id=order_id,
+            instrument_id=instrument_id,
             now=now,
-            stale_after=timedelta(minutes=2),
-            max_observation_skew=timedelta(minutes=2),
         )
+        if not isinstance(snapshot, ExternalReconciliationSnapshot):
+            raise RuntimeBoundaryError("canary_reconciliation_invalid", "snapshot reader returned a non-canonical snapshot")
+        snapshot.verify_integrity()
+        account = snapshot.account.fact.data if snapshot.account is not None else None
+        positions = snapshot.positions.fact.data if snapshot.positions is not None else ()
+        open_orders = snapshot.open_orders.fact.data if snapshot.open_orders is not None else ()
+        fills = snapshot.fills.fact.data if snapshot.fills is not None else ()
+        fees_data = snapshot.fees.fact.data if snapshot.fees is not None else ()
+        fees = tuple(item for item in fees_data if isinstance(item, FeeEvent))
         return ExternalCanaryFactBundle(
-            fills=fills,
-            fees=tuple(fact.fee for fact in fee_facts),
+            fills=tuple(fills),
+            fees=fees,
             account=account,
-            positions=positions,
-            open_orders=open_orders,
-            reconciliation=reconciliation,
+            positions=tuple(positions),
+            open_orders=tuple(open_orders),
+            reconciliation=snapshot,
         )
 
     def market_fact(self, *, instrument_id: str, now: datetime) -> dict[str, object]:
-        if self._runtime is None or self._instruments is None or self._market is None:
-            raise RuntimeBoundaryError(
-                "canary_market_reader_unavailable",
-                "external canary binding has no typed market reader",
-            )
+        if self._instruments is None or self._market is None:
+            raise RuntimeBoundaryError("canary_market_reader_unavailable", "typed public market reader is unavailable")
         instrument = self._instruments.get(instrument_id)
-        raw = self._runtime._invoke_native(
-            "market_data",
-            "ticker",
-            {"instrument_id": instrument_id},
-        )
-        envelope = self._market.map_ticker(
+        request = ExternalHostRequest(
             request_id=f"canary-market:{instrument_id}",
-            broker_symbol=instrument.broker_symbol,
-            raw=raw,
-            now=now,
+            request=CanonicalHostRequest(
+                port="market_data",
+                operation="ticker",
+                payload=CanonicalPortQuery(subject=instrument_id, kind="instrument"),
+            ),
+        )
+        envelope = self._host.read_fact(
+            request=request,
+            mapper=lambda raw: self._market.map_ticker(
+                request_id=request.request_id,
+                broker_symbol=instrument.broker_symbol,
+                raw=raw,
+                now=now,
+            ),
         )
         market_envelope = envelope.data
         ticker = market_envelope.data
@@ -235,21 +197,6 @@ class ExternalCanaryRuntimeFactsReader:
         }
         result["fact_digest"] = _market_fact_digest(result)
         return result
-
-    @staticmethod
-    def _observation(*, context, fact_type, data, provenance, request_id, cursor):
-        envelope = ExternalFactEnvelope.create(
-            context=context,
-            fact_type=fact_type,
-            data=data,
-            request_id=request_id,
-            provenance=provenance,
-        )
-        return ExternalReconciliationObservation(
-            fact=envelope,
-            cursor=cursor,
-            receipt_digest=envelope.fact_digest,
-        )
 
 
 def _market_fact_digest(value: dict[str, object]) -> str:
