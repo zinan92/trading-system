@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from typing import Any
 
 from services.broker_port import (
     BrokerCapabilities,
     BrokerCapability,
     BrokerOrderRequest,
-    BrokerPortDescriptor,
     UnsupportedBrokerCapability,
-    broker_port_descriptor,
 )
 
 
@@ -24,6 +23,32 @@ STANDARD_BROKER_EXTERNAL_TESTNET_CAPABILITIES = BrokerCapabilities(
 
 class StandardBrokerExternalTestnetHostError(RuntimeError):
     """Stable blocker for an invalid public external-host binding."""
+
+
+@dataclass(frozen=True)
+class StandardBrokerExternalPortDescriptor:
+    adapter_name: str
+    provider: str
+    broker_id: str
+    environment: str
+    transport_profile: str
+    transport_state: str
+    capabilities: tuple[str, ...]
+    credential_env_names: tuple[str, ...] = ()
+    schema_version: str = "standard-broker-external-port-descriptor-v1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "adapter_name": self.adapter_name,
+            "provider": self.provider,
+            "broker_id": self.broker_id,
+            "environment": self.environment,
+            "transport_profile": self.transport_profile,
+            "transport_state": self.transport_state,
+            "capabilities": list(self.capabilities),
+            "credential_env_names": list(self.credential_env_names),
+        }
 
 
 class StandardBrokerExternalTestnetExecutionAdapter:
@@ -104,8 +129,16 @@ class StandardBrokerExternalTestnetExecutionAdapter:
         return STANDARD_BROKER_EXTERNAL_TESTNET_CAPABILITIES
 
     @property
-    def descriptor(self) -> BrokerPortDescriptor:
-        return broker_port_descriptor(self)
+    def descriptor(self) -> StandardBrokerExternalPortDescriptor:
+        return StandardBrokerExternalPortDescriptor(
+            adapter_name=self.name,
+            provider=self.provider,
+            broker_id="hyperliquid",
+            environment="testnet",
+            transport_profile=self.broker_config["transport_profile"],
+            transport_state=self.broker_config["transport_state"],
+            capabilities=self.capabilities.names,
+        )
 
     def preflight(self) -> dict[str, Any]:
         receipt = self._host.preflight(

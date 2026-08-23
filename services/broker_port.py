@@ -15,7 +15,7 @@ from typing import Any, Protocol, runtime_checkable
 from schemas.market_data import PaperOrder
 
 
-BROKER_PORT_DESCRIPTOR_SCHEMA = "broker-port-descriptor-v2"
+BROKER_PORT_DESCRIPTOR_SCHEMA = "broker-port-descriptor-v1"
 
 
 @dataclass(frozen=True)
@@ -148,9 +148,6 @@ class BrokerPortDescriptor:
     environment: str
     capabilities: tuple[str, ...]
     credential_env_names: tuple[str, ...]
-    broker_id: str = ""
-    transport_profile: str = ""
-    transport_state: str = ""
     schema_version: str = BROKER_PORT_DESCRIPTOR_SCHEMA
 
     def to_dict(self) -> dict:
@@ -161,9 +158,6 @@ class BrokerPortDescriptor:
             "environment": self.environment,
             "capabilities": list(self.capabilities),
             "credential_env_names": list(self.credential_env_names),
-            "broker_id": self.broker_id,
-            "transport_profile": self.transport_profile,
-            "transport_state": self.transport_state,
         }
 
 
@@ -201,9 +195,6 @@ def broker_port_descriptor(adapter: Any) -> BrokerPortDescriptor:
         environment=str(config.get("environment") or ("paper" if getattr(adapter, "name", "") == "paper" else "")),
         capabilities=capabilities.names,
         credential_env_names=env_names,
-        broker_id=str(config.get("broker_id") or ""),
-        transport_profile=str(config.get("transport_profile") or ""),
-        transport_state=str(config.get("transport_state") or ""),
     )
 
 
