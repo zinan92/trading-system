@@ -552,9 +552,22 @@ class ExternalCanaryBinding:
         receipt = self._order.submit(intent)
         return self._wrap_receipt(receipt, intent)
 
-    def recover(self, intent: OrderIntent) -> None:
-        """Restore one persisted canonical intent without invoking transport."""
+    def recover(
+        self,
+        intent: OrderIntent,
+        *,
+        broker_order_id: str,
+        state: str,
+    ) -> None:
+        """Restore persisted canonical intent/order identity without transport."""
 
+        recover = getattr(self._order, "recover", None)
+        if not callable(recover):
+            raise RuntimeBoundaryError(
+                "order_recovery_unavailable",
+                "external order facade does not support persisted identity recovery",
+            )
+        recover(intent, broker_order_id=broker_order_id, state=state)
         self._remember_intent(intent)
 
     def query(self, order_id: str) -> ExternalCanaryReceipt:

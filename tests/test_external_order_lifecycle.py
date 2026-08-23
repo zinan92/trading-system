@@ -114,6 +114,14 @@ class LifecycleStub:
         self.calls.append(("submit", intent))
         return self.submit_result or self._receipt(self.runtime_session, order_id=intent.order_id)
 
+    def recover(self, intent: OrderIntent, *, broker_order_id: str, state: str) -> OrderReceipt:
+        self.calls.append(("recover", intent))
+        return self._receipt(
+            self.runtime_session,
+            order_id=intent.order_id,
+            state=OrderState(state),
+        )
+
     def cancel(self, order_id: str) -> OrderReceipt:
         self.calls.append(("cancel", order_id))
         return self._receipt(self.runtime_session, order_id=order_id, state=OrderState.CANCEL_PENDING)

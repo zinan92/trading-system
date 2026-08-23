@@ -112,12 +112,12 @@ def test_binding_recovers_persisted_intent_without_transport() -> None:
     binding, lifecycle, _, _ = _binding()
     intent = _intent()
 
-    binding.recover(intent)
+    binding.recover(intent, broker_order_id="101", state="resting")
 
-    assert lifecycle.calls == []
+    assert [name for name, _ in lifecycle.calls] == ["recover"]
     recovered = binding.query_by_idempotency_key("cycle-1")
     assert recovered.order_id == "order-1"
-    assert [name for name, _ in lifecycle.calls] == ["query"]
+    assert [name for name, _ in lifecycle.calls] == ["recover", "query"]
 
 
 def test_binding_rejects_unknown_idempotency_without_fallback() -> None:

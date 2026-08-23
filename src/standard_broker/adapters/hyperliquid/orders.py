@@ -157,6 +157,50 @@ class HyperliquidOrderAdapter:
             return self._replace(receipt, state=OrderState.UNKNOWN, reason=f"ambiguous_submit:{exc}")
         return self._apply_submit_response(receipt, response)
 
+    def recover(
+        self,
+        intent: OrderIntent,
+        *,
+        broker_order_id: str,
+        state: str | OrderState,
+    ) -> OrderReceipt:
+        """Restore one persisted order identity without invoking transport."""
+
+        self._validate_intent(intent)
+        broker_id = str(broker_order_id or "").strip()
+        if not broker_id:
+            raise RuntimeBoundaryError(
+                "broker_order_identity_required",
+                "persisted order recovery requires a Broker order identity",
+            )
+        try:
+            order_state = state if isinstance(state, OrderState) else OrderState(str(state).lower())
+        except ValueError as exc:
+            raise RuntimeBoundaryError(
+                "recovery_state_invalid",
+                "persisted order recovery state is not canonical",
+            ) from exc
+        client_order_id = intent.client_order_id or self._client_order_id(intent.idempotency_key)
+        receipt = OrderReceipt(
+            order_id=intent.order_id,
+            broker_id="hyperliquid",
+            environment=self._environment,
+            client_order_id=client_order_id,
+            state=order_state,
+            original_quantity=intent.quantity,
+            filled_quantity=intent.quantity if order_state is OrderState.FILLED else Decimal("0"),
+            remaining_quantity=Decimal("0") if order_state is OrderState.FILLED else intent.quantity,
+            broker_order_id=broker_id,
+            average_fill_price=None,
+            reason="recovered_persisted_identity",
+            provenance=self._provenance(),
+            updated_at=datetime.now(UTC),
+            broker_order_lineage=(broker_id,),
+            client_order_lineage=(client_order_id,),
+        )
+        self._remember(intent, receipt)
+        return receipt
+
     def cancel(self, order_id: str) -> OrderReceipt:
         order_id = self.resolve_order_id(order_id)
         receipt = self._orders[order_id]
@@ -951,6 +995,22 @@ class HyperliquidRuntimeOrderAdapter:
         self._sync_inline_fills()
         return receipt
 
+    def recover(
+        self,
+        intent: OrderIntent,
+        *,
+        broker_order_id: str,
+        state: str | OrderState,
+    ) -> OrderReceipt:
+        self._validate_intent(intent)
+        return self._bind_receipt(
+            self._lifecycle.recover(
+                intent,
+                broker_order_id=broker_order_id,
+                state=state,
+            )
+        )
+
     def cancel(self, order_id: str) -> OrderReceipt:
         return self._bind_receipt(
             self._lifecycle.cancel(self._lifecycle.resolve_order_id(order_id))
@@ -1146,6 +1206,15 @@ class ExternalOrderLifecyclePort(Protocol):
     def submit(self, intent: OrderIntent) -> OrderReceipt:
         ...
 
+    def recover(
+        self,
+        intent: OrderIntent,
+        *,
+        broker_order_id: str,
+        state: str | OrderState,
+    ) -> OrderReceipt:
+        ...
+
     def cancel(self, order_id: str) -> OrderReceipt:
         ...
 
@@ -1229,6 +1298,22 @@ class HyperliquidExternalOrderAdapter:
     def submit(self, intent: OrderIntent) -> OrderReceipt:
         self._authorize(intent.order_id, "submit", intent)
         return self._validate_receipt(self._lifecycle.submit(intent))
+
+    def recover(
+        self,
+        intent: OrderIntent,
+        *,
+        broker_order_id: str,
+        state: str | OrderState,
+    ) -> OrderReceipt:
+        self._authorize(intent.order_id, "query", intent)
+        return self._validate_receipt(
+            self._lifecycle.recover(
+                intent,
+                broker_order_id=broker_order_id,
+                state=state,
+            )
+        )
 
     def cancel(self, order_id: str) -> OrderReceipt:
         reference = self._reference(order_id)
