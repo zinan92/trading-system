@@ -34,6 +34,35 @@
   external ProtectionOrder remain separate prerequisites before any strategy
   admission.
 
+## 现在在哪里(2026-08-23, CANARY-01/02)
+- CANARY-01 / #893 merged in trading-system PR #896 as
+  `main@4fe2a028de54b056659fd1952b4c7a36a99c645a`. It adds the attended,
+  single-order Hyperliquid Testnet canary admission and entry lifecycle with
+  exact profile/account/runtime/release/capability identity, Park's durable
+  confirmation ledger, local risk/market freshness gates, submit-intent
+  reservation, typed receipt lineage, and durable fail-closed blockers.
+- CANARY-02 / #894 merged in trading-system PR #897 as
+  `main@3494b82c149b7833995f9f809045623a4475d4d0`. It consumes an injected
+  typed facts bundle for fill, actual fee, account, position, open-order, and
+  reconciliation evidence; requires a terminal attended ordinary
+  reduce-only close with causal reverse-side fill; and only records
+  `FLAT_RECONCILED` after zero open orders and zero signed position. Evidence
+  is redacted and digest-bound; unknown, stale, mixed-identity, mixed-cursor,
+  fee, or partial-close outcomes remain durable blockers.
+- Focused CANARY-01/02 plus external bridge/composition/host/Park tests passed
+  121 cases; compileall, diff-check, and gitleaks passed. The full suite has
+  3338 passed and 1 skipped; one existing unrelated GridMind Playwright drag
+  test remains failing in the current environment. No network, credential,
+  Testnet order, deployment, cloud, soak, or Live/Mainnet action occurred.
+- #895 is not ready to run. The current trading-system external bridge is
+  deliberately preflight-only and cannot satisfy the canary order/facts ports.
+  The next owner is the standard-broker public binding: typed external order
+  facade plus typed fill/fee/account/position/reconciliation wrapper backed by
+  `ExternalReconciliationSnapshot.require_coherent()`. Once that public seam
+  is merged and reviewed, Park must provide the exact canary plan and durable
+  confirmation for one attended Testnet attempt; DCA/Grid, ProtectionOrder,
+  soak, and Live/Mainnet remain blocked.
+
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
   merged as `main@e9cd5c91dab026df4605bb14387fff9a22b0a214`. The attended Live DCA
