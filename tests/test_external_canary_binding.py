@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -265,6 +266,57 @@ def test_runtime_fact_factories_send_typed_instrument_query(
         if protected
         else "hyperliquid-testnet-default"
     )
+
+
+def test_market_fact_freshness_uses_read_completion_time() -> None:
+    from standard_broker.external_canary import ExternalCanaryRuntimeFactsReader
+    from standard_broker.market_data import FreshnessState
+
+    session = _profile_session()
+    context = _profile_context(session)
+    received_at = datetime.now(UTC)
+    captured: list[datetime] = []
+    provenance = Provenance(
+        source="nautilus-hyperliquid.testnet",
+        execution_scope=session.execution_scope,
+        transport_state="external_testnet",
+        mapping_revision=session.capabilities.revision,
+        received_at=received_at,
+    )
+
+    class FakeHost:
+        def read_fact(self, *, request, mapper):
+            del request
+            return mapper({"provenance": provenance, "data": {"bbo": {"bbo": [{"px": "4610"}, {"px": "4611"}]}, "mid": "4610.5"}})
+
+    class FakeMarket:
+        def map_ticker(self, *, now, **_kwargs):
+            captured.append(now)
+            return SimpleNamespace(
+                data=SimpleNamespace(
+                    data=SimpleNamespace(mid=Decimal("4610.5"), bid=None, ask=None, venue_timestamp=None),
+                    freshness=FreshnessState.FRESH,
+                ),
+                provenance=provenance,
+            )
+
+    class FakeInstruments:
+        def get(self, _instrument_id):
+            return SimpleNamespace(broker_symbol="PAXG")
+
+    reader = ExternalCanaryRuntimeFactsReader(
+        context=context,
+        host=FakeHost(),
+        order=SimpleNamespace(query_fills=lambda **_kwargs: ()),
+        snapshot_reader=SimpleNamespace(read_reconciliation=lambda **_kwargs: None),
+        instruments=FakeInstruments(),
+        market=FakeMarket(),
+    )
+    caller_now = received_at.replace(microsecond=0) - __import__("datetime").timedelta(seconds=1)
+    result = reader.market_fact(instrument_id="PAXG-USD-PERP", now=caller_now)
+
+    assert result["freshness"] == "fresh"
+    assert captured and captured[0] >= received_at
 
 
 def test_host_typed_fact_read_authorizes_without_exposing_internal_payload() -> None:

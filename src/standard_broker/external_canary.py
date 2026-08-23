@@ -346,14 +346,21 @@ class ExternalCanaryRuntimeFactsReader:
                 payload=CanonicalPortQuery(subject=instrument_id, kind="instrument"),
             ),
         )
-        envelope = self._host.read_fact(
-            request=request,
-            mapper=lambda raw: self._market.map_ticker(
+        def map_ticker(raw):
+            # The host receives the observation before invoking the mapper.
+            # Use a completion-time floor so a caller timestamp captured before
+            # a network read cannot make a just-received fact look future/unknown.
+            effective_now = max(now, datetime.now(UTC))
+            return self._market.map_ticker(
                 request_id=request.request_id,
                 broker_symbol=instrument.broker_symbol,
                 raw=raw,
-                now=now,
-            ),
+                now=effective_now,
+            )
+
+        envelope = self._host.read_fact(
+            request=request,
+            mapper=map_ticker,
         )
         market_envelope = envelope.data
         ticker = market_envelope.data
