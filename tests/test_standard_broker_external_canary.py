@@ -127,7 +127,7 @@ def test_wrapper_can_pass_attended_canary_admission_without_order_mutation(tmp_p
     assert binding.requests == []
 
 
-def test_wrapper_projects_standard_typed_bundle_without_native_fields() -> None:
+def test_wrapper_rejects_fake_reconciliation_snapshot() -> None:
     from standard_broker import ExternalCanaryFactBundle
     from standard_broker.account import AccountSnapshot
     from standard_broker.fees import FeeEvent, FeeKind, FeeSource, FeeState
@@ -209,8 +209,5 @@ def test_wrapper_projects_standard_typed_bundle_without_native_fields() -> None:
         open_orders=(),
         reconciliation=snapshot,
     )
-    projected = StandardBrokerExternalCanaryAdapter._convert_bundle(bundle)
-    assert projected.fills[0].fill_id == "fill-1"
-    assert projected.fees[0].fee_state == "actual"
-    assert projected.reconciliation.passed is True
-    assert "native" not in str(projected).lower()
+    with pytest.raises(StandardBrokerExternalCanaryError, match="non-canonical"):
+        StandardBrokerExternalCanaryAdapter._convert_bundle(bundle)
