@@ -77,6 +77,71 @@ def test_registry_prefers_exact_key_then_explicit_fallback(tmp_path: Path):
         registry.register(exact)
 
 
+def test_standard_broker_registry_resolves_exact_broker_and_transport_profile_only(tmp_path: Path):
+    registry = BrokerPluginRegistry()
+    fixture = BrokerPlugin(
+        BrokerPluginKey(
+            "live",
+            "standard_broker",
+            "testnet",
+            broker_id="hyperliquid",
+            transport_profile="local_fixture_v1",
+        ),
+        execution_factory=lambda context: "fixture",
+    )
+    external = BrokerPlugin(
+        BrokerPluginKey(
+            "live",
+            "standard_broker",
+            "testnet",
+            broker_id="hyperliquid",
+            transport_profile="hyperliquid-testnet-default",
+        ),
+        execution_factory=lambda context: "external",
+    )
+    wildcard = BrokerPlugin(
+        BrokerPluginKey("live", "standard_broker", "*"),
+        execution_factory=lambda context: "forbidden-fallback",
+    )
+    for plugin in (fixture, external, wildcard):
+        registry.register(plugin)
+
+    assert registry.resolve(
+        _context(
+            tmp_path,
+            provider="standard_broker",
+            environment="testnet",
+            broker_config={
+                "broker_id": "hyperliquid",
+                "transport_profile": "local_fixture_v1",
+            },
+        )
+    ) is fixture
+    assert registry.resolve(
+        _context(
+            tmp_path,
+            provider="standard_broker",
+            environment="testnet",
+            broker_config={
+                "broker_id": "hyperliquid",
+                "transport_profile": "hyperliquid-testnet-default",
+            },
+        )
+    ) is external
+    with pytest.raises(RuntimeError, match="unsupported standard_broker selection"):
+        registry.resolve(
+            _context(
+                tmp_path,
+                provider="standard_broker",
+                environment="testnet",
+                broker_config={
+                    "broker_id": "hyperliquid",
+                    "transport_profile": "unknown-profile",
+                },
+            )
+        )
+
+
 def test_registry_rejects_nonconforming_execution_port(tmp_path: Path):
     registry = BrokerPluginRegistry()
     registry.register(
@@ -260,6 +325,20 @@ def test_standard_broker_requires_explicit_environment_identity(tmp_path: Path):
         )
 
 
+def test_standard_broker_testnet_requires_explicit_transport_profile(tmp_path: Path):
+    with pytest.raises(ValueError, match="explicit transport_profile"):
+        BrokerBuildContext(
+            output_root=tmp_path / "outputs",
+            execution_mode="live",
+            live_trading_enabled=False,
+            broker_config={
+                "provider": "standard_broker",
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+            },
+        )
+
+
 @pytest.mark.parametrize(
     ("selection_environment", "configured_environment"),
     [("testnet", "mainnet"), ("paper", "mainnet")],
@@ -336,7 +415,10 @@ def test_standard_broker_testnet_requires_local_fixture_and_approval(tmp_path: P
                 mode="live",
                 provider="standard_broker",
                 environment="testnet",
-                broker_config={"broker_id": "hyperliquid"},
+                broker_config={
+                    "broker_id": "hyperliquid",
+                    "transport_profile": "local_fixture_v1",
+                },
             )
         )
 
