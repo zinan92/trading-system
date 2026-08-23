@@ -115,7 +115,19 @@ class StandardBrokerExternalCanaryAdapter:
         except ImportError as exc:
             raise StandardBrokerExternalCanaryError("trading-system fact schema is unavailable") from exc
         snapshot = bundle.reconciliation
-        if snapshot is None or snapshot.identity is None or snapshot.cursor is None:
+        try:
+            from standard_broker import ExternalReconciliationSnapshot
+        except ModuleNotFoundError as exc:
+            raise StandardBrokerExternalCanaryError("standard-broker reconciliation contract is unavailable") from exc
+        if not isinstance(snapshot, ExternalReconciliationSnapshot):
+            raise StandardBrokerExternalCanaryError(
+                "standard-broker returned a non-canonical reconciliation snapshot"
+            )
+        try:
+            snapshot.verify_integrity()
+        except Exception as exc:  # noqa: BLE001 - integrity is a hard evidence gate.
+            raise StandardBrokerExternalCanaryError("standard-broker reconciliation integrity failed") from exc
+        if snapshot.identity is None or snapshot.cursor is None:
             raise StandardBrokerExternalCanaryError(
                 "standard-broker returned no cursor-bound reconciliation snapshot"
             )

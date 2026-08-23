@@ -1,4 +1,4 @@
 # Focused GridMind Paper application runtime.
 numpy>=2.0,<3
 PyJWT[crypto]>=2.8,<3
-standard-broker @ git+https://github.com/zinan92/standard-broker.git@916b0eb241b50d5f46be08150eb3197996530552
+standard-broker @ git+https://github.com/zinan92/standard-broker.git@c96be927c53ce40ce5ca71f4a5c7d28b6351c474
