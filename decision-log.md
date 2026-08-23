@@ -1,5 +1,38 @@
 # Decision Log
 
+## Add one attended external DCA next-entry action (Issue #924 / PR #925)
+
+Date: 2026-08-23
+
+### Decision
+
+- Expose `next-entry` as a single attended action over the existing protected
+  public standard-broker canary binding. It reuses the canonical lifecycle's
+  Park confirmation, exact account/runtime/release/profile checks, fresh
+  facts, and position-following protection gate; it never loops, schedules, or
+  retries an unknown result.
+- The operator must provide the exact DCA plan, durable Testnet confirmation,
+  account/approval identity, and an opaque local signer-file path. The local
+  `standard-broker` import must resolve the pinned protected main
+  `f011fc00d434ed66aca33f31da411b07cb50a88a`, not the older user checkout.
+- A clean detached Testnet operator worktree was prepared at
+  `/Users/wendy/work/trading-system-testnet`; the user's dirty checkout was
+  not changed. The standard-broker protected source is kept separately at
+  `/Users/wendy/work/standard-broker-testnet`.
+
+### Verification
+
+- PR #925 merged as `main@563818f143d7f9f6d4fa18ca86617397b61a8c23`; Registry
+  handoff PR #927 merged as `main@782914f8e059c4469f4489f31d4b9b5732a3f65a`.
+- External DCA/canary/protection focused suite: 49 passed; full clean suite:
+  3373 passed, 1 skipped, and one pre-existing GridMind lower-drag browser
+  failure. `compileall`, `git diff --check`, and gitleaks passed.
+- No network, credential resolution, Testnet order, scheduler, cloud, Paper
+  deployment, or Live/Mainnet action occurred. Exact-main Paper deployment is
+  intentionally omitted because the handoff contract forbids deployment/cloud
+  mutation in this phase; the clean worktree and local verification are the
+  available evidence.
+
 ## Bridge the exact external Testnet host without enabling strategy writes (Issue #888 / PR #889)
 
 Date: 2026-08-23
