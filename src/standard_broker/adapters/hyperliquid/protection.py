@@ -40,6 +40,8 @@ def default_external_testnet_protection_capabilities() -> ProtectionCapabilityMa
         "mark_price_trigger": False,
         "grouped_tp_sl": False,
         "sibling_cancellation": False,
+        "bracket": False,
+        "parent_child": False,
         "fixed_size": False,
         "position_following": False,
         "position_level_tpsl": False,

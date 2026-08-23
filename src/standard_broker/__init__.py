@@ -15,7 +15,13 @@ from .adapters.hyperliquid import (
     run_testnet_lifecycle,
 )
 from .capabilities import PORT_NAMES, CapabilityDescriptor
-from .conformance import ConformanceReport, EvidenceKind, run_paper_conformance
+from .conformance import (
+    ConformanceReport,
+    EvidenceKind,
+    ExternalConformanceReport,
+    run_external_conformance,
+    run_paper_conformance,
+)
 from .errors import (
     BrokerCapabilityError,
     BrokerError,
@@ -156,6 +162,7 @@ __all__ = [
     "CanonicalPortQuery",
     "CapabilityDescriptor",
     "ConformanceReport",
+    "ExternalConformanceReport",
     "EvidenceClass",
     "EvidenceIdentity",
     "EVIDENCE_IDENTITY_FIELDS",
@@ -242,6 +249,7 @@ __all__ = [
     "TriggerReference",
     "find_secret_like_literals",
     "run_paper_conformance",
+    "run_external_conformance",
     "preflight_runtime_session",
     "run_paper_runtime_readiness",
     "default_testnet_capabilities",

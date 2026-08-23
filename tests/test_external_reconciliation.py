@@ -184,8 +184,14 @@ def _replace_fact(fact: ExternalFactEnvelope, **changes) -> ExternalFactEnvelope
                 "raw_payload_digest": candidate.raw_payload_digest,
                 "broker_id": candidate.broker_id,
                 "environment": candidate.environment,
+                "account_scope": candidate.account_scope,
                 "account_address": candidate.account_address,
+                "signer_kind": candidate.signer_kind,
+                "execution_scope": candidate.execution_scope,
                 "lifecycle_id": candidate.lifecycle_id,
+                "release_sha": candidate.release_sha,
+                "runtime_identity": candidate.runtime_identity,
+                "capability_revision": candidate.capability_revision,
                 "provenance": candidate.provenance,
             }
         ),
@@ -243,7 +249,11 @@ def test_mixed_cursor_fails_closed_as_explicit_non_pass() -> None:
 def test_mismatched_account_identity_fails_closed() -> None:
     observations = _observations()
     wrong = _replace_fact(observations["positions"].fact, account_address="0x" + "22" * 20)
-    observations["positions"] = replace(observations["positions"], fact=wrong)
+    observations["positions"] = replace(
+        observations["positions"],
+        fact=wrong,
+        receipt_digest=wrong.fact_digest,
+    )
     snapshot = _assemble(**observations)
 
     assert snapshot.passed is False
@@ -262,7 +272,16 @@ def test_stale_unknown_and_incomplete_states_are_not_passes() -> None:
     observations = _observations()
     unknown_order = replace(observations["open_orders"].fact.data[0], state=OrderState.UNKNOWN)
     unknown_fact = _replace_fact(observations["open_orders"].fact, data=(unknown_order,))
-    unknown = _assemble(**{**observations, "open_orders": replace(observations["open_orders"], fact=unknown_fact)})
+    unknown = _assemble(
+        **{
+            **observations,
+            "open_orders": replace(
+                observations["open_orders"],
+                fact=unknown_fact,
+                receipt_digest=unknown_fact.fact_digest,
+            ),
+        }
+    )
     assert unknown.outcome is ExternalReconciliationOutcome.UNKNOWN
 
     incomplete = _assemble(funding=None, funding_applicable=True)
@@ -273,7 +292,11 @@ def test_stale_unknown_and_incomplete_states_are_not_passes() -> None:
 def test_raw_or_illegal_fact_cannot_enter_the_reconciliation_envelope() -> None:
     observations = _observations()
     raw_fact = _replace_fact(observations["fills"].fact, data=({"tid": "raw-provider-fill"},))
-    raw_observation = replace(observations["fills"], fact=raw_fact)
+    raw_observation = replace(
+        observations["fills"],
+        fact=raw_fact,
+        receipt_digest=raw_fact.fact_digest,
+    )
 
     with pytest.raises(RuntimeBoundaryError, match="external_reconciliation_fact_invalid"):
         _assemble(fills=raw_observation)

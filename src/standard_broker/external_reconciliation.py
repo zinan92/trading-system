@@ -8,7 +8,12 @@ from typing import Generic, TypeVar
 
 from .account import AccountSnapshot, PositionFact
 from .errors import RuntimeBoundaryError
-from .external_host import ExternalFactEnvelope, ExternalRuntimeIdentity, digest_canonical
+from .external_host import (
+    ExternalCanonicalReceipt,
+    ExternalFactEnvelope,
+    ExternalRuntimeIdentity,
+    digest_canonical,
+)
 from .fees import FeeEvent, FeeScheduleSnapshot, FundingPayment
 from .models import AccountScope, BrokerEnvironment, SignerKind
 from .orders import OrderFill, OrderReceipt, OrderState
@@ -89,6 +94,7 @@ class ExternalReconciliationObservation(Generic[T]):
     fact: ExternalFactEnvelope[T]
     cursor: ExternalReconciliationCursor
     receipt_digest: str
+    receipt: ExternalCanonicalReceipt | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fact, ExternalFactEnvelope):
@@ -101,6 +107,20 @@ class ExternalReconciliationObservation(Generic[T]):
             raise ValueError("fact request_digest must be a sha256 digest")
         if self.fact.fact_digest != _expected_fact_digest(self.fact):
             raise ValueError("fact_digest is not bound to the canonical fact payload")
+        if self.receipt is None:
+            if self.receipt_digest != self.fact.fact_digest:
+                raise ValueError("receipt_digest must bind to the fact when no transport receipt is supplied")
+        elif (
+            self.receipt.receipt_digest != self.receipt_digest
+            or self.receipt.broker_id != self.fact.broker_id
+            or self.receipt.environment is not self.fact.environment
+            or self.receipt.account_address != self.fact.account_address
+            or self.receipt.lifecycle_id != self.fact.lifecycle_id
+            or self.receipt.release_sha != self.fact.release_sha
+            or self.receipt.runtime_identity != self.fact.runtime_identity
+            or self.receipt.capability_revision != self.fact.capability_revision
+        ):
+            raise ValueError("transport receipt does not bind to the canonical fact identity")
         if self.fact.raw_payload_digest is not None and not _DIGEST.fullmatch(
             self.fact.raw_payload_digest
         ):
@@ -268,6 +288,11 @@ class ExternalReconciliationSnapshot:
     @property
     def passed(self) -> bool:
         return self.outcome is ExternalReconciliationOutcome.COHERENT
+
+    def verify_integrity(self) -> None:
+        """Re-run the immutable contract checks for an evidence consumer."""
+
+        self.__post_init__()
 
     def require_coherent(self) -> "ExternalReconciliationSnapshot":
         """Fail closed when a caller attempts to use a non-pass snapshot."""
@@ -443,8 +468,14 @@ def _expected_fact_digest(fact: ExternalFactEnvelope[object]) -> str:
             "raw_payload_digest": fact.raw_payload_digest,
             "broker_id": fact.broker_id,
             "environment": fact.environment,
+            "account_scope": fact.account_scope,
             "account_address": fact.account_address,
+            "signer_kind": fact.signer_kind,
+            "execution_scope": fact.execution_scope,
             "lifecycle_id": fact.lifecycle_id,
+            "release_sha": fact.release_sha,
+            "runtime_identity": fact.runtime_identity,
+            "capability_revision": fact.capability_revision,
             "provenance": fact.provenance,
         }
     )

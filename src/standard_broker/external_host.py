@@ -354,8 +354,14 @@ class ExternalFactEnvelope(Generic[T]):
                 "raw_payload_digest": raw_payload_digest,
                 "broker_id": context.identity.broker_id,
                 "environment": context.identity.environment,
+                "account_scope": context.identity.account_scope,
                 "account_address": context.identity.account_address,
+                "signer_kind": context.identity.signer_kind,
+                "execution_scope": context.identity.execution_scope,
                 "lifecycle_id": context.session.lifecycle_id,
+                "release_sha": context.release_sha,
+                "runtime_identity": context.runtime_identity,
+                "capability_revision": context.capabilities.revision,
                 "provenance": provenance,
             }
         )
@@ -450,6 +456,12 @@ class ExternalBrokerHost:
     @property
     def runtime_identity(self) -> ExternalRuntimeIdentity:
         return self._context.runtime_identity
+
+    @property
+    def external_profile_id(self) -> str | None:
+        """Return the exact registered profile identifier, when bound."""
+
+        return self._profile.profile_id if self._profile is not None else None
 
     @property
     def context(self) -> ExternalBrokerBuildContext:
