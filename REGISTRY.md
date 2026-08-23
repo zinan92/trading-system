@@ -101,6 +101,25 @@
   passed 3366 with 1 skipped and one unrelated existing GridMind browser drag
   failure. No credentials, network, or Testnet orders were used; #895 still
   requires the attended plan and confirmation.
+- TS-DCA-EXT-05 / #920 merged in trading-system PR #921 as
+  `main@6ed14b5a12fc0467df230de27b361b7c499d3f61`. The attended external DCA
+  operator now exposes local `digest`, credential-free protected `preflight`,
+  and explicit Park-confirmed `start` / `flatten` actions over the public
+  standard-broker protected canary binding. `start` submits at most one entry,
+  reads canonical facts, and stops at `WAITING_ENTRY`, `PROTECTION_ACTIVE`, or
+  durable `BLOCKED`; it never auto-submits the next DCA level. `flatten`
+  cancel/query-confirms entries and protection, submits one ordinary
+  reduce-only close, and requires canonical cursor-bound flat reconciliation.
+  The application pin is now the immutable protected standard-broker main
+  `f011fc00d434ed66aca33f31da411b07cb50a88a`. Focused DCA/CLI/canary/protection
+  validation passed 48 cases; the clean post-merge live/schedule/soak subset
+  passed 59 cases; compileall, diff-check, and gitleaks passed. No credential,
+  network, or Testnet order was used. Next Park inputs are the exact DCA plan,
+  matching durable confirmation, approved Testnet account/approval identity,
+  and a local signer-file path for one attended `start`; after exposure, run
+  the attended `flatten` and retain `FLAT_RECONCILED` evidence. Scheduler,
+  automatic multi-entry progression, Grid, soak completion, Live/Mainnet, and
+  cloud deployment remain out of scope.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
