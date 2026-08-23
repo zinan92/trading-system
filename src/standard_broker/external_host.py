@@ -56,7 +56,7 @@ def _canonicalize(value: object) -> object:
     )
 
 
-def _digest(value: object) -> str:
+def digest_canonical(value: object) -> str:
     encoded = json.dumps(
         _canonicalize(value),
         ensure_ascii=False,
@@ -64,6 +64,9 @@ def _digest(value: object) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+_digest = digest_canonical
 
 
 def _require_sha(value: str, field: str) -> None:

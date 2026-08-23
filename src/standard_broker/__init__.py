@@ -44,6 +44,14 @@ from .external_host import (
     ExternalRuntimeIdentity,
     ExternalTransportProfile,
 )
+from .external_reconciliation import (
+    ExternalCursorKind,
+    ExternalReconciliationCursor,
+    ExternalReconciliationIdentity,
+    ExternalReconciliationObservation,
+    ExternalReconciliationOutcome,
+    ExternalReconciliationSnapshot,
+)
 from .fees import (
     FeeEvent,
     FeeKind,
@@ -219,6 +227,12 @@ __all__ = [
     "ExternalPreflightReceipt",
     "ExternalRuntimeIdentity",
     "ExternalTransportProfile",
+    "ExternalCursorKind",
+    "ExternalReconciliationCursor",
+    "ExternalReconciliationIdentity",
+    "ExternalReconciliationObservation",
+    "ExternalReconciliationOutcome",
+    "ExternalReconciliationSnapshot",
     "RecordingEvent",
     "RecordingTrack",
     "SignerKind",
