@@ -21,7 +21,7 @@ EXTERNAL_PROFILE = "hyperliquid-testnet-default"
 EXTERNAL_ENVIRONMENT = "testnet"
 MAX_ALLOWED_LOSS_USD = Decimal("50")
 MAX_MARKET_FACT_AGE_SECONDS = Decimal("120")
-DEFAULT_MARKET_SOURCES = frozenset({"hyperliquid.external_testnet"})
+DEFAULT_MARKET_SOURCES = frozenset({"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"})
 _DIGEST_PREFIX = "sha256:"
 _KNOWN_RECEIPT_STATES = {
     "submitting",
@@ -200,6 +200,9 @@ class TestnetCanaryOrderPort(Protocol):
         ...
 
     def cancel(self, order_id: str) -> object:
+        ...
+
+    def market_fact(self, *, instrument_id: str, now: datetime) -> Mapping[str, Any]:
         ...
 
 
@@ -555,6 +558,14 @@ class TestnetCanary:
             self._block(state, str(exc), timestamp=timestamp)
             self._save(state)
             raise
+        try:
+            market_fact = self._read_market_fact(plan, now=now)
+            preflight = {**preflight, "market_fact": market_fact}
+            state["preflight"] = self._safe_mapping(preflight)
+        except TestnetCanaryError as exc:
+            self._block(state, str(exc), timestamp=timestamp)
+            self._save(state)
+            raise
         state["status"] = "AWAITING_ATTENDED_START"
         state["lifecycle_state"] = "AWAITING_ATTENDED_START"
         state["confirmation_state"] = "CONFIRMED"
@@ -901,8 +912,24 @@ class TestnetCanary:
             raise TestnetCanaryError("canary protection gap is not explicit")
         if plan.order_type == "ioc_limit":
             raise TestnetCanaryError("external Testnet canary does not support ioc_limit")
-        self._validate_market_fact(result.get("market_fact"), plan, now=now)
+        if result.get("market_fact") is not None:
+            self._validate_market_fact(result.get("market_fact"), plan, now=now)
         return result
+
+    def _read_market_fact(self, plan: TestnetCanaryPlan, *, now: datetime) -> Mapping[str, Any]:
+        reader = getattr(self.broker, "market_fact", None)
+        if not callable(reader):
+            raise TestnetCanaryError("fresh market fact reader is unavailable")
+        try:
+            value = reader(instrument_id=plan.instrument_id, now=now)
+        except TestnetCanaryError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - market read is a hard admission gate.
+            raise TestnetCanaryError(f"market_fact_unknown:{type(exc).__name__}") from exc
+        if not isinstance(value, Mapping):
+            raise TestnetCanaryError("market fact reader returned a non-mapping value")
+        self._validate_market_fact(value, plan, now=now)
+        return value
 
     @staticmethod
     def _coerce_plan(
