@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
+from types import MappingProxyType
+from collections.abc import Mapping
 
+from .errors import BrokerCapabilityError
 from .models import BrokerEnvironment, Provenance
 from .orders import OrderSide
 
@@ -121,3 +124,76 @@ class ProtectionGroup:
             raise ValueError("protection entry_price and quantity must be positive")
         if self.take_profit is None and self.stop_loss is None:
             raise ValueError("protection group requires a take-profit or stop-loss leg")
+
+
+@dataclass(frozen=True)
+class ProtectionCapabilityMatrix:
+    """Explicit Broker protection semantics used for fail-closed gating."""
+
+    profile_id: str
+    values: Mapping[str, bool]
+
+    def __post_init__(self) -> None:
+        if not self.profile_id or self.profile_id != self.profile_id.strip():
+            raise ValueError("protection capability profile_id is required")
+        normalized = {}
+        for capability, supported in self.values.items():
+            name = str(capability).strip()
+            if not name:
+                raise ValueError("protection capability name is required")
+            if not isinstance(supported, bool):
+                raise TypeError("protection capability values must be bool")
+            normalized[name] = supported
+        object.__setattr__(self, "values", MappingProxyType(normalized))
+
+    def supports(self, capability: str) -> bool:
+        return self.values.get(str(capability), False)
+
+    def require(self, capability: str) -> None:
+        if not self.supports(capability):
+            raise BrokerCapabilityError(
+                "protection_order",
+                str(capability),
+                f"external protection capability gap: {capability}",
+            )
+
+    def required_for(self, group: ProtectionGroup, *, operation: str) -> tuple[str, ...]:
+        operation = str(operation)
+        required = [operation]
+        if operation in {
+            "submit",
+            "replace",
+            "cancel_replace",
+            "reconcile",
+            "position_coverage",
+            "partial_fill_repair",
+        }:
+            required.extend(("reduce_only", "mark_price_trigger"))
+        if operation in {"replace", "cancel_replace"}:
+            required.append("cancel_replace")
+        if operation == "position_coverage":
+            required.append("position_coverage")
+        if operation == "partial_fill_repair":
+            required.append("partial_fill_repair")
+        if group.take_profit is not None and group.stop_loss is not None:
+            required.extend(("grouped_tp_sl", "sibling_cancellation"))
+        if group.quantity_policy is ProtectionQuantityPolicy.FIXED_SIZE:
+            required.append("fixed_size")
+        else:
+            required.extend(("position_following", "position_level_tpsl"))
+        for leg in (group.take_profit, group.stop_loss):
+            if leg is not None:
+                required.append(f"{leg.protection_type.value}_{leg.execution.value}")
+        return tuple(dict.fromkeys(required))
+
+    def missing_for(self, group: ProtectionGroup, *, operation: str) -> tuple[str, ...]:
+        return tuple(
+            capability
+            for capability in self.required_for(group, operation=operation)
+            if not self.supports(capability)
+        )
+
+    def require_group(self, group: ProtectionGroup, *, operation: str) -> None:
+        missing = self.missing_for(group, operation=operation)
+        if missing:
+            self.require(missing[0])

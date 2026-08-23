@@ -13,6 +13,7 @@ from .external import (
     NAUTILUS_HYPERLIQUID_VERSION,
     default_testnet_capabilities,
 )
+from .protection import default_external_testnet_protection_capabilities
 
 
 HYPERLIQUID_TESTNET_PROFILE = ExternalTransportProfile(
@@ -27,6 +28,7 @@ HYPERLIQUID_TESTNET_PROFILE = ExternalTransportProfile(
     transport_state="external_testnet",
     signer_kind=SignerKind.API_AGENT,
     capabilities=default_testnet_capabilities(),
+    protection_capabilities=default_external_testnet_protection_capabilities(),
 )
 
 

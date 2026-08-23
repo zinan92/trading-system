@@ -14,6 +14,7 @@ from .capabilities import CapabilityDescriptor
 from .errors import BrokerCapabilityError, RuntimeBoundaryError
 from .host import CanonicalHostRequest
 from .models import AccountScope, BrokerEnvironment, BrokerIdentity, Provenance, SignerKind
+from .protection import ProtectionCapabilityMatrix, ProtectionGroup
 from .runtime import (
     BrokerRuntimeSession,
     ExternalEnvironmentApproval,
@@ -116,6 +117,7 @@ class ExternalTransportProfile:
     transport_state: str
     signer_kind: SignerKind
     capabilities: CapabilityDescriptor
+    protection_capabilities: ProtectionCapabilityMatrix | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -139,6 +141,11 @@ class ExternalTransportProfile:
             )
         if not isinstance(self.capabilities, CapabilityDescriptor):
             raise TypeError("profile capabilities must be a CapabilityDescriptor")
+        if self.protection_capabilities is not None and not isinstance(
+            self.protection_capabilities,
+            ProtectionCapabilityMatrix,
+        ):
+            raise TypeError("profile protection_capabilities must be a ProtectionCapabilityMatrix")
 
     def validate(
         self,
@@ -368,6 +375,22 @@ class ExternalBrokerHost:
     def context(self) -> ExternalBrokerBuildContext:
         return self._context
 
+    @property
+    def protection_capabilities(self) -> ProtectionCapabilityMatrix | None:
+        return self._profile.protection_capabilities if self._profile is not None else None
+
+    def require_protection(self, group: ProtectionGroup, *, operation: str) -> None:
+        """Fail closed before transport when protection semantics are unavailable."""
+
+        matrix = self.protection_capabilities
+        if matrix is None:
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "external protection capability profile is unavailable",
+            )
+        matrix.require_group(group, operation=operation)
+
     def preflight(
         self,
         *,
@@ -473,6 +496,11 @@ class ExternalBrokerHost:
             raise TypeError("external host requires an ExternalHostRequest")
         self._validate_public_payload(request.request)
         request_digest = _digest(request.request)
+        if isinstance(request.request.payload, ProtectionGroup):
+            self.require_protection(
+                request.request.payload,
+                operation=request.request.operation,
+            )
         self.preflight(
             request_id=request.request_id,
             required_operations={request.request.port: {request.request.operation}},

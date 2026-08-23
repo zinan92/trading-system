@@ -27,6 +27,7 @@ from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter, HyperliquidRuntimeReadAdapter
 from .orders import HyperliquidOrderAdapter, HyperliquidRuntimeOrderAdapter
 from .protection import (
+    default_external_testnet_protection_capabilities,
     HyperliquidProtectionAdapter,
     HyperliquidRuntimeProtectionAdapter,
     ProtectionLifecycleState,
@@ -66,6 +67,7 @@ __all__ = [
     "HyperliquidOrderAdapter",
     "HyperliquidRuntimeOrderAdapter",
     "HyperliquidProtectionAdapter",
+    "default_external_testnet_protection_capabilities",
     "HyperliquidRuntimeProtectionAdapter",
     "ProtectionLifecycleState",
     "ProtectionLifecycleStatus",

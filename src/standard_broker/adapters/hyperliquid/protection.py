@@ -8,6 +8,7 @@ from ...errors import BrokerCapabilityError, RuntimeBoundaryError
 from ...models import BrokerEnvironment
 from ...orders import OrderSide
 from ...protection import (
+    ProtectionCapabilityMatrix,
     ProtectionExecution,
     ProtectionGroup,
     ProtectionLeg,
@@ -21,6 +22,37 @@ from ...protection import (
 )
 from .bridge import NautilusHyperliquidRuntime, NautilusRuntimeState
 from .resilience import RateLimitError, RetryPolicy, plan_retry
+
+
+def default_external_testnet_protection_capabilities() -> ProtectionCapabilityMatrix:
+    """Return the explicit, intentionally unavailable external Testnet profile."""
+
+    capabilities = {
+        "submit": False,
+        "cancel": False,
+        "replace": False,
+        "query": False,
+        "retry": False,
+        "position_coverage": False,
+        "partial_fill_repair": False,
+        "reduce_only_close": True,
+        "reduce_only": False,
+        "mark_price_trigger": False,
+        "grouped_tp_sl": False,
+        "sibling_cancellation": False,
+        "fixed_size": False,
+        "position_following": False,
+        "position_level_tpsl": False,
+        "take_profit_market": False,
+        "take_profit_limit": False,
+        "stop_loss_market": False,
+        "stop_loss_limit": False,
+        "cancel_replace": False,
+    }
+    return ProtectionCapabilityMatrix(
+        profile_id="hyperliquid-testnet-protection-v1",
+        values=capabilities,
+    )
 
 
 @dataclass(frozen=True)
