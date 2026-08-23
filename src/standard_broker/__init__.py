@@ -7,6 +7,7 @@ from .adapters.hyperliquid import (
     HyperliquidExternalOrderAdapter,
     ExternalOrderLifecyclePort,
     build_hyperliquid_testnet_order_adapter,
+    build_hyperliquid_testnet_canary_binding,
     LocalFileSecretProvider,
     NautilusHyperliquidTestnetBackend,
     TestnetProofPlan,
@@ -49,6 +50,13 @@ from .external_host import (
     ExternalPreflightReceipt,
     ExternalRuntimeIdentity,
     ExternalTransportProfile,
+)
+from .external_canary import (
+    ExternalCanaryBinding,
+    ExternalCanaryFactBundle,
+    ExternalCanaryFactsReader,
+    ExternalCanaryRuntimeFactsReader,
+    ExternalCanaryReceipt,
 )
 from .external_reconciliation import (
     ExternalCursorKind,
@@ -149,6 +157,7 @@ __all__ = [
     "HyperliquidExternalOrderAdapter",
     "ExternalOrderLifecyclePort",
     "build_hyperliquid_testnet_order_adapter",
+    "build_hyperliquid_testnet_canary_binding",
     "BrokerCapabilityError",
     "BrokerEnvironment",
     "BrokerError",
@@ -234,6 +243,11 @@ __all__ = [
     "ExternalPreflightReceipt",
     "ExternalRuntimeIdentity",
     "ExternalTransportProfile",
+    "ExternalCanaryBinding",
+    "ExternalCanaryFactBundle",
+    "ExternalCanaryFactsReader",
+    "ExternalCanaryRuntimeFactsReader",
+    "ExternalCanaryReceipt",
     "ExternalCursorKind",
     "ExternalReconciliationCursor",
     "ExternalReconciliationIdentity",
