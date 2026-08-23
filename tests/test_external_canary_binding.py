@@ -137,6 +137,8 @@ def test_protected_canary_binding_composes_order_facts_and_protection_under_one_
     preflight = binding.preflight()
     assert binding.protection is not None
     assert binding.profile_id == "hyperliquid-testnet-position-protection"
+    assert binding.runtime_session is session
+    assert binding.protection_capabilities is host.protection_capabilities
     assert preflight["protection_ready"] is True
     assert preflight["broker_operation_invoked"] is False
     assert lifecycle.calls == []

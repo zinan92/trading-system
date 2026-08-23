@@ -455,6 +455,18 @@ class ExternalCanaryBinding:
         return self._context
 
     @property
+    def runtime_session(self):
+        """Return the exact public runtime session bound to this canary."""
+
+        return self._context.session
+
+    @property
+    def protection_capabilities(self):
+        """Return the profile-owned public protection capability matrix."""
+
+        return self._host.protection_capabilities
+
+    @property
     def local_only(self) -> bool:
         return False
 
