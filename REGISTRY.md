@@ -54,14 +54,17 @@
   3338 passed and 1 skipped; one existing unrelated GridMind Playwright drag
   test remains failing in the current environment. No network, credential,
   Testnet order, deployment, cloud, soak, or Live/Mainnet action occurred.
-- #895 is not ready to run. The current trading-system external bridge is
-  deliberately preflight-only and cannot satisfy the canary order/facts ports.
-  The next owner is the standard-broker public binding: typed external order
-  facade plus typed fill/fee/account/position/reconciliation wrapper backed by
-  `ExternalReconciliationSnapshot.require_coherent()`. Once that public seam
-  is merged and reviewed, Park must provide the exact canary plan and durable
-  confirmation for one attended Testnet attempt; DCA/Grid, ProtectionOrder,
-  soak, and Live/Mainnet remain blocked.
+- TS-EXT-02 / #899 merged in trading-system PR #900 as
+  `main@73aca6c83c793902c8de9bb847d6659a4ab3b194`. The thin wrapper now
+  consumes standard-broker's public canary binding, maps canonical receipts
+  and typed facts into CANARY-01/02, and reads the fresh market fact only
+  after durable Park confirmation; no generic strategy adapter or fallback was
+  changed.
+- The corresponding standard-broker consumer seam is merged in PR #65,
+  hardened host-backed fact reads in PR #68, and watermark-bound snapshot
+  reader in PR #71. #895 is now implementation-ready but still needs Park's
+  exact canary plan and durable confirmation for one attended Testnet attempt.
+  DCA/Grid, ProtectionOrder, soak, and Live/Mainnet remain blocked.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
