@@ -556,7 +556,7 @@ class ExternalDcaLifecycle:
         order_id = str(state.get("entry_order_id") or "").strip()
         try:
             request = self._entry_request(plan, self._entry_index(plan, order_id))
-            self._recover_order_intent(request)
+            self._recover_order_intent(state, request)
             queried = self.orders.query(order_id)
             self._record_receipt(
                 state,
@@ -682,7 +682,7 @@ class ExternalDcaLifecycle:
                 if order_id and self._entry_is_open(state, str(order_id)):
                     entry_index = self._entry_index(plan, str(order_id))
                     entry_request = self._entry_request(plan, entry_index)
-                    self._recover_order_intent(entry_request)
+                    self._recover_order_intent(state, entry_request)
                     canceled = self.orders.cancel(str(order_id))
                     self._record_receipt(
                         state,
@@ -1035,10 +1035,30 @@ class ExternalDcaLifecycle:
             raise ExternalDcaError("entry_order_index_invalid")
         return index
 
-    def _recover_order_intent(self, request: TestnetCanaryOrderRequest) -> None:
+    def _recover_order_intent(
+        self,
+        state: Mapping[str, Any],
+        request: TestnetCanaryOrderRequest,
+    ) -> None:
         recover = getattr(self.orders, "recover", None)
-        if callable(recover):
-            recover(request)
+        if not callable(recover):
+            return
+        rows = [
+            row
+            for row in state.get("receipts") or ()
+            if isinstance(row, Mapping) and row.get("order_id") == request.order_id
+        ]
+        if not rows:
+            raise ExternalDcaError("persisted_broker_order_identity_missing")
+        latest = rows[-1]
+        broker_order_id = str(latest.get("broker_order_id") or "").strip()
+        if not broker_order_id:
+            raise ExternalDcaError("persisted_broker_order_identity_missing")
+        recover(
+            request,
+            broker_order_id=broker_order_id,
+            state=str(latest.get("state") or "unknown"),
+        )
 
     def _new_state(self, plan: ExternalDcaPlan, timestamp: str) -> dict[str, Any]:
         return {
