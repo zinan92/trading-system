@@ -54,6 +54,8 @@ class ExternalProtectionBuildConfig:
 
 def build_external_position_protection_binding(
     config: ExternalProtectionBuildConfig,
+    *,
+    canary: bool = False,
 ) -> tuple[object, object]:
     """Build ``(runtime, binding)`` for the exact opt-in Testnet profile.
 
@@ -72,9 +74,11 @@ def build_external_position_protection_binding(
             ExternalEnvironmentApproval,
             ExternalRuntimeIdentity,
             RuntimeActivationPolicy,
+            RuntimeFactLedger,
             SignerKind,
             SignerReference,
             build_hyperliquid_testnet_position_protection_binding_from_runtime,
+            build_hyperliquid_testnet_protected_canary_binding_from_runtime,
             enabled_testnet_position_protection_capabilities,
         )
         from standard_broker.adapters.hyperliquid import (
@@ -152,9 +156,17 @@ def build_external_position_protection_binding(
             release_sha=config.release_sha,
             approval=approval,
         )
-        binding = build_hyperliquid_testnet_position_protection_binding_from_runtime(
-            context=context,
-            runtime=runtime,
+        binding = (
+            build_hyperliquid_testnet_protected_canary_binding_from_runtime(
+                context=context,
+                runtime=runtime,
+                ledger=RuntimeFactLedger(),
+            )
+            if canary
+            else build_hyperliquid_testnet_position_protection_binding_from_runtime(
+                context=context,
+                runtime=runtime,
+            )
         )
         matrix = getattr(binding, "protection_capabilities", None)
         if matrix is None:
@@ -180,10 +192,12 @@ def build_external_position_protection_binding(
             raise StandardBrokerExternalProtectionError(
                 "external_protection_preflight_identity_mismatch"
             )
+        runtime_session = getattr(binding, "runtime_session", None)
         if (
-            binding.runtime_session.account.address != config.account_address
-            or binding.runtime_session.lifecycle_id != config.runtime_id
-            or binding.runtime_session.capability_revision != config.capability_revision
+            runtime_session is None
+            or runtime_session.account.address != config.account_address
+            or runtime_session.lifecycle_id != config.runtime_id
+            or runtime_session.capability_revision != config.capability_revision
         ):
             raise StandardBrokerExternalProtectionError(
                 "external_protection_binding_identity_mismatch"
@@ -197,3 +211,11 @@ def build_external_position_protection_binding(
         raise StandardBrokerExternalProtectionError(
             f"external_protection_build_blocked:{type(exc).__name__}"
         ) from exc
+
+
+def build_external_protected_canary_binding(
+    config: ExternalProtectionBuildConfig,
+) -> tuple[object, object]:
+    """Build the combined order/facts/protection binding for DCA hosts."""
+
+    return build_external_position_protection_binding(config, canary=True)

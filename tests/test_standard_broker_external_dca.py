@@ -137,11 +137,11 @@ class _Orders:
             "canary_ready": True,
             "environment": "testnet",
             "transport_state": "external_testnet",
-            "transport_profile": "hyperliquid-testnet-default",
+            "transport_profile": "hyperliquid-testnet-position-protection",
             "account_fingerprint": ACCOUNT_FINGERPRINT,
             "runtime_id": "dca-runtime-1",
             "release_sha": RELEASE_SHA,
-            "capability_revision": "hyperliquid-testnet-runtime-v1",
+            "capability_revision": CAPABILITY,
             "network_io": True,
             "real_money_eligible": False,
         }
