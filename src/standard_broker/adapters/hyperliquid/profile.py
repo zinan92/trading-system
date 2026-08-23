@@ -33,7 +33,7 @@ from ...external_canary import (
     HyperliquidExternalSnapshotReader,
 )
 from ...market_data import FreshnessPolicy
-from ...host import CanonicalHostRequest
+from ...host import CanonicalHostRequest, CanonicalPortQuery
 from ...instruments import InstrumentCatalog
 from .read_facts import HyperliquidExternalFactAdapter
 
@@ -193,7 +193,11 @@ def build_hyperliquid_testnet_canary_binding_from_runtime(
     envelope = host.read_fact(
         request=ExternalHostRequest(
             request_id=f"canary-instruments:{context.session.lifecycle_id}",
-            request=CanonicalHostRequest(port="instrument", operation="read"),
+            request=CanonicalHostRequest(
+                port="instrument",
+                operation="read",
+                payload=CanonicalPortQuery(kind="instruments"),
+            ),
         ),
         mapper=lambda raw: mapper.map_instruments(
             request_id=f"canary-instruments:{context.session.lifecycle_id}",
@@ -253,7 +257,11 @@ def build_hyperliquid_testnet_protected_canary_binding_from_runtime(
     envelope = host.read_fact(
         request=ExternalHostRequest(
             request_id=f"protected-canary-instruments:{context.session.lifecycle_id}",
-            request=CanonicalHostRequest(port="instrument", operation="read"),
+            request=CanonicalHostRequest(
+                port="instrument",
+                operation="read",
+                payload=CanonicalPortQuery(kind="instruments"),
+            ),
         ),
         mapper=lambda raw: mapper.map_instruments(
             request_id=f"protected-canary-instruments:{context.session.lifecycle_id}",

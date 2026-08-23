@@ -10,7 +10,7 @@ from standard_broker.external_canary import (
 )
 from standard_broker.models import BrokerEnvironment
 from standard_broker.models import Provenance
-from standard_broker.external_host import ExternalFactEnvelope, ExternalHostRequest
+from standard_broker.external_host import ExternalBrokerHost, ExternalFactEnvelope, ExternalHostRequest
 from standard_broker.host import CanonicalHostRequest, CanonicalPortQuery
 from standard_broker.orders import OrderState
 from standard_broker.adapters.hyperliquid import (
@@ -18,10 +18,14 @@ from standard_broker.adapters.hyperliquid import (
     NautilusHyperliquidRuntime,
     NautilusRuntimeConfig,
     build_hyperliquid_testnet_canary_binding,
+    build_hyperliquid_testnet_canary_binding_from_runtime,
+    build_hyperliquid_testnet_protected_canary_binding_from_runtime,
 )
 from standard_broker.adapters.hyperliquid.external import (
     NAUTILUS_HYPERLIQUID_COMMIT,
     NAUTILUS_HYPERLIQUID_VERSION,
+    default_testnet_capabilities,
+    enabled_testnet_position_protection_capabilities,
 )
 from standard_broker.runtime import ExternalEnvironmentApproval, RuntimeActivationPolicy
 from standard_broker.models import BrokerEnvironment
@@ -185,6 +189,80 @@ def test_public_factory_composes_external_canary_binding_without_network() -> No
     preflight = binding.preflight()
     assert preflight["canary_ready"] is True
     assert backend.calls == []
+
+
+@pytest.mark.parametrize("protected", [False, True])
+def test_runtime_fact_factories_send_typed_instrument_query(
+    monkeypatch: pytest.MonkeyPatch,
+    protected: bool,
+) -> None:
+    capabilities = (
+        enabled_testnet_position_protection_capabilities()
+        if protected
+        else default_testnet_capabilities()
+    )
+    session = _profile_session(capabilities=capabilities)
+    backend = ExternalOrderBackend(capabilities)
+    runtime = NautilusHyperliquidRuntime(
+        session=session,
+        backend=backend,
+        config=NautilusRuntimeConfig(
+            expected_version=NAUTILUS_HYPERLIQUID_VERSION,
+            expected_commit=NAUTILUS_HYPERLIQUID_COMMIT,
+            policy=RuntimeActivationPolicy(
+                testnet_approval=ExternalEnvironmentApproval(
+                    environment=BrokerEnvironment.TESTNET,
+                    approval_id="typed-instrument-read-approval",
+                    release_sha=RELEASE_SHA,
+                    approved_by="park",
+                    approved_at=NOW,
+                    account_address=session.account.address,
+                    lifecycle_id=session.lifecycle_id,
+                )
+            ),
+            expected_release_sha=RELEASE_SHA,
+        ),
+    )
+    runtime.start()
+    context = _profile_context(session)
+    captured: list[object] = []
+    provenance = Provenance(
+        source="nautilus-hyperliquid.testnet",
+        execution_scope=session.execution_scope,
+        transport_state="external_testnet",
+        mapping_revision=capabilities.revision,
+    )
+
+    def fake_read_fact(self, *, request, mapper):
+        del self
+        captured.append(request.request.payload)
+        return mapper(
+            {
+                "meta": {
+                    "universe": [
+                        {"name": "BTC", "index": 0, "szDecimals": 5, "maxLeverage": 40}
+                    ]
+                },
+                "provenance": provenance,
+            }
+        )
+
+    monkeypatch.setattr(ExternalBrokerHost, "read_fact", fake_read_fact)
+    factory = (
+        build_hyperliquid_testnet_protected_canary_binding_from_runtime
+        if protected
+        else build_hyperliquid_testnet_canary_binding_from_runtime
+    )
+    binding = factory(context=context, runtime=runtime, ledger=RuntimeFactLedger())
+
+    assert captured
+    assert isinstance(captured[0], CanonicalPortQuery)
+    assert captured[0].kind == "instruments"
+    assert binding.profile_id == (
+        "hyperliquid-testnet-position-protection"
+        if protected
+        else "hyperliquid-testnet-default"
+    )
 
 
 def test_host_typed_fact_read_authorizes_without_exposing_internal_payload() -> None:
