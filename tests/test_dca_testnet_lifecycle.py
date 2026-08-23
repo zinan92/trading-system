@@ -147,6 +147,7 @@ def _broker(tmp_path: Path, *, protection: bool = True):
             "provider": "standard_broker",
             "broker_id": "hyperliquid",
             "environment": "testnet",
+            "transport_profile": "local_fixture_v1",
             "environment_fingerprint": "hyperliquid:testnet:dca",
             "account_id": "testnet-account",
             "credential_source": "HL_TESTNET_CREDENTIAL",

@@ -17,6 +17,7 @@ def _testnet_config(backend: object, approval: object) -> dict:
         "provider": "standard_broker",
         "broker_id": "hyperliquid",
         "environment": "testnet",
+        "transport_profile": "local_fixture_v1",
         "environment_fingerprint": "hyperliquid:testnet:fingerprint",
         "account_id": "testnet-account",
         "credential_source": "HL_TESTNET_CREDENTIAL",

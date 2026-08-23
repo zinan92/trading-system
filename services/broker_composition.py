@@ -56,6 +56,25 @@ class BrokerBuildContext:
         configured_environment = str(
             self.broker_config.get("environment") or ""
         ).strip().lower()
+        transport_profile = str(
+            self.broker_config.get("transport_profile") or ""
+        ).strip().lower()
+        external_host_markers = (
+            "external_host" in self.broker_config
+            or "standard_broker_release_sha" in self.broker_config
+            or transport_profile == "hyperliquid-testnet-default"
+        )
+        if external_host_markers and provider != "standard_broker":
+            raise ValueError(
+                "external host markers require provider=standard_broker"
+            )
+        if external_host_markers and (
+            (self.selection_environment or configured_environment) != "testnet"
+            or transport_profile != "hyperliquid-testnet-default"
+        ):
+            raise ValueError(
+                "external host markers require the exact Testnet external profile"
+            )
         if provider == "standard_broker" and not (
             self.selection_environment or configured_environment
         ):
@@ -71,10 +90,22 @@ class BrokerBuildContext:
                 raise ValueError(
                     "contradictory standard_broker environment sources"
                 )
+        if (
+            provider == "standard_broker"
+            and (self.selection_environment or configured_environment) == "testnet"
+            and not transport_profile
+        ):
+            raise ValueError("standard_broker Testnet requires explicit transport_profile")
 
     @property
     def provider(self) -> str:
         return str(self.broker_config.get("provider") or "manual_gateway").strip().lower()
+
+    @property
+    def broker_id(self) -> str:
+        if self.provider != "standard_broker":
+            return "*"
+        return str(self.broker_config.get("broker_id") or "").strip().lower()
 
     @property
     def environment(self) -> str:
@@ -90,8 +121,18 @@ class BrokerBuildContext:
         return "live"
 
     @property
+    def transport_profile(self) -> str:
+        return str(self.broker_config.get("transport_profile") or "").strip().lower()
+
+    @property
     def key(self) -> BrokerPluginKey:
-        return BrokerPluginKey(self.execution_mode, self.provider, self.environment)
+        return BrokerPluginKey(
+            self.execution_mode,
+            self.provider,
+            self.environment,
+            broker_id=self.broker_id,
+            transport_profile=self.transport_profile or "*",
+        )
 
     def with_broker_config(self, broker_config: dict) -> BrokerBuildContext:
         return replace(self, broker_config=dict(broker_config))
@@ -102,12 +143,16 @@ class BrokerPluginKey:
     execution_mode: str
     provider: str
     environment: str
+    broker_id: str = "*"
+    transport_profile: str = "*"
 
     def __post_init__(self) -> None:
         values = {
             "execution_mode": str(self.execution_mode or "").strip().lower(),
             "provider": str(self.provider or "").strip().lower(),
             "environment": str(self.environment or "").strip().lower(),
+            "broker_id": str(self.broker_id or "").strip().lower(),
+            "transport_profile": str(self.transport_profile or "").strip().lower(),
         }
         if not all(values.values()):
             raise ValueError("broker plugin key fields are required")
@@ -150,6 +195,16 @@ class BrokerPluginRegistry:
 
     def resolve(self, context: BrokerBuildContext) -> BrokerPlugin:
         key = context.key
+        if key.provider == "standard_broker":
+            plugin = self._plugins.get(key)
+            if plugin is not None:
+                return plugin
+            raise RuntimeError(
+                "unsupported standard_broker selection: "
+                f"mode={key.execution_mode}, provider={key.provider}, "
+                f"broker_id={key.broker_id}, environment={key.environment}, "
+                f"transport_profile={key.transport_profile}"
+            )
         candidates = (
             key,
             BrokerPluginKey(key.execution_mode, key.provider, "*"),
@@ -384,6 +439,59 @@ def _standard_broker_testnet_execution(context: BrokerBuildContext) -> BrokerExe
     return adapter
 
 
+def _standard_broker_external_testnet_execution(
+    context: BrokerBuildContext,
+) -> BrokerExecutionPort:
+    from services.standard_broker_external_testnet import (
+        StandardBrokerExternalTestnetExecutionAdapter,
+        StandardBrokerExternalTestnetHostError,
+    )
+
+    forbidden = {
+        "credential_source",
+        "private_key",
+        "secret",
+        "signature",
+        "signed_payload",
+    }.intersection(context.broker_config)
+    if forbidden:
+        raise StandardBrokerExternalTestnetHostError(
+            "external host composition forbids credential or signed-payload configuration"
+        )
+    required = (
+        "external_host",
+        "account_id",
+        "runtime_id",
+        "release_sha",
+        "standard_broker_release_sha",
+    )
+    missing = [name for name in required if name not in context.broker_config]
+    if missing:
+        raise StandardBrokerExternalTestnetHostError(
+            "external host composition is blocked; missing " + ", ".join(missing)
+        )
+    try:
+        return StandardBrokerExternalTestnetExecutionAdapter(
+            external_host=context.broker_config["external_host"],
+            account_id=str(context.broker_config["account_id"]),
+            runtime_id=str(context.broker_config["runtime_id"]),
+            release_sha=str(context.broker_config["release_sha"]),
+            execution_scope=str(
+                context.broker_config.get("execution_scope") or "hypercore:default"
+            ),
+            transport_profile=context.transport_profile,
+            standard_broker_release_sha=str(
+                context.broker_config["standard_broker_release_sha"]
+            ),
+        )
+    except StandardBrokerExternalTestnetHostError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - normalize public host blockers.
+        raise StandardBrokerExternalTestnetHostError(
+            f"standard-broker external host blocked: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _reject_standard_broker_selection(context: BrokerBuildContext) -> BrokerExecutionPort:
     from services.standard_broker_host import StandardBrokerHostError
 
@@ -512,10 +620,18 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
         STANDARD_BROKER_PAPER_CAPABILITIES,
     )
     from services.standard_broker_testnet import STANDARD_BROKER_TESTNET_CAPABILITIES
+    from services.standard_broker_external_testnet import (
+        STANDARD_BROKER_EXTERNAL_TESTNET_CAPABILITIES,
+    )
 
     registry.register(
         BrokerPlugin(
-            BrokerPluginKey("paper", "standard_broker", "paper"),
+            BrokerPluginKey(
+                "paper",
+                "standard_broker",
+                "paper",
+                broker_id="hyperliquid",
+            ),
             execution_factory=_standard_broker_paper_execution,
             capabilities=STANDARD_BROKER_PAPER_CAPABILITIES,
         )
@@ -528,15 +644,39 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
     )
     registry.register(
         BrokerPlugin(
-            BrokerPluginKey("live", "standard_broker", "testnet"),
+            BrokerPluginKey(
+                "live",
+                "standard_broker",
+                "testnet",
+                broker_id="hyperliquid",
+                transport_profile="local_fixture_v1",
+            ),
             execution_factory=_standard_broker_testnet_execution,
             capabilities=STANDARD_BROKER_TESTNET_CAPABILITIES,
+        )
+    )
+    registry.register(
+        BrokerPlugin(
+            BrokerPluginKey(
+                "live",
+                "standard_broker",
+                "testnet",
+                broker_id="hyperliquid",
+                transport_profile="hyperliquid-testnet-default",
+            ),
+            execution_factory=_standard_broker_external_testnet_execution,
+            capabilities=STANDARD_BROKER_EXTERNAL_TESTNET_CAPABILITIES,
         )
     )
     for environment in ("mainnet", "live"):
         registry.register(
             BrokerPlugin(
-                BrokerPluginKey("live", "standard_broker", environment),
+                BrokerPluginKey(
+                    "live",
+                    "standard_broker",
+                    environment,
+                    broker_id="hyperliquid",
+                ),
                 execution_factory=_standard_broker_environment_gate,
                 capabilities=STANDARD_BROKER_ENVIRONMENT_CAPABILITIES,
             )

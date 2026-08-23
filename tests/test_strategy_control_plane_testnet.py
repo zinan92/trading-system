@@ -153,3 +153,48 @@ def test_testnet_control_never_publishes_running_when_protection_capability_is_m
         )
 
     assert plane.active_plan(plan["cycle_id"]) is None
+
+
+def test_external_host_bridge_cannot_start_dca_before_protection_story(tmp_path: Path) -> None:
+    from services.broker_composition import build_broker_execution_port
+    from tests.test_standard_broker_external_testnet import _context, _host
+
+    host, runtime = _host()
+    adapter = build_broker_execution_port(_context(tmp_path, host))
+    plane = StrategyControlPlane(tmp_path)
+    plan = _plan()
+    confirmation = _durable_confirmation(tmp_path, plan)
+
+    with pytest.raises(StrategyControlMachineError, match="testnet_adapter_required"):
+        plane.start_testnet_dca(
+            plan,
+            confirmation=confirmation,
+            market={"execution_ready": True, "fresh": True, "is_synthetic": False, "fallback_policy": "none"},
+            adapter=adapter,
+        )
+
+    assert plane.active_plan(plan["cycle_id"]) is None
+    assert runtime.invoke_calls == []
+
+
+def test_external_host_bridge_cannot_start_grid_before_protection_story(tmp_path: Path) -> None:
+    from services.broker_composition import build_broker_execution_port
+    from tests.test_grid_testnet_lifecycle import _plan as grid_plan
+    from tests.test_standard_broker_external_testnet import _context, _host
+
+    host, runtime = _host()
+    adapter = build_broker_execution_port(_context(tmp_path, host))
+    plane = StrategyControlPlane(tmp_path)
+    plan = grid_plan()
+    confirmation = _durable_confirmation(tmp_path, plan)
+
+    with pytest.raises(StrategyControlMachineError, match="testnet_adapter_required"):
+        plane.start_testnet_grid(
+            plan,
+            confirmation=confirmation,
+            market={"execution_ready": True, "fresh": True, "is_synthetic": False, "fallback_policy": "none"},
+            adapter=adapter,
+        )
+
+    assert plane.active_plan(plan["cycle_id"]) is None
+    assert runtime.invoke_calls == []
