@@ -120,6 +120,18 @@
   the attended `flatten` and retain `FLAT_RECONCILED` evidence. Scheduler,
   automatic multi-entry progression, Grid, soak completion, Live/Mainnet, and
   cloud deployment remain out of scope.
+- TS-DCA-EXT-07 / #924 merged in trading-system PR #925 as
+  `main@563818f143d7f9f6d4fa18ca86617397b61a8c23`. The external DCA operator
+  now also exposes one attended `next-entry` action after
+  `PROTECTION_ACTIVE`; it submits one approved ladder level, reads canonical
+  facts when filled, and re-confirms position-following protection before
+  stopping. It never loops or schedules additional entries. Focused
+  next-entry/operator validation passed 13 cases; compileall, diff-check, and
+  gitleaks passed. No credentials, network, or Testnet orders were used. The
+  first real external DCA run is still waiting for Park's exact plan, durable
+  confirmation, account/approval identity, and local signer-file path; after
+  each attended level, `flatten` remains the required terminal proof. The
+  14-window soak and Live/Mainnet activation are later, separate milestones.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
