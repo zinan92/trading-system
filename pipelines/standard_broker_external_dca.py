@@ -207,14 +207,14 @@ def _verify_durable_confirmation(
 
 
 def _require_operator_args(args: argparse.Namespace, *, action: str) -> None:
-    if action in {"preflight", "start", "next-entry", "flatten"}:
+    if action in {"preflight", "start", "reconcile-entry", "next-entry", "flatten"}:
         if not str(args.account_address or "").strip():
             raise ExternalDcaCliError("account_address_required")
         if not str(args.approval_id or "").strip():
             raise ExternalDcaCliError("approval_id_required")
         if not str(args.approved_by or "").strip():
             raise ExternalDcaCliError("approved_by_required")
-    if action in {"start", "next-entry", "flatten"}:
+    if action in {"start", "reconcile-entry", "next-entry", "flatten"}:
         if not args.confirmation:
             raise ExternalDcaCliError("confirmation_required")
         if not args.secret_file:
@@ -587,6 +587,56 @@ def _next_entry_action(
         _close_runtime(runtime)
 
 
+def _reconcile_entry_action(
+    plan: ExternalDcaPlan,
+    args: argparse.Namespace,
+    confirmation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Query one current entry and process its facts without submitting."""
+
+    output_root = Path(args.output_root)
+    runtime: object | None = None
+    lifecycle: ExternalDcaLifecycle | None = None
+    try:
+        runtime, binding = _build_external_protection(plan, args, canary=True)
+        lifecycle, _adapter = _build_lifecycle(output_root, binding)
+        state = lifecycle.reconcile_entry(
+            plan,
+            confirmation=confirmation,
+            timestamp=_timestamp(),
+        )
+        return _state_result(
+            action="reconcile-entry",
+            plan=plan,
+            state=state,
+            lifecycle=lifecycle,
+        )
+    except ExternalDcaError as exc:
+        if lifecycle is not None:
+            state = lifecycle.snapshot()
+            if state:
+                return _state_result(
+                    action="reconcile-entry",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                )
+        raise ExternalDcaCliError(_reason_code(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - provider details stay redacted.
+        if lifecycle is not None:
+            state = lifecycle.snapshot()
+            if state:
+                return _state_result(
+                    action="reconcile-entry",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                )
+        raise ExternalDcaCliError(_reason_code(type(exc).__name__)) from exc
+    finally:
+        _close_runtime(runtime)
+
+
 def _write_cli_blocker(output_root: Path, plan: ExternalDcaPlan | None, reason_code: str) -> dict[str, Any]:
     path = output_root / "standard_broker_external_dca" / "cli-blockers.json"
     rows = load_json(path)
@@ -626,13 +676,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--action",
-        choices=("digest", "preflight", "start", "next-entry", "flatten"),
+        choices=("digest", "preflight", "start", "reconcile-entry", "next-entry", "flatten"),
         default="digest",
     )
     parser.add_argument("--plan", type=Path, required=True, help="JSON external DCA plan; no credentials")
     parser.add_argument("--confirmation", type=Path, help="confirmed Park projection JSON/JSONL")
     parser.add_argument("--account-address", help="Hyperliquid Testnet account address")
-    parser.add_argument("--secret-file", type=Path, help="local protected signer file (start/next-entry/flatten only)")
+    parser.add_argument("--secret-file", type=Path, help="local protected signer file (start/reconcile-entry/next-entry/flatten only)")
     parser.add_argument("--credential-reference", default=DEFAULT_CREDENTIAL_REFERENCE)
     parser.add_argument("--approval-id", help="human Testnet approval identifier")
     parser.add_argument("--approved-by", help="human approver identity")
@@ -654,12 +704,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _digest_action(raw)
         else:
             plan = _require_plan(raw)
-            if args.action in {"start", "next-entry", "flatten"}:
+            if args.action in {"start", "reconcile-entry", "next-entry", "flatten"}:
                 _require_account(plan, args.account_address)
                 confirmation = _load_confirmation_mapping(Path(args.confirmation), plan=plan)
                 _verify_durable_confirmation(Path(args.output_root), plan=plan, confirmation=confirmation)
                 if args.action == "start":
                     result = _start_action(plan, args, confirmation)
+                elif args.action == "reconcile-entry":
+                    result = _reconcile_entry_action(plan, args, confirmation)
                 elif args.action == "next-entry":
                     result = _next_entry_action(plan, args, confirmation)
                 else:

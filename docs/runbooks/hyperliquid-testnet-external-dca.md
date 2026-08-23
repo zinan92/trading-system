@@ -56,6 +56,27 @@ is filled, and then submits/reconciles the position-following TP/SL group. It
 stops at `WAITING_ENTRY`, `PROTECTION_ACTIVE`, or durable `BLOCKED`. A further
 DCA level requires a new attended command and the same confirmation gate.
 
+## Reconcile one entry
+
+While an entry is resting, use this attended command to query it once. If the
+entry is still resting it remains `WAITING_ENTRY`; if it filled, the command
+reads canonical facts and activates/reconciles protection. It never submits an
+entry.
+
+```bash
+python3 -m pipelines.standard_broker_external_dca \
+  --action reconcile-entry \
+  --plan <path-to-external-dca-plan.json> \
+  --confirmation <path-to-confirmed-park-projection.json> \
+  --account-address <testnet-account-address> \
+  --secret-file <local-testnet-signer-file> \
+  --approval-id <human-testnet-approval-id> \
+  --approved-by park \
+  --output-root <output-root> \
+  --execute-testnet \
+  --acknowledge I_UNDERSTAND_ONE_ATTENDED_EXTERNAL_DCA_TESTNET_ACTION
+```
+
 ## One attended next entry
 
 After `start` reaches `PROTECTION_ACTIVE`, one additional approved ladder level

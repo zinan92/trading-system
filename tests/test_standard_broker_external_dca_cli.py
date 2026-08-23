@@ -118,7 +118,7 @@ def _args(tmp_path: Path, plan_path: Path, confirmation_path: Path | None = None
     ]
     if confirmation_path is not None:
         values.extend(["--confirmation", str(confirmation_path)])
-    if action in {"start", "next-entry", "flatten"}:
+    if action in {"start", "reconcile-entry", "next-entry", "flatten"}:
         values.extend(
             [
                 "--secret-file",
@@ -465,3 +465,40 @@ def test_next_entry_protection_gate_returns_redacted_blocker_without_facts(
     assert result["blocker"] == "new_entry_requires_active_protection"
     assert result["secret_resolved"] is False
     assert "read_facts" not in calls
+
+
+def test_reconcile_entry_queries_once_without_submitting_another_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan_path, plan = _write_plan(tmp_path)
+    confirmation_path, _output_root = _write_confirmation(tmp_path, plan)
+    calls: list[str] = []
+
+    class FakeLifecycle:
+        current_path = tmp_path / "outputs" / "standard_broker_external_dca" / "current.json"
+
+        def reconcile_entry(self, *_args, **_kwargs):
+            calls.append("reconcile_entry")
+            return {
+                "status": "WAITING_ENTRY",
+                "next_action": "attended_reconcile_entry_or_cancel_entry",
+            }
+
+        def snapshot(self):
+            return {
+                "status": "WAITING_ENTRY",
+                "next_action": "attended_reconcile_entry_or_cancel_entry",
+            }
+
+    runtime = SimpleNamespace(close=lambda: calls.append("close"))
+    binding = SimpleNamespace(protection=object())
+    monkeypatch.setattr(cli, "_build_external_protection", lambda *_args, **_kwargs: (runtime, binding))
+    monkeypatch.setattr(cli, "_build_lifecycle", lambda *_args, **_kwargs: (FakeLifecycle(), object()))
+
+    assert cli.main(_args(tmp_path, plan_path, confirmation_path, action="reconcile-entry")) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "WAITING_ENTRY"
+    assert result["action"] == "reconcile-entry"
+    assert calls == ["reconcile_entry", "close"]
