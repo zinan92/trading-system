@@ -70,6 +70,11 @@
   reader in PR #71. #895 is now implementation-ready but still needs Park's
   exact canary plan and durable confirmation for one attended Testnet attempt.
   DCA/Grid, ProtectionOrder, soak, and Live/Mainnet remain blocked.
+- TS-OPS-03 / #907 pins the application dependency to
+  `standard-broker@9bccc89d00c69ee74ef0c9f0cc4753932ed5a632`, the reviewed
+  standard-broker main containing the runtime-bound public canary factory used
+  by the attended CLI. The pin is immutable; no floating branch or fallback is
+  allowed. The CLI itself is tracked separately in #906 / PR #908.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
