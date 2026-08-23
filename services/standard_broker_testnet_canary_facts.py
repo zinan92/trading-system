@@ -607,6 +607,11 @@ class TestnetCanaryFillFlat:
                     "price": str(fill.price),
                     "quantity": str(fill.quantity),
                     "occurred_at": fill.occurred_at,
+                    "broker_order_id": fill.broker_order_id,
+                    "client_order_id": fill.client_order_id,
+                    "cursor": fill.cursor,
+                    "fact_digest": fill.fact_digest,
+                    "raw_payload_digest": fill.raw_payload_digest,
                 }
                 for fill in bundle.fills
             ],
@@ -617,6 +622,11 @@ class TestnetCanaryFillFlat:
                     "amount_usd": str(fee.amount_usd),
                     "currency": fee.currency,
                     "occurred_at": fee.occurred_at,
+                    "cursor": fee.cursor,
+                    "fee_source": fee.fee_source,
+                    "fee_state": fee.fee_state,
+                    "fact_digest": fee.fact_digest,
+                    "raw_payload_digest": fee.raw_payload_digest,
                 }
                 for fee in bundle.fees
             ],
@@ -625,6 +635,8 @@ class TestnetCanaryFillFlat:
                 "equity_usd": str(bundle.account.equity_usd),
                 "cursor": bundle.account.cursor,
                 "observed_at": bundle.account.observed_at,
+                "fact_digest": bundle.account.fact_digest,
+                "raw_payload_digest": bundle.account.raw_payload_digest,
             },
             "positions": [
                 {
@@ -632,6 +644,8 @@ class TestnetCanaryFillFlat:
                     "signed_quantity": str(position.signed_quantity),
                     "cursor": position.cursor,
                     "observed_at": position.observed_at,
+                    "fact_digest": position.fact_digest,
+                    "raw_payload_digest": position.raw_payload_digest,
                 }
                 for position in bundle.positions
             ],
@@ -643,6 +657,10 @@ class TestnetCanaryFillFlat:
                 "open_order_ids": list(bundle.reconciliation.open_order_ids),
                 "signed_position_quantity": str(bundle.reconciliation.signed_position_quantity),
                 "observed_at": bundle.reconciliation.observed_at,
+                "canonical_schema": bundle.reconciliation.canonical_schema,
+                "evidence_digest": bundle.reconciliation.evidence_digest,
+                "fact_digest": bundle.reconciliation.fact_digest,
+                "raw_payload_digest": bundle.reconciliation.raw_payload_digest,
             },
         }
 
