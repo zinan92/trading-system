@@ -75,6 +75,16 @@
   standard-broker main containing the runtime-bound public canary factory used
   by the attended CLI. The pin is immutable; no floating branch or fallback is
   allowed. The CLI itself is tracked separately in #906 / PR #908.
+- TS-OPS-02 / #906 merged in trading-system PR #908 as
+  `main@70db4e857cbd1a5530b594c988319677dca249ca`. The attended operator CLI
+  now offers local `digest`, release-bound no-invocation `preflight`, and an
+  explicit acknowledged `run` path over the public standard-broker factory;
+  it validates the durable Park ledger before any network-capable binding is
+  constructed and records redacted blockers. Offline CLI/canary validation
+  passed 41 tests (with the existing collection warnings). No credential was
+  read, no Testnet order or network operation was run, and #895 still awaits
+  Park's exact plan, account binding, and durable confirmation. DCA/Grid,
+  ProtectionOrder, soak, Mainnet, and Live remain blocked.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
