@@ -30,6 +30,14 @@ from .evidence import (
     ExternalTestnetLifecycleEvidence,
     run_paper_runtime_readiness,
 )
+from .external_host import (
+    ExternalBrokerBuildContext,
+    ExternalBrokerHost,
+    ExternalCanonicalReceipt,
+    ExternalHostRequest,
+    ExternalPreflightReceipt,
+    ExternalRuntimeIdentity,
+)
 from .fees import (
     FeeEvent,
     FeeKind,
@@ -191,6 +199,12 @@ __all__ = [
     "ReconciliationEvidence",
     "TESTNET_LIFECYCLE_STEPS",
     "ExternalTestnetLifecycleEvidence",
+    "ExternalBrokerBuildContext",
+    "ExternalBrokerHost",
+    "ExternalCanonicalReceipt",
+    "ExternalHostRequest",
+    "ExternalPreflightReceipt",
+    "ExternalRuntimeIdentity",
     "RecordingEvent",
     "RecordingTrack",
     "SignerKind",

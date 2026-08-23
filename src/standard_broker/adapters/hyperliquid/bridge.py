@@ -312,6 +312,12 @@ class NautilusHyperliquidRuntime:
         return self._session
 
     @property
+    def transport_state(self) -> str:
+        """Return the non-secret transport profile bound to this runtime."""
+
+        return "local_fixture" if getattr(self._backend, "local_only", False) else "external_testnet"
+
+    @property
     def health(self) -> NautilusRuntimeHealth:
         return NautilusRuntimeHealth(
             state=self._state,
