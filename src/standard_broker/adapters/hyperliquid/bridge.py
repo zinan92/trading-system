@@ -386,6 +386,9 @@ class NautilusHyperliquidRuntime:
             if self._session.environment is BrokerEnvironment.TESTNET
             else {}
         )
+        # Fill reads are instrument/order-scoped and are lazily preflighted by
+        # the public external order facade immediately before query_fills();
+        # startup does not authorize an unrequested read operation.
         self.preflight(required_operations=required_operations)
         activate = getattr(self._backend, "activate", None)
         if self._session.environment is BrokerEnvironment.TESTNET and not getattr(

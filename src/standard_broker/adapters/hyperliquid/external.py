@@ -34,7 +34,7 @@ def default_testnet_capabilities(revision: str = "hyperliquid-testnet-runtime-v1
             "instrument": frozenset({"read"}),
             "account": frozenset({"read", "positions"}),
             "order_execution": frozenset(
-                {"submit", "cancel", "replace", "query", "open_orders"}
+                {"submit", "cancel", "replace", "query", "open_orders", "fills"}
             ),
             "fee": frozenset({"read", "schedule", "fill"}),
         },
@@ -190,6 +190,8 @@ class NautilusHyperliquidTestnetBackend:
             return self._query(request)
         if operation == "open_orders":
             return self._open_orders(request)
+        if operation == "fills":
+            return self._fills(request)
         raise RuntimeBoundaryError(
             "external_operation_unsupported",
             f"Testnet order backend does not implement {operation}",
@@ -342,6 +344,33 @@ class NautilusHyperliquidTestnetBackend:
         )
         rows = [self._order_event(item) for item in (result or [])]
         return self._with_provenance({"orders": rows})
+
+    def _fills(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        instrument_id = request.get("instrument_id")
+        if not instrument_id:
+            raise RuntimeBoundaryError(
+                "instrument_required",
+                "Hyperliquid external fill query requires an instrument scope",
+            )
+        result = self._call(
+            "request_fill_reports",
+            str(self._instrument_id(instrument_id)),
+        )
+        requested_oid = str(request.get("oid") or "")
+        requested_cloid = str(request.get("cloid") or request.get("client_order_id") or "")
+        rows: list[dict[str, object]] = []
+        for report in result or []:
+            event = self._fill_event(report, include_fee=True)
+            reported_oid = str(event.get("oid") or "")
+            reported_cloid = str(event.get("cloid") or "")
+            if requested_oid and reported_oid != requested_oid and requested_cloid and reported_cloid != requested_cloid:
+                continue
+            if requested_oid and not requested_cloid and reported_oid != requested_oid:
+                continue
+            if requested_cloid and not requested_oid and reported_cloid != requested_cloid:
+                continue
+            rows.append(event)
+        return self._with_provenance({"fills": rows})
 
     def _read_instruments(self) -> Mapping[str, object]:
         self._ensure_instruments()

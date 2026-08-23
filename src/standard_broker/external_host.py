@@ -568,20 +568,33 @@ class ExternalBrokerHost:
             receipt_digest=_digest(receipt_data),
         )
 
-    def request(self, request: ExternalHostRequest) -> ExternalCanonicalReceipt:
+    def authorize(self, request: ExternalHostRequest) -> ExternalPreflightReceipt:
+        """Authorize one typed request without invoking the transport.
+
+        External adapter facades use this seam when the canonical operation
+        needs to return a richer domain receipt than ``ExternalCanonicalReceipt``.
+        The authorization path remains centralized in this host, while the
+        adapter owns the provider-specific lifecycle mapping.
+        """
+
         if not isinstance(request, ExternalHostRequest):
             raise TypeError("external host requires an ExternalHostRequest")
         self._validate_public_payload(request.request)
-        request_digest = _digest(request.request)
         if isinstance(request.request.payload, ProtectionGroup):
             self.require_protection(
                 request.request.payload,
                 operation=request.request.operation,
             )
-        self.preflight(
+        return self.preflight(
             request_id=request.request_id,
             required_operations={request.request.port: {request.request.operation}},
         )
+
+    def request(self, request: ExternalHostRequest) -> ExternalCanonicalReceipt:
+        if not isinstance(request, ExternalHostRequest):
+            raise TypeError("external host requires an ExternalHostRequest")
+        request_digest = _digest(request.request)
+        self.authorize(request)
         runtime_receipt = self._runtime.invoke(
             request.request.port,
             request.request.operation,

@@ -8,11 +8,15 @@ from ...external_host import (
 )
 from ...errors import RuntimeBoundaryError
 from ...models import BrokerEnvironment, SignerKind
+from ...runtime_facts import RuntimeFactLedger
 from .external import (
     NAUTILUS_HYPERLIQUID_COMMIT,
     NAUTILUS_HYPERLIQUID_VERSION,
     default_testnet_capabilities,
 )
+from .bridge import NautilusHyperliquidRuntime
+from .instruments import HyperliquidInstrumentAdapter
+from .orders import HyperliquidExternalOrderAdapter, HyperliquidRuntimeOrderAdapter
 from .protection import default_external_testnet_protection_capabilities
 
 
@@ -53,3 +57,21 @@ def build_hyperliquid_testnet_host(
     profile = resolve_external_profile(HYPERLIQUID_TESTNET_PROFILE.profile_id)
     profile.validate(context=context, runtime=runtime, require_approval=False)
     return ExternalBrokerHost(context=context, runtime=runtime, profile=profile)
+
+
+def build_hyperliquid_testnet_order_adapter(
+    *,
+    context: ExternalBrokerBuildContext,
+    runtime: NautilusHyperliquidRuntime,
+    instruments: HyperliquidInstrumentAdapter,
+    ledger: RuntimeFactLedger,
+) -> HyperliquidExternalOrderAdapter:
+    """Bind one exact external host to the canonical Hyperliquid lifecycle."""
+
+    host = build_hyperliquid_testnet_host(context=context, runtime=runtime)
+    lifecycle = HyperliquidRuntimeOrderAdapter(
+        runtime=runtime,
+        instruments=instruments,
+        ledger=ledger,
+    )
+    return HyperliquidExternalOrderAdapter(host=host, lifecycle=lifecycle)

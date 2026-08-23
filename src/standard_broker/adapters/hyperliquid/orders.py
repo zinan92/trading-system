@@ -7,8 +7,9 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Protocol, runtime_checkable
 
-from ...errors import OrderIdempotencyError
+from ...errors import BrokerCapabilityError, OrderIdempotencyError, RuntimeBoundaryError
 from ...models import BrokerEnvironment, Provenance
 from ...orders import (
     InMemoryOrderTransport,
@@ -31,6 +32,9 @@ def _decimal(value: object) -> Decimal:
 
 def _timestamp(value: object) -> datetime:
     return datetime.fromtimestamp(int(value) / 1000, tz=UTC)
+
+
+_TERMINAL_STATES = frozenset({OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED})
 
 
 class HyperliquidOrderAdapter:
@@ -154,7 +158,13 @@ class HyperliquidOrderAdapter:
         return self._apply_submit_response(receipt, response)
 
     def cancel(self, order_id: str) -> OrderReceipt:
+        order_id = self.resolve_order_id(order_id)
         receipt = self._orders[order_id]
+        if receipt.state is OrderState.UNKNOWN:
+            raise RuntimeBoundaryError(
+                "reconciliation_required",
+                "an ambiguous order outcome must be queried or reconciled before cancel retry",
+            )
         try:
             response = self._transport.cancel(receipt)
         except (TimeoutError, OSError) as exc:
@@ -177,10 +187,21 @@ class HyperliquidOrderAdapter:
                 return receipt.order_id
         raise KeyError(f"unknown Hyperliquid order identity: {reference}")
 
+    def instrument_id_for_order(self, reference: str) -> str:
+        """Return the canonical instrument for one resolved order identity."""
+
+        return self._instrument_ids[self.resolve_order_id(reference)]
+
     def modify(self, order_id: str, intent: OrderIntent) -> OrderReceipt:
+        order_id = self.resolve_order_id(order_id)
         receipt = self._orders[order_id]
         if intent.order_id != order_id:
             raise ValueError("replacement intent order_id must match the canonical order")
+        if receipt.state is OrderState.UNKNOWN:
+            raise RuntimeBoundaryError(
+                "reconciliation_required",
+                "an ambiguous order outcome must be queried or reconciled before replace retry",
+            )
         if receipt.state in {OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED, OrderState.UNKNOWN}:
             raise ValueError("terminal orders cannot be replaced")
         replacement_client_order_id = self._client_order_id(
@@ -207,6 +228,7 @@ class HyperliquidOrderAdapter:
     def query(self, order_id: str) -> OrderReceipt:
         """Query the Broker lifecycle and reconcile the returned canonical order state."""
 
+        order_id = self.resolve_order_id(order_id)
         receipt = self._orders[order_id]
         try:
             response = self._transport.query(receipt)
@@ -339,6 +361,15 @@ class HyperliquidOrderAdapter:
     def apply_order_update(self, raw: Mapping[str, object]) -> OrderReceipt:
         receipt = self._find_receipt(raw)
         status = str(raw.get("status") or "").lower()
+        event_timestamp = self._event_timestamp(raw)
+        if receipt.state in _TERMINAL_STATES:
+            return receipt
+        if (
+            event_timestamp is not None
+            and receipt.broker_updated_at is not None
+            and event_timestamp < receipt.broker_updated_at
+        ):
+            return receipt
         broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else receipt.broker_order_id
         pending = self._pending_modifies.get(receipt.order_id)
         pending_old = pending[0] if pending is not None else None
@@ -409,7 +440,14 @@ class HyperliquidOrderAdapter:
                     reason="status_without_fill_identity",
                 )
             return self.apply_fill(raw)
-        return receipt
+        changes: dict[str, object] = {
+            "state": OrderState.UNKNOWN,
+            "broker_order_id": broker_order_id,
+            "reason": f"unrecognized_order_status:{status or 'missing'}",
+        }
+        if event_timestamp is not None:
+            changes["broker_updated_at"] = event_timestamp
+        return self._replace(receipt, **changes)
 
     def reconcile(self, raw: Mapping[str, object]) -> OrderReceipt:
         return self.apply_order_update(self.normalize_reconcile_event(raw))
@@ -432,7 +470,7 @@ class HyperliquidOrderAdapter:
         return event
 
     def get(self, order_id: str) -> OrderReceipt:
-        return self._orders[order_id]
+        return self._orders[self.resolve_order_id(order_id)]
 
     @property
     def fills(self) -> Mapping[str, OrderFill]:
@@ -587,8 +625,28 @@ class HyperliquidOrderAdapter:
                     state=OrderState.UNKNOWN,
                     reason="filled_without_fill_identity",
                 )
-            self._fills[str(fill_id)] = OrderFill(
-                fill_id=str(fill_id),
+            fill_id = str(fill_id)
+            identity_keys = {fill_id}
+            if filled.get("tid") is not None:
+                identity_keys.add(f"tid:{fill_id}")
+            if filled.get("hash") is not None:
+                identity_keys.add(f"hash:{filled['hash']}")
+            existing_fill_ids = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
+            if len(existing_fill_ids) > 1:
+                raise ValueError("fill aliases resolve to different canonical fills")
+            existing_fill_id = next(iter(existing_fill_ids), None)
+            if existing_fill_id is not None:
+                existing_fill = self._fills[existing_fill_id]
+                if (
+                    existing_fill.order_id != updated.order_id
+                    or existing_fill.price != _decimal(filled["avgPx"])
+                    or existing_fill.quantity != quantity
+                    or existing_fill.side is not self._side(filled["side"])
+                ):
+                    raise ValueError("fill identity was reused with different canonical facts")
+                return updated
+            self._fills[fill_id] = OrderFill(
+                fill_id=fill_id,
                 order_id=updated.order_id,
                 broker_order_id=updated.broker_order_id,
                 client_order_id=updated.client_order_id,
@@ -601,7 +659,9 @@ class HyperliquidOrderAdapter:
             raw_fill = dict(filled)
             raw_fill.setdefault("px", filled.get("avgPx"))
             raw_fill.setdefault("sz", filled.get("totalSz"))
-            self._fill_raws[str(fill_id)] = raw_fill
+            self._fill_raws[fill_id] = raw_fill
+            for identity_key in identity_keys:
+                self._fill_aliases[identity_key] = fill_id
             return updated
         if status.get("error") is not None:
             return self._replace(
@@ -874,6 +934,12 @@ class HyperliquidRuntimeOrderAdapter:
 
         return self._runtime.session
 
+    @property
+    def transport_state(self) -> str:
+        """Expose the runtime transport identity to external compositions."""
+
+        return self._runtime.transport_state
+
     def resolve_order_id(self, reference: str) -> str:
         """Resolve one canonical, client, or broker order identity."""
 
@@ -906,6 +972,53 @@ class HyperliquidRuntimeOrderAdapter:
         )
         self._sync_inline_fills()
         return result
+
+    def query_fills(
+        self,
+        *,
+        order_id: str | None = None,
+        instrument_id: str | None = None,
+    ) -> tuple[OrderFill, ...]:
+        """Query external fill observations and merge them idempotently."""
+
+        if order_id and instrument_id:
+            raise ValueError("query_fills accepts either order_id or instrument_id, not both")
+        request: dict[str, object] = {}
+        resolved_order_id = None
+        if order_id is not None:
+            resolved_order_id = self._lifecycle.resolve_order_id(order_id)
+            receipt = self._lifecycle.get(resolved_order_id)
+            request["instrument_id"] = self._lifecycle.instrument_id_for_order(resolved_order_id)
+            request["oid"] = receipt.broker_order_id
+            request["cloid"] = receipt.client_order_id
+        elif instrument_id is not None:
+            request["instrument_id"] = instrument_id
+        else:
+            raise BrokerCapabilityError(
+                "order_execution",
+                "fills",
+                "an instrument or order scope is required by the external fill transport",
+            )
+        response = self._runtime._invoke_native("order_execution", "fills", request)
+        rows = response.get("fills") if isinstance(response, Mapping) else None
+        if not isinstance(rows, list):
+            raise RuntimeBoundaryError(
+                "external_fill_response_invalid",
+                "external fill query did not return a canonical fill list",
+            )
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise RuntimeBoundaryError(
+                    "external_fill_response_invalid",
+                    "external fill query contained a non-mapping observation",
+                )
+            self.apply_fill(row)
+        values = tuple(self.fills.values())
+        if resolved_order_id is not None:
+            values = tuple(item for item in values if item.order_id == resolved_order_id)
+        if instrument_id is not None:
+            values = tuple(item for item in values if item.instrument_id == instrument_id)
+        return values
 
     def apply_fill(self, raw: Mapping[str, object]) -> OrderReceipt:
         self.validate_fill(raw)
@@ -1012,3 +1125,233 @@ class HyperliquidRuntimeOrderAdapter:
                 raw = dict(raw)
                 raw["provenance"] = self._lifecycle.get(fill.order_id).provenance
             self._ledger.record_order_fill(bound_fill, raw)
+
+
+@runtime_checkable
+class ExternalOrderLifecyclePort(Protocol):
+    """Typed lifecycle dependency required by the external facade."""
+
+    @property
+    def runtime_session(self) -> BrokerRuntimeSession:
+        ...
+
+    @property
+    def local_only(self) -> bool:
+        ...
+
+    @property
+    def transport_state(self) -> str:
+        ...
+
+    def submit(self, intent: OrderIntent) -> OrderReceipt:
+        ...
+
+    def cancel(self, order_id: str) -> OrderReceipt:
+        ...
+
+    def modify(self, order_id: str, intent: OrderIntent) -> OrderReceipt:
+        ...
+
+    def query(self, order_id: str) -> OrderReceipt:
+        ...
+
+    def open_orders(self, instrument_id: str | None = None) -> tuple[OrderReceipt, ...]:
+        ...
+
+    def query_fills(
+        self,
+        *,
+        order_id: str | None = None,
+        instrument_id: str | None = None,
+    ) -> tuple[OrderFill, ...]:
+        ...
+
+    @property
+    def fills(self) -> Mapping[str, OrderFill]:
+        ...
+
+
+class HyperliquidExternalOrderAdapter:
+    """Public external OrderExecutionPort facade for one exact host binding.
+
+    The host owns authorization and capability gates.  The injected runtime
+    lifecycle owns canonical order state and native transport translation.
+    No provider-native request or response crosses this facade.
+    """
+
+    name = "hyperliquid_external_order_execution"
+
+    def __init__(self, *, host: object, lifecycle: ExternalOrderLifecyclePort) -> None:
+        context = getattr(host, "context", None)
+        runtime_session = getattr(lifecycle, "runtime_session", None)
+        if context is None or runtime_session is None:
+            raise TypeError("external order adapter requires a public host and runtime lifecycle")
+        if runtime_session != context.session:
+            raise RuntimeBoundaryError(
+                "external_order_identity_mismatch",
+                "order lifecycle session does not match the external host context",
+            )
+        if context.session.environment is not BrokerEnvironment.TESTNET:
+            raise RuntimeBoundaryError(
+                "external_order_environment_invalid",
+                "external order facade is restricted to the exact Testnet binding",
+            )
+        if context.runtime_identity.transport_state != "external_testnet":
+            raise RuntimeBoundaryError(
+                "external_order_transport_invalid",
+                "external order facade requires external_testnet transport",
+            )
+        if not callable(getattr(host, "authorize", None)):
+            raise TypeError("external order adapter requires the public host authorization seam")
+        if not isinstance(lifecycle, ExternalOrderLifecyclePort):
+            raise TypeError("external order adapter requires a typed order lifecycle")
+        if lifecycle.local_only is not False or lifecycle.transport_state != "external_testnet":
+            raise RuntimeBoundaryError(
+                "external_order_fixture_forbidden",
+                "external order facade requires a non-local external_testnet lifecycle",
+            )
+        self._host = host
+        self._lifecycle = lifecycle
+        self._context = context
+
+    @property
+    def runtime_session(self) -> BrokerRuntimeSession:
+        return self._lifecycle.runtime_session
+
+    @property
+    def local_only(self) -> bool:
+        return self._lifecycle.local_only
+
+    @property
+    def transport_state(self) -> str:
+        return self._lifecycle.transport_state
+
+    def submit(self, intent: OrderIntent) -> OrderReceipt:
+        self._authorize(intent.order_id, "submit", intent)
+        return self._validate_receipt(self._lifecycle.submit(intent))
+
+    def cancel(self, order_id: str) -> OrderReceipt:
+        reference = self._reference(order_id)
+        self._authorize(reference, "cancel", reference)
+        return self._validate_receipt(self._lifecycle.cancel(reference))
+
+    def replace(self, order_id: str, intent: OrderIntent) -> OrderReceipt:
+        reference = self._reference(order_id)
+        self._authorize(reference, "replace", intent)
+        return self._validate_receipt(self._lifecycle.modify(reference, intent))
+
+    def modify(self, order_id: str, intent: OrderIntent) -> OrderReceipt:
+        """Compatibility spelling for callers using the runtime adapter name."""
+
+        return self.replace(order_id, intent)
+
+    def query(self, order_id: str) -> OrderReceipt:
+        reference = self._reference(order_id)
+        self._authorize(reference, "query", reference)
+        return self._validate_receipt(self._lifecycle.query(reference))
+
+    def open_orders(self, instrument_id: str | None = None) -> tuple[OrderReceipt, ...]:
+        self._authorize(
+            f"open-orders:{instrument_id or 'all'}",
+            "open_orders",
+            self._query(subject=instrument_id, kind="instrument" if instrument_id else "all"),
+        )
+        result = self._lifecycle.open_orders(instrument_id)
+        if not isinstance(result, tuple):
+            result = tuple(result)
+        return tuple(self._validate_receipt(item) for item in result)
+
+    def fills(
+        self,
+        *,
+        order_id: str | None = None,
+        instrument_id: str | None = None,
+    ) -> tuple[OrderFill, ...]:
+        if order_id and instrument_id:
+            raise ValueError("fills accepts either order_id or instrument_id, not both")
+        self._authorize(
+            f"fills:{order_id or instrument_id or 'all'}",
+            "fills",
+            self._query(
+                subject=order_id or instrument_id,
+                kind="order" if order_id else "instrument" if instrument_id else "all",
+            ),
+        )
+        values = self._lifecycle.query_fills(order_id=order_id, instrument_id=instrument_id)
+        if not isinstance(values, tuple):
+            values = tuple(values)
+        return tuple(self._validate_fill(item) for item in values)
+
+    def _authorize(self, request_id: str, operation: str, payload: object) -> None:
+        from ...external_host import ExternalHostRequest
+        from ...host import CanonicalHostRequest
+
+        self._host.authorize(
+            ExternalHostRequest(
+                request_id=request_id,
+                request=CanonicalHostRequest(
+                    port="order_execution",
+                    operation=operation,
+                    payload=payload,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _query(*, subject: str | None, kind: str):
+        from ...host import CanonicalPortQuery
+
+        return CanonicalPortQuery(subject=subject, kind=kind)
+
+    @staticmethod
+    def _reference(value: str) -> str:
+        reference = str(value or "").strip()
+        if not reference:
+            raise ValueError("order reference is required")
+        return reference
+
+    def _validate_receipt(self, value: object) -> OrderReceipt:
+        if not isinstance(value, OrderReceipt):
+            raise RuntimeBoundaryError(
+                "external_order_receipt_invalid",
+                "external order lifecycle returned a non-canonical receipt",
+            )
+        if not isinstance(value.provenance, Provenance):
+            raise RuntimeBoundaryError(
+                "external_order_receipt_provenance_missing",
+                "external order receipt must carry canonical provenance",
+            )
+        if (
+            value.broker_id != self._context.identity.broker_id
+            or value.environment is not self._context.identity.environment
+            or value.account_address != self._context.identity.account_address
+            or value.lifecycle_id != self._context.session.lifecycle_id
+            or value.release_sha != self._context.release_sha
+            or value.provenance.transport_state != self._context.runtime_identity.transport_state
+            or value.provenance.execution_scope != self._context.identity.execution_scope
+            or value.provenance.mapping_revision != self._context.capabilities.revision
+            or self._context.runtime_identity.adapter_id not in value.provenance.source
+        ):
+            raise RuntimeBoundaryError(
+                "external_order_receipt_identity_mismatch",
+                "external order receipt does not match the bound host context",
+            )
+        return value
+
+    def _validate_fill(self, value: object) -> OrderFill:
+        if not isinstance(value, OrderFill):
+            raise RuntimeBoundaryError(
+                "external_order_fill_invalid",
+                "external order lifecycle returned a non-canonical fill",
+            )
+        if (
+            value.environment is not self._context.identity.environment
+            or value.account_address != self._context.identity.account_address
+            or value.lifecycle_id != self._context.session.lifecycle_id
+            or value.release_sha != self._context.release_sha
+        ):
+            raise RuntimeBoundaryError(
+                "external_order_fill_identity_mismatch",
+                "external order fill does not match the bound host context",
+            )
+        return value

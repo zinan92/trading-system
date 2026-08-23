@@ -25,7 +25,12 @@ from .testnet_proof import TestnetProofPlan, TestnetProofResult, run_testnet_lif
 from .fees import HyperliquidFeeAdapter, HyperliquidRuntimeFeeAdapter
 from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter, HyperliquidRuntimeReadAdapter
-from .orders import HyperliquidOrderAdapter, HyperliquidRuntimeOrderAdapter
+from .orders import (
+    ExternalOrderLifecyclePort,
+    HyperliquidExternalOrderAdapter,
+    HyperliquidOrderAdapter,
+    HyperliquidRuntimeOrderAdapter,
+)
 from .read_facts import HyperliquidExternalFactAdapter
 from .protection import (
     default_external_testnet_protection_capabilities,
@@ -38,6 +43,7 @@ from .protection import (
 from .profile import (
     HYPERLIQUID_TESTNET_PROFILE,
     build_hyperliquid_testnet_host,
+    build_hyperliquid_testnet_order_adapter,
     resolve_external_profile,
 )
 from .resilience import (
@@ -67,6 +73,8 @@ __all__ = [
     "HyperliquidRuntimeReadAdapter",
     "HyperliquidOrderAdapter",
     "HyperliquidRuntimeOrderAdapter",
+    "HyperliquidExternalOrderAdapter",
+    "ExternalOrderLifecyclePort",
     "HyperliquidExternalFactAdapter",
     "HyperliquidProtectionAdapter",
     "default_external_testnet_protection_capabilities",
@@ -76,6 +84,7 @@ __all__ = [
     "ProtectionRetryPlan",
     "HYPERLIQUID_TESTNET_PROFILE",
     "build_hyperliquid_testnet_host",
+    "build_hyperliquid_testnet_order_adapter",
     "resolve_external_profile",
     "HyperliquidRuntimeReconciliationAdapter",
     "RateLimitError",

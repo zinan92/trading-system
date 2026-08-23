@@ -265,6 +265,37 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
                 ),
             )
 
+    def test_external_fill_query_passes_string_instrument_id_to_nautilus(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient()
+            session = self.session()
+            backend = NautilusHyperliquidTestnetBackend(
+                session=session,
+                config=HyperliquidTestnetBackendConfig(
+                    account_address=session.account.address,
+                    capabilities=session.capabilities,
+                ),
+                secrets=self.provider(directory),
+                client_factory=lambda private_key, account: client,
+            )
+
+            backend.activate(release_sha="a" * 40)
+            result = backend.invoke(
+                "order_execution",
+                "fills",
+                {"instrument_id": "HYPE-USD-PERP", "oid": "9001"},
+            )
+
+            self.assertEqual(result["fills"], [])
+            self.assertEqual(
+                client.calls[-1],
+                (
+                    "request_fill_reports",
+                    ("HYPE-USD-PERP.HYPERLIQUID",),
+                    {},
+                ),
+            )
+
     def test_terminal_query_normalizes_provider_cloid_for_same_venue_order(self) -> None:
         class TerminalIdentityClient(FakeClient):
             async def request_order_status_report(self, **kwargs: object) -> object:

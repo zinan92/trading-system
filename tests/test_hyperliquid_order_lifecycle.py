@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from standard_broker.adapters.hyperliquid import HyperliquidOrderAdapter
+from standard_broker.errors import RuntimeBoundaryError
 from standard_broker.orders import (
     InMemoryOrderTransport,
     OrderIntent,
@@ -122,6 +123,114 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(first.state, OrderState.UNKNOWN)
         self.assertEqual(second.state, OrderState.UNKNOWN)
         self.assertEqual(len(transport.submit_calls), 1)
+
+    def test_unknown_order_cannot_blind_retry_cancel_before_reconciliation(self) -> None:
+        transport = InMemoryOrderTransport(submit_response=TimeoutError("transport timeout"))
+        adapter = HyperliquidOrderAdapter(transport=transport)
+        unknown = adapter.submit(self.intent())
+
+        with self.assertRaises(RuntimeBoundaryError) as raised:
+            adapter.cancel(unknown.order_id)
+
+        self.assertEqual(raised.exception.reason_code, "reconciliation_required")
+        self.assertEqual(len(transport.cancel_calls), 0)
+
+    def test_unrecognized_order_status_enters_unknown_until_reconciliation(self) -> None:
+        transport = InMemoryOrderTransport(submit_response=self.resting_response())
+        adapter = HyperliquidOrderAdapter(transport=transport)
+        submitted = adapter.submit(self.intent())
+
+        unknown = adapter.apply_order_update(
+            {
+                "status": "broker_added_state",
+                "oid": 101,
+                "cloid": submitted.client_order_id,
+                "timestamp": 1787313660000,
+            }
+        )
+        reconciled = adapter.reconcile(
+            {
+                "status": "open",
+                "oid": 101,
+                "cloid": submitted.client_order_id,
+                "timestamp": 1787313661000,
+            }
+        )
+
+        self.assertEqual(unknown.state, OrderState.UNKNOWN)
+        self.assertEqual(unknown.reason, "unrecognized_order_status:broker_added_state")
+        self.assertEqual(reconciled.state, OrderState.RESTING)
+
+    def test_terminal_order_ignores_late_non_terminal_event(self) -> None:
+        transport = InMemoryOrderTransport(submit_response=self.resting_response())
+        adapter = HyperliquidOrderAdapter(transport=transport)
+        submitted = adapter.submit(self.intent())
+
+        filled = adapter.apply_order_update(
+            {
+                "status": "filled",
+                "oid": 101,
+                "cloid": submitted.client_order_id,
+                "coin": "BTC",
+                "tid": 501,
+                "side": "B",
+                "px": "65000",
+                "sz": "0.1",
+                "time": 1787313661000,
+            }
+        )
+        late = adapter.apply_order_update(
+            {
+                "status": "open",
+                "oid": 101,
+                "cloid": submitted.client_order_id,
+                "timestamp": 1787313662000,
+            }
+        )
+
+        self.assertEqual(filled.state, OrderState.FILLED)
+        self.assertEqual(late, filled)
+
+    def test_filled_submit_observation_registers_aliases_for_duplicate_fill(self) -> None:
+        transport = InMemoryOrderTransport(
+            submit_response={
+                "status": "ok",
+                "response": {
+                    "data": {
+                        "statuses": [
+                            {
+                                "filled": {
+                                    "oid": 101,
+                                    "totalSz": "0.1",
+                                    "avgPx": "65000",
+                                    "side": "B",
+                                    "tid": 501,
+                                    "time": 1787313661000,
+                                }
+                            }
+                        ]
+                    }
+                },
+            }
+        )
+        adapter = HyperliquidOrderAdapter(transport=transport)
+        submitted = adapter.submit(self.intent())
+
+        duplicate = adapter.apply_fill(
+            {
+                "oid": 101,
+                "cloid": submitted.client_order_id,
+                "coin": "BTC",
+                "tid": "501",
+                "side": "B",
+                "px": "65000",
+                "sz": "0.1",
+                "time": 1787313661000,
+            }
+        )
+
+        self.assertEqual(duplicate.state, OrderState.FILLED)
+        self.assertEqual(len(adapter.fills), 1)
 
     def test_cancel_waits_for_authoritative_cancel_event(self) -> None:
         transport = InMemoryOrderTransport(
