@@ -27,12 +27,13 @@
 - SB-EXT-01D is merged in PR #61 at `5b2b946`: typed external Hyperliquid order facade with exact Testnet lifecycle binding, external fill query/normalization, idempotency and lineage preservation, stale/terminal event protection, and fail-closed ambiguous retry handling.
 - SB-EXT-01E is merged in PR #62 at `b274e95`: cursor/watermark-bound external reconciliation evidence across account, positions, orders, fills, fees, and funding, with identity/drift/stale/unknown/incomplete fail-closed outcomes and digest-only canonical evidence.
 - SB-EXT-01F is merged in PR #59 at `f9cada9`: explicit protection capability matrix, reduce-only-close distinction, and ProtectionGroup fail-closed gating for unsupported external protection semantics.
+- SB-EXT-01G is merged in PR #63 at `81fe9ed`: preflight-only external conformance report, exact-profile/no-fallback proof, full identity/digest checks, strict secret/raw rejection, complete protection-gap proof, and pinned trading-system handoff.
 - Decision A is recorded in `docs/adr/0005-rt06-reconciliation-seam.md`: RT-06 is not a second order lifecycle owner; RT-08 will compose the unique lifecycle.
 
 ## Next
 
 - TESTNET-01 (#30) is merged in PR #48 at `f5dbf87`: human-gated Hyperliquid Testnet proof for one default validator-operated perpetual, including submit/query/cancel-replace/fill/fee/position/reconciliation evidence. The final account was flat with no open orders; evidence is stored outside the repository.
-- SB-EXT-01G (#56): remains blocked behind final conformance, security, and Paper-only proof.
+- SB-EXT-01A–01G are complete in standard-broker. The next dependency is a separate `trading-system` external-host bridge issue that must consume only the public seam and retain host-owned strategy, risk, Paper/testnet/live, Park, Recording Track, Supervisor, boot, release-SHA, and Telegram gates.
 - Mainnet/live remains a separate future milestone requiring its own specification, credentials, release identity, approval, and evidence.
 
 ## Safety boundary
