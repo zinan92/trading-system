@@ -522,6 +522,78 @@ class ExternalDcaLifecycle:
                 timestamp=timestamp,
             )
 
+    def reconcile_entry(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        confirmation: Mapping[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        """Query the current entry once and process facts if it filled."""
+
+        with production_mutation_lock(self.output_root):
+            return self._reconcile_entry(
+                plan,
+                confirmation=confirmation,
+                timestamp=timestamp,
+            )
+
+    def _reconcile_entry(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        confirmation: Mapping[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        state = self._state(plan)
+        now = _timestamp(timestamp, "timestamp")
+        try:
+            self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
+        except ExternalDcaError as exc:
+            return self._block(state, str(exc), timestamp=timestamp)
+        if state.get("status") not in {"WAITING_ENTRY", "ENTRY_FILLED_PENDING_FACTS"}:
+            return self._block(state, "entry_reconcile_not_available", timestamp=timestamp)
+        order_id = str(state.get("entry_order_id") or "").strip()
+        try:
+            request = self._entry_request(plan, self._entry_index(plan, order_id))
+            queried = self.orders.query(order_id)
+            self._record_receipt(
+                state,
+                queried,
+                request=request,
+                timestamp=timestamp,
+                operation="reconcile_query",
+            )
+            receipt_state = self._receipt_state(queried)
+            if receipt_state in {"unknown", "rejected"}:
+                raise ExternalDcaError(f"entry_reconcile_{receipt_state}")
+            if receipt_state in {"canceled", "rejected"}:
+                raise ExternalDcaError("entry_canceled_before_fill")
+            if receipt_state not in {"filled", "partially_filled"}:
+                state["status"] = "WAITING_ENTRY"
+                state["next_action"] = "attended_reconcile_entry_or_cancel_entry"
+                self._event(state, "entry_reconcile_checked", timestamp=timestamp, lifecycle_state=receipt_state)
+                self._save(state)
+                return state
+            state["status"] = "ENTRY_FILLED_PENDING_FACTS"
+            state["next_action"] = "read_entry_facts"
+            self._save(state)
+            bundle = self.facts.read_facts(
+                order_id=order_id,
+                instrument_id=plan.instrument_id,
+                now=_timestamp(timestamp, "timestamp"),
+            )
+            return self._on_entry_facts(
+                plan,
+                bundle=bundle,
+                confirmation=confirmation,
+                timestamp=timestamp,
+            )
+        except ExternalDcaError as exc:
+            return self._block(state, str(exc), timestamp=timestamp)
+        except Exception as exc:  # noqa: BLE001
+            return self._block(state, f"entry_reconcile_unknown:{type(exc).__name__}", timestamp=timestamp)
+
     def _submit_next_entry(
         self,
         plan: ExternalDcaPlan,

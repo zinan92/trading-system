@@ -435,3 +435,20 @@ def test_external_dca_rechecks_confirmation_before_next_entry(tmp_path: Path) ->
     assert state["status"] == "BLOCKED"
     assert state["blocker"] == "confirmation_expired"
     assert len(orders.requests) == 1
+
+
+def test_external_dca_reconcile_entry_reads_facts_and_activates_protection(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, orders, protection = _lifecycle(tmp_path)
+
+    prepared = lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+    assert prepared["status"] == "ENTRY_FILLED_PENDING_FACTS"
+    state = lifecycle.reconcile_entry(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+
+    assert state["status"] == "PROTECTION_ACTIVE"
+    assert state["next_action"] == "submit_next_entry_only_after_attended_price_gate"
+    assert protection.calls == ["submit", "query"]
+    assert any(row["operation"] == "reconcile_query" for row in state["receipts"])
