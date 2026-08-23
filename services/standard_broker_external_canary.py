@@ -48,13 +48,23 @@ class StandardBrokerExternalCanaryAdapter:
     def submit(self, request: TestnetCanaryOrderRequest) -> object:
         return self._binding.submit(self._intent(request))
 
-    def recover(self, request: TestnetCanaryOrderRequest) -> None:
+    def recover(
+        self,
+        request: TestnetCanaryOrderRequest,
+        *,
+        broker_order_id: str,
+        state: str,
+    ) -> None:
         """Restore one persisted canonical intent without submitting it."""
 
         recover = getattr(self._binding, "recover", None)
         if not callable(recover):
             raise StandardBrokerExternalCanaryError("public binding does not support intent recovery")
-        recover(self._intent(request))
+        recover(
+            self._intent(request),
+            broker_order_id=broker_order_id,
+            state=state,
+        )
 
     def query(self, order_id: str) -> object:
         return self._binding.query(order_id)

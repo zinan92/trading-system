@@ -57,7 +57,7 @@ class FakeBinding:
         self.requests.append(intent)
         return SimpleNamespace(order_id=intent.order_id, intent=intent)
 
-    def recover(self, intent):
+    def recover(self, intent, *, broker_order_id, state):
         self.recovered.append(intent)
 
     def query(self, order_id):
@@ -111,7 +111,7 @@ def test_wrapper_recovers_persisted_intent_without_submission() -> None:
     adapter = StandardBrokerExternalCanaryAdapter(binding)
     request = _request()
 
-    adapter.recover(request)
+    adapter.recover(request, broker_order_id="101", state="resting")
 
     assert len(binding.recovered) == 1
     assert binding.recovered[0].order_id == request.order_id
