@@ -56,6 +56,7 @@ from .external_canary import (
     ExternalCanaryFactBundle,
     ExternalCanaryFactsReader,
     ExternalCanaryRuntimeFactsReader,
+    ExternalCanarySnapshotReader,
     ExternalCanaryReceipt,
 )
 from .external_reconciliation import (
@@ -247,6 +248,7 @@ __all__ = [
     "ExternalCanaryFactBundle",
     "ExternalCanaryFactsReader",
     "ExternalCanaryRuntimeFactsReader",
+    "ExternalCanarySnapshotReader",
     "ExternalCanaryReceipt",
     "ExternalCursorKind",
     "ExternalReconciliationCursor",

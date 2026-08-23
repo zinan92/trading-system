@@ -446,6 +446,30 @@ class NautilusHyperliquidRuntime:
             ),
         )
 
+    def invoke_fact(self, port: str, operation: str, request: object) -> object:
+        """Public typed-fact hook used by ``ExternalBrokerHost.read_fact``.
+
+        The native response remains inside the standard-broker runtime; the
+        host immediately maps it to an ``ExternalFactEnvelope`` before it can
+        reach a consumer.
+        """
+
+        from ...host import CanonicalPortQuery
+
+        if isinstance(request, CanonicalPortQuery):
+            subject = request.subject
+            if port == "account" and operation == "read":
+                request = {"account_address": subject or self._session.account.address}
+            elif port == "account" and operation == "positions":
+                request = {"instrument_id": subject or ""}
+            elif port == "fee" and operation == "fill":
+                request = {"fill_id": subject or ""}
+            elif port == "market_data" and operation == "ticker":
+                request = {"instrument_id": subject or ""}
+            else:
+                request = {}
+        return self._invoke_native(port, operation, request)
+
     def close(self) -> NautilusRuntimeHealth:
         """Close the runtime and prevent further backend invocation."""
 
