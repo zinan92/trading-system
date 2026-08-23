@@ -552,6 +552,11 @@ class ExternalCanaryBinding:
         receipt = self._order.submit(intent)
         return self._wrap_receipt(receipt, intent)
 
+    def recover(self, intent: OrderIntent) -> None:
+        """Restore one persisted canonical intent without invoking transport."""
+
+        self._remember_intent(intent)
+
     def query(self, order_id: str) -> ExternalCanaryReceipt:
         receipt = self._order.query(order_id)
         intent = self._intent_for_order(receipt.order_id)

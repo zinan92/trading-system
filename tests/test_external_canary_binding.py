@@ -108,6 +108,18 @@ def test_binding_idempotency_recovery_uses_canonical_order_identity() -> None:
     assert [name for name, _ in lifecycle.calls] == ["submit", "query"]
 
 
+def test_binding_recovers_persisted_intent_without_transport() -> None:
+    binding, lifecycle, _, _ = _binding()
+    intent = _intent()
+
+    binding.recover(intent)
+
+    assert lifecycle.calls == []
+    recovered = binding.query_by_idempotency_key("cycle-1")
+    assert recovered.order_id == "order-1"
+    assert [name for name, _ in lifecycle.calls] == ["query"]
+
+
 def test_binding_rejects_unknown_idempotency_without_fallback() -> None:
     binding, lifecycle, _, _ = _binding()
 
