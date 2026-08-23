@@ -5,6 +5,7 @@ from datetime import timedelta
 from ...external_host import (
     ExternalBrokerBuildContext,
     ExternalBrokerHost,
+    ExternalHostRequest,
     ExternalTransportProfile,
     _ExternalRuntimePort,
 )
@@ -27,6 +28,8 @@ from ...external_canary import (
     HyperliquidExternalSnapshotReader,
 )
 from ...market_data import FreshnessPolicy
+from ...host import CanonicalHostRequest
+from ...instruments import InstrumentCatalog
 from .read_facts import HyperliquidExternalFactAdapter
 
 
@@ -125,3 +128,46 @@ def build_hyperliquid_testnet_canary_binding(
         market=facts_mapper,
     )
     return ExternalCanaryBinding(host=host, order=order, facts=facts)
+
+
+def build_hyperliquid_testnet_canary_binding_from_runtime(
+    *,
+    context: ExternalBrokerBuildContext,
+    runtime: NautilusHyperliquidRuntime,
+    ledger: RuntimeFactLedger,
+    snapshot_reader: ExternalCanarySnapshotReader | None = None,
+) -> ExternalCanaryBinding:
+    """Build the canary binding after typed instrument metadata mapping."""
+
+    host = build_hyperliquid_testnet_host(context=context, runtime=runtime)
+    mapper = HyperliquidExternalFactAdapter(
+        context=context,
+        instruments=None,
+        freshness_policy=FreshnessPolicy(timedelta(minutes=2)),
+    )
+    envelope = host.read_fact(
+        request=ExternalHostRequest(
+            request_id=f"canary-instruments:{context.session.lifecycle_id}",
+            request=CanonicalHostRequest(port="instrument", operation="read"),
+        ),
+        mapper=lambda raw: mapper.map_instruments(
+            request_id=f"canary-instruments:{context.session.lifecycle_id}",
+            raw=raw,
+        ),
+    )
+    mapped = envelope.data
+    if not mapped:
+        raise RuntimeBoundaryError(
+            "canary_instrument_metadata_missing",
+            "typed instrument reader returned no instruments",
+        )
+    instruments = HyperliquidInstrumentAdapter(
+        InstrumentCatalog({item.canonical_symbol: item for item in mapped})
+    )
+    return build_hyperliquid_testnet_canary_binding(
+        context=context,
+        runtime=runtime,
+        instruments=instruments,
+        ledger=ledger,
+        snapshot_reader=snapshot_reader,
+    )
