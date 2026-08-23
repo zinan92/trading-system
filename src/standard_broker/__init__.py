@@ -3,6 +3,7 @@
 from .account import AccountSnapshot, LiquidationFact, PositionFact, PositionSide
 from .adapters.hyperliquid import (
     HyperliquidTestnetBackendConfig,
+    HyperliquidExternalFactAdapter,
     LocalFileSecretProvider,
     NautilusHyperliquidTestnetBackend,
     TestnetProofPlan,
@@ -34,6 +35,7 @@ from .external_host import (
     ExternalBrokerBuildContext,
     ExternalBrokerHost,
     ExternalCanonicalReceipt,
+    ExternalFactEnvelope,
     ExternalHostRequest,
     ExternalPreflightReceipt,
     ExternalRuntimeIdentity,
@@ -126,6 +128,7 @@ __all__ = [
     "AccountScope",
     "AccountSnapshot",
     "HyperliquidTestnetBackendConfig",
+    "HyperliquidExternalFactAdapter",
     "BrokerCapabilityError",
     "BrokerEnvironment",
     "BrokerError",
@@ -205,6 +208,7 @@ __all__ = [
     "ExternalBrokerBuildContext",
     "ExternalBrokerHost",
     "ExternalCanonicalReceipt",
+    "ExternalFactEnvelope",
     "ExternalHostRequest",
     "ExternalPreflightReceipt",
     "ExternalRuntimeIdentity",

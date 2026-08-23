@@ -26,6 +26,7 @@ from .fees import HyperliquidFeeAdapter, HyperliquidRuntimeFeeAdapter
 from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter, HyperliquidRuntimeReadAdapter
 from .orders import HyperliquidOrderAdapter, HyperliquidRuntimeOrderAdapter
+from .read_facts import HyperliquidExternalFactAdapter
 from .protection import (
     default_external_testnet_protection_capabilities,
     HyperliquidProtectionAdapter,
@@ -66,6 +67,7 @@ __all__ = [
     "HyperliquidRuntimeReadAdapter",
     "HyperliquidOrderAdapter",
     "HyperliquidRuntimeOrderAdapter",
+    "HyperliquidExternalFactAdapter",
     "HyperliquidProtectionAdapter",
     "default_external_testnet_protection_capabilities",
     "HyperliquidRuntimeProtectionAdapter",

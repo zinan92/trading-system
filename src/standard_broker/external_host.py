@@ -8,7 +8,7 @@ from enum import Enum
 import hashlib
 import json
 import re
-from typing import Protocol, runtime_checkable
+from typing import Generic, Protocol, TypeVar, runtime_checkable
 
 from .capabilities import CapabilityDescriptor
 from .errors import BrokerCapabilityError, RuntimeBoundaryError
@@ -297,6 +297,83 @@ class ExternalCanonicalReceipt:
     request_digest: str
     receipt_digest: str
     raw_payload_digest: str | None = None
+
+
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class ExternalFactEnvelope(Generic[T]):
+    """Canonical fact with external identity and non-secret digests."""
+
+    fact_type: str
+    data: T
+    broker_id: str
+    environment: BrokerEnvironment
+    account_scope: AccountScope
+    account_address: str
+    signer_kind: SignerKind
+    execution_scope: str
+    lifecycle_id: str
+    release_sha: str
+    runtime_identity: ExternalRuntimeIdentity
+    capability_revision: str
+    provenance: Provenance
+    request_digest: str
+    fact_digest: str
+    raw_payload_digest: str | None = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        context: ExternalBrokerBuildContext,
+        fact_type: str,
+        data: T,
+        request_id: str,
+        provenance: Provenance,
+        raw_payload: object | None = None,
+    ) -> "ExternalFactEnvelope[T]":
+        raw_payload_digest = _digest(raw_payload) if raw_payload is not None else None
+        request_digest = _digest(
+            {
+                "request_id": request_id,
+                "fact_type": fact_type,
+                "raw_payload_digest": raw_payload_digest,
+                "lifecycle_id": context.session.lifecycle_id,
+            }
+        )
+        fact_digest = _digest(
+            {
+                "fact_type": fact_type,
+                "data": data,
+                "request_digest": request_digest,
+                "raw_payload_digest": raw_payload_digest,
+                "broker_id": context.identity.broker_id,
+                "environment": context.identity.environment,
+                "account_address": context.identity.account_address,
+                "lifecycle_id": context.session.lifecycle_id,
+                "provenance": provenance,
+            }
+        )
+        return cls(
+            fact_type=fact_type,
+            data=data,
+            broker_id=context.identity.broker_id,
+            environment=context.identity.environment,
+            account_scope=context.identity.account_scope,
+            account_address=context.identity.account_address or "",
+            signer_kind=context.identity.signer_kind,
+            execution_scope=context.identity.execution_scope,
+            lifecycle_id=context.session.lifecycle_id,
+            release_sha=context.release_sha,
+            runtime_identity=context.runtime_identity,
+            capability_revision=context.capabilities.revision,
+            provenance=provenance,
+            request_digest=request_digest,
+            fact_digest=fact_digest,
+            raw_payload_digest=raw_payload_digest,
+        )
 
 
 @runtime_checkable
