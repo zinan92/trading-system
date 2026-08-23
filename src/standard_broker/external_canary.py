@@ -30,6 +30,8 @@ from .orders import OrderFill, OrderIntent, OrderReceipt, OrderSide, OrderState
 
 _ACCOUNT_FINGERPRINT_PREFIX = "sha256:"
 _CANARY_OPERATIONS = {
+    "market_data": {"ticker"},
+    "instrument": {"read"},
     "order_execution": {"submit", "cancel", "replace", "query", "open_orders", "fills"},
     "account": {"read", "positions"},
     "fee": {"fill"},
