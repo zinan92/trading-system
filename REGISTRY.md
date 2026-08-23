@@ -32,12 +32,22 @@
 - SB-EXT-03 is merged in PR #68 at `8cf99b4`: typed fact reads stay behind `ExternalBrokerHost.read_fact()`, consumer code cannot call private runtime/native methods, and the canary facts reader requires a real cursor-bound `ExternalReconciliationSnapshot` provider instead of manufacturing one from independent reads.
 - SB-EXT-04 is merged in PR #71 at `24a60cb`: the exact Testnet profile composes host-backed typed observations into a watermark-bound `ExternalReconciliationSnapshot` with freshness/skew/digest checks; missing or incoherent facts remain non-coherent.
 - SB-EXT-05 is merged in PR #74 at `6856781`: the exact runtime factory maps instrument metadata through the public host fact seam before constructing the consumer canary binding; consumers do not assemble provider objects or raw runtime payloads.
+- SB-EXT-06 is merged in PR #77 at `a1fb8ba`: an opt-in
+  `hyperliquid-testnet-position-protection` profile exposes a typed external
+  position-level TP/SL binding with reduce-only/OCO mapping, grouped-response
+  handling, remote query/coverage confirmation, digest-bound observations, and
+  fail-closed unknown/cancel-replace behavior. The default
+  `hyperliquid-testnet-default` profile remains protection-disabled.
 - Decision A is recorded in `docs/adr/0005-rt06-reconciliation-seam.md`: RT-06 is not a second order lifecycle owner; RT-08 will compose the unique lifecycle.
 
 ## Next
 
 - TESTNET-01 (#30) is merged in PR #48 at `f5dbf87`: human-gated Hyperliquid Testnet proof for one default validator-operated perpetual, including submit/query/cancel-replace/fill/fee/position/reconciliation evidence. The final account was flat with no open orders; evidence is stored outside the repository.
-- SB-EXT-01A–01G and SB-EXT-02/03/04/05 are complete in standard-broker. The next dependency is the trading-system operator entrypoint and Park-attended #895 run. No strategy, ProtectionOrder, soak, or Mainnet/Live authority is implied by these binding merges.
+- SB-EXT-01A–01G and SB-EXT-02/03/04/05/06 are complete in standard-broker.
+  The next dependency is trading-system's opt-in DCA strategy adapter and
+  admission against the position-protection profile. No strategy, soak, or
+  Mainnet/Live authority is implied by this broker merge; external proof still
+  requires an attended plan and approval.
 - Mainnet/live remains a separate future milestone requiring its own specification, credentials, release identity, approval, and evidence.
 
 ## Safety boundary
