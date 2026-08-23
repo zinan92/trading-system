@@ -1,5 +1,46 @@
 # Decision Log
 
+## Bridge the exact external Testnet host without enabling strategy writes (Issue #888 / PR #889)
+
+Date: 2026-08-23
+
+### Decision
+
+- `trading-system` consumes the public `ExternalBrokerHost` seam from exact
+  `standard-broker@916b0eb241b50d5f46be08150eb3197996530552`. It does not
+  construct a signer/runtime, resolve a credential, call `_invoke_native()`, or
+  accept Hyperliquid-native request/response shapes.
+- The Broker registry key now carries explicit Broker and transport-profile
+  identity. The standard-broker namespace resolves exact keys only;
+  `local_fixture_v1` and `hyperliquid-testnet-default` cannot enter each
+  other's factory, and any external marker with a missing/typo provider or
+  non-Testnet/non-external profile fails before registry resolution.
+- The bridge pins account, lifecycle, external release, standard-broker
+  release, execution scope, transport state, Nautilus adapter/version/commit,
+  capability revision, complete operation matrix, and the complete external
+  Protection-gap matrix. Missing, extra, or jointly drifted facts fail closed
+  before a Broker operation.
+- This story is preflight-only. The adapter declares only `PREFLIGHT`, exposes
+  the account as a stable fingerprint, and reports upstream read/order facts
+  separately from adapter readiness. `ready`, `strategy_ready`,
+  `protection_ready`, account-read readiness, and order-execution readiness all
+  remain false. Submit is rejected locally, and existing DCA/Grid control
+  planes reject the sibling adapter.
+- Canonical receipt/Recording projection, external ProtectionOrder, DCA/Grid
+  external lifecycle, soak, operator handoff, deployment, and Mainnet/Live are
+  independent later contracts; none is implied by host availability.
+
+### Verification
+
+- Merged source: `main@30034298c056edf38e880b46f896f70c5f3823a8`.
+- Final focused composition/adapter/descriptor/DCA/Grid suite: 147 passed.
+- Wider broker upstream/downstream suite: 282 passed before the final isolated
+  Protection profile-ID test; that final test also passed.
+- `compileall`, `git diff --check`, and gitleaks passed. Two-axis review ended
+  with Standards PASS and Spec PASS (zero remaining findings).
+- No network, order, credential, user dirty-checkout, deployment, cloud, soak,
+  or Live/Mainnet mutation occurred.
+
 ## Produce source-bound Testnet soak and readiness evidence (Issue #860 / PR #873)
 
 Date: 2026-08-22
