@@ -22,7 +22,12 @@ from .external_host import (
     ExternalFactEnvelope,
     ExternalHostRequest,
 )
-from .external_reconciliation import ExternalReconciliationSnapshot
+from .external_reconciliation import (
+    ExternalCursorKind,
+    ExternalReconciliationCursor,
+    ExternalReconciliationObservation,
+    ExternalReconciliationSnapshot,
+)
 from .fees import FeeEvent
 from .host import CanonicalHostRequest, CanonicalPortQuery
 from .models import BrokerEnvironment
@@ -73,6 +78,177 @@ class ExternalCanaryFactBundle:
     positions: tuple[PositionFact, ...]
     open_orders: tuple[OrderReceipt, ...]
     reconciliation: ExternalReconciliationSnapshot | None
+
+
+class HyperliquidExternalSnapshotReader:
+    """Read typed observations and return one verified cursor-bound snapshot."""
+
+    def __init__(
+        self,
+        *,
+        context: ExternalBrokerBuildContext,
+        host: ExternalBrokerHost,
+        order: object,
+        facts_mapper: object,
+        instruments: object,
+    ) -> None:
+        self._context = context
+        self._host = host
+        self._order = order
+        self._mapper = facts_mapper
+        self._instruments = instruments
+        if not callable(getattr(order, "query_fills", None)) or not callable(getattr(order, "open_orders", None)):
+            raise TypeError("snapshot reader requires the public order facts facade")
+        for method in ("map_account", "map_positions", "map_fill"):
+            if not callable(getattr(facts_mapper, method, None)):
+                raise TypeError("snapshot reader requires the typed Hyperliquid fact mapper")
+
+    def read_reconciliation(
+        self,
+        *,
+        order_id: str,
+        instrument_id: str,
+        now: datetime,
+    ) -> ExternalReconciliationSnapshot:
+        if now.tzinfo is None:
+            raise ValueError("snapshot now must include timezone")
+        instrument = self._instruments.get(instrument_id)
+        account_envelope = self._read_fact(
+            port="account",
+            operation="read",
+            subject=self._context.identity.account_address or "",
+            kind="account",
+            request_id=f"canary-account:{order_id}",
+            mapper=lambda raw: self._mapper.map_account(
+                request_id=f"canary-account:{order_id}",
+                raw=raw,
+            ),
+        )
+        positions_envelope = self._read_fact(
+            port="account",
+            operation="positions",
+            subject=instrument.broker_symbol,
+            kind="instrument",
+            request_id=f"canary-positions:{order_id}",
+            mapper=lambda raw: self._mapper.map_positions(
+                request_id=f"canary-positions:{order_id}",
+                broker_symbol=instrument.broker_symbol,
+                raw=raw,
+            ),
+        )
+        fills = tuple(self._order.query_fills(order_id=order_id))
+        open_orders = tuple(self._order.open_orders(instrument_id))
+        provenance = account_envelope.provenance
+        fill_envelope = self._envelope(
+            fact_type="canary.fills",
+            data=fills,
+            provenance=provenance,
+            request_id=f"canary-fills:{order_id}",
+        ) if fills else None
+        open_order_envelope = self._envelope(
+            fact_type="canary.open_orders",
+            data=open_orders,
+            provenance=provenance,
+            request_id=f"canary-open-orders:{order_id}",
+        )
+        fee_events: list[FeeEvent] = []
+        for fill in fills:
+            mapped = self._read_fact(
+                port="fee",
+                operation="fill",
+                subject=fill.fill_id,
+                kind="fill",
+                request_id=f"canary-fee:{fill.fill_id}",
+                mapper=lambda raw, fill_id=fill.fill_id: self._mapper.map_fill(
+                    request_id=f"canary-fee:{fill_id}",
+                    raw=raw,
+                ),
+            )
+            fill_fact = mapped.data
+            if fill_fact.fill_id != fill.fill_id or fill_fact.order_id not in {None, fill.order_id}:
+                raise RuntimeBoundaryError(
+                    "canary_fee_fill_identity_mismatch",
+                    "actual fee fact does not match the canonical fill",
+                )
+            fee_events.append(fill_fact.fee)
+        fee_envelope = self._envelope(
+            fact_type="canary.fees",
+            data=tuple(fee_events),
+            provenance=provenance,
+            request_id=f"canary-fees:{order_id}",
+        ) if fee_events else None
+        envelopes = [account_envelope, positions_envelope, open_order_envelope]
+        if fill_envelope is not None:
+            envelopes.append(fill_envelope)
+        if fee_envelope is not None:
+            envelopes.append(fee_envelope)
+        observed_times = [envelope.provenance.received_at for envelope in envelopes]
+        observed_times.extend(fill.occurred_at for fill in fills)
+        observed_times.extend(receipt.updated_at for receipt in open_orders)
+        observed_times.extend(fee.occurred_at for fee in fee_events)
+        observed_at = max(observed_times)
+        watermark = int(observed_at.timestamp() * 1000)
+        if watermark <= 0:
+            raise RuntimeBoundaryError(
+                "canary_reconciliation_watermark_missing",
+                "typed observations have no positive Broker watermark",
+            )
+        cursor = ExternalReconciliationCursor(
+            kind=ExternalCursorKind.WATERMARK,
+            value=watermark,
+            observed_at=observed_at,
+        )
+        observations = [
+            ExternalReconciliationObservation(
+                fact=envelope,
+                cursor=cursor,
+                receipt_digest=envelope.fact_digest,
+            )
+            for envelope in envelopes
+        ]
+        account_observation, positions_observation, open_orders_observation = observations[:3]
+        index = 3
+        fills_observation = None
+        fees_observation = None
+        if fill_envelope is not None:
+            fills_observation = observations[index]
+            index += 1
+        if fee_envelope is not None:
+            fees_observation = observations[index]
+        return ExternalReconciliationSnapshot.assemble(
+            account=account_observation,
+            positions=positions_observation,
+            open_orders=open_orders_observation,
+            fills=fills_observation,
+            fees=fees_observation,
+            funding=None,
+            funding_applicable=False,
+            now=now,
+            stale_after=timedelta(minutes=2),
+            max_observation_skew=timedelta(minutes=2),
+        )
+
+    def _read_fact(self, *, port, operation, subject, kind, request_id, mapper):
+        return self._host.read_fact(
+            request=ExternalHostRequest(
+                request_id=request_id,
+                request=CanonicalHostRequest(
+                    port=port,
+                    operation=operation,
+                    payload=CanonicalPortQuery(subject=subject, kind=kind),
+                ),
+            ),
+            mapper=mapper,
+        )
+
+    def _envelope(self, *, fact_type, data, provenance, request_id):
+        return ExternalFactEnvelope.create(
+            context=self._context,
+            fact_type=fact_type,
+            data=data,
+            request_id=request_id,
+            provenance=provenance,
+        )
 
 
 @runtime_checkable

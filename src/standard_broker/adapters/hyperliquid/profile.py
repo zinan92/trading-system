@@ -24,6 +24,7 @@ from ...external_canary import (
     ExternalCanaryBinding,
     ExternalCanaryRuntimeFactsReader,
     ExternalCanarySnapshotReader,
+    HyperliquidExternalSnapshotReader,
 )
 from ...market_data import FreshnessPolicy
 from .read_facts import HyperliquidExternalFactAdapter
@@ -92,7 +93,7 @@ def build_hyperliquid_testnet_canary_binding(
     runtime: NautilusHyperliquidRuntime,
     instruments: HyperliquidInstrumentAdapter,
     ledger: RuntimeFactLedger,
-    snapshot_reader: ExternalCanarySnapshotReader,
+    snapshot_reader: ExternalCanarySnapshotReader | None = None,
 ) -> ExternalCanaryBinding:
     """Build the public typed order/facts binding consumed by a canary host."""
 
@@ -102,6 +103,18 @@ def build_hyperliquid_testnet_canary_binding(
         instruments=instruments,
         ledger=ledger,
     )
+    facts_mapper = HyperliquidExternalFactAdapter(
+        context=context,
+        instruments=instruments,
+        freshness_policy=FreshnessPolicy(timedelta(minutes=2)),
+    )
+    snapshot_reader = snapshot_reader or HyperliquidExternalSnapshotReader(
+        context=context,
+        host=host,
+        order=lifecycle,
+        facts_mapper=facts_mapper,
+        instruments=instruments,
+    )
     order = HyperliquidExternalOrderAdapter(host=host, lifecycle=lifecycle)
     facts = ExternalCanaryRuntimeFactsReader(
         context=context,
@@ -109,10 +122,6 @@ def build_hyperliquid_testnet_canary_binding(
         order=lifecycle,
         snapshot_reader=snapshot_reader,
         instruments=instruments,
-        market=HyperliquidExternalFactAdapter(
-            context=context,
-            instruments=instruments,
-            freshness_policy=FreshnessPolicy(timedelta(minutes=2)),
-        ),
+        market=facts_mapper,
     )
     return ExternalCanaryBinding(host=host, order=order, facts=facts)
