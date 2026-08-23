@@ -12,6 +12,28 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-23)
+- #888 / PR #889 merged as
+  `main@30034298c056edf38e880b46f896f70c5f3823a8`, consuming the public
+  `standard-broker@916b0eb241b50d5f46be08150eb3197996530552`
+  external host seam. `standard_broker` composition now exact-matches Broker,
+  environment, and transport profile, keeping `local_fixture_v1` separate from
+  `hyperliquid-testnet-default` without provider or wildcard fallback. The new
+  sibling adapter validates the accepted account/lifecycle/release identity,
+  Nautilus adapter/version/commit, complete operation matrix, capability
+  revision, and exact Protection-gap matrix through public preflight only.
+  Public facts are redacted to an account fingerprint; Broker operations,
+  credential references, native payloads, and private runtime calls remain
+  unreachable. The adapter deliberately declares only `PREFLIGHT`, reports
+  `strategy_ready=false` and `protection_ready=false`, and remains rejected by
+  both DCA and Grid admission. Focused validation passed 147 tests; the wider
+  broker upstream/downstream suite passed 282 tests before the final isolated
+  profile-ID test, which also passed. Compile, diff, gitleaks, Standards review,
+  and Spec review passed. No network, order, credential, deployment, cloud,
+  soak, or Live/Mainnet action occurred. Canonical Recording projection and
+  external ProtectionOrder remain separate prerequisites before any strategy
+  admission.
+
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
   merged as `main@e9cd5c91dab026df4605bb14387fff9a22b0a214`. The attended Live DCA
