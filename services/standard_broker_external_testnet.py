@@ -30,6 +30,30 @@ STANDARD_BROKER_EXTERNAL_OPERATIONS = {
     "fee": frozenset({"read", "schedule", "fill"}),
 }
 STANDARD_BROKER_PROTECTION_PROFILE = "hyperliquid-testnet-protection-v1"
+STANDARD_BROKER_EXTERNAL_PROTECTION_VALUES = {
+    "submit": False,
+    "cancel": False,
+    "replace": False,
+    "query": False,
+    "retry": False,
+    "position_coverage": False,
+    "partial_fill_repair": False,
+    "reduce_only_close": True,
+    "reduce_only": False,
+    "mark_price_trigger": False,
+    "grouped_tp_sl": False,
+    "sibling_cancellation": False,
+    "bracket": False,
+    "parent_child": False,
+    "fixed_size": False,
+    "position_following": False,
+    "position_level_tpsl": False,
+    "take_profit_market": False,
+    "take_profit_limit": False,
+    "stop_loss_market": False,
+    "stop_loss_limit": False,
+    "cancel_replace": False,
+}
 STANDARD_BROKER_EXTERNAL_TESTNET_CAPABILITIES = BrokerCapabilities(
     frozenset({BrokerCapability.PREFLIGHT})
 )
@@ -134,12 +158,8 @@ class StandardBrokerExternalTestnetExecutionAdapter:
         if (
             protection is None
             or protection.profile_id != STANDARD_BROKER_PROTECTION_PROFILE
-            or protection.supports("reduce_only_close") is not True
-            or any(
-                supported is True
-                for name, supported in protection.values.items()
-                if name != "reduce_only_close"
-            )
+            or dict(protection.values)
+            != STANDARD_BROKER_EXTERNAL_PROTECTION_VALUES
         ):
             raise StandardBrokerExternalTestnetHostError(
                 "external protection capability identity does not match the accepted gap profile"

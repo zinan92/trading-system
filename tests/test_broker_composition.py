@@ -340,16 +340,23 @@ def test_standard_broker_testnet_requires_explicit_transport_profile(tmp_path: P
 
 
 @pytest.mark.parametrize("provider", [None, "standard-borker"])
+@pytest.mark.parametrize(
+    "external_marker",
+    [
+        {"external_host": object()},
+        {"standard_broker_release_sha": "916b0eb241b50d5f46be08150eb3197996530552"},
+        {"transport_profile": "hyperliquid-testnet-default"},
+    ],
+)
 def test_external_host_markers_require_exact_standard_broker_provider(
     tmp_path: Path,
     provider: str | None,
+    external_marker: dict,
 ):
     broker_config = {
         "broker_id": "hyperliquid",
         "environment": "testnet",
-        "transport_profile": "hyperliquid-testnet-default",
-        "external_host": object(),
-        "standard_broker_release_sha": "916b0eb241b50d5f46be08150eb3197996530552",
+        **external_marker,
     }
     if provider is not None:
         broker_config["provider"] = provider

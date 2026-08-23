@@ -13,6 +13,7 @@ from standard_broker import (
     ExternalBrokerHost,
     ExternalEnvironmentApproval,
     ExternalRuntimeIdentity,
+    ProtectionCapabilityMatrix,
     RuntimePreflight,
     SignerKind,
     SignerReference,
@@ -259,7 +260,7 @@ def test_external_testnet_profile_never_falls_back_to_local_fixture(tmp_path) ->
     config = dict(_context(tmp_path, host).broker_config)
     config["transport_profile"] = "local_fixture_v1"
 
-    with pytest.raises(RuntimeError, match="missing backend"):
+    with pytest.raises(ValueError, match="external host markers require.*external profile"):
         build_broker_execution_port(
             BrokerBuildContext(
                 output_root=tmp_path / "outputs",
@@ -296,7 +297,13 @@ def test_external_testnet_bridge_rejects_credential_configuration(tmp_path) -> N
         replace(
             HYPERLIQUID_TESTNET_PROFILE,
             adapter_id="different-adapter",
+        ),
+        replace(
+            HYPERLIQUID_TESTNET_PROFILE,
             version="9.9.9",
+        ),
+        replace(
+            HYPERLIQUID_TESTNET_PROFILE,
             commit="d" * 40,
         ),
         replace(
@@ -327,6 +334,36 @@ def test_external_testnet_bridge_rejects_runtime_or_capability_profile_drift(
     host, runtime = _host_for_profile(profile)
 
     with pytest.raises(RuntimeError, match="runtime|capability|identity"):
+        build_broker_execution_port(_context(tmp_path, host))
+
+    assert runtime.invoke_calls == []
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"reduce_only_close": True},
+        {
+            **dict(HYPERLIQUID_TESTNET_PROFILE.protection_capabilities.values),
+            "future_false_capability": False,
+        },
+    ],
+)
+def test_external_testnet_bridge_rejects_incomplete_or_extra_protection_gap_matrix(
+    tmp_path,
+    values: dict[str, bool],
+) -> None:
+    accepted = HYPERLIQUID_TESTNET_PROFILE.protection_capabilities
+    profile = replace(
+        HYPERLIQUID_TESTNET_PROFILE,
+        protection_capabilities=ProtectionCapabilityMatrix(
+            profile_id=accepted.profile_id,
+            values=values,
+        ),
+    )
+    host, runtime = _host_for_profile(profile)
+
+    with pytest.raises(RuntimeError, match="protection capability identity"):
         build_broker_execution_port(_context(tmp_path, host))
 
     assert runtime.invoke_calls == []

@@ -68,6 +68,13 @@ class BrokerBuildContext:
             raise ValueError(
                 "external host markers require provider=standard_broker"
             )
+        if external_host_markers and (
+            (self.selection_environment or configured_environment) != "testnet"
+            or transport_profile != "hyperliquid-testnet-default"
+        ):
+            raise ValueError(
+                "external host markers require the exact Testnet external profile"
+            )
         if provider == "standard_broker" and not (
             self.selection_environment or configured_environment
         ):
