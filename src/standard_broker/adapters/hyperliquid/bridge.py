@@ -417,6 +417,7 @@ class NautilusHyperliquidRuntime:
     def invoke(self, port: str, operation: str, request: object) -> NautilusRuntimeReceipt:
         """Invoke and return a canonical receipt without provider-native payloads."""
 
+        request = self._normalize_runtime_request(request)
         self._invoke_native(port, operation, request)
         return NautilusRuntimeReceipt(
             broker_id=self._session.broker_id,
@@ -468,7 +469,17 @@ class NautilusHyperliquidRuntime:
                 request = {"instrument_id": subject or ""}
             else:
                 request = {}
+        request = self._normalize_runtime_request(request)
         return self._invoke_native(port, operation, request)
+
+    @staticmethod
+    def _normalize_runtime_request(request: object) -> object:
+        from ...protection import ProtectionGroup
+        from .protection import HyperliquidProtectionAdapter
+
+        if isinstance(request, ProtectionGroup):
+            return HyperliquidProtectionAdapter().serialize_group(request)
+        return request
 
     def close(self) -> NautilusRuntimeHealth:
         """Close the runtime and prevent further backend invocation."""

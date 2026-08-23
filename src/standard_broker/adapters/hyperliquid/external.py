@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 import inspect
+import hashlib
 from importlib.metadata import PackageNotFoundError, version as package_version
 import json
 import re
@@ -13,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from time import time_ns
 
 from ...capabilities import CapabilityDescriptor
+from ...external_host import digest_canonical
 from ...models import BrokerEnvironment, Provenance, SignerKind
 from ...runtime import BrokerRuntimeSession, RuntimeBoundaryError, SignerReference
 from .bridge import NautilusAdapterMetadata
@@ -38,6 +40,22 @@ def default_testnet_capabilities(revision: str = "hyperliquid-testnet-runtime-v1
             ),
             "fee": frozenset({"read", "schedule", "fill"}),
         },
+        revision=revision,
+    )
+
+
+def enabled_testnet_position_protection_capabilities(
+    revision: str = "hyperliquid-testnet-position-protection-runtime-v1",
+) -> CapabilityDescriptor:
+    """Opt-in external capability set for position-level TP/SL groups."""
+
+    capabilities = default_testnet_capabilities(revision)
+    operations = dict(capabilities.operations)
+    operations["protection_order"] = frozenset({"submit", "cancel", "replace", "query"})
+    return CapabilityDescriptor(
+        broker_id=capabilities.broker_id,
+        environment=capabilities.environment,
+        operations=operations,
         revision=revision,
     )
 
@@ -135,6 +153,7 @@ class NautilusHyperliquidTestnetBackend:
         self._client_factory = client_factory or self._default_client_factory
         self._client: object | None = None
         self._instruments: dict[str, object] = {}
+        self._protection_orders: dict[str, dict[str, object]] = {}
         self._activated = False
 
     def activate(self, *, release_sha: str | None) -> None:
@@ -162,6 +181,8 @@ class NautilusHyperliquidTestnetBackend:
             )
         if port == "order_execution":
             return self._invoke_order(operation, request)
+        if port == "protection_order":
+            return self._invoke_protection(operation, request)
         if port == "market_data" and operation == "ticker":
             return self._read_ticker(request)
         if port == "instrument" and operation == "read":
@@ -196,6 +217,373 @@ class NautilusHyperliquidTestnetBackend:
             "external_operation_unsupported",
             f"Testnet order backend does not implement {operation}",
         )
+
+    def _invoke_protection(self, operation: str, request: Mapping[str, object]) -> object:
+        """Map one canonical position-level TP/SL group through Nautilus.
+
+        The default public profile still advertises this port as unavailable
+        until a release enables the capability matrix.  Keeping the mapping
+        behind the same backend makes the eventual enablement explicit and
+        testable without exposing native order objects to consumers.
+        """
+
+        protection_id = str(request.get("protectionId") or "").strip()
+        if not protection_id:
+            raise RuntimeBoundaryError(
+                "protection_id_required",
+                "external protection requests require a canonical protectionId",
+            )
+        if operation == "submit":
+            return self._submit_protection(request)
+        if operation == "query":
+            return self._query_protection(protection_id)
+        if operation == "cancel":
+            return self._cancel_protection(protection_id)
+        if operation == "replace":
+            return self._replace_protection(request)
+        raise RuntimeBoundaryError(
+            "external_operation_unsupported",
+            f"Testnet protection backend does not implement {operation}",
+        )
+
+    def _submit_protection(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        protection_id = str(request.get("protectionId") or "").strip()
+        grouping = str(request.get("grouping") or "").strip()
+        legs = request.get("legs")
+        if grouping != "positionTpsl":
+            raise RuntimeBoundaryError(
+                "protection_grouping_unsupported",
+                "external Testnet v1 only submits an existing-position positionTpsl group",
+            )
+        if not isinstance(legs, list) or len(legs) != 2:
+            raise RuntimeBoundaryError(
+                "protection_group_invalid",
+                "positionTpsl requires exactly one TP and one SL leg",
+            )
+        orders = self._build_protection_orders(request)
+        reports = self._call("submit_orders", orders)
+        if not isinstance(reports, (list, tuple)) or not reports:
+            raise RuntimeBoundaryError(
+                "protection_submit_response_invalid",
+                "Nautilus returned no actionable protection group report",
+            )
+        if len(reports) == len(orders):
+            rows = tuple(self._protection_report(report) for report in reports)
+        elif len(reports) == 1 and len(legs) == 2:
+            # Hyperliquid returns one group-level status for positionTpsl.  The
+            # child CLOIDs are deterministic and can be queried individually
+            # once the user-events stream assigns their venue order IDs.
+            group_row = self._protection_report(reports[0])
+            if group_row["status"] in {"unknown", "rejected", "canceled", "cancelled"}:
+                raise RuntimeBoundaryError(
+                    "protection_group_submit_rejected",
+                    "Nautilus returned a non-accepted positionTpsl group report",
+                )
+            rows = tuple(
+                {
+                    "status": "waiting_for_trigger",
+                    "oid": None,
+                    "cloid": self._protection_client_id(
+                        protection_id,
+                        index,
+                        leg,
+                    ),
+                }
+                for index, leg in enumerate(legs)
+                if isinstance(leg, Mapping)
+            )
+        else:
+            raise RuntimeBoundaryError(
+                "protection_submit_response_invalid",
+                "Nautilus returned an ambiguous protection group response",
+            )
+        self._protection_orders[protection_id] = {
+            "request": dict(request),
+            "rows": rows,
+        }
+        return self._protection_observation(
+            protection_id=protection_id,
+            operation="submit",
+            state="submitted" if all(row["status"] not in {"unknown", "rejected"} for row in rows) else "unknown",
+            covered_quantity=Decimal("0"),
+            rows=rows,
+        )
+
+    def _query_protection(self, protection_id: str) -> Mapping[str, object]:
+        record = self._protection_orders.get(protection_id)
+        if not isinstance(record, Mapping):
+            return self._protection_observation(
+                protection_id=protection_id,
+                operation="query",
+                state="unknown",
+                covered_quantity=Decimal("0"),
+                rows=(),
+            )
+        request = record.get("request")
+        old_rows = record.get("rows")
+        if not isinstance(request, Mapping) or not isinstance(old_rows, (list, tuple)):
+            return self._protection_observation(
+                protection_id=protection_id,
+                operation="query",
+                state="unknown",
+                covered_quantity=Decimal("0"),
+                rows=(),
+            )
+        instrument = self._instrument(request)
+        rows: list[dict[str, object]] = []
+        for row in old_rows:
+            if not isinstance(row, Mapping):
+                continue
+            try:
+                report = self._call(
+                    "request_order_status_report",
+                    venue_order_id=row.get("oid") or None,
+                    client_order_id=row.get("cloid") or None,
+                )
+                rows.append(self._protection_report(report))
+            except Exception:
+                rows.append(
+                    {
+                        "status": "unknown",
+                        "oid": row.get("oid"),
+                        "cloid": row.get("cloid"),
+                    }
+                )
+        state = self._protection_state(rows)
+        quantity = Decimal(str(request.get("quantity") or "0"))
+        covered = quantity if state == "active" else Decimal("0")
+        del instrument
+        self._protection_orders[protection_id] = {"request": dict(request), "rows": tuple(rows)}
+        return self._protection_observation(
+            protection_id=protection_id,
+            operation="query",
+            state=state,
+            covered_quantity=covered,
+            rows=rows,
+        )
+
+    def _cancel_protection(self, protection_id: str) -> Mapping[str, object]:
+        record = self._protection_orders.get(protection_id)
+        if not isinstance(record, Mapping):
+            return self._protection_observation(
+                protection_id=protection_id,
+                operation="cancel",
+                state="unknown",
+                covered_quantity=Decimal("0"),
+                rows=(),
+            )
+        request = record.get("request")
+        rows = record.get("rows")
+        if not isinstance(request, Mapping) or not isinstance(rows, (list, tuple)):
+            return self._protection_observation(
+                protection_id=protection_id,
+                operation="cancel",
+                state="unknown",
+                covered_quantity=Decimal("0"),
+                rows=(),
+            )
+        instrument = self._instrument(request)
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            self._call(
+                "cancel_order",
+                instrument.id,
+                client_order_id=self._optional_client_order_id(row),
+                venue_order_id=self._optional_venue_order_id(row),
+            )
+        observed = self._query_protection(protection_id)
+        return {
+            **dict(observed),
+            "operation": "cancel",
+            "state": "canceled" if observed.get("state") == "canceled" else "unknown",
+        }
+
+    def _replace_protection(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        protection_id = str(request.get("protectionId") or "").strip()
+        # Hyperliquid's public order API exposes modify for individual orders,
+        # while the canonical group identity is owned here.  Use an explicit,
+        # same-venue cancel -> terminal query -> grouped submit decomposition;
+        # any unknown cancel or submit outcome stops before the next step.
+        canceled = self._cancel_protection(protection_id)
+        if canceled.get("state") != "canceled":
+            return self._protection_observation(
+                protection_id=protection_id,
+                operation="replace",
+                state="unknown",
+                covered_quantity=Decimal("0"),
+                rows=(),
+            )
+        submitted = self._submit_protection(request)
+        return {
+            **dict(submitted),
+            "operation": "replace",
+        }
+
+    def _build_protection_orders(self, request: Mapping[str, object]) -> list[object]:
+        """Build Nautilus order objects for one positionTpsl group."""
+
+        try:
+            from nautilus_trader.core.uuid import UUID4
+            from nautilus_trader.model.enums import (
+                ContingencyType,
+                OrderSide,
+                TimeInForce,
+                TriggerType,
+            )
+            from nautilus_trader.model.identifiers import (
+                ClientOrderId,
+                InstrumentId,
+                StrategyId,
+                TraderId,
+            )
+            from nautilus_trader.model.objects import Price, Quantity
+            from nautilus_trader.model.orders import (
+                LimitIfTouchedOrder,
+                MarketIfTouchedOrder,
+                StopLimitOrder,
+                StopMarketOrder,
+            )
+            from nautilus_trader.cache.transformers import transform_order_to_pyo3
+        except ImportError as exc:
+            raise RuntimeBoundaryError(
+                "nautilus_protection_order_model_missing",
+                "Nautilus Python order models are required for grouped protection",
+            ) from exc
+
+        instrument_id = str(request.get("instrumentId") or "").strip()
+        if not instrument_id:
+            raise RuntimeBoundaryError("instrument_required", "protection instrument is required")
+        if not instrument_id.endswith(".HYPERLIQUID"):
+            instrument_id = instrument_id + ".HYPERLIQUID"
+        instrument = InstrumentId.from_str(instrument_id)
+        quantity = Quantity.from_str(str(request.get("quantity") or "0"))
+        legs = request.get("legs")
+        if not isinstance(legs, list):
+            raise RuntimeBoundaryError("protection_group_invalid", "protection legs must be a list")
+        client_ids = [
+            ClientOrderId(self._protection_client_id(str(request.get("protectionId")), index, leg))
+            for index, leg in enumerate(legs)
+            if isinstance(leg, Mapping)
+        ]
+        if len(client_ids) != len(legs):
+            raise RuntimeBoundaryError("protection_group_invalid", "protection legs must be mappings")
+        trader_id = TraderId("STANDARD-BROKER")
+        strategy_id = StrategyId("EXTERNAL-PROTECTION")
+        now_ns = time_ns()
+        result: list[object] = []
+        for index, (leg, client_id) in enumerate(zip(legs, client_ids, strict=True)):
+            side = OrderSide.BUY if str(leg.get("side") or "").upper() == "B" else OrderSide.SELL
+            execution = str(leg.get("execution") or "").lower()
+            tpsl = str(leg.get("tpsl") or "").lower()
+            trigger = Price.from_str(str(leg.get("triggerPx") or "0"))
+            limit_value = leg.get("limitPx")
+            linked = [other for position, other in enumerate(client_ids) if position != index]
+            common = {
+                "trader_id": trader_id,
+                "strategy_id": strategy_id,
+                "instrument_id": instrument,
+                "client_order_id": client_id,
+                "order_side": side,
+                "quantity": quantity,
+                "trigger_price": trigger,
+                "trigger_type": TriggerType.DEFAULT,
+                "init_id": UUID4(),
+                "ts_init": now_ns,
+                "time_in_force": TimeInForce.GTC,
+                "reduce_only": leg.get("reduceOnly") is True,
+                "contingency_type": ContingencyType.OCO,
+                "linked_order_ids": linked,
+            }
+            if not common["reduce_only"]:
+                raise RuntimeBoundaryError(
+                    "protection_reduce_only_required",
+                    "every external protection leg must be reduce-only",
+                )
+            if tpsl == "tp" and execution == "market":
+                order = MarketIfTouchedOrder(**common)
+            elif tpsl == "sl" and execution == "market":
+                order = StopMarketOrder(**common)
+            elif tpsl == "tp" and execution == "limit":
+                order = LimitIfTouchedOrder(
+                    **common,
+                    price=Price.from_str(str(limit_value or "0")),
+                )
+            elif tpsl == "sl" and execution == "limit":
+                order = StopLimitOrder(
+                    **common,
+                    price=Price.from_str(str(limit_value or "0")),
+                )
+            else:
+                raise RuntimeBoundaryError(
+                    "protection_leg_unsupported",
+                    "external protection leg type is unsupported",
+                )
+            try:
+                result.append(transform_order_to_pyo3(order))
+            except Exception as exc:  # noqa: BLE001 - conversion is a hard boundary.
+                raise RuntimeBoundaryError(
+                    "nautilus_protection_order_conversion_failed",
+                    "Nautilus order could not be converted at the public order seam",
+                ) from exc
+        return result
+
+    @staticmethod
+    def _protection_client_id(protection_id: str, index: int, leg: object) -> str:
+        digest = hashlib.sha256(
+            f"{protection_id}|{index}|{str(leg)}".encode("utf-8")
+        ).hexdigest()[:28]
+        return f"SBP-{digest}"
+
+    def _protection_report(self, report: object) -> dict[str, object]:
+        event = self._order_event(report)
+        return {
+            "status": str(event.get("status") or "unknown").lower(),
+            "oid": event.get("oid"),
+            "cloid": event.get("cloid"),
+            "side": event.get("side"),
+            "px": event.get("px"),
+            "sz": event.get("sz"),
+            "time": event.get("time"),
+        }
+
+    @staticmethod
+    def _protection_state(rows: list[dict[str, object]]) -> str:
+        statuses = {str(row.get("status") or "unknown").lower() for row in rows}
+        if not rows or "unknown" in statuses or "rejected" in statuses:
+            return "unknown"
+        if statuses and statuses <= {"canceled", "cancelled"}:
+            return "canceled"
+        if statuses <= {"resting", "waiting_for_trigger", "waiting_for_fill", "filled", "partially_filled"}:
+            return "active"
+        return "unknown"
+
+    def _protection_observation(
+        self,
+        *,
+        protection_id: str,
+        operation: str,
+        state: str,
+        covered_quantity: Decimal,
+        rows: tuple[Mapping[str, object], ...] | list[Mapping[str, object]],
+    ) -> Mapping[str, object]:
+        order_ids = [
+            str(row.get("oid") or row.get("cloid") or "")
+            for row in rows
+            if str(row.get("oid") or row.get("cloid") or "")
+        ]
+        result = self._with_provenance(
+            {
+                "protection_id": protection_id,
+                "operation": operation,
+                "state": state,
+                "accepted": state not in {"unknown", "rejected"},
+                "covered_quantity": str(covered_quantity),
+                "order_ids": order_ids,
+            }
+        )
+        result["observation_digest"] = digest_canonical(result)
+        return result
 
     def _submit(self, request: Mapping[str, object]) -> Mapping[str, object]:
         instrument = self._instrument(request)
@@ -659,7 +1047,7 @@ class NautilusHyperliquidTestnetBackend:
 
     def _instrument(self, request: Mapping[str, object]) -> object:
         self._ensure_instruments()
-        value = request.get("instrument_id") or request.get("coin")
+        value = request.get("instrument_id") or request.get("instrumentId") or request.get("coin")
         if not value:
             raise RuntimeBoundaryError("instrument_required", "Hyperliquid order instrument is required")
         key = str(value)

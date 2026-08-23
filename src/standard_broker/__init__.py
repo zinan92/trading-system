@@ -9,11 +9,13 @@ from .adapters.hyperliquid import (
     build_hyperliquid_testnet_order_adapter,
     build_hyperliquid_testnet_canary_binding,
     build_hyperliquid_testnet_canary_binding_from_runtime,
+    build_hyperliquid_testnet_position_protection_binding_from_runtime,
     LocalFileSecretProvider,
     NautilusHyperliquidTestnetBackend,
     TestnetProofPlan,
     TestnetProofResult,
     default_testnet_capabilities,
+    enabled_testnet_position_protection_capabilities,
     run_testnet_lifecycle,
 )
 from .capabilities import PORT_NAMES, CapabilityDescriptor
@@ -68,6 +70,12 @@ from .external_reconciliation import (
     ExternalReconciliationObservation,
     ExternalReconciliationOutcome,
     ExternalReconciliationSnapshot,
+)
+from .external_protection import (
+    ExternalProtectionBinding,
+    ExternalProtectionObservation,
+    ExternalProtectionPort,
+    ExternalProtectionReceipt,
 )
 from .fees import (
     FeeEvent,
@@ -162,6 +170,7 @@ __all__ = [
     "build_hyperliquid_testnet_order_adapter",
     "build_hyperliquid_testnet_canary_binding",
     "build_hyperliquid_testnet_canary_binding_from_runtime",
+    "build_hyperliquid_testnet_position_protection_binding_from_runtime",
     "BrokerCapabilityError",
     "BrokerEnvironment",
     "BrokerError",
@@ -260,6 +269,10 @@ __all__ = [
     "ExternalReconciliationObservation",
     "ExternalReconciliationOutcome",
     "ExternalReconciliationSnapshot",
+    "ExternalProtectionBinding",
+    "ExternalProtectionObservation",
+    "ExternalProtectionPort",
+    "ExternalProtectionReceipt",
     "RecordingEvent",
     "RecordingTrack",
     "SignerKind",
@@ -273,5 +286,6 @@ __all__ = [
     "preflight_runtime_session",
     "run_paper_runtime_readiness",
     "default_testnet_capabilities",
+    "enabled_testnet_position_protection_capabilities",
     "run_testnet_lifecycle",
 ]
