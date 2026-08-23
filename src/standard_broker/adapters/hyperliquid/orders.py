@@ -166,7 +166,6 @@ class HyperliquidOrderAdapter:
     ) -> OrderReceipt:
         """Restore one persisted order identity without invoking transport."""
 
-        self._validate_intent(intent)
         broker_id = str(broker_order_id or "").strip()
         if not broker_id:
             raise RuntimeBoundaryError(
