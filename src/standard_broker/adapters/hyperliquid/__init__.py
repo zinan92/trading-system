@@ -20,6 +20,7 @@ from .external import (
     HyperliquidTestnetBackendConfig,
     NautilusHyperliquidTestnetBackend,
     default_testnet_capabilities,
+    enabled_testnet_position_protection_capabilities,
 )
 from .testnet_proof import TestnetProofPlan, TestnetProofResult, run_testnet_lifecycle
 from .fees import HyperliquidFeeAdapter, HyperliquidRuntimeFeeAdapter
@@ -34,6 +35,7 @@ from .orders import (
 from .read_facts import HyperliquidExternalFactAdapter
 from .protection import (
     default_external_testnet_protection_capabilities,
+    enabled_external_testnet_position_protection_capabilities,
     HyperliquidProtectionAdapter,
     HyperliquidRuntimeProtectionAdapter,
     ProtectionLifecycleState,
@@ -42,11 +44,15 @@ from .protection import (
 )
 from .profile import (
     HYPERLIQUID_TESTNET_PROFILE,
+    HYPERLIQUID_TESTNET_POSITION_PROTECTION_PROFILE,
     build_hyperliquid_testnet_host,
     build_hyperliquid_testnet_order_adapter,
     build_hyperliquid_testnet_canary_binding,
     build_hyperliquid_testnet_canary_binding_from_runtime,
+    build_hyperliquid_testnet_position_protection_binding_from_runtime,
+    build_hyperliquid_testnet_position_protection_host,
     resolve_external_profile,
+    resolve_external_position_protection_profile,
 )
 from .resilience import (
     HyperliquidRuntimeReconciliationAdapter,
@@ -80,16 +86,21 @@ __all__ = [
     "HyperliquidExternalFactAdapter",
     "HyperliquidProtectionAdapter",
     "default_external_testnet_protection_capabilities",
+    "enabled_external_testnet_position_protection_capabilities",
     "HyperliquidRuntimeProtectionAdapter",
     "ProtectionLifecycleState",
     "ProtectionLifecycleStatus",
     "ProtectionRetryPlan",
     "HYPERLIQUID_TESTNET_PROFILE",
+    "HYPERLIQUID_TESTNET_POSITION_PROTECTION_PROFILE",
     "build_hyperliquid_testnet_host",
     "build_hyperliquid_testnet_order_adapter",
     "build_hyperliquid_testnet_canary_binding",
     "build_hyperliquid_testnet_canary_binding_from_runtime",
+    "build_hyperliquid_testnet_position_protection_binding_from_runtime",
+    "build_hyperliquid_testnet_position_protection_host",
     "resolve_external_profile",
+    "resolve_external_position_protection_profile",
     "HyperliquidRuntimeReconciliationAdapter",
     "RateLimitError",
     "ObservationSource",
@@ -121,6 +132,7 @@ __all__ = [
     "HyperliquidTestnetBackendConfig",
     "NautilusHyperliquidTestnetBackend",
     "default_testnet_capabilities",
+    "enabled_testnet_position_protection_capabilities",
     "TestnetProofPlan",
     "TestnetProofResult",
     "run_testnet_lifecycle",

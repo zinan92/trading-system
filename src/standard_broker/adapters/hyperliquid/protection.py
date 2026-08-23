@@ -57,6 +57,44 @@ def default_external_testnet_protection_capabilities() -> ProtectionCapabilityMa
     )
 
 
+def enabled_external_testnet_position_protection_capabilities() -> ProtectionCapabilityMatrix:
+    """Return the opt-in positionTpsl capability matrix.
+
+    This is intentionally separate from the default external profile.  The
+    default canary remains ordinary-close-only until a downstream release
+    binds this exact protection profile and supplies its own attended approval.
+    """
+
+    supported = {
+        "submit": True,
+        "cancel": True,
+        "replace": True,
+        "query": True,
+        "retry": False,
+        "position_coverage": True,
+        "partial_fill_repair": True,
+        "reduce_only_close": True,
+        "reduce_only": True,
+        "mark_price_trigger": True,
+        "grouped_tp_sl": True,
+        "sibling_cancellation": True,
+        "bracket": False,
+        "parent_child": False,
+        "fixed_size": False,
+        "position_following": True,
+        "position_level_tpsl": True,
+        "take_profit_market": True,
+        "take_profit_limit": True,
+        "stop_loss_market": True,
+        "stop_loss_limit": True,
+        "cancel_replace": True,
+    }
+    return ProtectionCapabilityMatrix(
+        profile_id="hyperliquid-testnet-position-protection-v1",
+        values=supported,
+    )
+
+
 @dataclass(frozen=True)
 class HyperliquidProtectionLeg:
     side: OrderSide
@@ -510,6 +548,32 @@ class HyperliquidProtectionAdapter:
     """Builds explicit Hyperliquid protection semantics without network I/O."""
 
     name = "protection_order"
+
+    def serialize_group(self, group: ProtectionGroup) -> dict[str, object]:
+        """Return the internal canonical mapping consumed by the runtime port."""
+
+        request = self.build_group(group)
+        return {
+            "protectionId": group.protection_id,
+            "parentOrderId": group.parent_order_id,
+            "instrumentId": group.instrument_id,
+            "grouping": request.grouping,
+            "quantity": str(request.quantity),
+            "quantityPolicy": request.quantity_policy.value,
+            "legs": [
+                {
+                    "side": "B" if leg.side is OrderSide.BUY else "A",
+                    "tpsl": leg.tpsl,
+                    "execution": leg.execution,
+                    "triggerPx": str(leg.trigger_price),
+                    "limitPx": str(leg.limit_price) if leg.limit_price is not None else None,
+                    "reduceOnly": leg.reduce_only,
+                    "triggerReference": leg.trigger_reference.value,
+                    "siblingId": leg.sibling_id,
+                }
+                for leg in request.legs
+            ],
+        }
 
     def build_group(self, group: ProtectionGroup) -> HyperliquidProtectionRequest:
         legs = tuple(
