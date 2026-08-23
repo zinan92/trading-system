@@ -1,5 +1,26 @@
 # Decision Log
 
+## Correct next-entry evidence and gates (Issue #931 / PR #932)
+
+Date: 2026-08-23
+
+### Decision
+
+- `secret_resolved` is now invocation-local and conservative. A `next-entry`
+  result reports signer resolution only when this invocation adds a new entry
+  receipt; no-next-level and protection-blocked outcomes remain false and do
+  not read facts or claim an exposure-changing write.
+- The next-entry CLI has dedicated exact-acknowledgement and explicit
+  `--execute-testnet` tests, plus no-level, protection-gate, and secret/native
+  redaction coverage. The one-action, no-loop boundary is unchanged.
+
+### Verification
+
+- PR #932 merged as `main@35fda450f5f5586504838612e2230d0acf51fde3`.
+- Focused DCA/operator validation passed 17 cases; compileall, diff-check,
+  and gitleaks passed. No network, credentials, orders, scheduler, cloud,
+  deployment, or Live/Mainnet action occurred.
+
 ## Add one attended external DCA next-entry action (Issue #924 / PR #925)
 
 Date: 2026-08-23

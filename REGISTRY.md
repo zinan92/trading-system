@@ -132,6 +132,16 @@
   confirmation, account/approval identity, and local signer-file path; after
   each attended level, `flatten` remains the required terminal proof. The
   14-window soak and Live/Mainnet activation are later, separate milestones.
+- TS-DCA-EXT-11 / #931 merged in trading-system PR #932 as
+  `main@35fda450f5f5586504838612e2230d0acf51fde3`. Operator readback now
+  keeps `secret_resolved=false` for no-next-level and protection-blocked
+  outcomes unless this invocation adds exposure evidence; dedicated tests
+  cover next-entry acknowledgement/execute gates, no-level, protection gate,
+  and redaction. Focused validation passed 17 cases; compileall, diff-check,
+  and gitleaks passed. No network, credentials, Testnet orders, or deployment
+  were used. The remaining gate is still Park's exact DCA plan, durable
+  confirmation, approved account/approval identity, and local pinned signer
+  path for an attended Testnet run.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
