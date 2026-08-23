@@ -17,6 +17,7 @@ from tests.test_standard_broker_testnet_canary import _authorized_canary, _plan
 class FakeBinding:
     def __init__(self) -> None:
         self.requests = []
+        self.recovered = []
 
     def preflight(self):
         return {
@@ -55,6 +56,9 @@ class FakeBinding:
     def submit(self, intent):
         self.requests.append(intent)
         return SimpleNamespace(order_id=intent.order_id, intent=intent)
+
+    def recover(self, intent):
+        self.recovered.append(intent)
 
     def query(self, order_id):
         return SimpleNamespace(order_id=order_id)
@@ -100,6 +104,18 @@ def test_wrapper_maps_only_canonical_order_request_and_exposes_preflight() -> No
     assert intent.quantity == request.quantity
     assert not hasattr(intent, "oid")
     assert adapter.market_fact(instrument_id=request.instrument_id, now=__import__("datetime").datetime.now(__import__("datetime").timezone.utc))["instrument_id"] == request.instrument_id
+
+
+def test_wrapper_recovers_persisted_intent_without_submission() -> None:
+    binding = FakeBinding()
+    adapter = StandardBrokerExternalCanaryAdapter(binding)
+    request = _request()
+
+    adapter.recover(request)
+
+    assert len(binding.recovered) == 1
+    assert binding.recovered[0].order_id == request.order_id
+    assert binding.requests == []
 
 
 def test_wrapper_rejects_missing_public_binding() -> None:

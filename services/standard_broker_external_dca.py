@@ -556,6 +556,7 @@ class ExternalDcaLifecycle:
         order_id = str(state.get("entry_order_id") or "").strip()
         try:
             request = self._entry_request(plan, self._entry_index(plan, order_id))
+            self._recover_order_intent(request)
             queried = self.orders.query(order_id)
             self._record_receipt(
                 state,
@@ -681,6 +682,7 @@ class ExternalDcaLifecycle:
                 if order_id and self._entry_is_open(state, str(order_id)):
                     entry_index = self._entry_index(plan, str(order_id))
                     entry_request = self._entry_request(plan, entry_index)
+                    self._recover_order_intent(entry_request)
                     canceled = self.orders.cancel(str(order_id))
                     self._record_receipt(
                         state,
@@ -1032,6 +1034,11 @@ class ExternalDcaLifecycle:
         if index < 0 or index >= len(plan.entry_levels):
             raise ExternalDcaError("entry_order_index_invalid")
         return index
+
+    def _recover_order_intent(self, request: TestnetCanaryOrderRequest) -> None:
+        recover = getattr(self.orders, "recover", None)
+        if callable(recover):
+            recover(request)
 
     def _new_state(self, plan: ExternalDcaPlan, timestamp: str) -> dict[str, Any]:
         return {
