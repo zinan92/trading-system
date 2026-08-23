@@ -21,11 +21,13 @@
 - Runtime RT-07 is merged in PR #39 at `006512a`: ProtectionOrderPort lifecycle with explicit mark/sibling capabilities, reduce-only enforcement, fixed/position-following coverage gaps, Paper SUBMITTED/FROZEN states, and auditable bounded retry plans.
 - Runtime RT-08 is merged in PR #46 at `c0ee74c`: typed canonical host requests/queries across six ports, explicit binding provenance and safety validation, canonical receipt normalization, and Recording Track raw-payload rejection.
 - Runtime RT-09 is merged in PR #47 at `c689a29`: Paper runtime readiness evidence with distinct Paper/Testnet/Live identity, reconciliation evidence schema, provenance/secret checks, and explicit pending external gate.
+- SB-EXT-01A is merged in PR #57 at `043074b`: reusable typed external Broker host context and canonical receipt seam with runtime/transport attestation, digest/provenance binding, Mainnet fail-closed behavior, and fixture-only public-boundary tests.
 - Decision A is recorded in `docs/adr/0005-rt06-reconciliation-seam.md`: RT-06 is not a second order lifecycle owner; RT-08 will compose the unique lifecycle.
 
 ## Next
 
 - TESTNET-01 (#30) is merged in PR #48 at `f5dbf87`: human-gated Hyperliquid Testnet proof for one default validator-operated perpetual, including submit/query/cancel-replace/fill/fee/position/reconciliation evidence. The final account was flat with no open orders; evidence is stored outside the repository.
+- SB-EXT-01B–01G (#51–#56): remain blocked behind the merged external host binding and are not implemented by PR #57.
 - Mainnet/live remains a separate future milestone requiring its own specification, credentials, release identity, approval, and evidence.
 
 ## Safety boundary
