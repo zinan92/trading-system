@@ -85,6 +85,22 @@
   read, no Testnet order or network operation was run, and #895 still awaits
   Park's exact plan, account binding, and durable confirmation. DCA/Grid,
   ProtectionOrder, soak, Mainnet, and Live remain blocked.
+- TS-DCA-EXT-01/02 / #912/#914 merged in trading-system PRs #913/#915;
+  the application now pins standard-broker's exact opt-in
+  `hyperliquid-testnet-position-protection` profile at
+  `standard-broker@2f24f45b4f28d5198fe80c5eade243b240f8c2f1`. The builder
+  performs release/account/capability/network preflight only and does not
+  enable DCA/Grid or resolve credentials.
+- TS-DCA-EXT-03 / #916 merged in trading-system PR #917 as
+  `main@0665b2e1caf983f4fdb8fe3b7afd6d8217abfc0f`. It adds a separate
+  canonical external DCA lifecycle with durable Park confirmation rechecks,
+  fresh market facts, explicit risk/precision/fee/contract-multiplier limits,
+  cursor/digest/TTL fact validation, remotely confirmed position-following
+  protection before every next entry, and causal reduce-only flatten proof.
+  Grid remains out of scope. Focused validation passed 50 cases; full suite
+  passed 3366 with 1 skipped and one unrelated existing GridMind browser drag
+  failure. No credentials, network, or Testnet orders were used; #895 still
+  requires the attended plan and confirmation.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
