@@ -329,7 +329,6 @@ class ExternalDcaOrderPort(Protocol):
     def submit(self, request: TestnetCanaryOrderRequest) -> object: ...
     def query(self, order_id: str) -> object: ...
     def cancel(self, order_id: str) -> object: ...
-    def open_orders(self, instrument_id: str) -> tuple[object, ...]: ...
 
 
 @runtime_checkable
@@ -578,7 +577,7 @@ class ExternalDcaLifecycle:
         self,
         plan: ExternalDcaPlan,
         *,
-        bundle: CanaryFactBundle,
+        bundle: CanaryFactBundle | None = None,
         confirmation: Mapping[str, Any],
         timestamp: str,
     ) -> dict[str, Any]:
@@ -594,7 +593,7 @@ class ExternalDcaLifecycle:
         self,
         plan: ExternalDcaPlan,
         *,
-        bundle: CanaryFactBundle,
+        bundle: CanaryFactBundle | None,
         confirmation: Mapping[str, Any],
         timestamp: str,
     ) -> dict[str, Any]:
@@ -608,9 +607,28 @@ class ExternalDcaLifecycle:
         try:
             for order_id in tuple(state.get("entry_order_ids") or [state.get("entry_order_id")]):
                 if order_id and self._entry_is_open(state, str(order_id)):
+                    entry_index = self._entry_index(plan, str(order_id))
+                    entry_request = self._entry_request(plan, entry_index)
                     canceled = self.orders.cancel(str(order_id))
+                    self._record_receipt(
+                        state,
+                        canceled,
+                        request=entry_request,
+                        timestamp=timestamp,
+                        operation="cancel",
+                    )
                     if self._receipt_state(canceled) not in {"canceled", "rejected"}:
                         raise ExternalDcaError("entry_cancel_not_confirmed")
+                    queried_cancel = self.orders.query(str(order_id))
+                    self._record_receipt(
+                        state,
+                        queried_cancel,
+                        request=entry_request,
+                        timestamp=timestamp,
+                        operation="cancel_query",
+                    )
+                    if self._receipt_state(queried_cancel) not in {"canceled", "rejected"}:
+                        raise ExternalDcaError("entry_cancel_query_not_confirmed")
             position_quantity = Decimal(str(state.get("position_quantity") or "0"))
             if position_quantity <= 0:
                 raise ExternalDcaError("flatten_position_missing")
@@ -652,6 +670,12 @@ class ExternalDcaLifecycle:
             self._record_receipt(state, queried, request=request, timestamp=timestamp, operation="flatten_query")
             if self._receipt_state(queried) != "filled":
                 raise ExternalDcaError("flatten_not_filled")
+            if bundle is None:
+                bundle = self.facts.read_facts(
+                    order_id=close_id,
+                    instrument_id=plan.instrument_id,
+                    now=_timestamp(timestamp, "timestamp"),
+                )
             close_fill_quantity = sum(
                 (fill.quantity for fill in bundle.fills if fill.order_id == close_id),
                 Decimal("0"),
@@ -686,13 +710,13 @@ class ExternalDcaLifecycle:
             "account_fingerprint": plan.account_fingerprint,
             "runtime_id": plan.runtime_id,
             "release_sha": plan.release_sha,
-            "capability_revision": "hyperliquid-testnet-runtime-v1",
+            "capability_revision": plan.capability_revision,
         }.items():
             if result.get(key) != expected:
                 raise ExternalDcaError(f"order_preflight_{key}_mismatch")
         if result.get("network_io") is not True or result.get("canary_ready") is not True:
             raise ExternalDcaError("order_preflight_not_ready")
-        if result.get("transport_profile") != "hyperliquid-testnet-default":
+        if result.get("transport_profile") != plan.profile_id:
             raise ExternalDcaError("order_preflight_profile_mismatch")
         matrix = getattr(self.protection, "protection_capabilities", None)
         if matrix is None or matrix.profile_id != "hyperliquid-testnet-position-protection-v1":
@@ -923,6 +947,19 @@ class ExternalDcaLifecycle:
             time_in_force=plan.time_in_force,
             idempotency_key=f"{plan.plan_id}:entry:{index}:{plan.entry_levels[index]}",
         )
+
+    @staticmethod
+    def _entry_index(plan: ExternalDcaPlan, order_id: str) -> int:
+        prefix = f"{plan.plan_id}:entry:"
+        if not order_id.startswith(prefix):
+            raise ExternalDcaError("entry_order_identity_invalid")
+        try:
+            index = int(order_id[len(prefix) :])
+        except ValueError as exc:
+            raise ExternalDcaError("entry_order_index_invalid") from exc
+        if index < 0 or index >= len(plan.entry_levels):
+            raise ExternalDcaError("entry_order_index_invalid")
+        return index
 
     def _new_state(self, plan: ExternalDcaPlan, timestamp: str) -> dict[str, Any]:
         return {
