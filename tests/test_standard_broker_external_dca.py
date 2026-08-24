@@ -754,6 +754,103 @@ def test_external_dca_reconciles_unknown_flatten_without_resubmitting(tmp_path: 
     assert recovered_orders.requests == []
 
 
+def test_external_dca_persists_blocked_final_facts_when_causal_fill_is_missing(tmp_path: Path) -> None:
+    plan, confirmation, _unused_lifecycle, _unused_orders, protection = _lifecycle(tmp_path)
+    _path, confirmation, output_root = _confirmation(tmp_path / "reconcile-blocked-final-facts", plan)
+
+    class _NoCausalFacts(_Facts):
+        def read_facts(
+            self,
+            *,
+            order_id: str,
+            instrument_id: str,
+            now: datetime,
+            client_order_id: str | None = None,
+        ) -> CanaryFactBundle:
+            bundle = super().read_facts(
+                order_id=order_id,
+                instrument_id=instrument_id,
+                now=now,
+                client_order_id=client_order_id,
+            )
+            return replace(bundle, fills=(), fees=())
+
+    class _ExistingFacts(_Facts):
+        def read_account_state(self, *, instrument_id: str, now: datetime) -> CanaryFactBundle:
+            del instrument_id, now
+            return _bundle(
+                self.plan,
+                order_id=f"{self.plan.plan_id}:existing",
+                position=self.plan.entry_quantities[0],
+                side="buy",
+                price=self.plan.entry_levels[0],
+            )
+
+    seed_orders = _Orders()
+    seed_lifecycle = ExternalDcaLifecycle(
+        output_root,
+        seed_orders,
+        _ExistingFacts(plan),
+        protection,
+        journal_id="cleanup-reconcile-blocked-final-facts",
+    )
+    seed_lifecycle.adopt_existing_position(
+        plan,
+        bundle=_ExistingFacts(plan).read_account_state(instrument_id=plan.instrument_id, now=datetime.now(UTC)),
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    state = seed_lifecycle.snapshot()
+    state["status"] = "BLOCKED"
+    state["blocker"] = "flatten_submit_receipt_unknown"
+    client_order_id = f"{plan.plan_id}:flatten:{plan.entry_quantities[0]}:{plan.close_price}"
+    state["receipts"] = [
+        {
+            "operation": "flatten_submit",
+            "order_id": f"{plan.plan_id}:flatten",
+            "client_order_id": client_order_id,
+            "broker_order_id": "",
+            "state": "unknown",
+            "quantity": str(plan.entry_quantities[0]),
+            "price": str(plan.close_price),
+            "side": "sell",
+            "instrument_id": plan.instrument_id,
+            "environment": "testnet",
+            "account_fingerprint": plan.account_fingerprint,
+            "runtime_id": plan.runtime_id,
+            "release_sha": plan.release_sha,
+            "capability_revision": plan.capability_revision,
+            "observed_at": NOW,
+        }
+    ]
+    seed_lifecycle._save(state)
+
+    recovered_orders = _Orders(query_state="unknown")
+    recovered_orders.receipts[f"{plan.plan_id}:flatten"] = _Receipt(
+        order_id=f"{plan.plan_id}:flatten",
+        state="unknown",
+        client_order_id=client_order_id,
+        broker_order_id="",
+    )
+    recovered = ExternalDcaLifecycle(
+        output_root,
+        recovered_orders,
+        _NoCausalFacts(plan),
+        protection,
+        journal_id="cleanup-reconcile-blocked-final-facts",
+    )
+
+    blocked = recovered.reconcile_flatten(plan, confirmation=confirmation, timestamp=NOW)
+
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["blocker"] == "canonical_fill_missing"
+    assert blocked["final_facts"]["fills"] == []
+    assert blocked["final_facts"]["fees"] == []
+    assert blocked["final_facts"]["positions"] == []
+    assert blocked["final_facts_digest"].startswith("sha256:")
+    assert recovered_orders.requests == []
+
+
 @pytest.mark.parametrize(
     ("query_state", "expected_status", "expected_outcome"),
     [
