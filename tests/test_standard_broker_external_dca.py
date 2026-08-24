@@ -520,6 +520,36 @@ def test_external_dca_expired_resting_entry_can_be_cancelled_and_reconciled(tmp_
     assert orders.cancelled == {orders.requests[0].order_id}
 
 
+def test_external_dca_expired_fill_blocks_then_allows_explicit_unprotected_flatten(tmp_path: Path) -> None:
+    plan = _plan(expires_at="2026-08-23T01:01:00+00:00")
+    _path, confirmation, output_root = _confirmation(
+        tmp_path,
+        plan,
+        confirmation_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    orders = _Orders(query_state="filled")
+    protection = _Protection()
+    lifecycle = ExternalDcaLifecycle(output_root, orders, _Facts(plan), protection)
+    lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+
+    expired = lifecycle.reconcile_expired_entry(
+        plan,
+        confirmation=confirmation,
+        timestamp="2026-08-23T01:02:00+00:00",
+    )
+    assert expired["status"] == "EXPIRED_POSITION_BLOCKED"
+    assert expired["next_action"] == "attended_flatten_expired_position"
+
+    flat = lifecycle.flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp="2026-08-23T01:02:00+00:00",
+    )
+    assert flat["status"] == "FLAT_RECONCILED"
+    assert flat["protection"]["status"] == "not_present"
+    assert protection.calls == []
+
+
 def test_external_dca_fresh_process_recovery_never_resubmits_ambiguous_intent(tmp_path: Path) -> None:
     plan, confirmation, lifecycle, orders, protection = _lifecycle(tmp_path)
     lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
