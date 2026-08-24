@@ -296,6 +296,102 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
                 ),
             )
 
+    def test_external_fill_query_filters_conflicting_client_identity_even_when_oid_matches(self) -> None:
+        class ConflictingFillClient(FakeClient):
+            async def request_fill_reports(self, instrument_id: str) -> list[object]:
+                self.calls.append(("request_fill_reports", (instrument_id,), {}))
+                return [
+                    {
+                        "trade_id": "tid-conflicting-cloid",
+                        "venue_order_id": "9001",
+                        "client_order_id": "0xother-cloid",
+                        "instrument_id": "HYPE-USD-PERP.HYPERLIQUID",
+                        "order_side": "BUY",
+                        "last_px": "50",
+                        "last_qty": "0.2",
+                        "ts_last": 1_800_000_000_000_000_000,
+                    }
+                ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = ConflictingFillClient()
+            session = self.session()
+            backend = NautilusHyperliquidTestnetBackend(
+                session=session,
+                config=HyperliquidTestnetBackendConfig(
+                    account_address=session.account.address,
+                    capabilities=session.capabilities,
+                ),
+                secrets=self.provider(directory),
+                client_factory=lambda private_key, account: client,
+            )
+
+            backend.activate(release_sha="a" * 40)
+            result = backend.invoke(
+                "order_execution",
+                "fills",
+                {
+                    "instrument_id": "HYPE-USD-PERP",
+                    "oid": "9001",
+                    "cloid": "0xrequested-cloid",
+                },
+            )
+
+            self.assertEqual(result["fills"], [])
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("nautilus_trader") is not None,
+        "native CLOID normalization requires the pinned Nautilus dependency",
+    )
+    def test_recovered_native_cloid_is_normalized_for_client_scoped_fill(self) -> None:
+        from nautilus_trader.core import nautilus_pyo3
+
+        canonical = "0x" + "ab" * 16
+        native = str(
+            nautilus_pyo3.hyperliquid_cloid_from_client_order_id(
+                nautilus_pyo3.ClientOrderId(canonical)
+            )
+        )
+
+        class NativeCloidFillClient(FakeClient):
+            async def request_fill_reports(self, instrument_id: str) -> list[object]:
+                self.calls.append(("request_fill_reports", (instrument_id,), {}))
+                return [
+                    {
+                        "trade_id": "tid-native-cloid",
+                        "venue_order_id": "9001",
+                        "client_order_id": native,
+                        "instrument_id": "HYPE-USD-PERP.HYPERLIQUID",
+                        "order_side": "BUY",
+                        "last_px": "50",
+                        "last_qty": "0.2",
+                        "ts_last": 1_800_000_000_000_000_000,
+                    }
+                ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = NativeCloidFillClient()
+            session = self.session()
+            backend = NautilusHyperliquidTestnetBackend(
+                session=session,
+                config=HyperliquidTestnetBackendConfig(
+                    account_address=session.account.address,
+                    capabilities=session.capabilities,
+                ),
+                secrets=self.provider(directory),
+                client_factory=lambda private_key, account: client,
+            )
+
+            backend.activate(release_sha="a" * 40)
+            result = backend.invoke(
+                "order_execution",
+                "fills",
+                {"instrument_id": "HYPE-USD-PERP", "cloid": canonical},
+            )
+
+            self.assertEqual(len(result["fills"]), 1)
+            self.assertEqual(result["fills"][0]["cloid"], canonical)
+
     def test_terminal_query_normalizes_provider_cloid_for_same_venue_order(self) -> None:
         class TerminalIdentityClient(FakeClient):
             async def request_order_status_report(self, **kwargs: object) -> object:
