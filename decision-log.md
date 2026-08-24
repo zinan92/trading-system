@@ -1,6 +1,6 @@
 # Decision Log
 
-## Keep ambiguous Testnet cleanup blocked without causal fill/fee evidence (Issues #958, #972, #974, #976)
+## Keep ambiguous Testnet cleanup blocked without causal fill/fee evidence (Issues #958, #972, #974, #976, #978)
 
 Date: 2026-08-24
 
@@ -16,12 +16,16 @@ Date: 2026-08-24
   can show the newest flat-but-incomplete snapshot without promoting it to
   success. The durable evidence report is
   `docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`.
+- After standard-broker RT-15/RT-16, a redacted read saw four instrument fill
+  reports but zero client identity fields, zero recovered-identity matches,
+  zero canonical fills, and zero canonical fees. No price/time/quantity
+  inference is allowed to turn those reports into causal evidence.
 
 ### Verification
 
-- Standard-broker PRs #103/#105 and trading-system PRs #973/#975 are merged;
-  focused external lifecycle/canary tests pass and the standard-broker suite
-  is `287 passed, 1 skipped`.
+- Standard-broker PRs #103/#105/#107/#109 and trading-system PRs
+  #973/#975/#977 are merged; standard-broker full regression is `291 passed,
+  2 skipped`, and the pinned Nautilus focused suite is `28 passed`.
 - No secret value, raw provider payload, Mainnet/Live path, scheduler, cloud
   mutation, or second order submit was used.
 

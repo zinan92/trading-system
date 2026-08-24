@@ -10,7 +10,7 @@ is made.
 | Field | Evidence |
 |---|---|
 | Trading-system source | `main` after PR #975 merge `a951628372c26315d4f903669297e31105fd393d` |
-| Standard-broker source | `main` after PR #105 merge `4e5cf2e22ff7a80b644e3171a165771c78313194` |
+| Standard-broker source | `main` after PR #109 merge `1c0d9706be30ef444dd9aa2373743ab5d0f80834` |
 | Runtime release identity in plan | `c9a31732b61f0289867a3b8e40cc26a380072bbc` |
 | Environment | Hyperliquid Testnet only |
 | Account | Park-confirmed master account; only fingerprint persisted: `sha256:75b327ae65b27db8eb8955fd922a291945da160ba52e9f64995ed9e430df0c56` |
@@ -54,14 +54,23 @@ lifecycle at approximately `10:17:20Z` is:
 This is an explicit flat-but-not-causally-reconciled state. It must not be
 promoted to `FLAT_RECONCILED` or used to start a new DCA cycle.
 
+After the RT-15/RT-16 public-seam fixes, a read-only redacted diagnostic saw
+four instrument fill reports, zero reports carrying a client identity, zero
+matches to the recovered canonical/native client identity, zero canonical
+fills, and zero canonical fees. The diagnostic did not print raw provider
+payload, order IDs, prices, quantities, or credentials. This confirms that the
+remaining blocker is missing venue identity evidence, not an unreviewed
+price/time/quantity inference.
+
 ## Public seam and test evidence
 
 - standard-broker PR #103 added client-scoped fill recovery; PR #105 forwarded
-  the typed client scope to the native fill query.
+  the typed client scope to the native fill query; PR #107 normalized the
+  deterministic native CLOID and PR #109 rejected conflicting identities.
 - trading-system PR #973 passed the recovered client identity into final facts;
   PR #975 persisted blocked final facts without weakening validation.
-- standard-broker focused/full regression after PR #105: `287 passed, 1
-  skipped`.
+- standard-broker full regression after PR #109: `291 passed, 2 skipped`; the
+  pinned Nautilus external-backend/canary suite passed `28` tests.
 - trading-system external lifecycle/canary regression after PR #975: `28
   passed` (two existing collection warnings).
 
