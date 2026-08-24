@@ -11,6 +11,7 @@ import pytest
 
 from services.park_confirmation import ParkConfirmationLedger
 from services.standard_broker_external_dca import (
+    CanonicalDcaProvenance,
     ExternalDcaError,
     ExternalDcaLifecycle,
     ExternalDcaPlan,
@@ -128,9 +129,11 @@ class _Receipt:
 
 
 class _Orders:
-    def __init__(self) -> None:
+    def __init__(self, *, submit_state: str = "filled", query_state: str | None = None) -> None:
         self.requests: list[TestnetCanaryOrderRequest] = []
         self.receipts: dict[str, _Receipt] = {}
+        self.submit_state = submit_state
+        self.query_state = query_state if query_state is not None else submit_state
 
     def preflight(self):
         return {
@@ -166,7 +169,7 @@ class _Orders:
         self.requests.append(request)
         receipt = _Receipt(
             order_id=request.order_id,
-            state="filled",
+            state=self.submit_state,
             client_order_id=request.idempotency_key,
             broker_order_id=f"broker:{request.order_id}",
         )
@@ -174,7 +177,9 @@ class _Orders:
         return receipt
 
     def query(self, order_id: str):
-        return self.receipts[order_id]
+        receipt = self.receipts[order_id]
+        receipt.state = self.query_state
+        return receipt
 
     def cancel(self, order_id: str):
         receipt = self.receipts[order_id]
@@ -330,6 +335,33 @@ def _lifecycle(tmp_path: Path, *, protection_state: ProtectionLifecycleState = P
     return plan, confirmation, lifecycle, orders, protection
 
 
+def _provenance(plan: ExternalDcaPlan) -> CanonicalDcaProvenance:
+    return CanonicalDcaProvenance.from_mapping(
+        {
+            "source_strategy_plan_id": "strategy-plan-paper-dca-1",
+            "source_strategy_plan_digest": "sha256:" + "d" * 64,
+            "canonical_semantics": {
+                "direction": plan.direction,
+                "notional_per_addition": "100",
+                "max_additions": len(plan.entry_levels),
+                "loop_enabled": False,
+                "aggregate_take_profit": "fixed_price",
+            },
+            "source_market": {
+                "provider": "nautilus-hyperliquid.testnet",
+                "symbol": plan.instrument_id,
+            },
+            "execution_market_source": {
+                "source_id": "nautilus-hyperliquid.testnet",
+                "broker_id": plan.broker_id,
+                "environment": plan.environment,
+                "instrument_id": plan.instrument_id,
+                "execution_venue": True,
+            },
+        }
+    )
+
+
 def test_external_dca_requires_opt_in_profile_and_exact_plan_digest() -> None:
     values = _plan_values()
     values["profile_id"] = "hyperliquid-testnet-default"
@@ -363,6 +395,166 @@ def test_external_dca_prepare_facts_protection_then_next_entry(tmp_path: Path) -
     assert len(orders.requests) == 2
     encoded = json.dumps(lifecycle.snapshot(), sort_keys=True).lower()
     assert all(token not in encoded for token in ("cloid", "tid", "hash", "coin", '"px"', '"sz"', '"oid"'))
+
+
+def test_external_dca_canonical_start_persists_source_and_normalized_facts(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, orders, _protection = _lifecycle(tmp_path)
+    provenance = _provenance(plan)
+
+    prepared = lifecycle.prepare(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+        canonical_provenance=provenance,
+        require_canonical=True,
+    )
+    state = lifecycle.on_entry_facts(
+        plan,
+        bundle=_Facts(plan).read_facts(
+            order_id=orders.requests[0].order_id,
+            instrument_id=plan.instrument_id,
+            now=datetime.now(UTC),
+        ),
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+
+    assert prepared["source_strategy_plan_id"] == provenance.source_strategy_plan_id
+    assert prepared["source_strategy_plan_digest"] == provenance.source_strategy_plan_digest
+    assert prepared["execution_market_source"]["instrument_id"] == plan.instrument_id
+    assert state["entry_facts"]["account"]["account_fingerprint"] == plan.account_fingerprint
+    assert state["entry_facts"]["reconciliation"]["freshness"] == "fresh"
+    assert state["entry_facts"]["reconciliation"]["cursor"] == f"cursor:{orders.requests[0].order_id}"
+    assert state["entry_facts"]["provenance"]["runtime_id"] == plan.runtime_id
+    assert state["entry_facts_digest"].startswith("sha256:")
+
+
+def test_external_dca_canonical_start_requires_source_provenance(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, _orders, _protection = _lifecycle(tmp_path)
+    with pytest.raises(ExternalDcaError, match="canonical_strategy_plan_required"):
+        lifecycle.prepare(
+            plan,
+            confirmation=confirmation,
+            timestamp=NOW,
+            require_canonical=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("query_state", "expected_status", "expected_outcome"),
+    [
+        ("resting", "WAITING_ENTRY", "resting"),
+        ("rejected", "BLOCKED", "rejected"),
+        ("canceled", "BLOCKED", "canceled"),
+        ("unknown", "BLOCKED", "unknown"),
+    ],
+)
+def test_external_dca_entry_outcomes_are_normalized(
+    tmp_path: Path,
+    query_state: str,
+    expected_status: str,
+    expected_outcome: str,
+) -> None:
+    plan, confirmation, _unused_lifecycle, _unused_orders, protection = _lifecycle(tmp_path)
+    output_root = tmp_path / f"outputs-{query_state}"
+    ledger = ParkConfirmationLedger(output_root, park_user_id="park")
+    proposal = ledger.create_proposal(
+        proposal_id=f"proposal-{query_state}",
+        strategy_session_id=plan.strategy_session_id,
+        strategy_revision_id=plan.strategy_revision_id,
+        plan_digest=plan.plan_digest,
+        risk_digest=plan.plan_digest,
+        expires_at=4102444800,
+        execution_environment="testnet",
+    )
+    decision = ledger.decide(
+        proposal_id=proposal["proposal_id"],
+        park_user_id="park",
+        command_text=f"confirm {plan.plan_digest}",
+        current_binding={
+            "strategy_session_id": plan.strategy_session_id,
+            "strategy_revision_id": plan.strategy_revision_id,
+        },
+        now=1787446800,
+    )
+    confirmation = {
+        "event": "confirmed",
+        "execution_authorized": True,
+        "execution_environment": "testnet",
+        "canary_id": plan.plan_id,
+        "plan_digest": plan.plan_digest,
+        "operator_id": "park",
+        "proposal_id": proposal["proposal_id"],
+        "receipt_digest": decision["receipt_digest"],
+        "expires_at": plan.expires_at,
+    }
+    orders = _Orders(query_state=query_state)
+    lifecycle = ExternalDcaLifecycle(
+        output_root,
+        orders,
+        _Facts(plan),
+        protection,
+    )
+    state = lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+    assert state["status"] == expected_status
+    assert state["entry_outcome"] == expected_outcome
+    assert len(orders.requests) == 1
+
+
+def test_external_dca_partial_fill_protects_only_owned_quantity(tmp_path: Path) -> None:
+    plan, confirmation, _lifecycle_unused, _orders_unused, protection = _lifecycle(tmp_path)
+    output_root = tmp_path / "outputs-partial"
+    ledger = ParkConfirmationLedger(output_root, park_user_id="park")
+    proposal = ledger.create_proposal(
+        proposal_id="proposal-partial",
+        strategy_session_id=plan.strategy_session_id,
+        strategy_revision_id=plan.strategy_revision_id,
+        plan_digest=plan.plan_digest,
+        risk_digest=plan.plan_digest,
+        expires_at=4102444800,
+        execution_environment="testnet",
+    )
+    decision = ledger.decide(
+        proposal_id=proposal["proposal_id"],
+        park_user_id="park",
+        command_text=f"confirm {plan.plan_digest}",
+        current_binding={
+            "strategy_session_id": plan.strategy_session_id,
+            "strategy_revision_id": plan.strategy_revision_id,
+        },
+        now=1787446800,
+    )
+    confirmation = {
+        "event": "confirmed",
+        "execution_authorized": True,
+        "execution_environment": "testnet",
+        "canary_id": plan.plan_id,
+        "plan_digest": plan.plan_digest,
+        "operator_id": "park",
+        "proposal_id": proposal["proposal_id"],
+        "receipt_digest": decision["receipt_digest"],
+        "expires_at": plan.expires_at,
+    }
+    orders = _Orders(query_state="partially_filled")
+    lifecycle = ExternalDcaLifecycle(output_root, orders, _Facts(plan), protection)
+    lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+    partial = Decimal("0.0005")
+    state = lifecycle.on_entry_facts(
+        plan,
+        bundle=_bundle(
+            plan,
+            order_id=orders.requests[0].order_id,
+            position=partial,
+            side="buy",
+            price=plan.entry_levels[0],
+            fill_quantity=partial,
+        ),
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    assert state["status"] == "PROTECTION_ACTIVE"
+    assert state["position_quantity"] == str(partial)
+    assert protection.calls == ["submit", "query"]
 
 
 def test_external_dca_unknown_protection_blocks_new_entries(tmp_path: Path) -> None:

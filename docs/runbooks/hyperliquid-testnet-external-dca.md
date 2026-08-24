@@ -14,6 +14,19 @@ python3 -m pipelines.standard_broker_external_dca \
 The default action only validates the canonical plan and prints its digest. It
 does not load credentials or invoke a backend.
 
+## Canonical external projection
+
+Before an attended start, project the locked Paper DCA StrategyPlan through the
+non-secret Broker/Instrument binding. This is local-only and produces the
+external plan digest used by the durable Park confirmation:
+
+```bash
+python3 -m pipelines.standard_broker_external_dca \
+  --action project \
+  --plan <path-to-strategy-plan-v1.json> \
+  --binding <path-to-non-secret-hyperliquid-instrument-binding.json>
+```
+
 ## Protected preflight
 
 ```bash
@@ -40,7 +53,8 @@ must never be pasted into chat or printed by the command.
 ```bash
 python3 -m pipelines.standard_broker_external_dca \
   --action start \
-  --plan <path-to-external-dca-plan.json> \
+  --strategy-plan <path-to-strategy-plan-v1.json> \
+  --binding <path-to-non-secret-hyperliquid-instrument-binding.json> \
   --confirmation <path-to-confirmed-park-projection.json> \
   --account-address <testnet-account-address> \
   --secret-file <local-testnet-signer-file> \

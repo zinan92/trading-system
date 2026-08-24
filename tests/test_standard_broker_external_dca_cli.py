@@ -104,12 +104,18 @@ def _write_confirmation(tmp_path: Path, plan: ExternalDcaPlan) -> tuple[Path, Pa
     return path, output_root
 
 
-def _args(tmp_path: Path, plan_path: Path, confirmation_path: Path | None = None, *, action: str = "start") -> list[str]:
+def _args(
+    tmp_path: Path,
+    plan_path: Path | None,
+    confirmation_path: Path | None = None,
+    *,
+    action: str = "start",
+    strategy_plan_path: Path | None = None,
+    binding_path: Path | None = None,
+) -> list[str]:
     values = [
         "--action",
         action,
-        "--plan",
-        str(plan_path),
         "--account-address",
         ACCOUNT_ADDRESS,
         "--approval-id",
@@ -119,6 +125,12 @@ def _args(tmp_path: Path, plan_path: Path, confirmation_path: Path | None = None
         "--output-root",
         str(tmp_path / "outputs"),
     ]
+    if strategy_plan_path is not None:
+        values.extend(["--strategy-plan", str(strategy_plan_path)])
+        if binding_path is not None:
+            values.extend(["--binding", str(binding_path)])
+    else:
+        values.extend(["--plan", str(plan_path)])
     if confirmation_path is not None:
         values.extend(["--confirmation", str(confirmation_path)])
     if action in {"start", "reconcile-entry", "next-entry", "flatten"}:
@@ -132,6 +144,24 @@ def _args(tmp_path: Path, plan_path: Path, confirmation_path: Path | None = None
             ]
         )
     return values
+
+
+def _write_canonical_start_inputs(
+    tmp_path: Path,
+) -> tuple[Path, Path, ExternalDcaPlan, Path]:
+    strategy_path = tmp_path / "strategy-plan.json"
+    binding_path = tmp_path / "binding.json"
+    strategy_path.write_text(json.dumps(_canonical_strategy_plan()), encoding="utf-8")
+    binding = _projection_binding()
+    binding["account_fingerprint"] = cli._account_fingerprint(ACCOUNT_ADDRESS)
+    binding_path.write_text(json.dumps(binding), encoding="utf-8")
+    projection = cli.project_canonical_dca_plan(
+        json.loads(strategy_path.read_text(encoding="utf-8")),
+        binding=binding,
+    )
+    plan = ExternalDcaPlan.from_mapping(projection.plan)
+    confirmation_path, _output_root = _write_confirmation(tmp_path, plan)
+    return strategy_path, binding_path, plan, confirmation_path
 
 
 def _canonical_strategy_plan() -> dict[str, object]:
@@ -316,7 +346,7 @@ def test_preflight_proves_opt_in_profile_without_network_or_secret_resolution(
 
 
 def test_start_requires_durable_confirmation_before_builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    plan_path, _plan = _write_plan(tmp_path)
+    strategy_path, binding_path, _plan, _confirmation_path = _write_canonical_start_inputs(tmp_path)
     called = False
 
     def fail_builder(*_args, **_kwargs):
@@ -326,11 +356,37 @@ def test_start_requires_durable_confirmation_before_builder(tmp_path: Path, monk
 
     monkeypatch.setattr(cli, "_build_external_protection", fail_builder)
     result_code = cli.main(
-        _args(tmp_path, plan_path, tmp_path / "missing-confirmation.json")
+        _args(
+            tmp_path,
+            None,
+            tmp_path / "missing-confirmation.json",
+            strategy_plan_path=strategy_path,
+            binding_path=binding_path,
+        )
     )
     result = json.loads(capsys.readouterr().out)
     assert result_code == 2
     assert result["reason_code"] == "input_unavailable"
+    assert called is False
+
+
+def test_start_rejects_hand_authored_external_plan_without_canonical_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan_path, _plan = _write_plan(tmp_path)
+    called = False
+
+    def fail_builder(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("protected builder must not run")
+
+    monkeypatch.setattr(cli, "_build_external_protection", fail_builder)
+    assert cli.main(_args(tmp_path, plan_path)) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["reason_code"] == "canonical_strategy_plan_required"
     assert called is False
 
 
@@ -340,8 +396,7 @@ def test_lifecycle_builder_rejects_unprotected_binding() -> None:
 
 
 def test_start_stops_after_one_attended_entry_and_protection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    plan_path, plan = _write_plan(tmp_path)
-    confirmation_path, _output_root = _write_confirmation(tmp_path, plan)
+    strategy_path, binding_path, plan, confirmation_path = _write_canonical_start_inputs(tmp_path)
     calls: list[object] = []
 
     class FakeLifecycle:
@@ -373,7 +428,15 @@ def test_start_stops_after_one_attended_entry_and_protection(tmp_path: Path, mon
 
     monkeypatch.setattr(cli, "_build_external_protection", lambda _plan, _args, *, canary: (runtime, binding))
     monkeypatch.setattr(cli, "_build_lifecycle", lambda _root, _binding: (lifecycle, adapter))
-    assert cli.main(_args(tmp_path, plan_path, confirmation_path)) == 0
+    assert cli.main(
+        _args(
+            tmp_path,
+            None,
+            confirmation_path,
+            strategy_plan_path=strategy_path,
+            binding_path=binding_path,
+        )
+    ) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "PROTECTION_ACTIVE"
     assert "submit_next_entry" not in calls
