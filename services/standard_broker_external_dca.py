@@ -1108,6 +1108,7 @@ class ExternalDcaLifecycle:
                     order_id=close_id,
                     instrument_id=plan.instrument_id,
                     now=_timestamp(timestamp, "timestamp"),
+                    client_order_id=client_order_id,
                 )
                 final = self._validate_facts(
                     plan,
@@ -1139,6 +1140,7 @@ class ExternalDcaLifecycle:
                 order_id=close_id,
                 instrument_id=plan.instrument_id,
                 now=_timestamp(timestamp, "timestamp"),
+                client_order_id=client_order_id,
             )
             final = self._validate_facts(
                 plan,

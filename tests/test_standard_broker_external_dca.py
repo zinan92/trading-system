@@ -332,8 +332,15 @@ class _Facts:
     def __init__(self, plan: ExternalDcaPlan) -> None:
         self.plan = plan
 
-    def read_facts(self, *, order_id: str, instrument_id: str, now: datetime) -> CanaryFactBundle:
-        del instrument_id, now
+    def read_facts(
+        self,
+        *,
+        order_id: str,
+        instrument_id: str,
+        now: datetime,
+        client_order_id: str | None = None,
+    ) -> CanaryFactBundle:
+        del instrument_id, now, client_order_id
         if "flatten" in order_id:
             return _bundle(self.plan, order_id=order_id, position=Decimal("0"), side="sell", price=Decimal("60500"))
         position = self.plan.entry_quantities[0] if order_id.endswith(":0") else sum(self.plan.entry_quantities)
