@@ -16561,20 +16561,21 @@ auditable datafeed port; broker execution remains a separate port.
   compileall, diff-check, and gitleaks. No order, credential value, or cloud
   mutation.
 
-# 2026-08-24 — Attended Testnet proof blocked at public account seam (#958)
+# 2026-08-24 — Attended Testnet proof reaches known existing exposure (#958)
 
 ## Observation
 
-- A read-only attempt with `standard-broker-testnet@196e368` and bundled
-  `nautilus_trader==1.230.0` reached the public external binding, then failed
-  closed at `account.read -> canonical_account_snapshot_gap`.
+- Standard-broker PR #95 (`main@25a04be`) maps the observed Nautilus
+  `AccountState` and supports account-wide clean-state snapshots through the
+  public seam. The real read is now cursor-bound and fresh, with
+  `-0.060 PAXG-USD-PERP` and zero open orders.
 - No new order, cancel, flatten, scheduler, Live/Mainnet, or cloud operation
-  occurred. The existing PAXG state remains unknown, so no `FLAT_RECONCILED`
-  or canonical DCA proof claim is made.
+  occurred. The existing position is known non-flat, so no
+  `FLAT_RECONCILED` or canonical DCA proof claim is made.
 
 ## Next action
 
-- Fix/release the reviewed standard-broker public account mapping, repeat the
-  read-only clean-slate audit, then obtain fresh Park confirmation before any
-  owned flatten action. See
+- Park must confirm the exact cleanup digest through the isolated
+  `adopt-flatten` gate; after `FLAT_RECONCILED`, generate and confirm the
+  canonical old-Paper-DCA projection. See
   `docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`.
