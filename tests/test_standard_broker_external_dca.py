@@ -615,6 +615,49 @@ def test_external_dca_clean_state_gate_blocks_existing_position_before_submit(tm
     assert orders.requests == []
 
 
+def test_external_dca_adopts_existing_position_in_isolated_journal_before_flatten(tmp_path: Path) -> None:
+    plan, confirmation, _unused_lifecycle, _unused_orders, protection = _lifecycle(tmp_path)
+    _path, confirmation, output_root = _confirmation(tmp_path / "adopt", plan)
+
+    class _ExistingFacts(_Facts):
+        def read_account_state(self, *, instrument_id: str, now: datetime) -> CanaryFactBundle:
+            del instrument_id, now
+            return _bundle(
+                self.plan,
+                order_id=f"{self.plan.plan_id}:existing",
+                position=self.plan.entry_quantities[0],
+                side="buy",
+                price=self.plan.entry_levels[0],
+            )
+
+    orders = _Orders()
+    lifecycle = ExternalDcaLifecycle(
+        output_root,
+        orders,
+        _ExistingFacts(plan),
+        protection,
+        journal_id="cleanup-existing-1",
+    )
+    adopted = lifecycle.adopt_existing_position(
+        plan,
+        bundle=_ExistingFacts(plan).read_account_state(
+            instrument_id=plan.instrument_id,
+            now=datetime.now(UTC),
+        ),
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    assert adopted["status"] == "EXPIRED_POSITION_BLOCKED"
+    assert adopted["existing_state"] == "adopted_external_canary"
+    assert lifecycle.current_path.name == "current.json"
+    assert "cleanup-existing-1" in str(lifecycle.current_path)
+
+    flattened = lifecycle.flatten(plan, confirmation=confirmation, timestamp=NOW)
+    assert flattened["status"] == "FLAT_RECONCILED"
+    assert orders.requests[-1].close_position is True
+    assert protection.calls == []
+
+
 @pytest.mark.parametrize(
     ("query_state", "expected_status", "expected_outcome"),
     [

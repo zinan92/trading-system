@@ -138,7 +138,7 @@ def _args(
         values.extend(["--plan", str(plan_path)])
     if confirmation_path is not None:
         values.extend(["--confirmation", str(confirmation_path)])
-    if action in {"start", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
+    if action in {"start", "reconcile-entry", "expire-reconcile", "adopt-flatten", "next-entry", "flatten"}:
         values.extend(
             [
                 "--secret-file",
@@ -797,3 +797,51 @@ def test_expire_reconcile_routes_to_cancel_reconcile_without_start(
     assert result["status"] == "EXPIRED_RECONCILED"
     assert result["action"] == "expire-reconcile"
     assert calls == ["reconcile_expired_entry", "close"]
+
+
+def test_adopt_flatten_uses_account_read_and_isolated_cleanup_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan_path, plan = _write_plan(tmp_path)
+    confirmation_path, _output_root = _write_confirmation(tmp_path, plan)
+    calls: list[str] = []
+
+    class FakeLifecycle:
+        current_path = tmp_path / "outputs" / "standard_broker_external_dca" / "cleanup-plan" / "current.json"
+
+        def snapshot(self):
+            return {}
+
+        def adopt_existing_position(self, *_args, **_kwargs):
+            calls.append("adopt_existing_position")
+            return {
+                "status": "EXPIRED_POSITION_BLOCKED",
+                "position_quantity": "0.01",
+                "next_action": "attended_flatten_existing_position",
+            }
+
+        def flatten(self, *_args, **_kwargs):
+            calls.append("flatten")
+            return {"status": "FLAT_RECONCILED", "next_action": "record_dca_result"}
+
+    class FakeAdapter:
+        def read_account_state(self, **_kwargs):
+            calls.append("read_account_state")
+            return object()
+
+    runtime = SimpleNamespace(close=lambda: calls.append("close"))
+    binding = SimpleNamespace(protection=object())
+    monkeypatch.setattr(cli, "_build_external_protection", lambda *_args, **_kwargs: (runtime, binding))
+
+    def fake_build_lifecycle(_root, _binding, *, journal_id):
+        assert journal_id == f"cleanup-{plan.plan_id}"
+        return FakeLifecycle(), FakeAdapter()
+
+    monkeypatch.setattr(cli, "_build_lifecycle", fake_build_lifecycle)
+    assert cli.main(_args(tmp_path, plan_path, confirmation_path, action="adopt-flatten")) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "FLAT_RECONCILED"
+    assert result["action"] == "adopt-flatten"
+    assert calls == ["read_account_state", "adopt_existing_position", "flatten", "close"]
