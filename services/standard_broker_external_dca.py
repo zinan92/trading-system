@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 import hashlib
 import json
 from pathlib import Path
@@ -645,6 +645,7 @@ class ExternalDcaLifecycle:
         bundle: CanaryFactBundle,
         confirmation: Mapping[str, Any],
         timestamp: str,
+        expected_client_order_id: str | None = None,
     ) -> dict[str, Any]:
         with production_mutation_lock(self.output_root):
             return self._on_entry_facts(
@@ -652,6 +653,7 @@ class ExternalDcaLifecycle:
                 bundle=bundle,
                 confirmation=confirmation,
                 timestamp=timestamp,
+                expected_client_order_id=expected_client_order_id,
             )
 
     def _on_entry_facts(
@@ -661,6 +663,7 @@ class ExternalDcaLifecycle:
         bundle: CanaryFactBundle,
         confirmation: Mapping[str, Any],
         timestamp: str,
+        expected_client_order_id: str | None = None,
     ) -> dict[str, Any]:
         state = self._state(plan)
         if plan.is_expired(now=_timestamp(timestamp, "timestamp")):
@@ -678,6 +681,9 @@ class ExternalDcaLifecycle:
                 bundle,
                 order_id=order_id,
                 timestamp=timestamp,
+                allow_historical_causal_facts=self._has_entry_slippage_block(state),
+                allow_slippage_violation=True,
+                expected_client_order_id=expected_client_order_id,
             )
             if position_quantity <= 0:
                 raise ExternalDcaError("entry_position_missing")
@@ -686,6 +692,18 @@ class ExternalDcaLifecycle:
             state["actual_fee_usd"] = str(actual_fees)
             state["entry_facts"] = self._safe_fact_bundle(bundle)
             state["entry_facts_digest"] = _digest(state["entry_facts"])
+            if self._entry_fill_slippage_exceeded(plan, bundle, order_id):
+                state["status"] = "BLOCKED"
+                state["blocker"] = "entry_fill_slippage_exceeded"
+                state["next_action"] = "attended_flatten_after_risk_block"
+                self._event(
+                    state,
+                    "entry_facts_persisted_after_risk_block",
+                    timestamp=timestamp,
+                    reason="entry_fill_slippage_exceeded",
+                )
+                self._save(state)
+                return state
             group = self._protection_group(plan, state, position_quantity, average_entry)
             previous = state.get("protection")
             receipt = (
@@ -788,7 +806,7 @@ class ExternalDcaLifecycle:
             for order_id in order_ids:
                 entry_index = self._entry_index(plan, order_id)
                 request = self._entry_request(plan, entry_index)
-                self._recover_order_intent(state, request)
+                self._recover_order_intent(state, request, state_override="unknown")
                 queried = self.orders.query(order_id)
                 self._record_receipt(
                     state,
@@ -883,19 +901,26 @@ class ExternalDcaLifecycle:
             self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
         except ExternalDcaError as exc:
             return self._block(state, str(exc), timestamp=timestamp)
+        allowed_blocked_recovery = (
+            state.get("status") == "BLOCKED"
+            and self._has_entry_slippage_block(state)
+        )
         if state.get("status") not in {
             "WAITING_ENTRY",
             "ENTRY_FILLED_PENDING_FACTS",
             "ENTRY_SUBMIT_INTENT_RESERVED",
             "RECOVERY_REQUIRED",
-        }:
+        } and not allowed_blocked_recovery:
             return self._block(state, "entry_reconcile_not_available", timestamp=timestamp)
         order_id = str(state.get("entry_order_id") or "").strip()
         if not order_id:
             return self._block(state, "persisted_entry_order_identity_missing", timestamp=timestamp)
         try:
             request = self._entry_request(plan, self._entry_index(plan, order_id))
-            self._recover_order_intent(state, request)
+            persisted_client_order_id = self._persisted_client_order_id(state, order_id)
+            if persisted_client_order_id:
+                request = replace(request, client_order_id=persisted_client_order_id)
+            self._recover_order_intent(state, request, state_override="unknown")
             queried = self.orders.query(order_id)
             self._record_receipt(
                 state,
@@ -923,12 +948,14 @@ class ExternalDcaLifecycle:
                 order_id=order_id,
                 instrument_id=plan.instrument_id,
                 now=_timestamp(timestamp, "timestamp"),
+                client_order_id=request.client_order_id,
             )
             return self._on_entry_facts(
                 plan,
                 bundle=bundle,
                 confirmation=confirmation,
                 timestamp=timestamp,
+                expected_client_order_id=request.client_order_id,
             )
         except ExternalDcaError as exc:
             return self._block(state, str(exc), timestamp=timestamp)
@@ -1377,13 +1404,19 @@ class ExternalDcaLifecycle:
             self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
         except ExternalDcaError as exc:
             return self._block(state, str(exc), timestamp=timestamp)
+        allowed_blocked_flatten = (
+            state.get("status") == "BLOCKED"
+            and self._has_entry_slippage_block(state)
+            and state.get("blocker") != "flatten_unknown"
+            and Decimal(str(state.get("position_quantity") or "0")) > 0
+        )
         if state.get("status") not in {
             "PROTECTION_ACTIVE",
             "WAITING_ENTRY",
             "ENTRY_FILLED_PENDING_FACTS",
             "RECOVERY_REQUIRED",
             "EXPIRED_POSITION_BLOCKED",
-        }:
+        } and not allowed_blocked_flatten:
             return self._block(state, "flatten_not_available", timestamp=timestamp)
         try:
             for order_id in tuple(state.get("entry_order_ids") or [state.get("entry_order_id")]):
@@ -1434,13 +1467,29 @@ class ExternalDcaLifecycle:
                     "covered_quantity": "0",
                     "reason": "expired_position_had_no_active_protection",
                 }
+            flatten_price = plan.close_price
+            if allowed_blocked_flatten:
+                market_price = self._validate_market_fact(
+                    plan,
+                    now=_timestamp(timestamp, "timestamp"),
+                )
+                flatten_price = self._emergency_flatten_price(plan, market_price)
+                state["flatten_recovery_price"] = str(flatten_price)
+                state["flatten_recovery_reason"] = "risk_block_market_guard"
+                self._event(
+                    state,
+                    "risk_block_flatten_price_selected",
+                    timestamp=timestamp,
+                    market_price=str(market_price),
+                    limit_price=str(flatten_price),
+                )
             request = TestnetCanaryOrderRequest(
                 order_id=f"{plan.plan_id}:flatten",
                 instrument_id=plan.instrument_id,
                 side="sell" if plan.direction == "long" else "buy",
                 quantity=position_quantity,
                 order_type="limit",
-                limit_price=plan.close_price,
+                limit_price=flatten_price,
                 time_in_force="ioc",
                 idempotency_key=f"{plan.plan_id}:flatten:{position_quantity}:{plan.close_price}",
                 reduce_only=True,
@@ -1591,7 +1640,7 @@ class ExternalDcaLifecycle:
             raise ExternalDcaError("clean_state_not_flat")
         return bundle
 
-    def _validate_market_fact(self, plan: ExternalDcaPlan, *, now: datetime) -> None:
+    def _validate_market_fact(self, plan: ExternalDcaPlan, *, now: datetime) -> Decimal:
         reader = getattr(self.orders, "market_fact", None)
         if not callable(reader):
             raise ExternalDcaError("fresh_market_fact_reader_missing")
@@ -1627,6 +1676,35 @@ class ExternalDcaLifecycle:
             raise ExternalDcaError("market_fact_price_tick_mismatch")
         if value.get("fact_digest") != market_fact_digest(value):
             raise ExternalDcaError("market_fact_digest_invalid")
+        return price
+
+    @staticmethod
+    def _emergency_flatten_price(
+        plan: ExternalDcaPlan,
+        market_price: Decimal,
+    ) -> Decimal:
+        # Hyperliquid default perps accept at most five significant figures
+        # for order prices.  Keep the emergency limit inside the plan's
+        # slippage envelope while rounding to a venue-valid price quantum.
+        significant_quantum = Decimal("1").scaleb(
+            market_price.copy_abs().adjusted() - 5 + 1
+        )
+        quantum = max(plan.price_tick, significant_quantum)
+        if plan.direction == "short":
+            raw = market_price + plan.max_slippage
+        else:
+            raw = market_price - plan.max_slippage
+        units = (raw / quantum).to_integral_value(
+            rounding=ROUND_FLOOR if plan.direction == "short" else ROUND_CEILING
+        )
+        price = units * quantum
+        if plan.direction == "short" and price < market_price:
+            price = (market_price / quantum).to_integral_value(rounding=ROUND_CEILING) * quantum
+        if plan.direction == "long" and price > market_price:
+            price = (market_price / quantum).to_integral_value(rounding=ROUND_FLOOR) * quantum
+        if price <= 0:
+            raise ExternalDcaError("emergency_flatten_price_invalid")
+        return price
 
     def _require_confirmation(
         self,
@@ -1681,6 +1759,7 @@ class ExternalDcaLifecycle:
         timestamp: str,
         require_flat: bool = False,
         allow_historical_causal_facts: bool = False,
+        allow_slippage_violation: bool = False,
         expected_client_order_id: str | None = None,
         expected_broker_order_id: str | None = None,
         expected_fill_quantity: Decimal | None = None,
@@ -1775,7 +1854,10 @@ class ExternalDcaLifecycle:
                         raise ExternalDcaError("entry_fill_side_mismatch")
                     if fill.quantity > plan.entry_quantities[index]:
                         raise ExternalDcaError("entry_fill_quantity_exceeds_plan")
-                    if abs(fill.price - plan.entry_levels[index]) > plan.max_slippage:
+                    if (
+                        abs(fill.price - plan.entry_levels[index]) > plan.max_slippage
+                        and not allow_slippage_violation
+                    ):
                         raise ExternalDcaError("entry_fill_slippage_exceeded")
         fee_ids = [str(fee.fee_id or "").strip() for fee in bundle.fees]
         if any(not fee_id for fee_id in fee_ids) or len(set(fee_ids)) != len(fee_ids):
@@ -1828,6 +1910,20 @@ class ExternalDcaLifecycle:
             if any(fill.side != expected_close_side for fill in fills):
                 raise ExternalDcaError("flatten_fill_side_mismatch")
         return abs(position_quantity), average, actual_fees
+
+    @staticmethod
+    def _entry_fill_slippage_exceeded(
+        plan: ExternalDcaPlan,
+        bundle: CanaryFactBundle,
+        order_id: str,
+    ) -> bool:
+        index = int(order_id.rsplit(":", 1)[-1])
+        expected_price = plan.entry_levels[index]
+        return any(
+            abs(fill.price - expected_price) > plan.max_slippage
+            for fill in bundle.fills
+            if fill.order_id == order_id
+        )
 
     @staticmethod
     def _protection_group(plan: ExternalDcaPlan, state: Mapping[str, Any], quantity: Decimal, entry_price: Decimal) -> object:
@@ -1892,6 +1988,8 @@ class ExternalDcaLifecycle:
         self,
         state: Mapping[str, Any],
         request: TestnetCanaryOrderRequest,
+        *,
+        state_override: str | None = None,
     ) -> None:
         recover = getattr(self.orders, "recover", None)
         if not callable(recover):
@@ -1910,7 +2008,7 @@ class ExternalDcaLifecycle:
         recover(
             request,
             broker_order_id=broker_order_id,
-            state=str(latest.get("state") or "unknown"),
+            state=state_override or str(latest.get("state") or "unknown"),
         )
 
     def _new_state(
@@ -2064,6 +2162,30 @@ class ExternalDcaLifecycle:
         if state.get("plan_digest") != plan.plan_digest:
             raise ExternalDcaError("persisted_plan_digest_mismatch")
         return state
+
+    @staticmethod
+    def _has_entry_slippage_block(state: Mapping[str, Any]) -> bool:
+        if state.get("blocker") == "entry_fill_slippage_exceeded":
+            return True
+        return any(
+            isinstance(event, Mapping)
+            and event.get("event") == "blocked"
+            and event.get("reason") == "entry_fill_slippage_exceeded"
+            for event in state.get("events") or ()
+        )
+
+    @staticmethod
+    def _persisted_client_order_id(
+        state: Mapping[str, Any],
+        order_id: str,
+    ) -> str | None:
+        for row in reversed(state.get("receipts") or ()):
+            if not isinstance(row, Mapping) or str(row.get("order_id") or "") != order_id:
+                continue
+            value = str(row.get("client_order_id") or "").strip()
+            if value:
+                return value
+        return None
 
     def _block(self, state: dict[str, Any], reason: str, *, timestamp: str) -> dict[str, Any]:
         state["status"] = "BLOCKED"

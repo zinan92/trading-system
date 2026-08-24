@@ -362,7 +362,15 @@ class _Facts:
             )
         position = self.plan.entry_quantities[0] if order_id.endswith(":0") else sum(self.plan.entry_quantities)
         price = self.plan.entry_levels[0] if order_id.endswith(":0") else self.plan.entry_levels[1]
-        return _bundle(self.plan, order_id=order_id, position=position, side="buy", price=price, fill_quantity=self.plan.entry_quantities[0])
+        return _bundle(
+            self.plan,
+            order_id=order_id,
+            position=position,
+            side="buy",
+            price=price,
+            fill_quantity=self.plan.entry_quantities[0],
+            client_order_id=client_order_id,
+        )
 
     def read_account_state(self, *, instrument_id: str, now: datetime) -> CanaryFactBundle:
         del instrument_id, now
@@ -1245,3 +1253,124 @@ def test_external_dca_reconcile_entry_reads_facts_and_activates_protection(tmp_p
     assert state["next_action"] == "submit_next_entry_only_after_attended_price_gate"
     assert protection.calls == ["submit", "query"]
     assert any(row["operation"] == "reconcile_query" for row in state["receipts"])
+
+
+def test_external_dca_persists_slippage_block_and_allows_attended_flatten_without_retry(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(max_slippage="1")
+    _path, confirmation, output_root = _confirmation(tmp_path, plan)
+
+    class _SlippageFacts(_Facts):
+        def read_facts(
+            self,
+            *,
+            order_id: str,
+            instrument_id: str,
+            now: datetime,
+            client_order_id: str | None = None,
+        ) -> CanaryFactBundle:
+            del instrument_id, now
+            if "flatten" in order_id:
+                return super().read_facts(
+                    order_id=order_id,
+                    instrument_id=self.plan.instrument_id,
+                    now=datetime.now(UTC),
+                    client_order_id=client_order_id,
+                )
+            return _bundle(
+                self.plan,
+                order_id=order_id,
+                position=self.plan.entry_quantities[0],
+                side="buy",
+                price=self.plan.entry_levels[0] + Decimal("20"),
+                fill_quantity=self.plan.entry_quantities[0],
+                client_order_id=client_order_id,
+            )
+
+    orders = _Orders()
+    protection = _Protection()
+    lifecycle = ExternalDcaLifecycle(output_root, orders, _SlippageFacts(plan), protection)
+    prepared = lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+    assert prepared["status"] == "ENTRY_FILLED_PENDING_FACTS"
+
+    blocked = lifecycle.on_entry_facts(
+        plan,
+        bundle=_SlippageFacts(plan).read_facts(
+            order_id=orders.requests[0].order_id,
+            instrument_id=plan.instrument_id,
+            now=datetime.now(UTC),
+        ),
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["blocker"] == "entry_fill_slippage_exceeded"
+    assert blocked["next_action"] == "attended_flatten_after_risk_block"
+    assert blocked["position_quantity"] == str(plan.entry_quantities[0])
+    assert blocked["entry_facts_digest"]
+    assert protection.calls == []
+
+    recovered = lifecycle.reconcile_entry(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    assert recovered["status"] == "BLOCKED"
+    assert recovered["blocker"] == "entry_fill_slippage_exceeded"
+    assert len(orders.requests) == 1
+    assert any(row["operation"] == "reconcile_query" for row in recovered["receipts"])
+
+    flattened = lifecycle.flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    assert flattened["status"] == "FLAT_RECONCILED"
+    assert len(orders.requests) == 2
+    assert orders.requests[-1].reduce_only is True
+    assert orders.requests[-1].limit_price == Decimal("59999")
+    assert flattened["flatten_recovery_reason"] == "risk_block_market_guard"
+    assert protection.calls == []
+
+
+def test_emergency_flatten_price_respects_hyperliquid_significant_figures() -> None:
+    plan = _plan(
+        direction="short",
+        entry_levels=["4630", "4660"],
+        entry_quantities=["0.06", "0.06"],
+        target_price="4580",
+        stop_price="4680",
+        close_price="4580",
+        max_slippage="5",
+        max_notional="560",
+        max_leverage="10",
+        price_tick="0.001",
+    )
+
+    assert ExternalDcaLifecycle._emergency_flatten_price(
+        plan,
+        Decimal("4682.550"),
+    ) == Decimal("4687.5")
+
+
+def test_external_dca_unknown_flatten_does_not_retry_after_ambiguous_submit(
+    tmp_path: Path,
+) -> None:
+    plan, confirmation, lifecycle, orders, _protection = _lifecycle(tmp_path)
+    state = lifecycle._new_state(plan, NOW)
+    state.update(
+        {
+            "status": "BLOCKED",
+            "blocker": "flatten_unknown",
+            "position_quantity": str(plan.entry_quantities[0]),
+            "entry_order_ids": [],
+        }
+    )
+    lifecycle._save(state)
+
+    blocked = lifecycle.flatten(plan, confirmation=confirmation, timestamp=NOW)
+
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["blocker"] == "flatten_not_available"
+    assert orders.requests == []
