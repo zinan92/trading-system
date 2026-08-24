@@ -204,8 +204,11 @@
 - Standard-broker PR #103 / `main@28d9a7b19f24f9f248a3002a92f306c7689cbe58`
   added public client-scoped fill recovery. PR #105 /
   `main@4e5cf2e22ff7a80b644e3171a165771c78313194` forwards the typed client
-  scope to the native fill query. The full standard-broker suite after #105
-  passed `287 passed, 1 skipped`.
+  scope to the native fill query. PR #107 normalized the deterministic native
+  CLOID and PR #109 / `main@1c0d9706be30ef444dd9aa2373743ab5d0f80834` rejected
+  conflicting client/OID identities. The full standard-broker suite after
+  #109 passed `291 passed, 2 skipped`; the pinned Nautilus focused suite passed
+  `28` tests.
 - Trading-system PR #973 / `main@5612cf2f875e5c0b7aae045d9a6a6d994694c309`
   passes the recovered client identity into final facts. PR #975 /
   `main@a951628372c26315d4f903669297e31105fd393d` persists blocked final
@@ -218,6 +221,10 @@
   `sha256:b2369648896415a586cc581ed7cd2cccafc49d3f8dafb7daa384883bc053a79c`.
   The venue query still returns `missing` for the recovered order identity;
   flat account state is not causal `FLAT_RECONCILED` evidence.
+- A redacted RT-16 diagnostic saw four instrument fill reports, zero client
+  identity fields, zero recovered-identity matches, zero canonical fills, and
+  zero canonical fees. No raw provider payload or heuristic correlation was
+  used.
 - Durable report: [`docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`](docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md).
   #958 remains open. Do not start a new DCA cycle; the next continuation needs
   a separately scoped recovery decision and public causal fill/fee evidence.
