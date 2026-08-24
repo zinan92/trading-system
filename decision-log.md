@@ -16649,3 +16649,41 @@ auditable datafeed port; broker execution remains a separate port.
 - No credential value, new order, cancel, replace, retry, Dashboard, Cloudflare,
   deployment, or cloud mutation was performed. Durable report:
   `docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`.
+
+# 2026-08-24 — Complete canonical Plan-03 Testnet terminal recovery (#984 / #986)
+
+## Decision
+
+- Preserve the old Paper DCA semantics exactly for the one attended Testnet
+  entry: short PAXG, 4630/4660 levels, 0.06/0.06 quantities, target 4580,
+  stop 4680, two additions, loop disabled.
+- A filled entry outside the slippage guard is a durable risk blocker. Persist
+  the canonical fill/fee/position facts, do not activate protection, and do
+  not submit another entry. Recovery queries only the persisted identity.
+- A reduce-only risk recovery may use a fresh market price only when it is
+  venue-valid, tick-valid, and within the plan slippage envelope. If no such
+  price exists, or a submit is ambiguous, fail closed and require explicit
+  Broker-identity reconciliation; never blind retry.
+- Final terminal success requires exact Broker order identity, canonical fill
+  and actual-fee coverage, cursor/provenance, fresh coherent reconciliation,
+  zero signed position, and zero open orders.
+
+## Verification
+
+- Trading-system PR #985 merged as
+  `main@49e1ead44be78336b9838a0a3ff64b03e81aa45a` after Standards/Spec review.
+- First entry Order ID `58421230104`: `0.060 @ 4681.300`, actual fee
+  `0.126395 USDC`; risk blocker `entry_fill_slippage_exceeded`; no second
+  entry or protection submission.
+- Risk recovery flatten Order ID `58423568585`: fills `0.026 @ 4672.600`
+  and `0.034 @ 4672.500`, actual fees `0.05466900` and `0.07148900` USDC,
+  cursor `1787586439505`, zero position/open orders, final facts digest
+  `sha256:4fdf4c3f3d7c9d06c80e8e0ae02ffce0ec729d960d9a38ffa9560f9dbde9999b`.
+- Final full trading-system suite: `3390 passed`, `50 skipped`, `6 warnings`;
+  standard-broker clean suite: `303 passed`; focused DCA/recovery suite:
+  `54 passed`; compileall, diff-check, and gitleaks passed.
+- Browser Order History read-only view independently showed the same filled
+  Broker Order ID and the account page showed flat position/equity. No
+  scheduler, Mainnet/Live, Dashboard/cloud mutation, or automatic promotion.
+- Durable evidence:
+  `docs/evidence/issue-958-canonical-dca-risk-recovery-2026-08-24.md`.

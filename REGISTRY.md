@@ -258,6 +258,33 @@
   confirmation. Durable evidence remains in
   [`docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`](docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md).
 
+## 现在在哪里(2026-08-24, canonical Plan-03 terminal proof)
+- TS-DCA-EXT-27 / #984 merged in trading-system PR #985 as
+  `main@49e1ead44be78336b9838a0a3ff64b03e81aa45a`. A filled entry that
+  exceeds the slippage guard now persists canonical facts and remains blocked;
+  exact risk-block recovery can query without retrying entry, and only an
+  attended reduce-only flatten may proceed. Emergency flatten prices are
+  venue-valid, tick-bound, inside the configured slippage envelope, and
+  persisted for ambiguous-submit reconciliation. Unknown/stale/mismatched
+  facts and ambiguous flatten states remain fail-closed.
+- The canonical Plan-03 entry submitted exactly once as Order ID `58421230104`
+  and filled `0.060 @ 4681.300` with an actual `0.126395 USDC` fee. The risk
+  gate blocked it before protection and no next entry was sent. The separate
+  recovery plan then used exact broker identity `58423568585` and reached
+  `FLAT_RECONCILED`: fills `0.026 @ 4672.600` plus `0.034 @ 4672.500`, actual
+  fees `0.05466900` plus `0.07148900` USDC, cursor `1787586439505`, zero
+  positions/open orders, final facts digest
+  `sha256:4fdf4c3f3d7c9d06c80e8e0ae02ffce0ec729d960d9a38ffa9560f9dbde9999b`.
+- Final validation after PR #985: trading-system full suite `3390 passed`,
+  `50 skipped`, `6 warnings`; standard-broker clean suite `303 passed`;
+  focused DCA/recovery suite `54 passed`; compileall, diff-check, and
+  gitleaks passed. Standards/spec review passed at `4f5301d`.
+- This is one attended Hyperliquid Testnet proof of the old Paper DCA
+  semantics plus terminal recovery. No second entry, scheduler, Mainnet/Live,
+  Dashboard/cloud mutation, or automatic promotion occurred. Soak and Live
+  readiness remain separate milestones. Durable evidence:
+  [`docs/evidence/issue-958-canonical-dca-risk-recovery-2026-08-24.md`](docs/evidence/issue-958-canonical-dca-risk-recovery-2026-08-24.md).
+
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
   merged as `main@e9cd5c91dab026df4605bb14387fff9a22b0a214`. The attended Live DCA
