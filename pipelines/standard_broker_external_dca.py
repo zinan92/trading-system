@@ -154,7 +154,12 @@ def _require_unexpired_plan(plan: ExternalDcaPlan) -> None:
         raise _expired_plan_blocker(plan)
 
 
-def _load_confirmation_mapping(path: Path, *, plan: ExternalDcaPlan) -> dict[str, Any]:
+def _load_confirmation_mapping(
+    path: Path,
+    *,
+    plan: ExternalDcaPlan,
+    allow_expired: bool = False,
+) -> dict[str, Any]:
     document = _load_document(path)
     candidate: Mapping[str, Any] | None = None
     if isinstance(document, Mapping):
@@ -191,7 +196,7 @@ def _load_confirmation_mapping(path: Path, *, plan: ExternalDcaPlan) -> dict[str
         raise ExternalDcaCliError("confirmation_expiry_invalid") from exc
     if expires_at.tzinfo is None:
         raise ExternalDcaCliError("confirmation_timezone_required")
-    if expires_at.astimezone(timezone.utc) <= _now():
+    if not allow_expired and expires_at.astimezone(timezone.utc) <= _now():
         raise ExternalDcaCliError("confirmation_expired")
     if not str(confirmation.get("proposal_id") or confirmation.get("confirmation_id") or "").strip():
         raise ExternalDcaCliError("confirmation_id_missing")
@@ -203,6 +208,7 @@ def _verify_durable_confirmation(
     *,
     plan: ExternalDcaPlan,
     confirmation: Mapping[str, Any],
+    allow_expired: bool = False,
 ) -> None:
     ledger = ParkConfirmationLedger(output_root, park_user_id="park")
     proposal_id = str(
@@ -234,7 +240,7 @@ def _verify_durable_confirmation(
     except (TypeError, ValueError) as exc:
         raise ExternalDcaCliError("durable_confirmation_expiry_invalid") from exc
     if (
-        proposal_expires <= _now().timestamp()
+        (not allow_expired and proposal_expires <= _now().timestamp())
         or proposal.get("execution_environment") != "testnet"
         or decision.get("execution_environment") != "testnet"
         or proposal.get("plan_digest") != plan.plan_digest
@@ -696,6 +702,7 @@ def _reconcile_flatten_action(
             plan,
             confirmation=confirmation,
             timestamp=_timestamp(),
+            broker_order_id=args.broker_order_id,
         )
         return _state_result(
             action="reconcile-flatten",
@@ -1008,6 +1015,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--binding", type=Path, help="JSON non-secret Broker/Instrument binding")
     parser.add_argument("--confirmation", type=Path, help="confirmed Park projection JSON/JSONL")
     parser.add_argument("--account-address", help="Hyperliquid Testnet account address")
+    parser.add_argument(
+        "--broker-order-id",
+        help="explicit existing Broker order identity for read-only flatten recovery",
+    )
     parser.add_argument("--secret-file", type=Path, help="local protected signer file (start/reconcile-entry/next-entry/flatten only)")
     parser.add_argument("--credential-reference", default=DEFAULT_CREDENTIAL_REFERENCE)
     parser.add_argument("--approval-id", help="human Testnet approval identifier")
@@ -1053,11 +1064,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             raw = _load_plan_mapping(Path(args.plan))
             plan = _require_plan(raw, allow_expired=True)
             if args.action in {"reconcile-entry", "expire-reconcile", "adopt-flatten", "reconcile-flatten", "next-entry", "flatten"}:
-                if args.action != "expire-reconcile":
+                allow_expired_reconcile = args.action == "reconcile-flatten" and bool(
+                    str(args.broker_order_id or "").strip()
+                )
+                if args.action != "expire-reconcile" and not allow_expired_reconcile:
                     _require_unexpired_plan(plan)
                 _require_account(plan, args.account_address)
-                confirmation = _load_confirmation_mapping(Path(args.confirmation), plan=plan)
-                _verify_durable_confirmation(Path(args.output_root), plan=plan, confirmation=confirmation)
+                confirmation = _load_confirmation_mapping(
+                    Path(args.confirmation),
+                    plan=plan,
+                    allow_expired=allow_expired_reconcile,
+                )
+                _verify_durable_confirmation(
+                    Path(args.output_root),
+                    plan=plan,
+                    confirmation=confirmation,
+                    allow_expired=allow_expired_reconcile,
+                )
                 if args.action == "reconcile-entry":
                     result = _reconcile_entry_action(plan, args, confirmation)
                 elif args.action == "expire-reconcile":
