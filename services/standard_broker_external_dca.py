@@ -675,13 +675,14 @@ class ExternalDcaLifecycle:
         if state.get("status") not in {"ENTRY_FILLED_PENDING_FACTS", "PROTECTION_ACTIVE"}:
             raise ExternalDcaError("entry_facts_not_expected")
         order_id = str(state.get("entry_order_id") or "")
+        risk_block_recovery = self._has_entry_slippage_block(state)
         try:
             position_quantity, average_entry, actual_fees = self._validate_facts(
                 plan,
                 bundle,
                 order_id=order_id,
                 timestamp=timestamp,
-                allow_historical_causal_facts=self._has_entry_slippage_block(state),
+                allow_historical_causal_facts=risk_block_recovery,
                 allow_slippage_violation=True,
                 expected_client_order_id=expected_client_order_id,
             )
@@ -692,7 +693,10 @@ class ExternalDcaLifecycle:
             state["actual_fee_usd"] = str(actual_fees)
             state["entry_facts"] = self._safe_fact_bundle(bundle)
             state["entry_facts_digest"] = _digest(state["entry_facts"])
-            if self._entry_fill_slippage_exceeded(plan, bundle, order_id):
+            slippage_exceeded = self._entry_fill_slippage_exceeded(plan, bundle, order_id)
+            if risk_block_recovery and not slippage_exceeded:
+                raise ExternalDcaError("entry_slippage_recovery_inconsistent")
+            if slippage_exceeded:
                 state["status"] = "BLOCKED"
                 state["blocker"] = "entry_fill_slippage_exceeded"
                 state["next_action"] = "attended_flatten_after_risk_block"
@@ -1163,7 +1167,6 @@ class ExternalDcaLifecycle:
                 or str(persisted_intent.get("instrument_id") or "") != request.instrument_id
                 or str(persisted_intent.get("side") or "") != request.side
                 or persisted_quantity != request.quantity
-                or persisted_price != request.limit_price
                 or str(persisted_intent.get("environment") or "") != "testnet"
                 or str(persisted_intent.get("account_fingerprint") or "") != state["account_fingerprint"]
                 or str(persisted_intent.get("runtime_id") or "") != state["runtime_id"]
@@ -1171,6 +1174,14 @@ class ExternalDcaLifecycle:
                 or str(persisted_intent.get("capability_revision") or "") != state["capability_revision"]
             ):
                 raise ExternalDcaError("flatten_persisted_intent_mismatch")
+            if persisted_price != request.limit_price:
+                if (
+                    state.get("flatten_recovery_reason") != "risk_block_market_guard"
+                    or str(state.get("flatten_recovery_price") or "") != str(persisted_price)
+                    or persisted_price % plan.price_tick != 0
+                ):
+                    raise ExternalDcaError("flatten_persisted_intent_mismatch")
+                request = replace(request, limit_price=persisted_price)
             persisted_reduce_only = persisted_intent.get("reduce_only")
             persisted_close_position = persisted_intent.get("close_position")
             if persisted_reduce_only is None and persisted_close_position is None:
@@ -1702,8 +1713,10 @@ class ExternalDcaLifecycle:
             price = (market_price / quantum).to_integral_value(rounding=ROUND_CEILING) * quantum
         if plan.direction == "long" and price > market_price:
             price = (market_price / quantum).to_integral_value(rounding=ROUND_FLOOR) * quantum
-        if price <= 0:
+        if price <= 0 or price % plan.price_tick != 0:
             raise ExternalDcaError("emergency_flatten_price_invalid")
+        if abs(price - market_price) > plan.max_slippage:
+            raise ExternalDcaError("emergency_flatten_slippage_unavailable")
         return price
 
     def _require_confirmation(
@@ -2165,14 +2178,7 @@ class ExternalDcaLifecycle:
 
     @staticmethod
     def _has_entry_slippage_block(state: Mapping[str, Any]) -> bool:
-        if state.get("blocker") == "entry_fill_slippage_exceeded":
-            return True
-        return any(
-            isinstance(event, Mapping)
-            and event.get("event") == "blocked"
-            and event.get("reason") == "entry_fill_slippage_exceeded"
-            for event in state.get("events") or ()
-        )
+        return state.get("blocker") == "entry_fill_slippage_exceeded"
 
     @staticmethod
     def _persisted_client_order_id(

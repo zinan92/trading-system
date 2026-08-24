@@ -1374,3 +1374,67 @@ def test_external_dca_unknown_flatten_does_not_retry_after_ambiguous_submit(
     assert blocked["status"] == "BLOCKED"
     assert blocked["blocker"] == "flatten_not_available"
     assert orders.requests == []
+
+
+def test_emergency_flatten_price_blocks_when_precision_cannot_fit_slippage() -> None:
+    plan = _plan(
+        max_slippage="1",
+        max_leverage="10",
+        price_tick="0.001",
+    )
+
+    with pytest.raises(ExternalDcaError, match="emergency_flatten_slippage_unavailable"):
+        ExternalDcaLifecycle._emergency_flatten_price(plan, Decimal("123456"))
+
+
+def test_reconcile_flatten_reuses_persisted_dynamic_emergency_price(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, orders, _protection = _lifecycle(tmp_path)
+    state = lifecycle._new_state(plan, NOW)
+    client_order_id = f"{plan.plan_id}:flatten:{plan.entry_quantities[0]}:{plan.close_price}"
+    flatten_order_id = f"{plan.plan_id}:flatten"
+    dynamic_price = Decimal("59999")
+    state.update(
+        {
+            "status": "BLOCKED",
+            "blocker": "flatten_not_filled",
+            "position_quantity": str(plan.entry_quantities[0]),
+            "flatten_recovery_price": str(dynamic_price),
+            "flatten_recovery_reason": "risk_block_market_guard",
+            "receipts": [
+                {
+                    "operation": "flatten_submit",
+                    "order_id": flatten_order_id,
+                    "client_order_id": client_order_id,
+                    "broker_order_id": "broker:dynamic-flatten",
+                    "state": "filled",
+                    "quantity": str(plan.entry_quantities[0]),
+                    "price": str(dynamic_price),
+                    "side": "sell",
+                    "instrument_id": plan.instrument_id,
+                    "reduce_only": True,
+                    "close_position": True,
+                    "environment": "testnet",
+                    "account_fingerprint": plan.account_fingerprint,
+                    "runtime_id": plan.runtime_id,
+                    "release_sha": plan.release_sha,
+                    "capability_revision": plan.capability_revision,
+                    "observed_at": NOW,
+                }
+            ],
+        }
+    )
+    lifecycle._save(state)
+    orders.receipts[flatten_order_id] = _Receipt(
+        order_id=flatten_order_id,
+        state="filled",
+        client_order_id=client_order_id,
+        broker_order_id="broker:dynamic-flatten",
+    )
+
+    reconciled = lifecycle.reconcile_flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+
+    assert reconciled["status"] == "FLAT_RECONCILED"
