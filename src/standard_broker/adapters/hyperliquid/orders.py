@@ -1094,6 +1094,7 @@ class HyperliquidRuntimeOrderAdapter:
         *,
         order_id: str | None = None,
         instrument_id: str | None = None,
+        client_order_id: str | None = None,
     ) -> tuple[OrderFill, ...]:
         """Query external fill observations and merge them idempotently."""
 
@@ -1122,6 +1123,13 @@ class HyperliquidRuntimeOrderAdapter:
                 "external_fill_response_invalid",
                 "external fill query did not return a canonical fill list",
             )
+        if client_order_id:
+            rows = [
+                row
+                for row in rows
+                if isinstance(row, Mapping)
+                and str(row.get("cloid") or row.get("client_order_id") or "") == client_order_id
+            ]
         for row in rows:
             if not isinstance(row, Mapping):
                 raise RuntimeBoundaryError(
@@ -1134,7 +1142,20 @@ class HyperliquidRuntimeOrderAdapter:
             values = tuple(item for item in values if item.order_id == resolved_order_id)
         if instrument_id is not None:
             values = tuple(item for item in values if item.instrument_id == instrument_id)
+        if client_order_id is not None:
+            values = tuple(item for item in values if item.client_order_id == client_order_id)
         return values
+
+    def fills_by_client_order_id(
+        self,
+        *,
+        client_order_id: str,
+        instrument_id: str,
+    ) -> tuple[OrderFill, ...]:
+        return self.query_fills(
+            instrument_id=instrument_id,
+            client_order_id=client_order_id,
+        )
 
     def apply_fill(self, raw: Mapping[str, object]) -> OrderReceipt:
         self.validate_fill(raw)
@@ -1441,6 +1462,31 @@ class HyperliquidExternalOrderAdapter:
             ),
         )
         values = self._lifecycle.query_fills(order_id=order_id, instrument_id=instrument_id)
+        if not isinstance(values, tuple):
+            values = tuple(values)
+        return tuple(self._validate_fill(item) for item in values)
+
+    def fills_by_client_order_id(
+        self,
+        *,
+        client_order_id: str,
+        instrument_id: str,
+    ) -> tuple[OrderFill, ...]:
+        self._authorize(
+            f"fills-client:{client_order_id}",
+            "fills",
+            self._query(subject=instrument_id, kind="instrument"),
+        )
+        reader = getattr(self._lifecycle, "fills_by_client_order_id", None)
+        if not callable(reader):
+            raise RuntimeBoundaryError(
+                "client_fill_recovery_unavailable",
+                "external order lifecycle lacks client-scoped fill recovery",
+            )
+        values = reader(
+            client_order_id=client_order_id,
+            instrument_id=instrument_id,
+        )
         if not isinstance(values, tuple):
             values = tuple(values)
         return tuple(self._validate_fill(item) for item in values)
