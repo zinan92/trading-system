@@ -168,6 +168,28 @@
   current checkout; no Testnet network, credential, order, deployment, or
   cloud mutation occurred. #956 is next for expiry, GTC reconciliation,
   clean-state admission, and terminal flatten.
+- #956 / PR #962 merged as
+  `main@1c01c048c46fdccee3d2ce0c00ecb68aa65c8603`. External DCA expiry now
+  leaves plan/confirmation identity-bound blockers before any runtime build,
+  exposes an attended `expire-reconcile` cancel/query path for resting GTC
+  entries, preserves persisted Broker identity for fresh-process recovery,
+  requires cursor-bound clean-state admission before canonical start, and can
+  flatten an explicitly observed expired position only through the ordinary
+  reduce-only/flat-reconciliation proof. Focused expiry/recovery/bridge/DCA/
+  Dashboard validation passed 117 tests; compileall, diff-check, and gitleaks
+  passed. No order, credential value, deployment, or cloud mutation occurred.
+- #957 / PR #963 merged as
+  `main@212c4c70a40abba8e09ac139830b790cc4496884`. The existing Dashboard
+  read/control contract now projects the external DCA journal as a read-only
+  Hyperliquid Testnet card with Broker/environment/Instrument/Strategy
+  identity, normalized counts/facts, protection, cursor/freshness,
+  reconciliation, blockers, and next action. A mismatched external Instrument
+  and Dashboard market is explicit `blocked`; no Paper snapshot is silently
+  reused and no venue/control call was added. Focused read-model/Dashboard/
+  external bridge validation passed 251 tests; compileall, diff-check, and
+  gitleaks passed. #958 is currently blocked by the standard-broker public
+  `account.read -> canonical_account_snapshot_gap` on the first read-only
+  Testnet audit; no new start or flatten has been attempted.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886

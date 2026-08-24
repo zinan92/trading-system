@@ -16524,3 +16524,57 @@ auditable datafeed port; broker execution remains a separate port.
   diff-check, and gitleaks passed. A full local run reached 3372 passed and
   1 skipped with 32 unrelated local dependency/readiness/browser failures;
   those failures do not touch the changed DCA/projection paths.
+
+# 2026-08-24 — Harden expiry and clean-state admission (#956)
+
+## Decision
+
+- An expired plan or Park confirmation is a durable identity-bound blocker;
+  it cannot construct the network-capable runtime. A resting GTC entry has an
+  explicit cancel/query reconciliation path and cannot be replaced after
+  expiry.
+- Canonical external start requires a fresh cursor-bound account snapshot with
+  zero positions and zero open orders. Persisted ambiguous intent is recovered
+  by Broker identity or remains blocked; no blind resubmit is allowed.
+
+## Verification
+
+- Trading-system PR #962 merged as
+  `main@1c01c048c46fdccee3d2ce0c00ecb68aa65c8603` after 117 focused tests,
+  compileall, diff-check, and gitleaks. No order or deployment mutation.
+
+# 2026-08-24 — Project external DCA through Dashboard read model (#957)
+
+## Decision
+
+- Dashboard reads the Trading System external DCA journal only. It exposes
+  Broker/environment/Instrument/Strategy identity, normalized facts,
+  protection, cursor/freshness/reconciliation, blockers, and next action as a
+  separate read-only card; it never calls a venue or infers missing state.
+- External Instrument versus Dashboard market mismatch is explicit blocked
+  evidence, preserving the old Paper path when no external lifecycle exists.
+
+## Verification
+
+- Trading-system PR #963 merged as
+  `main@212c4c70a40abba8e09ac139830b790cc4496884` after 251 focused tests,
+  compileall, diff-check, and gitleaks. No order, credential value, or cloud
+  mutation.
+
+# 2026-08-24 — Attended Testnet proof blocked at public account seam (#958)
+
+## Observation
+
+- A read-only attempt with `standard-broker-testnet@196e368` and bundled
+  `nautilus_trader==1.230.0` reached the public external binding, then failed
+  closed at `account.read -> canonical_account_snapshot_gap`.
+- No new order, cancel, flatten, scheduler, Live/Mainnet, or cloud operation
+  occurred. The existing PAXG state remains unknown, so no `FLAT_RECONCILED`
+  or canonical DCA proof claim is made.
+
+## Next action
+
+- Fix/release the reviewed standard-broker public account mapping, repeat the
+  read-only clean-slate audit, then obtain fresh Park confirmation before any
+  owned flatten action. See
+  `docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`.
