@@ -1555,6 +1555,7 @@ def _assemble_strategy_console_snapshot(
     )
     safe_repair_queue = SafeRepairQueue(output).read_model()
     cycle_decision = CycleDecisionLedger(output).read(cycle_id) or {}
+    external_dca_lifecycle = _load_external_dca_lifecycle(output)
     try:
         daily_reports = build_strategy_console_daily_reports_response(output_root=output)
     except Exception as exc:  # noqa: BLE001 - the read model must expose evidence loss, not hide it.
@@ -1598,6 +1599,7 @@ def _assemble_strategy_console_snapshot(
         "safe_repair_queue": safe_repair_queue,
         "cloud_health": cloud_health,
         "cycle_decision": cycle_decision,
+        "external_dca_lifecycle": external_dca_lifecycle,
         "testnet_readiness": TestnetSoakReadiness(output).public_status(now=datetime.now(timezone.utc).isoformat()),
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
@@ -1628,6 +1630,16 @@ def _load_current_cloud_health(output_root: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         pass
     return {}
+
+
+def _load_external_dca_lifecycle(output_root: Path) -> dict[str, Any]:
+    """Read the latest external DCA journal row without contacting a Broker."""
+
+    try:
+        rows = load_json(output_root / "standard_broker_external_dca" / "current.json")
+    except (OSError, ValueError):
+        return {}
+    return dict(rows[-1]) if rows and isinstance(rows[-1], dict) else {}
 
 
 def _latest_review_cycle_id(ledger: dict[str, Any], packages: list[dict[str, Any]]) -> str:

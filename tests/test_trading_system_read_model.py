@@ -10,6 +10,7 @@ from services.accounting_projection_core import OPEN_ORDER_STATES
 from services.order_lifecycle import LEGAL_TRANSITIONS, ORDER_STATES, TERMINAL_STATES
 from services.trading_system_read_model import (
     TRADING_SYSTEM_READ_MODEL_SCHEMA,
+    project_external_dca_lifecycle,
     project_trading_system_read_model,
 )
 
@@ -198,6 +199,120 @@ def test_read_model_exposes_only_auditable_grid_lifecycle_claims() -> None:
     assert lifecycle["unverified_count"] == 1
     assert lifecycle["synthetic_candle_fill_inference"] is False
     assert lifecycle["lines"][1]["evidence_missing"] == ["target_fill"]
+
+
+def _external_dca_state(status: str = "PROTECTION_ACTIVE") -> dict:
+    return {
+        "schema_version": "standard-broker-external-dca-v1",
+        "status": status,
+        "plan_id": "external-plan-1",
+        "plan_digest": "sha256:" + "a" * 64,
+        "source_strategy_plan_id": "strategy-plan-paper-1",
+        "source_strategy_plan_digest": "sha256:" + "b" * 64,
+        "strategy_session_id": "session-1",
+        "strategy_revision_id": "revision-1",
+        "broker_id": "hyperliquid",
+        "environment": "testnet",
+        "profile_id": "hyperliquid-testnet-position-protection",
+        "capability_revision": "hyperliquid-testnet-position-protection-runtime-v1",
+        "instrument_id": "PAXG-USD-PERP",
+        "account_fingerprint": "sha256:" + "c" * 64,
+        "execution_market_source": {
+            "source_id": "hyperliquid.external_testnet",
+            "broker_id": "hyperliquid",
+            "environment": "testnet",
+            "instrument_id": "PAXG-USD-PERP",
+            "execution_venue": True,
+        },
+        "receipts": [
+            {
+                "order_id": "external-plan-1:entry:0",
+                "state": "filled",
+                "instrument_id": "PAXG-USD-PERP",
+            }
+        ],
+        "position_quantity": "0.01",
+        "average_entry_price": "4000",
+        "actual_fee_usd": "0.10",
+        "entry_facts": {
+            "provenance": {
+                "account_fingerprint": "sha256:" + "c" * 64,
+                "runtime_id": "runtime-1",
+                "release_sha": "d" * 40,
+                "capability_revision": "hyperliquid-testnet-position-protection-runtime-v1",
+                "transport_state": "external_testnet",
+            },
+            "fills": [{"fill_id": "fill-1", "quantity": "0.01", "price": "4000"}],
+            "fees": [{"fee_id": "fee-1", "amount_usd": "0.10"}],
+            "positions": [{"instrument_id": "PAXG-USD-PERP", "signed_quantity": "0.01"}],
+            "reconciliation": {
+                "coherent": True,
+                "freshness": "fresh",
+                "cursor": "cursor-1",
+                "open_order_ids": [],
+                "evidence_digest": "sha256:" + "e" * 64,
+            },
+        },
+        "protection": {
+            "covered_quantity": "0.01",
+            "confirmed": {
+                "state": "active",
+                "covered_quantity": "0.01",
+                "observation_digest": "sha256:" + "f" * 64,
+            },
+        },
+        "next_action": "submit_next_entry_only_after_attended_price_gate",
+        "updated_at": "2026-08-24T01:00:00+00:00",
+    }
+
+
+def test_read_model_projects_external_dca_identity_facts_protection_and_reconciliation() -> None:
+    source = _source()
+    source["external_dca_lifecycle"] = _external_dca_state()
+
+    model = project_trading_system_read_model(source, broker=_broker()).to_dict()
+    external = model["external_dca"]
+
+    assert external["status"] == "PROTECTION_ACTIVE"
+    assert external["identity"]["broker_id"] == "hyperliquid"
+    assert external["identity"]["environment"] == "testnet"
+    assert external["identity"]["instrument_id"] == "PAXG-USD-PERP"
+    assert external["identity"]["source_strategy_plan_id"] == "strategy-plan-paper-1"
+    assert external["counts"] == {
+        "order_count": 1,
+        "open_order_count": 0,
+        "fill_count": 1,
+        "fee_count": 1,
+        "position_count": 1,
+    }
+    assert external["facts"]["cursor"] == "cursor-1"
+    assert external["facts"]["freshness"] == "fresh"
+    assert external["protection"]["status"] == "active"
+    assert external["reconciliation"]["status"] == "pass"
+    assert external["market_compatibility"]["status"] == "blocked"
+    assert "external_instrument_does_not_match_dashboard_market" in external["blockers"]
+    assert model["execution"]["external_dca"]["status"] == "PROTECTION_ACTIVE"
+    assert model["execution"]["broker"]["provider"] == "hyperliquid"
+    assert model["execution"]["broker"]["environment"] == "testnet"
+    assert model["execution"]["broker"]["armed"] is False
+    assert model["execution"]["broker"]["ready"] is False
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "WAITING_ENTRY",
+        "ENTRY_FILLED_PENDING_FACTS",
+        "PROTECTION_ACTIVE",
+        "BLOCKED",
+        "FLATTEN_SUBMIT_INTENT_RESERVED",
+        "FLAT_RECONCILED",
+    ],
+)
+def test_external_dca_statuses_are_not_collapsed_in_read_model(status: str) -> None:
+    projected = project_external_dca_lifecycle(_external_dca_state(status))
+    assert projected["status"] == status
+    assert projected["status_label"]
 
 
 def _risk(decision_id: str = "risk-7") -> dict:
