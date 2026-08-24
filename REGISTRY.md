@@ -187,9 +187,12 @@
   and Dashboard market is explicit `blocked`; no Paper snapshot is silently
   reused and no venue/control call was added. Focused read-model/Dashboard/
   external bridge validation passed 251 tests; compileall, diff-check, and
-  gitleaks passed. #958 is currently blocked by the standard-broker public
-  `account.read -> canonical_account_snapshot_gap` on the first read-only
-  Testnet audit; no new start or flatten has been attempted.
+  gitleaks passed. Standard-broker PR #95 / `main@25a04be00eadf9a1f6da7dad7204f68bcc1d1632`
+  then repaired the public Nautilus AccountState mapping and account-wide
+  clean-state snapshot. Trading-system PR #965 / `main@cf4fe8b32abad88ea0c0f5fb4ddca0f740c400b5`
+  added the isolated `adopt-flatten` gate. The fresh read now proves
+  `coherent=true`, `freshness=fresh`, `-0.060 PAXG-USD-PERP`, and zero open
+  orders; #958 remains open awaiting Park's exact cleanup-plan confirmation.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
