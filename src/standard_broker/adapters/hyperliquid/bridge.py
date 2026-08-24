@@ -464,7 +464,10 @@ class NautilusHyperliquidRuntime:
             elif port == "account" and operation == "positions":
                 request = {"instrument_id": subject or ""}
             elif port == "fee" and operation == "fill":
-                request = {"fill_id": subject or ""}
+                request = {
+                    "fill_id": subject or "",
+                    "instrument_id": request.instrument_id or "",
+                }
             elif port == "market_data" and operation == "ticker":
                 request = {"instrument_id": subject or ""}
             else:

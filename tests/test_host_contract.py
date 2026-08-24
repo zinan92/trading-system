@@ -330,6 +330,17 @@ class HostContractTests(unittest.TestCase):
         with self.assertRaises(BrokerError):
             track.record(RecordingEvent("event-raw", "raw", {"coin": "BTC", "oid": 1}, provenance))
 
+    def test_canonical_port_query_carries_fee_instrument_context(self) -> None:
+        query = CanonicalPortQuery(
+            subject="trade-1",
+            kind="fill",
+            instrument_id="PAXG-USD-PERP",
+        )
+
+        self.assertEqual(query.subject, "trade-1")
+        self.assertEqual(query.kind, "fill")
+        self.assertEqual(query.instrument_id, "PAXG-USD-PERP")
+
 
 if __name__ == "__main__":
     unittest.main()

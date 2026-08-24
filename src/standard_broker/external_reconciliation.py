@@ -679,13 +679,13 @@ def _append_payload_identity_failures(
                 valid = (
                     value.broker_id == expected.broker_id
                     and value.environment is expected.environment
-                    and value.provenance == observation.fact.provenance
+                    and _same_provenance_identity(value.provenance, observation.fact.provenance)
                 )
             elif isinstance(value, FeeScheduleSnapshot):
                 valid = (
                     value.broker_id == expected.broker_id
                     and value.environment is expected.environment
-                    and value.provenance == observation.fact.provenance
+                    and _same_provenance_identity(value.provenance, observation.fact.provenance)
                 )
             elif isinstance(value, OrderReceipt):
                 valid = (
@@ -707,14 +707,21 @@ def _append_payload_identity_failures(
                 valid = (
                     value.broker_id == expected.broker_id
                     and value.environment is expected.environment
-                    and value.provenance == observation.fact.provenance
-                    and value.fee.provenance == observation.fact.provenance
+                    and _same_provenance_identity(value.provenance, observation.fact.provenance)
+                    and _same_provenance_identity(value.fee.provenance, observation.fact.provenance)
                 )
             else:
                 continue
             if not valid:
                 failures.append("payload_identity_conflict")
                 break
+
+
+def _same_provenance_identity(actual: object, expected: object) -> bool:
+    """Compare stable provenance identity without collapsing observation times."""
+
+    fields = ("source", "execution_scope", "transport_state", "mapping_revision")
+    return all(getattr(actual, field, None) == getattr(expected, field, None) for field in fields)
 
 
 def _unique(values):
