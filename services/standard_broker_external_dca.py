@@ -1110,6 +1110,8 @@ class ExternalDcaLifecycle:
                     now=_timestamp(timestamp, "timestamp"),
                     client_order_id=client_order_id,
                 )
+                state["final_facts"] = self._safe_fact_bundle(bundle)
+                state["final_facts_digest"] = _digest(state["final_facts"])
                 final = self._validate_facts(
                     plan,
                     bundle,
@@ -1117,8 +1119,6 @@ class ExternalDcaLifecycle:
                     timestamp=timestamp,
                     require_flat=True,
                 )
-                state["final_facts"] = self._safe_fact_bundle(bundle)
-                state["final_facts_digest"] = _digest(state["final_facts"])
                 if final[0] == 0:
                     state["status"] = "FLAT_RECONCILED"
                     state["blocker"] = None
@@ -1142,6 +1142,8 @@ class ExternalDcaLifecycle:
                 now=_timestamp(timestamp, "timestamp"),
                 client_order_id=client_order_id,
             )
+            state["final_facts"] = self._safe_fact_bundle(bundle)
+            state["final_facts_digest"] = _digest(state["final_facts"])
             final = self._validate_facts(
                 plan,
                 bundle,
@@ -1149,8 +1151,6 @@ class ExternalDcaLifecycle:
                 timestamp=timestamp,
                 require_flat=True,
             )
-            state["final_facts"] = self._safe_fact_bundle(bundle)
-            state["final_facts_digest"] = _digest(state["final_facts"])
             if final[0] != 0:
                 raise ExternalDcaError("final_position_not_flat")
             state["status"] = "FLAT_RECONCILED"
