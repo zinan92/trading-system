@@ -255,7 +255,16 @@ class _Protection:
             self.state = previous
 
 
-def _bundle(plan: ExternalDcaPlan, *, order_id: str, position: Decimal, side: str, price: Decimal, fill_quantity: Decimal | None = None) -> CanaryFactBundle:
+def _bundle(
+    plan: ExternalDcaPlan,
+    *,
+    order_id: str,
+    position: Decimal,
+    side: str,
+    price: Decimal,
+    fill_quantity: Decimal | None = None,
+    client_order_id: str | None = None,
+) -> CanaryFactBundle:
     occurred = "2026-08-23T01:00:30+00:00"
     identity = {
         "account_fingerprint": plan.account_fingerprint,
@@ -267,7 +276,8 @@ def _bundle(plan: ExternalDcaPlan, *, order_id: str, position: Decimal, side: st
         fill_id=f"fill:{order_id}",
         order_id=order_id,
         broker_order_id=f"broker:{order_id}",
-        client_order_id=f"{plan.plan_id}:entry:0" if "flatten" not in order_id else f"{plan.plan_id}:flatten:{position}",
+        client_order_id=client_order_id
+        or (f"{plan.plan_id}:entry:0" if "flatten" not in order_id else f"{plan.plan_id}:flatten:{position}"),
         instrument_id=plan.instrument_id,
         side=side,
         price=price,
@@ -281,7 +291,7 @@ def _bundle(plan: ExternalDcaPlan, *, order_id: str, position: Decimal, side: st
         fee_id=f"fee:{order_id}",
         fill_id=fill.fill_id,
         amount_usd=Decimal("0.1"),
-        currency="USD",
+        currency="USDC",
         occurred_at=occurred,
         **identity,
         cursor=fill.cursor,
@@ -340,9 +350,16 @@ class _Facts:
         now: datetime,
         client_order_id: str | None = None,
     ) -> CanaryFactBundle:
-        del instrument_id, now, client_order_id
+        del instrument_id, now
         if "flatten" in order_id:
-            return _bundle(self.plan, order_id=order_id, position=Decimal("0"), side="sell", price=Decimal("60500"))
+            return _bundle(
+                self.plan,
+                order_id=order_id,
+                position=Decimal("0"),
+                side="sell",
+                price=Decimal("60500"),
+                client_order_id=client_order_id,
+            )
         position = self.plan.entry_quantities[0] if order_id.endswith(":0") else sum(self.plan.entry_quantities)
         price = self.plan.entry_levels[0] if order_id.endswith(":0") else self.plan.entry_levels[1]
         return _bundle(self.plan, order_id=order_id, position=position, side="buy", price=price, fill_quantity=self.plan.entry_quantities[0])
@@ -806,6 +823,15 @@ def test_external_dca_reconciles_expired_plan_by_explicit_broker_identity_withou
     )
     lifecycle._save(state)
 
+    blocked = lifecycle.reconcile_flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["blocker"] == "plan_expired"
+    assert orders.requests == []
+
     reconciled = lifecycle.reconcile_flatten(
         plan,
         confirmation=confirmation,
@@ -836,6 +862,86 @@ def test_external_dca_reconciles_expired_plan_by_explicit_broker_identity_withou
     )
     assert replay["status"] == "FLAT_RECONCILED"
     assert replay["blocker"] is None
+
+
+def test_external_dca_facts_require_fill_identity_and_exact_flatten_quantity(tmp_path: Path) -> None:
+    plan = _plan()
+    _path, confirmation, output_root = _confirmation(tmp_path / "facts-identity", plan)
+    lifecycle = ExternalDcaLifecycle(
+        output_root,
+        _Orders(),
+        _Facts(plan),
+        _Protection(),
+    )
+    bundle = _bundle(
+        plan,
+        order_id=f"{plan.plan_id}:flatten",
+        position=Decimal("0"),
+        side="sell",
+        price=plan.close_price,
+        fill_quantity=plan.entry_quantities[0],
+    )
+
+    with pytest.raises(ExternalDcaError, match="fill_client_identity_mismatch"):
+        lifecycle._validate_facts(
+            plan,
+            bundle,
+            order_id=f"{plan.plan_id}:flatten",
+            timestamp=NOW,
+            require_flat=True,
+            expected_client_order_id="client:wrong",
+            expected_fill_quantity=plan.entry_quantities[0],
+        )
+
+    with pytest.raises(ExternalDcaError, match="flatten_fill_quantity_mismatch"):
+        lifecycle._validate_facts(
+            plan,
+            bundle,
+            order_id=f"{plan.plan_id}:flatten",
+            timestamp=NOW,
+            require_flat=True,
+            expected_client_order_id=bundle.fills[0].client_order_id,
+            expected_fill_quantity=Decimal("0.002"),
+        )
+
+
+def test_external_dca_facts_require_actual_usdc_fees(tmp_path: Path) -> None:
+    plan = _plan()
+    _path, confirmation, output_root = _confirmation(tmp_path / "facts-fee", plan)
+    lifecycle = ExternalDcaLifecycle(
+        output_root,
+        _Orders(),
+        _Facts(plan),
+        _Protection(),
+    )
+    bundle = _bundle(
+        plan,
+        order_id=f"{plan.plan_id}:flatten",
+        position=Decimal("0"),
+        side="sell",
+        price=plan.close_price,
+        fill_quantity=plan.entry_quantities[0],
+    )
+    bad_fee = replace(
+        bundle.fees[0],
+        amount_usd=Decimal("-100"),
+        currency="BTC",
+        fee_source="estimate",
+        fee_state="estimated",
+    )
+    bad_fee = replace(bad_fee, fact_digest=canary_fact_digest(bad_fee))
+    bad_bundle = replace(bundle, fees=(bad_fee,))
+
+    with pytest.raises(ExternalDcaError, match="fee_fact_invalid"):
+        lifecycle._validate_facts(
+            plan,
+            bad_bundle,
+            order_id=f"{plan.plan_id}:flatten",
+            timestamp=NOW,
+            require_flat=True,
+            expected_client_order_id=bundle.fills[0].client_order_id,
+            expected_fill_quantity=plan.entry_quantities[0],
+        )
 
 
 def test_external_dca_persists_blocked_final_facts_when_causal_fill_is_missing(tmp_path: Path) -> None:
