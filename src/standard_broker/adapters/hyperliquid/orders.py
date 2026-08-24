@@ -350,6 +350,8 @@ class HyperliquidOrderAdapter:
             fill_id = canonical_tid
             identity_keys = {fill_id, f"tid:{canonical_tid}"}
             existing = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
+            if existing:
+                return fill_id, identity_keys, hash_key, True, existing
             if hash_key and hash_key in self._hash_fill_aliases.get(hash_key, set()):
                 owners = self._hash_fill_aliases[hash_key]
                 if self._transport_state != "local_fixture" or len(owners) != 1:

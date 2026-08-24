@@ -636,6 +636,8 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         adapter.apply_fill({**base, "px": "65000", "sz": "0.1"})
         adapter.apply_fill({**base, "tid": "trade-a", "px": "65000", "sz": "0.1"})
         adapter.apply_fill({**base, "tid": "trade-b", "px": "65010", "sz": "0.1", "time": 1787313660000})
+        adapter.apply_fill({**base, "tid": "trade-a", "px": "65000", "sz": "0.1"})
+        adapter.apply_fill({**base, "tid": "trade-b", "px": "65010", "sz": "0.1", "time": 1787313660000})
 
         self.assertEqual(len(adapter.fills), 2)
         self.assertEqual(
