@@ -38,6 +38,28 @@
   handling, remote query/coverage confirmation, digest-bound observations, and
   fail-closed unknown/cancel-replace behavior. The default
   `hyperliquid-testnet-default` profile remains protection-disabled.
+- RT-10 / Issue #94 is merged in PR #95 at `25a04be`: public mapping of the
+  Nautilus Testnet `AccountState` into the canonical account snapshot, with
+  deterministic sole-USDC fallback and account-wide no-fill reads.
+- RT-11 / Issue #96 is merged in PR #97 at `65d4bc3`: persisted canonical
+  client-identity recovery for an ambiguous external order, with no transport
+  call during recovery. RT-11 validation dispatch is fixed in PR #99 at
+  `883e1d4`.
+- RT-12 / Issue #100 is merged in PR #101 at `d241708`: order-scoped fill
+  recovery falls back to typed instrument scope and filters to the recovered
+  canonical order identity.
+- RT-13 / Issue #102 is merged in PR #103 at `28d9a7b`: public client-scoped
+  fill recovery preserves canonical cache identity. RT-14 / Issue #104 is
+  merged in PR #105 at `4e5cf2e`: the typed client scope is forwarded to the
+  native fill query.
+- RT-15 / Issue #106 is merged in PR #107 at `26df219`: deterministic Nautilus
+  native CLOID normalization returns canonical identity across fresh-process
+  recovery. RT-16 / Issue #108 is merged in PR #109 at `1c0d970`: unknown or
+  conflicting CLOID/OID reports fail closed instead of satisfying causal
+  reconciliation.
+- Post-RT-16 validation: standard-broker full suite `291 passed, 2 skipped`;
+  pinned Nautilus external-backend/canary suite `28 passed`. No new order,
+  cancel, retry, credential, Mainnet/Live, or cloud action was performed.
 - Decision A is recorded in `docs/adr/0005-rt06-reconciliation-seam.md`: RT-06 is not a second order lifecycle owner; RT-08 will compose the unique lifecycle.
 
 ## Next
@@ -48,6 +70,10 @@
   admission against the position-protection profile. No strategy, soak, or
   Mainnet/Live authority is implied by this broker merge; external proof still
   requires an attended plan and approval.
+- The current trading-system Path A cleanup remains externally blocked: the
+  account is flat with no open orders, but the ambiguous close has no causal
+  public fill/fee identity. This broker registry does not promote that state
+  to `FLAT_RECONCILED`; see trading-system Issue #958.
 - Mainnet/live remains a separate future milestone requiring its own specification, credentials, release identity, approval, and evidence.
 
 ## Safety boundary
