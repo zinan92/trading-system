@@ -257,17 +257,17 @@ def _require_operator_args(args: argparse.Namespace, *, action: str) -> None:
             raise ExternalDcaCliError("canonical_strategy_plan_required")
         if not args.binding:
             raise ExternalDcaCliError("binding_required")
-    elif action in {"digest", "preflight", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
+    elif action in {"digest", "preflight", "reconcile-entry", "expire-reconcile", "adopt-flatten", "next-entry", "flatten"}:
         if not args.plan:
             raise ExternalDcaCliError("plan_required")
-    if action in {"preflight", "start", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
+    if action in {"preflight", "start", "reconcile-entry", "expire-reconcile", "adopt-flatten", "next-entry", "flatten"}:
         if not str(args.account_address or "").strip():
             raise ExternalDcaCliError("account_address_required")
         if not str(args.approval_id or "").strip():
             raise ExternalDcaCliError("approval_id_required")
         if not str(args.approved_by or "").strip():
             raise ExternalDcaCliError("approved_by_required")
-    if action in {"start", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
+    if action in {"start", "reconcile-entry", "expire-reconcile", "adopt-flatten", "next-entry", "flatten"}:
         if not args.confirmation:
             raise ExternalDcaCliError("confirmation_required")
         if not args.secret_file:
@@ -404,6 +404,8 @@ def _preflight_action(plan: ExternalDcaPlan, args: argparse.Namespace) -> dict[s
 def _build_lifecycle(
     output_root: Path,
     binding: object,
+    *,
+    journal_id: str = "current",
 ) -> tuple[ExternalDcaLifecycle, object]:
     try:
         from services.standard_broker_external_canary import StandardBrokerExternalCanaryAdapter
@@ -418,6 +420,7 @@ def _build_lifecycle(
             adapter,
             protection,
             park_user_id="park",
+            journal_id=journal_id,
         )
         return lifecycle, adapter
     except ExternalDcaCliError:
@@ -592,6 +595,76 @@ def _flatten_action(plan: ExternalDcaPlan, args: argparse.Namespace, confirmatio
             if state:
                 return _state_result(
                     action="flatten",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=_exposure_operation_observed(before, state, action="flatten"),
+                )
+        raise ExternalDcaCliError(_reason_code(type(exc).__name__)) from exc
+    finally:
+        _close_runtime(runtime)
+
+
+def _adopt_flatten_action(
+    plan: ExternalDcaPlan,
+    args: argparse.Namespace,
+    confirmation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Adopt one separately-owned existing position, then flatten once."""
+
+    output_root = Path(args.output_root)
+    runtime: object | None = None
+    lifecycle: ExternalDcaLifecycle | None = None
+    before: Mapping[str, Any] = {}
+    try:
+        runtime, binding = _build_external_protection(plan, args, canary=True)
+        lifecycle, adapter = _build_lifecycle(
+            output_root,
+            binding,
+            journal_id=f"cleanup-{plan.plan_id}",
+        )
+        before = lifecycle.snapshot()
+        bundle = adapter.read_account_state(
+            instrument_id=plan.instrument_id,
+            now=_now(),
+        )
+        state = lifecycle.adopt_existing_position(
+            plan,
+            bundle=bundle,
+            confirmation=confirmation,
+            timestamp=_timestamp(),
+        )
+        if state.get("status") == "EXPIRED_POSITION_BLOCKED":
+            state = lifecycle.flatten(
+                plan,
+                confirmation=confirmation,
+                timestamp=_timestamp(),
+            )
+        return _state_result(
+            action="adopt-flatten",
+            plan=plan,
+            state=state,
+            lifecycle=lifecycle,
+            secret_resolved=_exposure_operation_observed(before, state, action="flatten"),
+        )
+    except ExternalDcaError as exc:
+        if lifecycle is not None:
+            state = lifecycle.snapshot()
+            if state:
+                return _state_result(
+                    action="adopt-flatten",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=_exposure_operation_observed(before, state, action="flatten"),
+                )
+        raise ExternalDcaCliError(_reason_code(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - provider details stay redacted.
+        if lifecycle is not None:
+            state = lifecycle.snapshot()
+            if state:
+                return _state_result(
+                    action="adopt-flatten",
                     plan=plan,
                     state=state,
                     lifecycle=lifecycle,
@@ -862,7 +935,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--action",
-        choices=("digest", "project", "preflight", "start", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"),
+        choices=("digest", "project", "preflight", "start", "reconcile-entry", "expire-reconcile", "adopt-flatten", "next-entry", "flatten"),
         default="digest",
     )
     parser.add_argument(
@@ -922,7 +995,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             raw = _load_plan_mapping(Path(args.plan))
             plan = _require_plan(raw, allow_expired=True)
-            if args.action in {"reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
+            if args.action in {"reconcile-entry", "expire-reconcile", "adopt-flatten", "next-entry", "flatten"}:
                 if args.action != "expire-reconcile":
                     _require_unexpired_plan(plan)
                 _require_account(plan, args.account_address)
@@ -932,6 +1005,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result = _reconcile_entry_action(plan, args, confirmation)
                 elif args.action == "expire-reconcile":
                     result = _expire_reconcile_action(plan, args, confirmation)
+                elif args.action == "adopt-flatten":
+                    result = _adopt_flatten_action(plan, args, confirmation)
                 elif args.action == "next-entry":
                     result = _next_entry_action(plan, args, confirmation)
                 else:

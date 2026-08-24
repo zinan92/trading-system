@@ -494,6 +494,7 @@ class ExternalDcaLifecycle:
         protection: ExternalDcaProtectionPort,
         *,
         park_user_id: str = "park",
+        journal_id: str = "current",
     ) -> None:
         if not isinstance(orders, ExternalDcaOrderPort):
             raise TypeError("external DCA orders must implement the public order port")
@@ -502,7 +503,11 @@ class ExternalDcaLifecycle:
         if not isinstance(protection, ExternalDcaProtectionPort):
             raise TypeError("external DCA protection must implement the public protection port")
         self.output_root = Path(output_root)
-        self.root = self.output_root / "standard_broker_external_dca"
+        journal = _text(journal_id, "journal_id")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", journal):
+            raise ValueError("journal_id_invalid")
+        base_root = self.output_root / "standard_broker_external_dca"
+        self.root = base_root if journal == "current" else base_root / journal
         self.current_path = self.root / "current.json"
         self.orders = orders
         self.facts = facts
@@ -993,6 +998,73 @@ class ExternalDcaLifecycle:
                 timestamp=timestamp,
             )
 
+    def adopt_existing_position(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        bundle: CanaryFactBundle,
+        confirmation: Mapping[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        """Record one separately-owned existing position before attended flatten."""
+
+        with production_mutation_lock(self.output_root):
+            return self._adopt_existing_position(
+                plan,
+                bundle=bundle,
+                confirmation=confirmation,
+                timestamp=timestamp,
+            )
+
+    def _adopt_existing_position(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        bundle: CanaryFactBundle,
+        confirmation: Mapping[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        existing = self.snapshot()
+        if existing:
+            if existing.get("plan_digest") != plan.plan_digest:
+                raise ExternalDcaError("persisted_plan_digest_mismatch")
+            return existing
+        state = self._new_state(plan, timestamp)
+        self._save(state)
+        try:
+            plan.validate(now=_timestamp(timestamp, "timestamp"))
+            self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
+            validated = self._validate_clean_state(
+                plan,
+                now=_timestamp(timestamp, "timestamp"),
+                require_flat=False,
+            )
+            signed_position = validated.reconciliation.signed_position_quantity
+            if signed_position == 0:
+                raise ExternalDcaError("existing_canary_position_not_found")
+            expected_direction = "long" if signed_position > 0 else "short"
+            if plan.direction != expected_direction:
+                raise ExternalDcaError("existing_canary_direction_mismatch")
+            if validated.open_orders:
+                raise ExternalDcaError("existing_canary_open_orders_require_reconciliation")
+            position_quantity = abs(signed_position)
+            state["position_quantity"] = str(position_quantity)
+            state["average_entry_price"] = str(plan.entry_levels[0])
+            state["actual_fee_usd"] = "0"
+            state["entry_facts"] = self._safe_fact_bundle(validated)
+            state["entry_facts_digest"] = _digest(state["entry_facts"])
+            state["status"] = "EXPIRED_POSITION_BLOCKED"
+            state["blocker"] = "existing_canary_position_requires_flatten"
+            state["next_action"] = "attended_flatten_existing_position"
+            state["existing_state"] = "adopted_external_canary"
+            self._event(state, "existing_position_adopted", timestamp=timestamp)
+            self._save(state)
+            return state
+        except ExternalDcaError as exc:
+            return self._block(state, str(exc), timestamp=timestamp)
+        except Exception as exc:  # noqa: BLE001 - external state remains frozen.
+            return self._block(state, f"existing_position_adoption_unknown:{type(exc).__name__}", timestamp=timestamp)
+
     def _flatten(
         self,
         plan: ExternalDcaPlan,
@@ -1147,7 +1219,13 @@ class ExternalDcaLifecycle:
         if session.lifecycle_id != plan.runtime_id or session.capability_revision != plan.capability_revision:
             raise ExternalDcaError("protection_runtime_identity_mismatch")
 
-    def _validate_clean_state(self, plan: ExternalDcaPlan, *, now: datetime) -> CanaryFactBundle:
+    def _validate_clean_state(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        now: datetime,
+        require_flat: bool = True,
+    ) -> CanaryFactBundle:
         reader = getattr(self.facts, "read_account_state", None)
         if not callable(reader):
             raise ExternalDcaError("clean_state_reader_missing")
@@ -1202,7 +1280,7 @@ class ExternalDcaLifecycle:
         )
         if signed_position != reconciliation.signed_position_quantity:
             raise ExternalDcaError("clean_state_position_reconciliation_mismatch")
-        if signed_position != 0 or bundle.open_orders:
+        if require_flat and (signed_position != 0 or bundle.open_orders):
             raise ExternalDcaError("clean_state_not_flat")
         return bundle
 

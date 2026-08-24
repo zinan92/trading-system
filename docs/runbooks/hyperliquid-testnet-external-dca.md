@@ -115,6 +115,28 @@ python3 -m pipelines.standard_broker_external_dca \
   --acknowledge I_UNDERSTAND_ONE_ATTENDED_EXTERNAL_DCA_TESTNET_ACTION
 ```
 
+## Flatten an existing canary position
+
+For an exposure that predates the current lifecycle journal, use a separate
+cleanup journal and a fresh confirmation bound to the cleanup plan digest. The
+command reads the account snapshot, adopts only the explicitly identified
+position, and submits one reduce-only close; it never adopts unknown open
+orders or starts a new strategy.
+
+```bash
+python3 -m pipelines.standard_broker_external_dca \
+  --action adopt-flatten \
+  --plan <path-to-explicit-cleanup-plan.json> \
+  --confirmation <path-to-fresh-cleanup-confirmation.json> \
+  --account-address <testnet-account-address> \
+  --secret-file <local-testnet-signer-file> \
+  --approval-id <human-testnet-approval-id> \
+  --approved-by park \
+  --output-root <output-root> \
+  --execute-testnet \
+  --acknowledge I_UNDERSTAND_ONE_ATTENDED_EXTERNAL_DCA_TESTNET_ACTION
+```
+
 ## One attended next entry
 
 After `start` reaches `PROTECTION_ACTIVE`, one additional approved ladder level
