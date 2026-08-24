@@ -62,7 +62,7 @@ def _broker(tmp_path: Path, *, protection: bool = True):
                 "sibling_cancellation",
                 "position_following",
                 "position_level_tpsl",
-                "take_profit_market",
+                "take_profit_limit",
                 "stop_loss_market",
             }
         )
@@ -195,6 +195,19 @@ def test_dca_testnet_is_sequential_and_confirms_aggregate_protection(tmp_path: P
     assert first["status"] == "open"
     assert first["protection"]["status"] == "active"
     assert first["protection"]["reduce_only"] is True
+    protection_submit = next(
+        request
+        for port, operation, request in backend.calls
+        if port == "protection_order" and operation == "submit"
+    )
+    assert protection_submit["quantityPolicy"] == "position_following"
+    tp_leg, sl_leg = protection_submit["legs"]
+    assert tp_leg["execution"] == "limit"
+    assert tp_leg["limitPx"] == "66000.0"
+    assert sl_leg["execution"] == "market"
+    assert all(leg["reduceOnly"] for leg in (tp_leg, sl_leg))
+    assert all(leg["triggerReference"] == "mark" for leg in (tp_leg, sl_leg))
+    assert tp_leg["siblingId"] == sl_leg["siblingId"]
     assert len(first["orders"]) == 2
     assert [call[0:2] for call in backend.calls if call[0] == "protection_order"] == [
         ("protection_order", "submit"),

@@ -433,8 +433,8 @@ def test_preflight_proves_opt_in_profile_without_network_or_secret_resolution(
         profile_id = cli.PROTECTION_MATRIX_ID
 
         @staticmethod
-        def supports(_name: str) -> bool:
-            return True
+        def supports(name: str) -> bool:
+            return name != "take_profit_market"
 
     runtime = SimpleNamespace(
         health=SimpleNamespace(external_network=True, invocation_performed=False),
@@ -471,6 +471,41 @@ def test_preflight_proves_opt_in_profile_without_network_or_secret_resolution(
     assert result["protection_ready"] is True
     assert result["invocation_performed"] is False
     assert calls == [False, "close"]
+
+
+def test_protection_capability_gate_requires_tp_limit_not_tp_market() -> None:
+    values = {
+        name: True
+        for name in (
+            "submit",
+            "cancel",
+            "replace",
+            "query",
+            "reduce_only",
+            "mark_price_trigger",
+            "grouped_tp_sl",
+            "sibling_cancellation",
+            "position_following",
+            "position_level_tpsl",
+            "take_profit_limit",
+            "stop_loss_market",
+            "position_coverage",
+            "cancel_replace",
+        )
+    }
+    values["take_profit_market"] = False
+
+    class Matrix:
+        @staticmethod
+        def supports(name: str) -> bool:
+            return values.get(name, False)
+
+    assert cli._required_protection_capabilities(Matrix()) is True
+    values["take_profit_market"] = True
+    assert cli._required_protection_capabilities(Matrix()) is False
+    values["take_profit_market"] = False
+    values["take_profit_limit"] = False
+    assert cli._required_protection_capabilities(Matrix()) is False
 
 
 def test_start_requires_durable_confirmation_before_builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

@@ -1961,8 +1961,9 @@ class ExternalDcaLifecycle:
             quantity_policy=ProtectionQuantityPolicy.POSITION_FOLLOWING,
             take_profit=ProtectionLeg(
                 protection_type=ProtectionType.TAKE_PROFIT,
-                execution=ProtectionExecution.MARKET,
+                execution=ProtectionExecution.LIMIT,
                 trigger_price=plan.target_price,
+                limit_price=plan.target_price,
             ),
             stop_loss=ProtectionLeg(
                 protection_type=ProtectionType.STOP_LOSS,
