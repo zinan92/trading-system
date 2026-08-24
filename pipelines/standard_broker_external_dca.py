@@ -26,6 +26,7 @@ from typing import Any, Mapping, Sequence
 from services.journal_store import load_json, write_json
 from services.park_confirmation import ParkConfirmationLedger
 from services.standard_broker_external_dca import (
+    CanonicalDcaProvenance,
     ExternalDcaError,
     ExternalDcaLifecycle,
     ExternalDcaPlan,
@@ -222,8 +223,19 @@ def _verify_durable_confirmation(
 
 
 def _require_operator_args(args: argparse.Namespace, *, action: str) -> None:
-    if action == "project" and not args.binding:
-        raise ExternalDcaCliError("binding_required")
+    if action == "project":
+        if not args.plan:
+            raise ExternalDcaCliError("canonical_plan_required")
+        if not args.binding:
+            raise ExternalDcaCliError("binding_required")
+    elif action == "start":
+        if not args.strategy_plan:
+            raise ExternalDcaCliError("canonical_strategy_plan_required")
+        if not args.binding:
+            raise ExternalDcaCliError("binding_required")
+    elif action in {"digest", "preflight", "reconcile-entry", "next-entry", "flatten"}:
+        if not args.plan:
+            raise ExternalDcaCliError("plan_required")
     if action in {"preflight", "start", "reconcile-entry", "next-entry", "flatten"}:
         if not str(args.account_address or "").strip():
             raise ExternalDcaCliError("account_address_required")
@@ -398,7 +410,7 @@ def _state_result(
     lifecycle: ExternalDcaLifecycle,
     secret_resolved: bool = False,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "status": str(state.get("status") or "BLOCKED"),
         "action": action,
         "plan_id": plan.plan_id,
@@ -410,6 +422,22 @@ def _state_result(
         "state_path": str(lifecycle.current_path),
         **({"blocker": state["blocker"]} if state.get("blocker") else {}),
     }
+    for key in (
+        "canonical_provenance",
+        "source_strategy_plan_id",
+        "source_strategy_plan_digest",
+        "canonical_semantics",
+        "source_market",
+        "execution_market_source",
+        "entry_outcome",
+        "entry_facts",
+        "entry_facts_digest",
+        "final_facts",
+        "final_facts_digest",
+    ):
+        if key in state:
+            result[key] = state[key]
+    return result
 
 
 def _exposure_operation_observed(
@@ -429,7 +457,13 @@ def _exposure_operation_observed(
     return False
 
 
-def _start_action(plan: ExternalDcaPlan, args: argparse.Namespace, confirmation: Mapping[str, Any]) -> dict[str, Any]:
+def _start_action(
+    plan: ExternalDcaPlan,
+    args: argparse.Namespace,
+    confirmation: Mapping[str, Any],
+    *,
+    canonical_provenance: CanonicalDcaProvenance,
+) -> dict[str, Any]:
     output_root = Path(args.output_root)
     runtime: object | None = None
     lifecycle: ExternalDcaLifecycle | None = None
@@ -438,7 +472,13 @@ def _start_action(plan: ExternalDcaPlan, args: argparse.Namespace, confirmation:
         runtime, binding = _build_external_protection(plan, args, canary=True)
         lifecycle, adapter = _build_lifecycle(output_root, binding)
         before = lifecycle.snapshot()
-        state = lifecycle.prepare(plan, confirmation=confirmation, timestamp=_timestamp())
+        state = lifecycle.prepare(
+            plan,
+            confirmation=confirmation,
+            timestamp=_timestamp(),
+            canonical_provenance=canonical_provenance,
+            require_canonical=True,
+        )
         if state.get("status") == "ENTRY_FILLED_PENDING_FACTS":
             order_id = str(state.get("entry_order_id") or "")
             bundle = adapter.read_facts(
@@ -714,6 +754,23 @@ def _project_action(raw: Mapping[str, Any], binding: Mapping[str, Any]) -> dict[
     }
 
 
+def _canonical_start_plan(
+    strategy_plan_path: Path,
+    binding_path: Path,
+) -> tuple[ExternalDcaPlan, CanonicalDcaProvenance]:
+    """Load and project the locked Paper DCA before any external build."""
+
+    raw_strategy_plan = _load_plan_mapping(strategy_plan_path)
+    binding = _load_binding_mapping(binding_path)
+    try:
+        projection = project_canonical_dca_plan(raw_strategy_plan, binding=binding)
+        plan = ExternalDcaPlan.from_mapping(projection.plan, now=_now())
+        provenance = CanonicalDcaProvenance.from_projection(projection)
+    except (DcaProjectionError, ExternalDcaError) as exc:
+        raise ExternalDcaCliError(_reason_code(exc)) from exc
+    return plan, provenance
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Attended external DCA Testnet action; default is local digest only."
@@ -723,8 +780,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("digest", "project", "preflight", "start", "reconcile-entry", "next-entry", "flatten"),
         default="digest",
     )
-    parser.add_argument("--plan", type=Path, required=True, help="JSON external DCA plan; no credentials")
-    parser.add_argument("--binding", type=Path, help="JSON non-secret Broker binding for project")
+    parser.add_argument(
+        "--plan",
+        type=Path,
+        help="JSON external DCA plan for read/reconcile/flatten actions; no credentials",
+    )
+    parser.add_argument(
+        "--strategy-plan",
+        type=Path,
+        help="canonical strategy-plan-v1 JSON used by the attended start action",
+    )
+    parser.add_argument("--binding", type=Path, help="JSON non-secret Broker/Instrument binding")
     parser.add_argument("--confirmation", type=Path, help="confirmed Park projection JSON/JSONL")
     parser.add_argument("--account-address", help="Hyperliquid Testnet account address")
     parser.add_argument("--secret-file", type=Path, help="local protected signer file (start/reconcile-entry/next-entry/flatten only)")
@@ -744,20 +810,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
         _require_operator_args(args, action=args.action)
-        raw = _load_plan_mapping(args.plan)
         if args.action == "digest":
+            raw = _load_plan_mapping(Path(args.plan))
             result = _digest_action(raw)
         elif args.action == "project":
+            raw = _load_plan_mapping(Path(args.plan))
             result = _project_action(raw, _load_binding_mapping(Path(args.binding)))
+        elif args.action == "start":
+            plan, canonical_provenance = _canonical_start_plan(
+                Path(args.strategy_plan),
+                Path(args.binding),
+            )
+            _require_account(plan, args.account_address)
+            confirmation = _load_confirmation_mapping(Path(args.confirmation), plan=plan)
+            _verify_durable_confirmation(Path(args.output_root), plan=plan, confirmation=confirmation)
+            result = _start_action(
+                plan,
+                args,
+                confirmation,
+                canonical_provenance=canonical_provenance,
+            )
         else:
+            raw = _load_plan_mapping(Path(args.plan))
             plan = _require_plan(raw)
             if args.action in {"start", "reconcile-entry", "next-entry", "flatten"}:
                 _require_account(plan, args.account_address)
                 confirmation = _load_confirmation_mapping(Path(args.confirmation), plan=plan)
                 _verify_durable_confirmation(Path(args.output_root), plan=plan, confirmation=confirmation)
-                if args.action == "start":
-                    result = _start_action(plan, args, confirmation)
-                elif args.action == "reconcile-entry":
+                if args.action == "reconcile-entry":
                     result = _reconcile_entry_action(plan, args, confirmation)
                 elif args.action == "next-entry":
                     result = _next_entry_action(plan, args, confirmation)

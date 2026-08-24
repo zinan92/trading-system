@@ -20,6 +20,7 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 from services.journal_store import load_json, write_json
 from services.park_confirmation import ParkConfirmationLedger
 from services.strategy_control_plane import production_mutation_lock
+from services.market_source_binding import MarketSourceIdentity
 from services.standard_broker_testnet_canary import (
     TestnetCanaryOrderRequest,
     market_fact_digest,
@@ -35,6 +36,22 @@ MAX_ALLOWED_LOSS_USD = Decimal("50")
 MAX_FACT_AGE_SECONDS = 120
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SHA1 = re.compile(r"^[0-9a-f]{40}$")
+
+_CANONICAL_PROVENANCE_FIELDS = (
+    "source_strategy_plan_id",
+    "source_strategy_plan_digest",
+    "canonical_semantics",
+    "source_market",
+    "execution_market_source",
+)
+_PROVENANCE_FORBIDDEN_KEYS = {
+    "secret",
+    "private_key",
+    "credential",
+    "credential_source",
+    "signed_payload",
+    "signature",
+}
 
 _PLAN_FIELDS = (
     "plan_id",
@@ -126,6 +143,110 @@ def _timestamp(value: object, field: str) -> datetime:
 
 def external_dca_plan_digest(mapping: Mapping[str, Any]) -> str:
     return _digest({field: mapping.get(field) for field in _PLAN_FIELDS})
+
+
+@dataclass(frozen=True)
+class CanonicalDcaProvenance:
+    """Redacted identity proving that an external plan came from Paper DCA.
+
+    The external plan remains the executable Broker-neutral document.  This
+    companion record keeps the source StrategyPlan and both market identities
+    attached to lifecycle evidence without allowing provider-native payloads
+    or credentials to cross the Trading System boundary.
+    """
+
+    source_strategy_plan_id: str
+    source_strategy_plan_digest: str
+    canonical_semantics: dict[str, Any]
+    source_market: dict[str, str]
+    execution_market_source: MarketSourceIdentity
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "CanonicalDcaProvenance":
+        if not isinstance(value, Mapping):
+            raise ExternalDcaError("canonical_provenance_invalid")
+        missing = [field for field in _CANONICAL_PROVENANCE_FIELDS if field not in value]
+        if missing:
+            raise ExternalDcaError(
+                "canonical_provenance_fields_missing:" + ",".join(missing)
+            )
+        if _contains_forbidden_key(value):
+            raise ExternalDcaError("canonical_provenance_secret_field_forbidden")
+        source_id = _text(value["source_strategy_plan_id"], "source_strategy_plan_id")
+        source_digest = _text(
+            value["source_strategy_plan_digest"],
+            "source_strategy_plan_digest",
+        ).lower()
+        if not _SHA256.fullmatch(source_digest):
+            raise ExternalDcaError("source_strategy_plan_digest_invalid")
+        semantics = value["canonical_semantics"]
+        if not isinstance(semantics, Mapping) or not semantics:
+            raise ExternalDcaError("canonical_semantics_invalid")
+        source_market = value["source_market"]
+        if not isinstance(source_market, Mapping):
+            raise ExternalDcaError("source_market_invalid")
+        source_provider = _text(source_market.get("provider"), "source_market_provider")
+        source_symbol = _text(source_market.get("symbol"), "source_market_symbol")
+        try:
+            execution_source = MarketSourceIdentity.from_mapping(
+                value["execution_market_source"]
+            )
+        except ValueError as exc:
+            raise ExternalDcaError(str(exc)) from exc
+        if execution_source.source_id not in {
+            "hyperliquid.external_testnet",
+            "nautilus-hyperliquid.testnet",
+        }:
+            raise ExternalDcaError("canonical_market_source_unsupported")
+        if (
+            source_provider != execution_source.source_id
+            or source_symbol != execution_source.instrument_id
+        ):
+            raise ExternalDcaError("canonical_market_identity_mismatch")
+        return cls(
+            source_strategy_plan_id=source_id,
+            source_strategy_plan_digest=source_digest,
+            canonical_semantics=dict(_canonical(semantics)),
+            source_market={"provider": source_provider, "symbol": source_symbol},
+            execution_market_source=execution_source,
+        )
+
+    @classmethod
+    def from_projection(cls, projection: object) -> "CanonicalDcaProvenance":
+        try:
+            value = {
+                "source_strategy_plan_id": projection.source_strategy_plan_id,
+                "source_strategy_plan_digest": projection.source_strategy_plan_digest,
+                "canonical_semantics": projection.canonical_semantics,
+                "source_market": projection.source_market,
+                "execution_market_source": projection.execution_market_source.to_dict(),
+            }
+        except AttributeError as exc:
+            raise ExternalDcaError("canonical_projection_invalid") from exc
+        return cls.from_mapping(value)
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "source_strategy_plan_id": self.source_strategy_plan_id,
+            "source_strategy_plan_digest": self.source_strategy_plan_digest,
+            "canonical_semantics": json.loads(
+                json.dumps(_canonical(self.canonical_semantics), ensure_ascii=False)
+            ),
+            "source_market": dict(self.source_market),
+            "execution_market_source": self.execution_market_source.to_dict(),
+        }
+
+
+def _contains_forbidden_key(value: object) -> bool:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if str(key).strip().lower() in _PROVENANCE_FORBIDDEN_KEYS:
+                return True
+            if _contains_forbidden_key(nested):
+                return True
+    elif isinstance(value, (list, tuple)):
+        return any(_contains_forbidden_key(item) for item in value)
+    return False
 
 
 @dataclass(frozen=True)
@@ -381,12 +502,16 @@ class ExternalDcaLifecycle:
         *,
         confirmation: Mapping[str, Any],
         timestamp: str,
+        canonical_provenance: CanonicalDcaProvenance | Mapping[str, Any] | None = None,
+        require_canonical: bool = False,
     ) -> dict[str, Any]:
         with production_mutation_lock(self.output_root):
             return self._prepare(
                 plan,
                 confirmation=confirmation,
                 timestamp=timestamp,
+                canonical_provenance=canonical_provenance,
+                require_canonical=require_canonical,
             )
 
     def _prepare(
@@ -395,17 +520,31 @@ class ExternalDcaLifecycle:
         *,
         confirmation: Mapping[str, Any],
         timestamp: str,
+        canonical_provenance: CanonicalDcaProvenance | Mapping[str, Any] | None = None,
+        require_canonical: bool = False,
     ) -> dict[str, Any]:
         now = _timestamp(timestamp, "timestamp")
         normalized = plan if isinstance(plan, ExternalDcaPlan) else ExternalDcaPlan.from_mapping(plan, now=now)
         normalized.validate(now=now)
+        provenance = self._normalize_provenance(canonical_provenance)
+        if require_canonical and provenance is None:
+            raise ExternalDcaError("canonical_strategy_plan_required")
+        if provenance is not None:
+            if provenance.execution_market_source.instrument_id != normalized.instrument_id:
+                raise ExternalDcaError("canonical_execution_instrument_mismatch")
+            if provenance.execution_market_source.broker_id != normalized.broker_id:
+                raise ExternalDcaError("canonical_execution_broker_mismatch")
+            if provenance.execution_market_source.environment != normalized.environment:
+                raise ExternalDcaError("canonical_execution_environment_mismatch")
         self._require_confirmation(normalized, confirmation, now)
         existing = self.snapshot()
         if existing:
             if existing.get("plan_digest") != normalized.plan_digest:
                 raise ExternalDcaError("persisted_plan_digest_mismatch")
+            if provenance is not None and existing.get("canonical_provenance") != provenance.to_mapping():
+                raise ExternalDcaError("persisted_canonical_provenance_mismatch")
             return existing
-        state = self._new_state(normalized, timestamp)
+        state = self._new_state(normalized, timestamp, provenance=provenance)
         self._save(state)
         try:
             self._validate_preflight(normalized)
@@ -417,7 +556,9 @@ class ExternalDcaLifecycle:
             self._save(state)
             receipt = self.orders.submit(request)
             self._record_receipt(state, receipt, request=request, timestamp=timestamp, operation="submit")
-            if self._receipt_state(receipt) in {"unknown", "rejected"}:
+            submit_state = self._receipt_state(receipt)
+            self._record_entry_outcome(state, submit_state)
+            if submit_state in {"unknown", "rejected"}:
                 raise ExternalDcaError("entry_submit_not_accepted")
             order_id = str(getattr(receipt, "order_id", "") or "").strip()
             if not order_id:
@@ -427,8 +568,11 @@ class ExternalDcaLifecycle:
             queried = self.orders.query(order_id)
             self._record_receipt(state, queried, request=request, timestamp=timestamp, operation="query")
             receipt_state = self._receipt_state(queried)
+            self._record_entry_outcome(state, receipt_state)
             if receipt_state in {"unknown", "rejected"}:
                 raise ExternalDcaError(f"entry_query_{receipt_state}")
+            if receipt_state == "canceled":
+                raise ExternalDcaError("entry_canceled_before_fill")
             state["status"] = "ENTRY_FILLED_PENDING_FACTS" if receipt_state in {"filled", "partially_filled"} else "WAITING_ENTRY"
             state["next_action"] = "read_entry_facts" if state["status"] != "WAITING_ENTRY" else "attended_query_or_cancel_entry"
             self._event(state, "entry_reconciled", timestamp=timestamp, lifecycle_state=state["status"])
@@ -483,6 +627,8 @@ class ExternalDcaLifecycle:
             state["position_quantity"] = str(position_quantity)
             state["average_entry_price"] = str(average_entry)
             state["actual_fee_usd"] = str(actual_fees)
+            state["entry_facts"] = self._safe_fact_bundle(bundle)
+            state["entry_facts_digest"] = _digest(state["entry_facts"])
             group = self._protection_group(plan, state, position_quantity, average_entry)
             previous = state.get("protection")
             receipt = (
@@ -566,6 +712,7 @@ class ExternalDcaLifecycle:
                 operation="reconcile_query",
             )
             receipt_state = self._receipt_state(queried)
+            self._record_entry_outcome(state, receipt_state)
             if receipt_state in {"unknown", "rejected"}:
                 raise ExternalDcaError(f"entry_reconcile_{receipt_state}")
             if receipt_state in {"canceled", "rejected"}:
@@ -624,7 +771,9 @@ class ExternalDcaLifecycle:
             self._save(state)
             receipt = self.orders.submit(request)
             self._record_receipt(state, receipt, request=request, timestamp=timestamp, operation="submit")
-            if self._receipt_state(receipt) in {"unknown", "rejected"}:
+            submit_state = self._receipt_state(receipt)
+            self._record_entry_outcome(state, submit_state)
+            if submit_state in {"unknown", "rejected"}:
                 raise ExternalDcaError("entry_submit_not_accepted")
             order_id = str(getattr(receipt, "order_id", "") or "").strip()
             if not order_id:
@@ -635,6 +784,7 @@ class ExternalDcaLifecycle:
             queried = self.orders.query(order_id)
             self._record_receipt(state, queried, request=request, timestamp=timestamp, operation="query")
             receipt_state = self._receipt_state(queried)
+            self._record_entry_outcome(state, receipt_state)
             if receipt_state in {"unknown", "rejected"}:
                 raise ExternalDcaError(f"entry_query_{receipt_state}")
             state["status"] = "ENTRY_FILLED_PENDING_FACTS" if receipt_state in {"filled", "partially_filled"} else "WAITING_ENTRY"
@@ -757,6 +907,8 @@ class ExternalDcaLifecycle:
             if close_fill_quantity < position_quantity:
                 raise ExternalDcaError("flatten_fill_quantity_incomplete")
             final = self._validate_facts(plan, bundle, order_id=close_id, timestamp=timestamp, require_flat=True)
+            state["final_facts"] = self._safe_fact_bundle(bundle)
+            state["final_facts_digest"] = _digest(state["final_facts"])
             if final[0] != 0:
                 raise ExternalDcaError("final_position_not_flat")
             state["status"] = "FLAT_RECONCILED"
@@ -964,6 +1116,8 @@ class ExternalDcaLifecycle:
             (position.signed_quantity for position in bundle.positions if position.instrument_id == plan.instrument_id),
             Decimal("0"),
         )
+        if position_quantity != reconciliation.signed_position_quantity:
+            raise ExternalDcaError("facts_position_reconciliation_mismatch")
         if (plan.direction == "long" and reconciliation.signed_position_quantity < 0) or (
             plan.direction == "short" and reconciliation.signed_position_quantity > 0
         ):
@@ -1060,8 +1214,14 @@ class ExternalDcaLifecycle:
             state=str(latest.get("state") or "unknown"),
         )
 
-    def _new_state(self, plan: ExternalDcaPlan, timestamp: str) -> dict[str, Any]:
-        return {
+    def _new_state(
+        self,
+        plan: ExternalDcaPlan,
+        timestamp: str,
+        *,
+        provenance: CanonicalDcaProvenance | None = None,
+    ) -> dict[str, Any]:
+        state = {
             "schema_version": EXTERNAL_DCA_SCHEMA,
             "plan_id": plan.plan_id,
             "plan_digest": plan.plan_digest,
@@ -1084,6 +1244,118 @@ class ExternalDcaLifecycle:
             "next_action": "submit_first_entry",
             "created_at": timestamp,
             "updated_at": timestamp,
+        }
+        if provenance is not None:
+            canonical = provenance.to_mapping()
+            state["canonical_provenance"] = canonical
+            state["source_strategy_plan_id"] = canonical["source_strategy_plan_id"]
+            state["source_strategy_plan_digest"] = canonical["source_strategy_plan_digest"]
+            state["canonical_semantics"] = canonical["canonical_semantics"]
+            state["source_market"] = canonical["source_market"]
+            state["execution_market_source"] = canonical["execution_market_source"]
+        return state
+
+    @staticmethod
+    def _normalize_provenance(
+        value: CanonicalDcaProvenance | Mapping[str, Any] | None,
+    ) -> CanonicalDcaProvenance | None:
+        if value is None:
+            return None
+        if isinstance(value, CanonicalDcaProvenance):
+            return value
+        return CanonicalDcaProvenance.from_mapping(value)
+
+    @staticmethod
+    def _record_entry_outcome(state: dict[str, Any], receipt_state: str) -> None:
+        normalized = {
+            "resting": "resting",
+            "waiting_for_fill": "resting",
+            "waiting_for_trigger": "resting",
+            "filled": "filled",
+            "partially_filled": "partial_fill",
+            "rejected": "rejected",
+            "canceled": "canceled",
+            "unknown": "unknown",
+        }.get(str(receipt_state).lower(), "unknown")
+        state["entry_outcome"] = normalized
+
+    @staticmethod
+    def _safe_fact_bundle(bundle: CanaryFactBundle) -> dict[str, Any]:
+        """Persist only normalized, cursor-bound facts and provenance."""
+
+        def fill_value(fill: object) -> dict[str, Any]:
+            return {
+                "fill_id": fill.fill_id,
+                "order_id": fill.order_id,
+                "instrument_id": fill.instrument_id,
+                "side": fill.side,
+                "price": str(fill.price),
+                "quantity": str(fill.quantity),
+                "occurred_at": fill.occurred_at,
+                "broker_order_id": fill.broker_order_id,
+                "client_order_id": fill.client_order_id,
+                "cursor": fill.cursor,
+                "fact_digest": fill.fact_digest,
+                "raw_payload_digest": fill.raw_payload_digest,
+            }
+
+        def fee_value(fee: object) -> dict[str, Any]:
+            return {
+                "fee_id": fee.fee_id,
+                "fill_id": fee.fill_id,
+                "amount_usd": str(fee.amount_usd),
+                "currency": fee.currency,
+                "occurred_at": fee.occurred_at,
+                "cursor": fee.cursor,
+                "fee_source": fee.fee_source,
+                "fee_state": fee.fee_state,
+                "fact_digest": fee.fact_digest,
+                "raw_payload_digest": fee.raw_payload_digest,
+            }
+
+        return {
+            "schema_version": "standard-broker-testnet-canary-facts-v1",
+            "provenance": {
+                "account_fingerprint": bundle.account.account_fingerprint,
+                "runtime_id": bundle.account.runtime_id,
+                "release_sha": bundle.account.release_sha,
+                "capability_revision": bundle.account.capability_revision,
+                "transport_state": bundle.account.transport_state,
+            },
+            "fills": [fill_value(fill) for fill in bundle.fills],
+            "fees": [fee_value(fee) for fee in bundle.fees],
+            "account": {
+                "account_fingerprint": bundle.account.account_fingerprint,
+                "equity_usd": str(bundle.account.equity_usd),
+                "cursor": bundle.account.cursor,
+                "observed_at": bundle.account.observed_at,
+                "fact_digest": bundle.account.fact_digest,
+                "raw_payload_digest": bundle.account.raw_payload_digest,
+            },
+            "positions": [
+                {
+                    "instrument_id": position.instrument_id,
+                    "signed_quantity": str(position.signed_quantity),
+                    "cursor": position.cursor,
+                    "observed_at": position.observed_at,
+                    "fact_digest": position.fact_digest,
+                    "raw_payload_digest": position.raw_payload_digest,
+                }
+                for position in bundle.positions
+            ],
+            "open_orders": list(bundle.open_orders),
+            "reconciliation": {
+                "coherent": bundle.reconciliation.coherent,
+                "freshness": bundle.reconciliation.freshness,
+                "cursor": bundle.reconciliation.cursor,
+                "open_order_ids": list(bundle.reconciliation.open_order_ids),
+                "signed_position_quantity": str(bundle.reconciliation.signed_position_quantity),
+                "observed_at": bundle.reconciliation.observed_at,
+                "canonical_schema": bundle.reconciliation.canonical_schema,
+                "evidence_digest": bundle.reconciliation.evidence_digest,
+                "fact_digest": bundle.reconciliation.fact_digest,
+                "raw_payload_digest": bundle.reconciliation.raw_payload_digest,
+            },
         }
 
     def _state(self, plan: ExternalDcaPlan) -> dict[str, Any]:
@@ -1123,8 +1395,6 @@ class ExternalDcaLifecycle:
     def _record_receipt(self, state: dict[str, Any], receipt: object, *, request: TestnetCanaryOrderRequest, timestamp: str, operation: str) -> None:
         self._validate_receipt_identity(state, receipt, operation=operation)
         receipt_state = self._receipt_state(receipt)
-        if receipt_state == "unknown":
-            raise ExternalDcaError(f"{operation}_receipt_unknown")
         state.setdefault("receipts", []).append(
             {
                 "operation": operation,
@@ -1144,6 +1414,10 @@ class ExternalDcaLifecycle:
                 "observed_at": timestamp,
             }
         )
+        if operation in {"submit", "query", "reconcile_query"}:
+            self._record_entry_outcome(state, receipt_state)
+        if receipt_state == "unknown":
+            raise ExternalDcaError(f"{operation}_receipt_unknown")
 
     @staticmethod
     def _validate_receipt_identity(state: Mapping[str, Any], receipt: object, *, operation: str) -> None:
