@@ -4,7 +4,11 @@ from copy import deepcopy
 
 import pytest
 
-from services.dca_plan import build_dca_preview, build_dca_strategy_plan
+from services.dca_plan import (
+    build_dca_preview,
+    build_dca_strategy_plan,
+    dca_strategy_plan_digest,
+)
 from services.dualtrack_config import DEFAULT_DUALTRACK_CONFIG
 from services.standard_broker_dca_projection import (
     DcaProjectionError,
@@ -94,6 +98,13 @@ def _binding() -> dict[str, object]:
         "time_in_force": "gtc",
         "expires_at": "2099-01-01T00:00:00+00:00",
         "close_price": "4050",
+        "market_source": {
+            "source_id": "hyperliquid.external_testnet",
+            "broker_id": "hyperliquid",
+            "environment": "testnet",
+            "instrument_id": "PAXG-USD-PERP",
+            "execution_venue": True,
+        },
     }
 
 
@@ -104,6 +115,14 @@ def test_projection_preserves_canonical_dca_and_maps_fixed_notional_to_external_
     mapped = projection.plan
     assert projection.source_strategy_plan_id == "strategy-plan-dca-parity"
     assert projection.source_strategy_plan_digest == source["plan_digest"]
+    assert projection.source_market == {
+        "provider": "binance_usdm_futures",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+    }
+    assert projection.execution_market_source.source_id == "hyperliquid.external_testnet"
+    assert projection.canonical_semantics["max_additions"] == 3
+    assert projection.canonical_semantics["loop_enabled"] is False
     assert mapped["plan_id"] == "hl-dca-parity-1"
     assert mapped["plan_version"] == 7
     assert mapped["instrument_id"] == "PAXG-USD-PERP"
@@ -126,13 +145,40 @@ def test_projection_rejects_non_dca_or_missing_canonical_plan_identity() -> None
     with pytest.raises(DcaProjectionError, match="strategy_plan_digest_missing"):
         project_canonical_dca_plan(malformed, binding=_binding())
 
+    tampered = {**source, "dca": {**source["dca"], "stop_price": 3900.0}}
+    with pytest.raises(DcaProjectionError, match="strategy_plan_digest_mismatch"):
+        project_canonical_dca_plan(tampered, binding=_binding())
+
 
 def test_projection_rejects_price_not_aligned_to_selected_instrument() -> None:
     source = _strategy_plan()
-    source["dca"] = {**source["dca"], "entries": [{**source["dca"]["entries"][0], "price": 4004.0005}] + source["dca"]["entries"][1:]}
+    source["dca"] = {
+        **source["dca"],
+        "entries": [
+            {**source["dca"]["entries"][0], "price": 4004.0005},
+            *source["dca"]["entries"][1:],
+        ],
+    }
+    source["plan_digest"] = dca_strategy_plan_digest(source)
 
     with pytest.raises(DcaProjectionError, match="canonical_price_precision_mismatch"):
         project_canonical_dca_plan(source, binding=_binding())
+
+
+def test_projection_rejects_market_source_from_another_binding() -> None:
+    binding = {
+        **_binding(),
+        "market_source": {
+            "source_id": "binance_usdm_futures",
+            "broker_id": "binance",
+            "environment": "demo",
+            "instrument_id": "XAUUSDT",
+            "execution_venue": True,
+        },
+    }
+
+    with pytest.raises(DcaProjectionError, match="market_source_binding_mismatch"):
+        project_canonical_dca_plan(_strategy_plan(), binding=binding)
 
 
 def test_projection_uses_canonical_notional_when_source_rounding_is_lower() -> None:
@@ -144,6 +190,7 @@ def test_projection_uses_canonical_notional_when_source_rounding_is_lower() -> N
             *source["dca"]["entries"][1:],
         ],
     }
+    source["plan_digest"] = dca_strategy_plan_digest(source)
     binding = {**_binding(), "quantity_step": "0.0001"}
 
     projection = project_canonical_dca_plan(source, binding=binding)

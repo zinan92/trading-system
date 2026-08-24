@@ -334,11 +334,22 @@ def build_dca_strategy_plan(
         strategy_revision_id or f"revision:{strategy_plan_id}:v{version}",
         "strategy_revision_id",
     )
-    digest_payload = {key: value for key, value in plan.items() if key != "plan_digest"}
-    plan["plan_digest"] = "sha256:" + hashlib.sha256(
-        json.dumps(digest_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    ).hexdigest()
+    plan["plan_digest"] = dca_strategy_plan_digest(plan)
     return plan
+
+
+def dca_strategy_plan_digest(plan: dict[str, Any]) -> str:
+    """Return the canonical digest for one versioned DCA StrategyPlan."""
+
+    digest_payload = {key: value for key, value in plan.items() if key != "plan_digest"}
+    return "sha256:" + hashlib.sha256(
+        json.dumps(
+            digest_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def build_dca_entry_commands(
