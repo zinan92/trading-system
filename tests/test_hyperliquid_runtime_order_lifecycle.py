@@ -589,6 +589,25 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         with self.assertRaises(ValueError, msg="ambiguous hash-only identity must fail closed"):
             adapter.apply_fill({key: value for key, value in base.items() if key not in {"tid", "sz"}} | {"sz": "0.1"})
 
+    def test_tid_promotion_after_hash_only_identity_fails_closed(self) -> None:
+        adapter, _ = self.adapter()
+        submitted = adapter.submit(self.intent())
+        base = {
+            "coin": "BTC",
+            "px": "65000",
+            "sz": "0.1",
+            "side": "B",
+            "time": 1787313659000,
+            "oid": 101,
+            "cloid": submitted.client_order_id,
+            "hash": "0xhash-only-first",
+        }
+
+        adapter.apply_fill(base)
+
+        with self.assertRaises(ValueError, msg="tid promotion after hash-only identity must fail closed"):
+            adapter.apply_fill({**base, "tid": "trade-promoted"})
+
     def test_cancel_and_replace_preserve_order_lineage(self) -> None:
         adapter, _ = self.adapter()
         submitted = adapter.submit(self.intent())
