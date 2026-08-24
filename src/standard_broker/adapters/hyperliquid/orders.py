@@ -1116,6 +1116,8 @@ class HyperliquidRuntimeOrderAdapter:
                 "fills",
                 "an instrument or order scope is required by the external fill transport",
             )
+        if client_order_id is not None:
+            request["cloid"] = client_order_id
         response = self._runtime._invoke_native("order_execution", "fills", request)
         rows = response.get("fills") if isinstance(response, Mapping) else None
         if not isinstance(rows, list):

@@ -111,6 +111,8 @@ class FakeOrderBackend:
                 "open_orders",
                 {"orders": [{"status": "open", "oid": self.last_broker_order_id, "cloid": self.last_client_order_id}]},
             )
+        if operation == "fills":
+            return self.responses.get("fills", {"fills": []})
         return {"status": "unknown"}
 
 
@@ -563,6 +565,22 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         backend.responses["open_orders"] = {"orders": [{"status": "open", "cloid": submitted.client_order_id}]}
         client_only_open_orders = adapter.open_orders("BTC-USD-PERP")
         self.assertEqual(client_only_open_orders[0].order_id, submitted.order_id)
+
+    def test_client_scoped_fill_query_passes_cloid_to_runtime(self) -> None:
+        adapter, backend = self.adapter(profile=capabilities("submit", "fills"))
+        submitted = adapter.submit(self.intent())
+
+        self.assertEqual(
+            adapter.query_fills(
+                instrument_id="BTC",
+                client_order_id=submitted.client_order_id,
+            ),
+            (),
+        )
+        fills_call = backend.calls[-1]
+        self.assertEqual(fills_call[1], "fills")
+        self.assertEqual(fills_call[2]["instrument_id"], "BTC")
+        self.assertEqual(fills_call[2]["cloid"], submitted.client_order_id)
 
     def test_capability_gap_blocks_cancel_before_runtime_backend(self) -> None:
         adapter, backend = self.adapter(profile=capabilities("submit"))
