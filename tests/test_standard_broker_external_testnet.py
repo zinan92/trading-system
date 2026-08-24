@@ -165,7 +165,16 @@ def _context(tmp_path, host) -> BrokerBuildContext:
             "release_sha": RELEASE_SHA,
             "execution_scope": "hypercore:default",
             "standard_broker_release_sha": STANDARD_BROKER_SHA,
-            "instrument_id": "PAXG-USD-PERP",
+            "instrument_binding": {
+                "instrument_id": "PAXG-USD-PERP",
+                "broker_symbol": "PAXG",
+                "price_tick": "0.001",
+                "quantity_step": "0.001",
+                "contract_multiplier": "1",
+                "minimum_quantity": "0.001",
+                "mapping_revision": "hyperliquid-testnet-runtime-v1",
+                "supported_order_types": ["limit"],
+            },
             "market_source": {
                 "source_id": "hyperliquid.external_testnet",
                 "broker_id": "hyperliquid",
@@ -196,6 +205,8 @@ def test_external_testnet_bridge_preflights_public_host_without_broker_invocatio
     assert preflight["transport_profile"] == "hyperliquid-testnet-default"
     assert preflight["transport_state"] == "external_testnet"
     assert preflight["instrument_id"] == "PAXG-USD-PERP"
+    assert preflight["instrument_binding"]["broker_symbol"] == "PAXG"
+    assert preflight["instrument_read_ready"] is True
     assert preflight["market_source"]["source_id"] == "hyperliquid.external_testnet"
     assert preflight["market_source_ready"] is True
     assert preflight["network_io"] is True
@@ -213,7 +224,7 @@ def test_external_testnet_bridge_descriptor_exposes_exact_nonsecret_profile(tmp_
     assert descriptor["broker_id"] == "hyperliquid"
     assert descriptor["transport_profile"] == "hyperliquid-testnet-default"
     assert descriptor["transport_state"] == "external_testnet"
-    assert descriptor["instrument_id"] == "PAXG-USD-PERP"
+    assert descriptor["instrument_binding"]["instrument_id"] == "PAXG-USD-PERP"
     assert descriptor["market_source"]["source_id"] == "hyperliquid.external_testnet"
     assert descriptor["credential_env_names"] == []
     assert "fixture://api-agent" not in json.dumps(descriptor, sort_keys=True)
@@ -305,7 +316,7 @@ def test_external_testnet_bridge_rejects_credential_configuration(tmp_path) -> N
     assert runtime.invoke_calls == []
 
 
-@pytest.mark.parametrize("field", ["instrument_id", "market_source"])
+@pytest.mark.parametrize("field", ["instrument_binding", "market_source"])
 def test_external_testnet_bridge_requires_explicit_market_binding(tmp_path, field: str) -> None:
     host, runtime = _host()
     config = dict(_context(tmp_path, host).broker_config)
@@ -333,6 +344,27 @@ def test_external_testnet_bridge_rejects_market_binding_drift(tmp_path) -> None:
     }
 
     with pytest.raises(RuntimeError, match="market_source_binding_mismatch"):
+        build_broker_execution_port(
+            BrokerBuildContext(
+                output_root=tmp_path / "outputs",
+                execution_mode="live",
+                live_trading_enabled=False,
+                broker_config=config,
+            )
+        )
+
+    assert runtime.invoke_calls == []
+
+
+def test_external_testnet_bridge_rejects_instrument_mapping_revision_drift(tmp_path) -> None:
+    host, runtime = _host()
+    config = dict(_context(tmp_path, host).broker_config)
+    config["instrument_binding"] = {
+        **config["instrument_binding"],
+        "mapping_revision": "stale-revision",
+    }
+
+    with pytest.raises(RuntimeError, match="instrument_mapping_revision_mismatch"):
         build_broker_execution_port(
             BrokerBuildContext(
                 output_root=tmp_path / "outputs",
