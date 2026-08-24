@@ -590,7 +590,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         with self.assertRaises(ValueError, msg="ambiguous hash-only identity must fail closed"):
             adapter.apply_fill({key: value for key, value in base.items() if key not in {"tid", "sz"}} | {"sz": "0.1"})
 
-    def test_tid_promotion_after_hash_only_identity_fails_closed(self) -> None:
+    def test_local_fixture_tid_promotion_enriches_hash_only_identity(self) -> None:
         adapter, _ = self.adapter()
         submitted = adapter.submit(self.intent())
         base = {
@@ -606,8 +606,10 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
 
         adapter.apply_fill(base)
 
-        with self.assertRaises(ValueError, msg="tid promotion after hash-only identity must fail closed"):
-            adapter.apply_fill({**base, "tid": "trade-promoted"})
+        promoted = adapter.apply_fill({**base, "tid": "trade-promoted"})
+
+        self.assertEqual(promoted.state, OrderState.FILLED)
+        self.assertEqual(len(adapter.fills), 1)
 
     def test_tid_replay_enriches_hash_alias_before_hash_only_replay(self) -> None:
         adapter, _ = self.adapter()

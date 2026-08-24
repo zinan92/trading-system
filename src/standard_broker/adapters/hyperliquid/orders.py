@@ -348,9 +348,14 @@ class HyperliquidOrderAdapter:
         if canonical_tid is not None:
             fill_id = canonical_tid
             identity_keys = {fill_id, f"tid:{canonical_tid}"}
-            if hash_key and hash_key in self._hash_fill_aliases.get(hash_key, set()):
-                raise ValueError("fill_identity_ambiguous")
             existing = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
+            if hash_key and hash_key in self._hash_fill_aliases.get(hash_key, set()):
+                owners = self._hash_fill_aliases[hash_key]
+                if self._transport_state == "external_testnet" or len(owners) != 1:
+                    raise ValueError("fill_identity_ambiguous")
+                fill_id = next(iter(owners))
+                identity_keys.update({fill_id, f"hash:{hash_key}"})
+                existing.add(fill_id)
             return fill_id, identity_keys, hash_key, True, existing
         if hash_key is None:
             raise ValueError("Hyperliquid fill requires tid or hash")
@@ -397,6 +402,8 @@ class HyperliquidOrderAdapter:
                 or existing_fill.side is not self._side(raw.get("side"))
             ):
                 raise ValueError("fill identity was reused with different canonical facts")
+            for identity_key in identity_keys:
+                self._fill_aliases[identity_key] = existing_fill_id
             self._register_hash_alias(hash_key, existing_fill_id)
             return receipt
 
@@ -765,6 +772,8 @@ class HyperliquidOrderAdapter:
                     or existing_fill.side is not self._side(filled["side"])
                 ):
                     raise ValueError("fill identity was reused with different canonical facts")
+                for identity_key in identity_keys:
+                    self._fill_aliases[identity_key] = existing_fill_id
                 self._register_hash_alias(hash_key, existing_fill_id)
                 return updated
             self._fills[fill_id] = OrderFill(

@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from standard_broker.adapters.hyperliquid import HyperliquidOrderAdapter
 from standard_broker.errors import RuntimeBoundaryError
+from standard_broker.models import BrokerEnvironment
 from standard_broker.orders import (
     InMemoryOrderTransport,
     OrderIntent,
@@ -59,6 +60,33 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(len(transport.submit_calls), 1)
+
+    def test_external_testnet_hash_only_to_tid_promotion_fails_closed(self) -> None:
+        class ExternalFixtureTransport(InMemoryOrderTransport):
+            local_only = False
+            external_network = True
+
+        transport = ExternalFixtureTransport(submit_response=self.resting_response())
+        adapter = HyperliquidOrderAdapter(
+            transport=transport,
+            environment=BrokerEnvironment.TESTNET,
+            transport_state="external_testnet",
+        )
+        submitted = adapter.submit(self.intent())
+        hash_only = {
+            "oid": 101,
+            "coin": "BTC",
+            "side": "B",
+            "px": "65000",
+            "sz": "0.1",
+            "time": 1787313659000,
+            "hash": "0xexternal-hash-only",
+        }
+
+        adapter.apply_fill(hash_only)
+
+        with self.assertRaises(ValueError):
+            adapter.apply_fill({**hash_only, "cloid": submitted.client_order_id, "tid": "trade-promoted"})
 
     def test_filled_submit_response_preserves_quantity_and_average_price(self) -> None:
         transport = InMemoryOrderTransport(
