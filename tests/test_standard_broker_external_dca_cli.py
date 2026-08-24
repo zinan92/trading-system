@@ -169,6 +169,34 @@ def _write_canonical_start_inputs(
     return strategy_path, binding_path, plan, confirmation_path
 
 
+def test_expired_confirmation_is_only_accepted_for_broker_identity_recovery(tmp_path: Path) -> None:
+    values = _plan_mapping()
+    values["expires_at"] = "2020-01-01T00:00:00+00:00"
+    values["plan_digest"] = external_dca_plan_digest(values)
+    plan_path = tmp_path / "expired-plan.json"
+    plan_path.write_text(json.dumps(values), encoding="utf-8")
+    plan = ExternalDcaPlan.from_mapping(values, allow_expired=True)
+    confirmation_path, output_root = _write_confirmation(tmp_path / "expired-confirmation", plan)
+
+    with pytest.raises(cli.ExternalDcaCliError, match="confirmation_expired"):
+        cli._load_confirmation_mapping(confirmation_path, plan=plan)
+
+    confirmation = cli._load_confirmation_mapping(
+        confirmation_path,
+        plan=plan,
+        allow_expired=True,
+    )
+    cli._verify_durable_confirmation(
+        output_root,
+        plan=plan,
+        confirmation=confirmation,
+        allow_expired=True,
+    )
+    assert cli.build_parser().parse_args(
+        ["--action", "reconcile-flatten", "--broker-order-id", "58400711187"]
+    ).broker_order_id == "58400711187"
+
+
 def _canonical_strategy_plan() -> dict[str, object]:
     config = deepcopy(DEFAULT_DUALTRACK_CONFIG)
     config["execution_contract"] = {

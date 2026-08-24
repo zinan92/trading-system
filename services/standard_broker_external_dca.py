@@ -26,7 +26,9 @@ from services.standard_broker_testnet_canary import (
     market_fact_digest,
 )
 from services.standard_broker_testnet_canary_facts import (
+    CanaryFeeFact,
     CanaryFactBundle,
+    CanaryFillFact,
     canary_fact_digest,
 )
 
@@ -1022,6 +1024,7 @@ class ExternalDcaLifecycle:
         *,
         confirmation: Mapping[str, Any],
         timestamp: str,
+        broker_order_id: str | None = None,
     ) -> dict[str, Any]:
         """Query one ambiguous flatten intent by its persisted idempotency key."""
 
@@ -1030,6 +1033,7 @@ class ExternalDcaLifecycle:
                 plan,
                 confirmation=confirmation,
                 timestamp=timestamp,
+                broker_order_id=broker_order_id,
             )
 
     def _reconcile_flatten(
@@ -1038,8 +1042,11 @@ class ExternalDcaLifecycle:
         *,
         confirmation: Mapping[str, Any],
         timestamp: str,
+        broker_order_id: str | None = None,
     ) -> dict[str, Any]:
         state = self._state(plan)
+        if state.get("status") == "FLAT_RECONCILED":
+            return state
         if state.get("status") not in {"BLOCKED", "FLATTEN_SUBMIT_INTENT_RESERVED"}:
             return self._block(state, "flatten_reconcile_not_available", timestamp=timestamp)
         if state.get("blocker") not in {
@@ -1048,11 +1055,20 @@ class ExternalDcaLifecycle:
             "flatten_reconcile_unknown",
             "flatten_reconcile_not_available",
             "facts_reconciliation_not_coherent",
+            "facts_stale",
+            "canonical_fill_missing",
+            "actual_fee_coverage_incomplete",
             "flatten_not_filled",
         }:
             return self._block(state, "flatten_reconcile_not_available", timestamp=timestamp)
         try:
-            self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
+            broker_order_id = str(broker_order_id or "").strip() or None
+            self._require_confirmation(
+                plan,
+                confirmation,
+                _timestamp(timestamp, "timestamp"),
+                allow_expired=broker_order_id is not None,
+            )
             position_quantity = Decimal(str(state.get("position_quantity") or "0"))
             if position_quantity <= 0:
                 raise ExternalDcaError("flatten_position_missing")
@@ -1079,16 +1095,33 @@ class ExternalDcaLifecycle:
             client_order_id = str(
                 persisted_receipts[-1].get("client_order_id") if persisted_receipts else ""
             ).strip()
-            recover_client = getattr(self.orders, "recover_client_order", None)
-            if not callable(recover_client) or not client_order_id:
-                raise ExternalDcaError("flatten_client_identity_missing")
-            recover_client(
-                request,
-                client_order_id=client_order_id,
-                state="unknown",
-            )
+            if broker_order_id is not None:
+                recover_broker = getattr(self.orders, "recover", None)
+                if not callable(recover_broker):
+                    raise ExternalDcaError("flatten_broker_identity_recovery_missing")
+                recover_broker(
+                    request,
+                    broker_order_id=broker_order_id,
+                    state="unknown",
+                )
+            else:
+                recover_client = getattr(self.orders, "recover_client_order", None)
+                if not callable(recover_client) or not client_order_id:
+                    raise ExternalDcaError("flatten_client_identity_missing")
+                recover_client(
+                    request,
+                    client_order_id=client_order_id,
+                    state="unknown",
+                )
             queried = query_by_key(request.idempotency_key)
             query_state = self._receipt_state(queried)
+            queried_broker_order_id = str(getattr(queried, "broker_order_id", "") or "").strip()
+            if (
+                broker_order_id is not None
+                and queried_broker_order_id
+                and queried_broker_order_id != broker_order_id
+            ):
+                raise ExternalDcaError("flatten_broker_identity_mismatch")
             try:
                 self._record_receipt(
                     state,
@@ -1100,6 +1133,43 @@ class ExternalDcaLifecycle:
             except ExternalDcaError:
                 if query_state != "unknown":
                     raise
+            if broker_order_id is not None:
+                close_id = request.order_id
+                bundle = self.facts.read_facts(
+                    order_id=close_id,
+                    instrument_id=plan.instrument_id,
+                    now=_timestamp(timestamp, "timestamp"),
+                    client_order_id=client_order_id,
+                )
+                state["final_facts"] = self._safe_fact_bundle(bundle)
+                state["final_facts_digest"] = _digest(state["final_facts"])
+                final = self._validate_facts(
+                    plan,
+                    bundle,
+                    order_id=close_id,
+                    timestamp=timestamp,
+                    require_flat=True,
+                    allow_historical_causal_facts=True,
+                )
+                if any(
+                    str(getattr(fill, "broker_order_id", "") or "").strip() != broker_order_id
+                    for fill in bundle.fills
+                ):
+                    raise ExternalDcaError("flatten_broker_identity_mismatch")
+                if final[0] != 0:
+                    raise ExternalDcaError("final_position_not_flat")
+                state["status"] = "FLAT_RECONCILED"
+                state["blocker"] = None
+                state["next_action"] = "record_dca_result"
+                state["flatten_outcome"] = "explicit_broker_identity_causal_fill_reconciled"
+                self._event(
+                    state,
+                    "flat_reconciled_from_explicit_broker_identity",
+                    timestamp=timestamp,
+                    broker_order_id=broker_order_id,
+                )
+                self._save(state)
+                return state
             if query_state == "unknown":
                 close_id = str(getattr(queried, "order_id", "") or "").strip()
                 if not close_id:
@@ -1469,7 +1539,14 @@ class ExternalDcaLifecycle:
         if value.get("fact_digest") != market_fact_digest(value):
             raise ExternalDcaError("market_fact_digest_invalid")
 
-    def _require_confirmation(self, plan: ExternalDcaPlan, confirmation: Mapping[str, Any], now: datetime) -> None:
+    def _require_confirmation(
+        self,
+        plan: ExternalDcaPlan,
+        confirmation: Mapping[str, Any],
+        now: datetime,
+        *,
+        allow_expired: bool = False,
+    ) -> None:
         if not isinstance(confirmation, Mapping):
             raise ExternalDcaError("confirmation_required")
         operator = str(confirmation.get("operator_id") or confirmation.get("park_user_id") or "").strip()
@@ -1483,7 +1560,7 @@ class ExternalDcaLifecycle:
             or not _SHA256.fullmatch(str(confirmation.get("receipt_digest") or "").lower())
         ):
             raise ExternalDcaError("confirmation_identity_invalid")
-        if _timestamp(confirmation.get("expires_at"), "confirmation.expires_at") <= now:
+        if not allow_expired and _timestamp(confirmation.get("expires_at"), "confirmation.expires_at") <= now:
             raise ExternalDcaError("confirmation_expired")
         proposal_id = str(confirmation.get("proposal_id") or confirmation.get("confirmation_id") or "").strip()
         rows = self.confirmations.rows()
@@ -1496,7 +1573,7 @@ class ExternalDcaLifecycle:
         if (
             not proposal
             or not decision
-            or proposal_expires <= now.timestamp()
+            or (not allow_expired and proposal_expires <= now.timestamp())
             or proposal.get("execution_environment") != "testnet"
             or decision.get("execution_environment") != "testnet"
             or decision.get("execution_authorized") is not True
@@ -1514,6 +1591,7 @@ class ExternalDcaLifecycle:
         order_id: str,
         timestamp: str,
         require_flat: bool = False,
+        allow_historical_causal_facts: bool = False,
     ) -> tuple[Decimal, Decimal, Decimal]:
         if not isinstance(bundle, CanaryFactBundle):
             raise ExternalDcaError("facts_bundle_invalid")
@@ -1541,7 +1619,16 @@ class ExternalDcaLifecycle:
                     continue
                 observed = _timestamp(value, f"facts.{field}")
                 age = (current - observed).total_seconds()
-                if age < -300 or age > MAX_FACT_AGE_SECONDS:
+                if (
+                    age < -300
+                    or (
+                        age > MAX_FACT_AGE_SECONDS
+                        and not (
+                            allow_historical_causal_facts
+                            and isinstance(fact, (CanaryFillFact, CanaryFeeFact))
+                        )
+                    )
+                ):
                     raise ExternalDcaError("facts_stale")
         if tuple(bundle.open_orders) != tuple(reconciliation.open_order_ids):
             raise ExternalDcaError("facts_open_order_reconciliation_mismatch")

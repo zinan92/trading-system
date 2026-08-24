@@ -754,6 +754,80 @@ def test_external_dca_reconciles_unknown_flatten_without_resubmitting(tmp_path: 
     assert recovered_orders.requests == []
 
 
+def test_external_dca_reconciles_expired_plan_by_explicit_broker_identity_without_mutation(tmp_path: Path) -> None:
+    plan = _plan(expires_at="2020-01-01T00:00:00+00:00")
+    _path, confirmation, output_root = _confirmation(tmp_path / "expired-broker-recovery", plan)
+    protection = _Protection()
+
+    class _BrokerOrders(_Orders):
+        def recover(self, request: TestnetCanaryOrderRequest, *, broker_order_id: str, state: str):
+            self.receipts[request.order_id] = _Receipt(
+                order_id=request.order_id,
+                state=state,
+                client_order_id=request.idempotency_key,
+                broker_order_id=broker_order_id,
+            )
+
+    orders = _BrokerOrders(query_state="unknown")
+    lifecycle = ExternalDcaLifecycle(
+        output_root,
+        orders,
+        _Facts(plan),
+        protection,
+        journal_id="expired-broker-recovery",
+    )
+    state = lifecycle._new_state(plan, NOW)
+    state.update(
+        {
+            "status": "BLOCKED",
+            "blocker": "flatten_submit_receipt_unknown",
+            "position_quantity": str(plan.entry_quantities[0]),
+            "average_entry_price": str(plan.entry_levels[0]),
+            "receipts": [
+                {
+                    "operation": "flatten_submit",
+                    "order_id": f"{plan.plan_id}:flatten",
+                    "client_order_id": f"{plan.plan_id}:flatten:{plan.entry_quantities[0]}:{plan.close_price}",
+                    "broker_order_id": "",
+                    "state": "unknown",
+                    "quantity": str(plan.entry_quantities[0]),
+                    "price": str(plan.close_price),
+                    "side": "sell",
+                    "instrument_id": plan.instrument_id,
+                    "environment": "testnet",
+                    "account_fingerprint": plan.account_fingerprint,
+                    "runtime_id": plan.runtime_id,
+                    "release_sha": plan.release_sha,
+                    "capability_revision": plan.capability_revision,
+                    "observed_at": NOW,
+                }
+            ],
+        }
+    )
+    lifecycle._save(state)
+
+    reconciled = lifecycle.reconcile_flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+        broker_order_id=f"broker:{plan.plan_id}:flatten",
+    )
+
+    assert reconciled["status"] == "FLAT_RECONCILED"
+    assert reconciled["flatten_outcome"] == "explicit_broker_identity_causal_fill_reconciled"
+    assert orders.requests == []
+    assert orders.receipts[f"{plan.plan_id}:flatten"].broker_order_id == f"broker:{plan.plan_id}:flatten"
+
+    replay = lifecycle.reconcile_flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+        broker_order_id=f"broker:{plan.plan_id}:flatten",
+    )
+    assert replay["status"] == "FLAT_RECONCILED"
+    assert replay["blocker"] is None
+
+
 def test_external_dca_persists_blocked_final_facts_when_causal_fill_is_missing(tmp_path: Path) -> None:
     plan, confirmation, _unused_lifecycle, _unused_orders, protection = _lifecycle(tmp_path)
     _path, confirmation, output_root = _confirmation(tmp_path / "reconcile-blocked-final-facts", plan)
