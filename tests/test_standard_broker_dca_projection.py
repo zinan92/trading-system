@@ -215,6 +215,21 @@ def test_projection_rejects_secret_like_binding_fields() -> None:
         project_canonical_dca_plan(_strategy_plan(), binding=binding)
 
 
+def test_projection_rejects_changed_aggregate_exit_semantics() -> None:
+    source = _strategy_plan()
+    source["dca"] = {
+        **source["dca"],
+        "aggregate_take_profit": {
+            **source["dca"]["aggregate_take_profit"],
+            "reduce_only": False,
+        },
+    }
+    source["plan_digest"] = dca_strategy_plan_digest(source)
+
+    with pytest.raises(DcaProjectionError, match="aggregate_take_profit_semantics_invalid"):
+        project_canonical_dca_plan(source, binding=_binding())
+
+
 def test_projection_rejects_strategy_market_from_another_venue() -> None:
     source = _strategy_plan(provider="binance_usdm_futures", symbol="GOLD")
 
