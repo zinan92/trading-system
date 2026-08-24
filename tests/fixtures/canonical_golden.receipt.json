@@ -1,0 +1,12 @@
+{
+  "source_repo": "/Users/wendy/work/trading-system-testnet",
+  "source_baseline_sha": "b841800ee03fd98107063c0cbbf5144096a5c4c0",
+  "fixture_path": "tests/fixtures/canonical_golden.json",
+  "fixture_sha256": "ce594ffa89ad134296b17795fd81f02b599f2211656d5cc13390b63cd548b67d",
+  "capture_script": "tools/capture_canonical_golden.py",
+  "capture_command": "python3 tools/capture_canonical_golden.py | diff -u tests/fixtures/canonical_golden.json -",
+  "capture_result": "GOLDEN_CAPTURE_DIFF_PASS",
+  "captured_at_utc": "2026-08-24T07:01:34Z",
+  "implementation_copy_started_after_fixture": true,
+  "source_behavior_note": "The capture imports only source pure DCA/Grid modules and emits deterministic JSON; it does not call network, credentials, broker, order, filesystem journal, Park, Telegram, or Cloud code."
+}

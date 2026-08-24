@@ -1,0 +1,1674 @@
+{
+  "conditional_grid": {
+    "same_bar_hard_stop": {
+      "armed": true,
+      "fills": [],
+      "gross_pnl": 0.0,
+      "lifecycle": [],
+      "max_inventory": 0,
+      "net_pnl": 0.0,
+      "rearms": 0,
+      "round_trips": 0,
+      "side_notional": 0.0,
+      "sides": 0,
+      "stop_hit": true,
+      "traded": false
+    },
+    "synthetic_range_rearm": {
+      "armed": true,
+      "fills": [
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0001",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3992.0,
+          "realized_pnl": -0.05,
+          "rung": 0,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 4000.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0002",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3984.0,
+          "realized_pnl": -0.05,
+          "rung": 1,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3992.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0003",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3976.0,
+          "realized_pnl": -0.05,
+          "rung": 2,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3984.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0004",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3968.0,
+          "realized_pnl": -0.05,
+          "rung": 3,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3976.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0005",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3960.0,
+          "realized_pnl": -0.05,
+          "rung": 4,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3968.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0006",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3952.0,
+          "realized_pnl": -0.05,
+          "rung": 5,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3960.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0007",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3944.0,
+          "realized_pnl": -0.05,
+          "rung": 6,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3952.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0008",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3936.0,
+          "realized_pnl": -0.05,
+          "rung": 7,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3944.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0009",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3928.0,
+          "realized_pnl": -0.05,
+          "rung": 8,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3936.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-rearm_grid_0010",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -0.05,
+          "rung": 9,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 3928.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.0490982,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0011",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -18.03607214,
+              "realized_pnl": -18.08517034,
+              "trade_id": "golden-conditional-rearm_grid_0001",
+              "units": 0.250501002004008
+            }
+          ],
+          "notional": 981.96392786,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -18.085170340681362,
+          "rung": 0,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04919679,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0012",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -16.06425703,
+              "realized_pnl": -16.11345382,
+              "trade_id": "golden-conditional-rearm_grid_0002",
+              "units": 0.25100401606425704
+            }
+          ],
+          "notional": 983.93574297,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -16.113453815261046,
+          "rung": 1,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04929577,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0013",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -14.08450704,
+              "realized_pnl": -14.13380282,
+              "trade_id": "golden-conditional-rearm_grid_0003",
+              "units": 0.2515090543259557
+            }
+          ],
+          "notional": 985.91549296,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -14.133802816901408,
+          "rung": 2,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04939516,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0014",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -12.09677419,
+              "realized_pnl": -12.14616935,
+              "trade_id": "golden-conditional-rearm_grid_0004",
+              "units": 0.25201612903225806
+            }
+          ],
+          "notional": 987.90322581,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -12.14616935483871,
+          "rung": 3,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04949495,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0015",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -10.1010101,
+              "realized_pnl": -10.15050505,
+              "trade_id": "golden-conditional-rearm_grid_0005",
+              "units": 0.25252525252525254
+            }
+          ],
+          "notional": 989.8989899,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -10.150505050505052,
+          "rung": 4,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04959514,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0016",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -8.09716599,
+              "realized_pnl": -8.14676113,
+              "trade_id": "golden-conditional-rearm_grid_0006",
+              "units": 0.25303643724696356
+            }
+          ],
+          "notional": 991.90283401,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -8.146761133603238,
+          "rung": 5,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04969574,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0017",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -6.0851927,
+              "realized_pnl": -6.13488844,
+              "trade_id": "golden-conditional-rearm_grid_0007",
+              "units": 0.2535496957403651
+            }
+          ],
+          "notional": 993.9148073,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -6.134888438133874,
+          "rung": 6,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04979675,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0018",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -4.06504065,
+              "realized_pnl": -4.1148374,
+              "trade_id": "golden-conditional-rearm_grid_0008",
+              "units": 0.2540650406504065
+            }
+          ],
+          "notional": 995.93495935,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -4.114837398373984,
+          "rung": 7,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04989817,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0019",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -2.03665988,
+              "realized_pnl": -2.08655804,
+              "trade_id": "golden-conditional-rearm_grid_0009",
+              "units": 0.2545824847250509
+            }
+          ],
+          "notional": 997.96334012,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -2.0865580448065173,
+          "rung": 8,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-conditional-rearm_grid_0020",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": 0.0,
+              "realized_pnl": -0.05,
+              "trade_id": "golden-conditional-rearm_grid_0010",
+              "units": 0.25510204081632654
+            }
+          ],
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3920.0,
+          "realized_pnl": -0.05,
+          "rung": 9,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        }
+      ],
+      "gross_pnl": -90.66667972709155,
+      "lifecycle": [],
+      "max_inventory": 10,
+      "net_pnl": -91.66214639310519,
+      "rearms": 1,
+      "round_trips": 0,
+      "side_notional": 19909.333320272905,
+      "sides": 20,
+      "stop_hit": true,
+      "traded": true
+    },
+    "terminal_flatten": {
+      "armed": true,
+      "fills": [
+        {
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-conditional-flatten_grid_0001",
+          "layer": "grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3992.0,
+          "realized_pnl": -0.05,
+          "rung": 0,
+          "side": "buy",
+          "sl": 3920.0,
+          "tp": 4000.0,
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "cost": 0.04997495,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "flatten",
+          "fill_id": "golden-conditional-flatten_grid_0002",
+          "layer": "grid",
+          "matched_entries": [
+            {
+              "gross_pnl": -0.501002,
+              "realized_pnl": -0.55097695,
+              "trade_id": "golden-conditional-flatten_grid_0001",
+              "units": 0.250501002004008
+            }
+          ],
+          "notional": 999.498998,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "price": 3990.0,
+          "realized_pnl": -0.5509769539078155,
+          "rung": 0,
+          "side": "sell",
+          "sl": 3920.0,
+          "tp": null,
+          "ts": "2026-07-05T01:01:00+00:00"
+        }
+      ],
+      "gross_pnl": -0.501002004008016,
+      "lifecycle": [],
+      "max_inventory": 1,
+      "net_pnl": -0.6009769539078156,
+      "rearms": 0,
+      "round_trips": 0,
+      "side_notional": 1999.4989979959919,
+      "sides": 2,
+      "stop_hit": false,
+      "traded": true
+    }
+  },
+  "dca": {
+    "commands": [
+      {
+        "cycle_id": "golden-dca",
+        "dca_round_id": "dca-round:strategy-plan-dca-golden",
+        "event": "entry",
+        "market_price": 4010.0,
+        "notional": 1997.996,
+        "order_type": "limit",
+        "position_id": "dca-round:strategy-plan-dca-golden",
+        "preview_entry_id": "dca-entry-01",
+        "price": 4004.0,
+        "quantity": 0.499,
+        "side": "buy",
+        "sl": 3970.0,
+        "source": "strategy_dca_paper",
+        "source_fill_id": "strategy-dca:strategy-plan-dca-golden:dca-entry-01",
+        "strategy_plan_id": "strategy-plan-dca-golden",
+        "strategy_plan_version": 1,
+        "strategy_type": "dca",
+        "symbol": "GOLD",
+        "trade_id": "dca-round:strategy-plan-dca-golden",
+        "ts": "2026-07-22T16:00:00+00:00"
+      },
+      {
+        "cycle_id": "golden-dca",
+        "dca_round_id": "dca-round:strategy-plan-dca-golden",
+        "event": "entry",
+        "market_price": 4010.0,
+        "notional": 1998.0,
+        "order_type": "limit",
+        "position_id": "dca-round:strategy-plan-dca-golden",
+        "preview_entry_id": "dca-entry-02",
+        "price": 3996.0,
+        "quantity": 0.5,
+        "side": "buy",
+        "sl": 3970.0,
+        "source": "strategy_dca_paper",
+        "source_fill_id": "strategy-dca:strategy-plan-dca-golden:dca-entry-02",
+        "strategy_plan_id": "strategy-plan-dca-golden",
+        "strategy_plan_version": 1,
+        "strategy_type": "dca",
+        "symbol": "GOLD",
+        "trade_id": "dca-round:strategy-plan-dca-golden",
+        "ts": "2026-07-22T16:00:00+00:00"
+      },
+      {
+        "cycle_id": "golden-dca",
+        "dca_round_id": "dca-round:strategy-plan-dca-golden",
+        "event": "entry",
+        "market_price": 4010.0,
+        "notional": 1997.988,
+        "order_type": "limit",
+        "position_id": "dca-round:strategy-plan-dca-golden",
+        "preview_entry_id": "dca-entry-03",
+        "price": 3988.0,
+        "quantity": 0.501,
+        "side": "buy",
+        "sl": 3970.0,
+        "source": "strategy_dca_paper",
+        "source_fill_id": "strategy-dca:strategy-plan-dca-golden:dca-entry-03",
+        "strategy_plan_id": "strategy-plan-dca-golden",
+        "strategy_plan_version": 1,
+        "strategy_type": "dca",
+        "symbol": "GOLD",
+        "trade_id": "dca-round:strategy-plan-dca-golden",
+        "ts": "2026-07-22T16:00:00+00:00"
+      }
+    ],
+    "plan": {
+      "cycle_id": "golden-dca",
+      "dca": {
+        "aggregate_take_profit": {
+          "event": "target",
+          "one_active_order_required": true,
+          "order_type": "limit",
+          "price": 4050.0,
+          "quantity_source": "reconciled_open_dca_round_quantity",
+          "reduce_only": true,
+          "replace_after_each_entry_fill": true,
+          "side": "sell"
+        },
+        "entries": [
+          {
+            "event": "entry",
+            "execution_contract": {
+              "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+              "execution_instrument_id": "",
+              "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "max_leverage": "10",
+              "price_increment": "0.01",
+              "quantity_increment": "0.001",
+              "schema_version": "dualtrack-execution-contract-v1",
+              "starting_cash": "10000"
+            },
+            "level": 1,
+            "notional": 1997.996,
+            "order_type": "limit",
+            "preview_entry_id": "dca-entry-01",
+            "price": 4004.0,
+            "quantity": 0.499,
+            "side": "buy",
+            "sl": 3970.0,
+            "state": "preview"
+          },
+          {
+            "event": "entry",
+            "execution_contract": {
+              "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+              "execution_instrument_id": "",
+              "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "max_leverage": "10",
+              "price_increment": "0.01",
+              "quantity_increment": "0.001",
+              "schema_version": "dualtrack-execution-contract-v1",
+              "starting_cash": "10000"
+            },
+            "level": 2,
+            "notional": 1998.0,
+            "order_type": "limit",
+            "preview_entry_id": "dca-entry-02",
+            "price": 3996.0,
+            "quantity": 0.5,
+            "side": "buy",
+            "sl": 3970.0,
+            "state": "preview"
+          },
+          {
+            "event": "entry",
+            "execution_contract": {
+              "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+              "execution_instrument_id": "",
+              "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "max_leverage": "10",
+              "price_increment": "0.01",
+              "quantity_increment": "0.001",
+              "schema_version": "dualtrack-execution-contract-v1",
+              "starting_cash": "10000"
+            },
+            "level": 3,
+            "notional": 1997.988,
+            "order_type": "limit",
+            "preview_entry_id": "dca-entry-03",
+            "price": 3988.0,
+            "quantity": 0.501,
+            "side": "buy",
+            "sl": 3970.0,
+            "state": "preview"
+          }
+        ],
+        "entry_count": 3,
+        "entry_levels": [
+          4004.0,
+          3996.0,
+          3988.0
+        ],
+        "loop_enabled": false,
+        "max_additions": 3,
+        "notional_per_addition": 2000.0,
+        "profit_calculation": "modeled_entry_exit_fees_after_execution_rounding_funding_excluded",
+        "stop_price": 3970.0,
+        "target_mode": "fixed_price",
+        "target_price": 4050.0,
+        "total_possible_notional": 5993.984
+      },
+      "direction": "long",
+      "execution_context": {
+        "market": {
+          "price": 4010.0,
+          "provider": "fixture-provider",
+          "symbol": "GOLD",
+          "timeframe": "1m",
+          "timestamp": "2026-07-22T00:19:00+00:00"
+        }
+      },
+      "field_sources": {
+        "dca": "confirmed",
+        "direction": "confirmed",
+        "risk_budget": "confirmed"
+      },
+      "locked_at": "2026-07-22T16:00:00+00:00",
+      "plan_digest": "sha256:6d58a0681092847d709853f7a662edcbfebe630aed8f3b360e5d06f48b630fba",
+      "preview_id": "dca-preview-7599a3c1250b",
+      "risk_budget": {
+        "actual_leverage_at_full_depth": 0.5994,
+        "capacity_exceeded": false,
+        "equity": 10000.0,
+        "estimated_margin_at_full_depth": 599.4,
+        "leverage_limit": 10.0,
+        "max_notional": 5993.984,
+        "max_open_orders": 3,
+        "max_open_positions": 1,
+        "maximum_loss_at_full_depth": 39.5814492,
+        "risk_flags": [],
+        "selected_leverage": 10.0
+      },
+      "schema_version": "strategy-plan-v1",
+      "status": "active",
+      "strategy_plan_id": "strategy-plan-dca-golden",
+      "strategy_revision_id": "revision:strategy-plan-dca-golden:v1",
+      "strategy_session_id": "session:dca:8a15a0abd161fca91ba2e7ed",
+      "strategy_type": "dca",
+      "version": 1
+    },
+    "preview": {
+      "aggregate_take_profit": {
+        "event": "target",
+        "one_active_order_required": true,
+        "order_type": "limit",
+        "price": 4050.0,
+        "quantity_source": "reconciled_open_dca_round_quantity",
+        "reduce_only": true,
+        "replace_after_each_entry_fill": true,
+        "side": "sell"
+      },
+      "cycle_id": "golden-dca",
+      "dca": {
+        "entry_count": 3,
+        "entry_levels": [
+          4004.0,
+          3996.0,
+          3988.0
+        ],
+        "loop_enabled": false,
+        "max_additions": 3,
+        "notional_per_addition": 2000.0,
+        "profit_calculation": "modeled_entry_exit_fees_after_execution_rounding_funding_excluded",
+        "stop_price": 3970.0,
+        "target_mode": "fixed_price",
+        "target_price": 4050.0,
+        "total_possible_notional": 5993.984
+      },
+      "depth_economics": [
+        {
+          "accumulated_notional": 1997.996,
+          "accumulated_quantity": 0.499,
+          "aggregate_target_quantity": 0.499,
+          "fill_depth": 1,
+          "stop_gross_pnl_usd": -16.966,
+          "stop_modeled_fees_usd": 0.1989513,
+          "stop_net_pnl_usd": -17.1649513,
+          "stop_price": 3970.0,
+          "target_gross_pnl_usd": 22.954,
+          "target_modeled_fees_usd": 0.2009473,
+          "target_net_pnl_usd": 22.7530527,
+          "target_price": 4050.0,
+          "weighted_average_entry": 4004.0
+        },
+        {
+          "accumulated_notional": 3995.996,
+          "accumulated_quantity": 0.999,
+          "aggregate_target_quantity": 0.999,
+          "fill_depth": 2,
+          "stop_gross_pnl_usd": -29.966,
+          "stop_modeled_fees_usd": 0.3981013,
+          "stop_net_pnl_usd": -30.3641013,
+          "stop_price": 3970.0,
+          "target_gross_pnl_usd": 49.954,
+          "target_modeled_fees_usd": 0.4020973,
+          "target_net_pnl_usd": 49.5519027,
+          "target_price": 4050.0,
+          "weighted_average_entry": 3999.995996
+        },
+        {
+          "accumulated_notional": 5993.984,
+          "accumulated_quantity": 1.5,
+          "aggregate_target_quantity": 1.5,
+          "fill_depth": 3,
+          "stop_gross_pnl_usd": -38.984,
+          "stop_modeled_fees_usd": 0.5974492,
+          "stop_net_pnl_usd": -39.5814492,
+          "stop_price": 3970.0,
+          "target_gross_pnl_usd": 81.016,
+          "target_modeled_fees_usd": 0.6034492,
+          "target_net_pnl_usd": 80.4125508,
+          "target_price": 4050.0,
+          "weighted_average_entry": 3995.98933333
+        }
+      ],
+      "direction": "long",
+      "entries": [
+        {
+          "event": "entry",
+          "execution_contract": {
+            "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+            "execution_instrument_id": "",
+            "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "max_leverage": "10",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+            "schema_version": "dualtrack-execution-contract-v1",
+            "starting_cash": "10000"
+          },
+          "level": 1,
+          "notional": 1997.996,
+          "order_type": "limit",
+          "preview_entry_id": "dca-entry-01",
+          "price": 4004.0,
+          "quantity": 0.499,
+          "side": "buy",
+          "sl": 3970.0,
+          "state": "preview"
+        },
+        {
+          "event": "entry",
+          "execution_contract": {
+            "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+            "execution_instrument_id": "",
+            "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "max_leverage": "10",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+            "schema_version": "dualtrack-execution-contract-v1",
+            "starting_cash": "10000"
+          },
+          "level": 2,
+          "notional": 1998.0,
+          "order_type": "limit",
+          "preview_entry_id": "dca-entry-02",
+          "price": 3996.0,
+          "quantity": 0.5,
+          "side": "buy",
+          "sl": 3970.0,
+          "state": "preview"
+        },
+        {
+          "event": "entry",
+          "execution_contract": {
+            "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+            "execution_instrument_id": "",
+            "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "max_leverage": "10",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+            "schema_version": "dualtrack-execution-contract-v1",
+            "starting_cash": "10000"
+          },
+          "level": 3,
+          "notional": 1997.988,
+          "order_type": "limit",
+          "preview_entry_id": "dca-entry-03",
+          "price": 3988.0,
+          "quantity": 0.501,
+          "side": "buy",
+          "sl": 3970.0,
+          "state": "preview"
+        }
+      ],
+      "market": {
+        "price": 4010.0,
+        "provider": "fixture-provider",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "timestamp": "2026-07-22T00:19:00+00:00"
+      },
+      "preview_id": "dca-preview-7599a3c1250b",
+      "risk": {
+        "actual_leverage_at_full_depth": 0.5994,
+        "capacity_exceeded": false,
+        "equity": 10000.0,
+        "estimated_margin_at_full_depth": 599.4,
+        "leverage_limit": 10.0,
+        "maximum_loss_at_full_depth": 39.5814492,
+        "risk_flags": [],
+        "selected_leverage": 10.0
+      },
+      "schema_version": "strategy-dca-preview-v1",
+      "strategy_type": "dca"
+    },
+    "stop_replay": {
+      "additions_filled": 3,
+      "average_entry_price": null,
+      "direction": "long",
+      "events": [
+        {
+          "aggregate_quantity": 0.499,
+          "entry_id": "dca-entry-01",
+          "event": "entry",
+          "price": 4004.0,
+          "quantity": 0.499,
+          "sequence": 1
+        },
+        {
+          "aggregate_quantity": 0.999,
+          "entry_id": "dca-entry-02",
+          "event": "entry",
+          "price": 3996.0,
+          "quantity": 0.5,
+          "sequence": 2
+        },
+        {
+          "aggregate_quantity": 1.5,
+          "entry_id": "dca-entry-03",
+          "event": "entry",
+          "price": 3988.0,
+          "quantity": 0.501,
+          "sequence": 2
+        },
+        {
+          "covered_entry_ids": [
+            "dca-entry-01",
+            "dca-entry-02",
+            "dca-entry-03"
+          ],
+          "event": "stop",
+          "price": 3970.0,
+          "quantity": 1.5,
+          "sequence": 2
+        }
+      ],
+      "open_quantity": 0,
+      "preview_id": "dca-preview-7599a3c1250b",
+      "schema_version": "strategy-dca-replay-v1",
+      "status": "stop_closed"
+    },
+    "target_replay": {
+      "additions_filled": 2,
+      "average_entry_price": null,
+      "direction": "long",
+      "events": [
+        {
+          "aggregate_quantity": 0.499,
+          "entry_id": "dca-entry-01",
+          "event": "entry",
+          "price": 4004.0,
+          "quantity": 0.499,
+          "sequence": 1
+        },
+        {
+          "aggregate_quantity": 0.999,
+          "entry_id": "dca-entry-02",
+          "event": "entry",
+          "price": 3996.0,
+          "quantity": 0.5,
+          "sequence": 2
+        },
+        {
+          "covered_entry_ids": [
+            "dca-entry-01",
+            "dca-entry-02"
+          ],
+          "event": "target",
+          "price": 4050.0,
+          "quantity": 0.999,
+          "sequence": 3
+        }
+      ],
+      "open_quantity": 0,
+      "preview_id": "dca-preview-7599a3c1250b",
+      "schema_version": "strategy-dca-replay-v1",
+      "status": "target_closed"
+    }
+  },
+  "grid": {
+    "explicit_rearm": {
+      "armed": true,
+      "fills": [
+        {
+          "closed_units": 0.25,
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-grid_ai_grid_0001",
+          "grid_line_cycle": 1,
+          "grid_line_id": "ai_grid_0",
+          "grid_line_transition": {
+            "event": "entry_fill_confirmed",
+            "from": "armed",
+            "generation": 1,
+            "sequence": 2,
+            "to": "open"
+          },
+          "gross_pnl": 0.0,
+          "layer": "ai_grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "pnl_units": 0.25,
+          "position_id": "ai_grid_0",
+          "position_status": "closed",
+          "price": 4000.0,
+          "realized_pnl": -0.05,
+          "remaining_units": 0.0,
+          "rung": 0,
+          "side": "buy",
+          "sl": 3990.0,
+          "tp": 4010.0,
+          "trade_id": "golden-grid_ai_grid_trade_0001",
+          "ts": "2026-07-05T01:00:00+00:00"
+        },
+        {
+          "cost": 0.050125,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "target",
+          "fill_id": "golden-grid_ai_grid_0002",
+          "grid_line_cycle": 1,
+          "grid_line_id": "ai_grid_0",
+          "grid_line_transition": {
+            "event": "close_fill_confirmed_rearm",
+            "from": "open",
+            "generation": 1,
+            "next_generation": 2,
+            "sequence": 3,
+            "to": "rearmed"
+          },
+          "gross_pnl": 2.5,
+          "layer": "ai_grid",
+          "matched_entries": [
+            {
+              "entry_price": 4000.0,
+              "fill_id": "golden-grid_ai_grid_0001",
+              "gross_pnl": 2.5,
+              "realized_pnl": 2.449875,
+              "trade_id": "golden-grid_ai_grid_trade_0001",
+              "units": 0.25
+            }
+          ],
+          "notional": 1002.5,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "pnl_units": 0.25,
+          "position_id": "ai_grid_0",
+          "position_status": "closed",
+          "price": 4010.0,
+          "realized_pnl": 2.449875,
+          "remaining_units": 0.0,
+          "rung": 0,
+          "side": "sell",
+          "sl": 3990.0,
+          "tp": 4010.0,
+          "trade_id": "golden-grid_ai_grid_trade_0001",
+          "ts": "2026-07-05T01:01:00+00:00"
+        },
+        {
+          "closed_units": 0.25,
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-grid_ai_grid_0003",
+          "grid_line_cycle": 2,
+          "grid_line_id": "ai_grid_0",
+          "grid_line_transition": {
+            "event": "entry_fill_confirmed",
+            "from": "rearmed",
+            "generation": 2,
+            "sequence": 4,
+            "to": "open"
+          },
+          "gross_pnl": 0.0,
+          "layer": "ai_grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "pnl_units": 0.25,
+          "position_id": "ai_grid_0",
+          "position_status": "closed",
+          "price": 4000.0,
+          "realized_pnl": -0.05,
+          "remaining_units": 0.0,
+          "rung": 0,
+          "side": "buy",
+          "sl": 3990.0,
+          "tp": 4010.0,
+          "trade_id": "golden-grid_ai_grid_trade_0001_cycle_0002",
+          "ts": "2026-07-05T01:02:00+00:00"
+        },
+        {
+          "cost": 0.050125,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "target",
+          "fill_id": "golden-grid_ai_grid_0004",
+          "grid_line_cycle": 2,
+          "grid_line_id": "ai_grid_0",
+          "grid_line_transition": {
+            "event": "close_fill_confirmed_rearm",
+            "from": "open",
+            "generation": 2,
+            "next_generation": 3,
+            "sequence": 5,
+            "to": "rearmed"
+          },
+          "gross_pnl": 2.5,
+          "layer": "ai_grid",
+          "matched_entries": [
+            {
+              "entry_price": 4000.0,
+              "fill_id": "golden-grid_ai_grid_0003",
+              "gross_pnl": 2.5,
+              "realized_pnl": 2.449875,
+              "trade_id": "golden-grid_ai_grid_trade_0001_cycle_0002",
+              "units": 0.25
+            }
+          ],
+          "notional": 1002.5,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "pnl_units": 0.25,
+          "position_id": "ai_grid_0",
+          "position_status": "closed",
+          "price": 4010.0,
+          "realized_pnl": 2.449875,
+          "remaining_units": 0.0,
+          "rung": 0,
+          "side": "sell",
+          "sl": 3990.0,
+          "tp": 4010.0,
+          "trade_id": "golden-grid_ai_grid_trade_0001_cycle_0002",
+          "ts": "2026-07-05T01:03:00+00:00"
+        }
+      ],
+      "gross_pnl": 5.0,
+      "lifecycle": [
+        {
+          "active": true,
+          "at": "2026-07-05T01:00:00+00:00",
+          "close_filled_quantity": 0.0,
+          "entry_filled_quantity": 0.0,
+          "entry_order_open": true,
+          "event": "armed",
+          "fill_id": "",
+          "fill_quantity": 0.0,
+          "from": "",
+          "generation": 1,
+          "line_id": "ai_grid_0",
+          "open_quantity": 0.0,
+          "requested_quantity": null,
+          "sequence": 1,
+          "to": "armed"
+        },
+        {
+          "active": true,
+          "at": "2026-07-05T01:00:00+00:00",
+          "close_filled_quantity": 0.0,
+          "entry_filled_quantity": 0.25,
+          "entry_order_open": false,
+          "event": "entry_fill_confirmed",
+          "fill_id": "golden-grid_ai_grid_0001",
+          "fill_quantity": 0.25,
+          "from": "armed",
+          "generation": 1,
+          "line_id": "ai_grid_0",
+          "open_quantity": 0.25,
+          "requested_quantity": 0.25,
+          "sequence": 2,
+          "to": "open"
+        },
+        {
+          "active": true,
+          "at": "2026-07-05T01:01:00+00:00",
+          "close_filled_quantity": 0.25,
+          "entry_filled_quantity": 0.25,
+          "entry_order_open": true,
+          "event": "close_fill_confirmed_rearm",
+          "fill_id": "golden-grid_ai_grid_0002",
+          "fill_quantity": 0.25,
+          "from": "open",
+          "generation": 1,
+          "line_id": "ai_grid_0",
+          "next_generation": 2,
+          "open_quantity": 0.0,
+          "requested_quantity": 0.25,
+          "sequence": 3,
+          "to": "rearmed"
+        },
+        {
+          "active": true,
+          "at": "2026-07-05T01:02:00+00:00",
+          "close_filled_quantity": 0.0,
+          "entry_filled_quantity": 0.25,
+          "entry_order_open": false,
+          "event": "entry_fill_confirmed",
+          "fill_id": "golden-grid_ai_grid_0003",
+          "fill_quantity": 0.25,
+          "from": "rearmed",
+          "generation": 2,
+          "line_id": "ai_grid_0",
+          "open_quantity": 0.25,
+          "requested_quantity": 0.25,
+          "sequence": 4,
+          "to": "open"
+        },
+        {
+          "active": true,
+          "at": "2026-07-05T01:03:00+00:00",
+          "close_filled_quantity": 0.25,
+          "entry_filled_quantity": 0.25,
+          "entry_order_open": true,
+          "event": "close_fill_confirmed_rearm",
+          "fill_id": "golden-grid_ai_grid_0004",
+          "fill_quantity": 0.25,
+          "from": "open",
+          "generation": 2,
+          "line_id": "ai_grid_0",
+          "next_generation": 3,
+          "open_quantity": 0.0,
+          "requested_quantity": 0.25,
+          "sequence": 5,
+          "to": "rearmed"
+        }
+      ],
+      "max_inventory": 1,
+      "net_pnl": 4.79975,
+      "rearms": 2,
+      "round_trips": 2,
+      "side_notional": 4005.0,
+      "sides": 4,
+      "stop_hit": false,
+      "traded": true
+    },
+    "hard_stop": {
+      "armed": true,
+      "fills": [
+        {
+          "closed_units": 0.25,
+          "cost": 0.05,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "entry",
+          "fill_id": "golden-grid-stop_ai_grid_0001",
+          "grid_line_cycle": 1,
+          "grid_line_id": "ai_grid_0",
+          "grid_line_transition": {
+            "event": "entry_fill_confirmed",
+            "from": "armed",
+            "generation": 1,
+            "sequence": 2,
+            "to": "open"
+          },
+          "gross_pnl": 0.0,
+          "layer": "ai_grid",
+          "notional": 1000.0,
+          "order_type": "limit",
+          "out_of_plan": false,
+          "pnl_units": 0.25,
+          "position_id": "ai_grid_0",
+          "position_status": "closed",
+          "price": 4000.0,
+          "realized_pnl": -0.05,
+          "remaining_units": 0.0,
+          "rung": 0,
+          "side": "buy",
+          "sl": 3990.0,
+          "tp": 4010.0,
+          "trade_id": "golden-grid-stop_ai_grid_trade_0001",
+          "ts": "2026-07-05T01:00:00+00:00"
+        },
+        {
+          "cost": 0.049875,
+          "cost_model": {
+            "cost_per_side_bp": 0.5
+          },
+          "event": "stop",
+          "fill_id": "golden-grid-stop_ai_grid_0002",
+          "grid_line_cycle": 1,
+          "grid_line_id": "ai_grid_0",
+          "grid_line_transition": {
+            "event": "close_fill_confirmed_terminal",
+            "from": "open",
+            "generation": 1,
+            "sequence": 3,
+            "to": "stopped"
+          },
+          "gross_pnl": -2.5,
+          "layer": "ai_grid",
+          "matched_entries": [
+            {
+              "entry_price": 4000.0,
+              "fill_id": "golden-grid-stop_ai_grid_0001",
+              "gross_pnl": -2.5,
+              "realized_pnl": -2.549875,
+              "trade_id": "golden-grid-stop_ai_grid_trade_0001",
+              "units": 0.25
+            }
+          ],
+          "notional": 997.5,
+          "order_type": "market",
+          "out_of_plan": false,
+          "pnl_units": 0.25,
+          "position_id": "ai_grid_0",
+          "position_status": "closed",
+          "price": 3990.0,
+          "realized_pnl": -2.549875,
+          "remaining_units": 0.0,
+          "rung": 0,
+          "side": "sell",
+          "sl": 3990.0,
+          "tp": null,
+          "trade_id": "golden-grid-stop_ai_grid_trade_0001",
+          "ts": "2026-07-05T01:01:00+00:00"
+        }
+      ],
+      "gross_pnl": -2.5,
+      "lifecycle": [
+        {
+          "active": true,
+          "at": "2026-07-05T01:00:00+00:00",
+          "close_filled_quantity": 0.0,
+          "entry_filled_quantity": 0.0,
+          "entry_order_open": true,
+          "event": "armed",
+          "fill_id": "",
+          "fill_quantity": 0.0,
+          "from": "",
+          "generation": 1,
+          "line_id": "ai_grid_0",
+          "open_quantity": 0.0,
+          "requested_quantity": null,
+          "sequence": 1,
+          "to": "armed"
+        },
+        {
+          "active": true,
+          "at": "2026-07-05T01:00:00+00:00",
+          "close_filled_quantity": 0.0,
+          "entry_filled_quantity": 0.25,
+          "entry_order_open": false,
+          "event": "entry_fill_confirmed",
+          "fill_id": "golden-grid-stop_ai_grid_0001",
+          "fill_quantity": 0.25,
+          "from": "armed",
+          "generation": 1,
+          "line_id": "ai_grid_0",
+          "open_quantity": 0.25,
+          "requested_quantity": 0.25,
+          "sequence": 2,
+          "to": "open"
+        },
+        {
+          "active": false,
+          "at": "2026-07-05T01:01:00+00:00",
+          "close_filled_quantity": 0.25,
+          "entry_filled_quantity": 0.25,
+          "entry_order_open": false,
+          "event": "close_fill_confirmed_terminal",
+          "fill_id": "golden-grid-stop_ai_grid_0002",
+          "fill_quantity": 0.25,
+          "from": "open",
+          "generation": 1,
+          "line_id": "ai_grid_0",
+          "open_quantity": 0.0,
+          "requested_quantity": 0.25,
+          "sequence": 3,
+          "to": "stopped"
+        }
+      ],
+      "max_inventory": 1,
+      "net_pnl": -2.599875,
+      "rearms": 0,
+      "round_trips": 0,
+      "side_notional": 1997.5,
+      "sides": 2,
+      "stop_hit": true,
+      "traded": true
+    },
+    "line_after_partial_close_cancel": {
+      "active": true,
+      "armed_at": "2026-07-05T01:00:00+00:00",
+      "close_filled_quantity": 0.0,
+      "entry_filled_quantity": 0.0,
+      "entry_order_open": true,
+      "generation": 2,
+      "line_id": "golden-line",
+      "processed_fill_ids": [
+        "close-partial",
+        "entry-partial"
+      ],
+      "requested_quantity": 10.0,
+      "state": "rearmed",
+      "transitions": [
+        {
+          "active": true,
+          "at": "2026-07-05T01:00:00+00:00",
+          "close_filled_quantity": 0.0,
+          "entry_filled_quantity": 0.0,
+          "entry_order_open": true,
+          "event": "armed",
+          "fill_id": "",
+          "fill_quantity": 0.0,
+          "from": "",
+          "generation": 1,
+          "line_id": "golden-line",
+          "open_quantity": 0.0,
+          "requested_quantity": 10.0,
+          "sequence": 1,
+          "to": "armed"
+        },
+        {
+          "active": true,
+          "at": "2026-07-05T01:01:00+00:00",
+          "close_filled_quantity": 0.0,
+          "entry_filled_quantity": 4.0,
+          "entry_order_open": true,
+          "event": "entry_partial_fill_confirmed",
+          "fill_id": "entry-partial",
+          "fill_quantity": 4.0,
+          "from": "armed",
+          "generation": 1,
+          "line_id": "golden-line",
+          "open_quantity": 4.0,
+          "requested_quantity": 10.0,
+          "sequence": 2,
+          "to": "entry_partially_filled"
+        },
+        {
+          "active": true,
+          "at": "2026-07-05T01:02:00+00:00",
+          "close_filled_quantity": 4.0,
+          "entry_filled_quantity": 4.0,
+          "entry_order_open": true,
+          "event": "close_fill_confirmed_waiting_entry_cancel",
+          "fill_id": "close-partial",
+          "fill_quantity": 4.0,
+          "from": "entry_partially_filled",
+          "generation": 1,
+          "line_id": "golden-line",
+          "open_quantity": 0.0,
+          "requested_quantity": 10.0,
+          "sequence": 3,
+          "to": "entry_cancel_pending"
+        },
+        {
+          "active": true,
+          "at": "2026-07-05T01:03:00+00:00",
+          "close_filled_quantity": 4.0,
+          "entry_filled_quantity": 4.0,
+          "entry_order_open": true,
+          "event": "entry_remainder_cancel_confirmed_rearm",
+          "fill_id": "",
+          "fill_quantity": 0.0,
+          "from": "entry_cancel_pending",
+          "generation": 1,
+          "line_id": "golden-line",
+          "next_generation": 2,
+          "open_quantity": 0.0,
+          "reason": "cancel remainder",
+          "requested_quantity": 10.0,
+          "sequence": 4,
+          "to": "rearmed"
+        }
+      ]
+    },
+    "preview": {
+      "cycle_id": "golden-grid-preview",
+      "direction": "neutral",
+      "grid": {
+        "count": 4,
+        "levels": [
+          90.0,
+          100.0,
+          110.0,
+          120.0,
+          130.0
+        ],
+        "leverage": 10.0,
+        "leverage_limit": 10.0,
+        "margin_utilization_cap": 1.0,
+        "max_spacing": 10.0,
+        "min_net_profit_per_grid_usd": 76.82,
+        "min_spacing": 10.0,
+        "mode": "arithmetic",
+        "net_profit_per_grid_pct": 7.6827,
+        "notional_mode": "manual",
+        "notional_per_grid": 1000.0,
+        "out_of_range": "exit_only",
+        "profit_calculation": "modeled_entry_exit_fees_after_execution_rounding_funding_excluded",
+        "profit_target_met": true,
+        "spacing": 10.0,
+        "spacing_atr": 4.0,
+        "spacing_atr_multiple": 0.25,
+        "spacing_atr_period": 14,
+        "spacing_ratio": null,
+        "spacing_source_timeframe": "4h",
+        "target_net_profit_per_grid_usd": 1.0,
+        "target_spacing": 1.0
+      },
+      "orders": [
+        {
+          "event": "entry",
+          "execution_contract": {
+            "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+            "execution_instrument_id": "",
+            "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "max_leverage": "10",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+            "schema_version": "dualtrack-execution-contract-v1",
+            "starting_cash": "10000"
+          },
+          "level": 0,
+          "notional": 999.99,
+          "order_type": "limit",
+          "planned_net_profit_usd": 111.0044455,
+          "preview_order_id": "preview-00-buy",
+          "price": 90.0,
+          "quantity": 11.111,
+          "side": "buy",
+          "sl": 80.0,
+          "state": "preview",
+          "tp": 100.0
+        },
+        {
+          "event": "entry",
+          "execution_contract": {
+            "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+            "execution_instrument_id": "",
+            "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "max_leverage": "10",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+            "schema_version": "dualtrack-execution-contract-v1",
+            "starting_cash": "10000"
+          },
+          "level": 1,
+          "notional": 1000.0,
+          "order_type": "limit",
+          "planned_net_profit_usd": 99.895,
+          "preview_order_id": "preview-01-buy",
+          "price": 100.0,
+          "quantity": 10.0,
+          "side": "buy",
+          "sl": 80.0,
+          "state": "preview",
+          "tp": 110.0
+        },
+        {
+          "event": "entry",
+          "execution_contract": {
+            "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+            "execution_instrument_id": "",
+            "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "max_leverage": "10",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+            "schema_version": "dualtrack-execution-contract-v1",
+            "starting_cash": "10000"
+          },
+          "level": 3,
+          "notional": 999.96,
+          "order_type": "limit",
+          "planned_net_profit_usd": 83.2341705,
+          "preview_order_id": "preview-03-sell",
+          "price": 120.0,
+          "quantity": 8.333,
+          "side": "sell",
+          "sl": 140.0,
+          "state": "preview",
+          "tp": 110.0
+        },
+        {
+          "event": "entry",
+          "execution_contract": {
+            "contract_hash": "sha256:6af62b24c9b76bd2471ac613a79ba36a939a8a703be363d5109e9c67281bbe33",
+            "execution_instrument_id": "",
+            "fee_contract_hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "max_leverage": "10",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+            "schema_version": "dualtrack-execution-contract-v1",
+            "starting_cash": "10000"
+          },
+          "level": 4,
+          "notional": 999.96,
+          "order_type": "limit",
+          "planned_net_profit_usd": 76.82385,
+          "preview_order_id": "preview-04-sell",
+          "price": 130.0,
+          "quantity": 7.692,
+          "side": "sell",
+          "sl": 140.0,
+          "state": "preview",
+          "tp": 120.0
+        }
+      ],
+      "preview_id": "grid-preview-59d56152e7ec",
+      "range": {
+        "atr": 10.0,
+        "atr_multiple": 2.0,
+        "atr_period": 14,
+        "high": 130.0,
+        "low": 90.0,
+        "method": "D1 ATR14 \u00d7 2",
+        "scope": "full",
+        "source_envelope": {
+          "high": 130.0,
+          "low": 90.0
+        },
+        "source_timeframe": "1d",
+        "split_price": 110.0
+      },
+      "risk": {
+        "absolute_notional_ceiling": 100000.0,
+        "actual_leverage": 0.2,
+        "calibration_status": "shadow_candidate",
+        "capital_budget": 100000.0,
+        "capital_budget_exceeded": false,
+        "capital_notional_cap_per_grid": 50000.0,
+        "capital_utilization_pct": 2.0,
+        "equity": 10000.0,
+        "estimated_margin": 200.0,
+        "max_loss": 311.11,
+        "max_loss_role": "advisory_only",
+        "max_simultaneous_same_side_levels": 2,
+        "profit_target_met": true,
+        "safe_notional_cap_per_grid": 50000.0,
+        "sizing_constraint": "min_net_profit_within_leverage_capacity"
+      },
+      "schema_version": "strategy-grid-preview-v1",
+      "style": "steady"
+    }
+  },
+  "source_baseline_sha": "b841800ee03fd98107063c0cbbf5144096a5c4c0"
+}
