@@ -463,6 +463,22 @@ def test_external_dca_prepare_facts_protection_then_next_entry(tmp_path: Path) -
     assert all(token not in encoded for token in ("cloid", "tid", "hash", "coin", '"px"', '"sz"', '"oid"'))
 
 
+def test_external_dca_protection_group_uses_pinned_tp_limit_and_marked_position_following() -> None:
+    plan = _plan()
+    group = ExternalDcaLifecycle._protection_group(
+        plan,
+        {"entry_order_id": "entry:0"},
+        Decimal("0.001"),
+        Decimal("60000"),
+    )
+
+    assert group.quantity_policy.value == "position_following"
+    assert group.take_profit.execution.value == "limit"
+    assert group.take_profit.trigger_price == plan.target_price
+    assert group.take_profit.limit_price == plan.target_price
+    assert group.stop_loss.execution.value == "market"
+
+
 def test_external_dca_canonical_start_persists_source_and_normalized_facts(tmp_path: Path) -> None:
     plan, confirmation, lifecycle, orders, _protection = _lifecycle(tmp_path)
     provenance = _provenance(plan)
