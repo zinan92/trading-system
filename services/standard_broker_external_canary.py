@@ -146,6 +146,7 @@ class StandardBrokerExternalCanaryAdapter:
                 idempotency_key=request.idempotency_key,
                 reduce_only=request.reduce_only,
                 close_position=request.close_position,
+                client_order_id=request.client_order_id,
             )
         except (TypeError, ValueError) as exc:
             raise StandardBrokerExternalCanaryError(

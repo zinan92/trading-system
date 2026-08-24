@@ -8,7 +8,7 @@ strategy state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -1061,7 +1061,7 @@ class ExternalDcaLifecycle:
                     ),
                     "",
                 )
-            if broker_order_id and broker_order_id == persisted_broker_order_id:
+            if not broker_order_id or broker_order_id == persisted_broker_order_id:
                 return state
             replay = dict(state)
             replay["status"] = "BLOCKED"
@@ -1139,6 +1139,7 @@ class ExternalDcaLifecycle:
             ).strip()
             if not client_order_id:
                 raise ExternalDcaError("flatten_client_identity_missing")
+            request = replace(request, client_order_id=client_order_id)
             persisted_broker_order_id = str(persisted_intent.get("broker_order_id") or "").strip()
             if broker_order_id is not None and persisted_broker_order_id and persisted_broker_order_id != broker_order_id:
                 raise ExternalDcaError("flatten_broker_identity_mismatch")

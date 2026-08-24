@@ -178,6 +178,7 @@ class TestnetCanaryOrderRequest:
     idempotency_key: str
     reduce_only: bool = False
     close_position: bool = False
+    client_order_id: str | None = None
 
 
 @runtime_checkable

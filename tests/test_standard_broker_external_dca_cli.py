@@ -205,7 +205,12 @@ def test_expired_reconcile_action_forwards_broker_id_without_exposure_methods(
     values["expires_at"] = "2020-01-01T00:00:00+00:00"
     values["plan_digest"] = external_dca_plan_digest(values)
     plan = ExternalDcaPlan.from_mapping(values, allow_expired=True)
-    _confirmation_path, confirmation, output_root = _write_confirmation(tmp_path / "action", plan)
+    confirmation_path, output_root = _write_confirmation(tmp_path / "action", plan)
+    confirmation = cli._load_confirmation_mapping(
+        confirmation_path,
+        plan=plan,
+        allow_expired=True,
+    )
     calls: list[object] = []
     runtime = SimpleNamespace(close=lambda: calls.append("close"))
     lifecycle = SimpleNamespace(
