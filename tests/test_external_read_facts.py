@@ -169,6 +169,91 @@ def test_complete_clearinghouse_account_maps_to_canonical_snapshot() -> None:
     assert envelope.data.positions[0].observation_id == "position-1"
 
 
+def test_nautilus_account_state_maps_to_canonical_snapshot() -> None:
+    envelope = _adapter().map_account(
+        request_id="account-state-1",
+        raw={
+            "data": {
+                "type": "AccountState",
+                "account_id": "0x1111111111111111111111111111111111111111-HYPERLIQUID",
+                "account_type": "MARGIN",
+                "balances": [
+                    {
+                        "type": "AccountBalance",
+                        "total": "1000.00000000",
+                        "locked": "25.00000000",
+                        "free": "975.00000000",
+                        "currency": "USDC",
+                    }
+                ],
+                "margins": [
+                    {
+                        "type": "MarginBalance",
+                        "initial": "100.00000000",
+                        "maintenance": "50.00000000",
+                        "currency": "USDC",
+                        "instrument_id": None,
+                    }
+                ],
+                "reported": True,
+                "event_id": "account-event-1",
+                "ts_event": 1787461200000,
+                "ts_init": 1787461200001,
+                "base_currency": None,
+            },
+            "provenance": _provenance(),
+        },
+    )
+
+    assert envelope.fact_type == "account.snapshot"
+    assert envelope.data.environment is BrokerEnvironment.TESTNET
+    assert envelope.data.equity == Decimal("1000.00000000")
+    assert envelope.data.balance == Decimal("1000.00000000")
+    assert envelope.data.withdrawable == Decimal("975.00000000")
+    assert envelope.data.margin_used == Decimal("100.00000000")
+    assert envelope.data.positions == ()
+    assert envelope.data.observation_id == "account-event-1"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"reported": False},
+        {"balances": []},
+        {"event_id": ""},
+        {"base_currency": "USD"},
+    ],
+)
+def test_nautilus_account_state_missing_canonical_fact_fails_closed(mutation: dict) -> None:
+    data = {
+        "type": "AccountState",
+        "account_id": "0x1111111111111111111111111111111111111111-HYPERLIQUID",
+        "account_type": "MARGIN",
+        "balances": [
+            {
+                "type": "AccountBalance",
+                "total": "1000",
+                "locked": "0",
+                "free": "1000",
+                "currency": "USDC",
+            }
+        ],
+        "margins": [],
+        "reported": True,
+        "event_id": "account-event-1",
+        "ts_event": 1787461200000,
+        "ts_init": 1787461200001,
+        "base_currency": "USDC",
+    }
+    data.update(mutation)
+
+    with pytest.raises(BrokerCapabilityError, match="capability_gap"):
+        _adapter().map_account(
+            request_id="account-state-invalid",
+            raw={"data": data, "provenance": _provenance()},
+        )
+
+
 def test_account_identity_mismatch_fails_closed() -> None:
     with pytest.raises(ValueError, match="account_identity_mismatch"):
         _adapter().map_account(

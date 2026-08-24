@@ -8,6 +8,7 @@ import pytest
 from standard_broker.external_canary import (
     ExternalCanaryBinding,
     ExternalCanaryFactBundle,
+    HyperliquidExternalSnapshotReader,
 )
 from standard_broker.models import BrokerEnvironment
 from standard_broker.models import Provenance
@@ -166,6 +167,88 @@ def test_binding_read_facts_is_typed_and_does_not_accept_raw_mapping() -> None:
     )
     assert isinstance(result, ExternalCanaryFactBundle)
     assert facts.calls == [("order-1", "SOL-USD-PERP")]
+
+
+def test_account_wide_snapshot_does_not_query_fills_for_blank_order_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _profile_session()
+    context = _profile_context(session)
+    provenance = Provenance(
+        source="nautilus-hyperliquid.testnet",
+        execution_scope=session.execution_scope,
+        transport_state="external_testnet",
+        mapping_revision=session.capabilities.revision,
+        received_at=NOW,
+    )
+
+    class FakeHost:
+        def read_fact(self, *, request, mapper):
+            del request
+            return mapper({"data": {}, "provenance": provenance})
+
+    class FakeMapper:
+        def _envelope(self, fact_type: str, data: object, request_id: str):
+            return ExternalFactEnvelope.create(
+                context=context,
+                fact_type=fact_type,
+                data=data,
+                request_id=request_id,
+                provenance=provenance,
+            )
+
+        def map_account(self, *, request_id: str, raw):
+            return self._envelope("account.snapshot", {}, request_id)
+
+        def map_positions(self, *, request_id: str, broker_symbol: str, raw):
+            del broker_symbol, raw
+            return self._envelope("account.positions", (), request_id)
+
+        def map_fill(self, *, request_id: str, raw):
+            del raw
+            return self._envelope("fee.fill", {}, request_id)
+
+    class FakeOrder:
+        def query_fills(self, *, order_id: str):
+            assert order_id
+            return ()
+
+        def open_orders(self, instrument_id: str):
+            assert instrument_id == "PAXG-USD-PERP"
+            return ()
+
+    class FakeInstruments:
+        def get(self, instrument_id: str):
+            assert instrument_id == "PAXG-USD-PERP"
+            return SimpleNamespace(broker_symbol="PAXG")
+
+    captured: dict[str, object] = {}
+
+    def fake_assemble(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        "standard_broker.external_canary.ExternalReconciliationSnapshot.assemble",
+        fake_assemble,
+    )
+    reader = HyperliquidExternalSnapshotReader(
+        context=context,
+        host=FakeHost(),
+        order=FakeOrder(),
+        facts_mapper=FakeMapper(),
+        instruments=FakeInstruments(),
+    )
+
+    reader.read_reconciliation(
+        order_id="",
+        instrument_id="PAXG-USD-PERP",
+        now=NOW,
+    )
+
+    assert captured["fills"].fact.data == ()
+    assert captured["fees"].fact.data == ()
+    assert captured["open_orders"].fact.data == ()
 
 
 def test_public_factory_composes_external_canary_binding_without_network() -> None:

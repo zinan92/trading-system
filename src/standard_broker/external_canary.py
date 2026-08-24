@@ -137,7 +137,11 @@ class HyperliquidExternalSnapshotReader:
                 raw=raw,
             ),
         )
-        fills = tuple(self._order.query_fills(order_id=order_id))
+        # An empty order identity is the public account-wide clean-state read:
+        # positions/open-orders/account are still reconciled, while fills and
+        # fees remain deliberately unscoped rather than querying a blank ID.
+        account_wide = not order_id
+        fills = tuple(self._order.query_fills(order_id=order_id)) if not account_wide else ()
         open_orders = tuple(self._order.open_orders(instrument_id))
         provenance = account_envelope.provenance
         fill_envelope = self._envelope(
@@ -145,7 +149,7 @@ class HyperliquidExternalSnapshotReader:
             data=fills,
             provenance=provenance,
             request_id=f"canary-fills:{order_id}",
-        ) if fills else None
+        ) if fills or account_wide else None
         open_order_envelope = self._envelope(
             fact_type="canary.open_orders",
             data=open_orders,
@@ -177,7 +181,7 @@ class HyperliquidExternalSnapshotReader:
             data=tuple(fee_events),
             provenance=provenance,
             request_id=f"canary-fees:{order_id}",
-        ) if fee_events else None
+        ) if fee_events or account_wide else None
         envelopes = [account_envelope, positions_envelope, open_order_envelope]
         if fill_envelope is not None:
             envelopes.append(fill_envelope)
@@ -224,7 +228,10 @@ class HyperliquidExternalSnapshotReader:
             fees=fees_observation,
             funding=None,
             funding_applicable=False,
-            now=now,
+            # Network reads complete after the caller captures ``now``. Use
+            # the completion-time floor so a fresh snapshot is not marked as
+            # future merely because the request took a few milliseconds.
+            now=max(now, datetime.now(UTC)),
             stale_after=timedelta(minutes=2),
             max_observation_skew=timedelta(minutes=2),
         )

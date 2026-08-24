@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from ...account import AccountSnapshot, PositionFact, PositionSide
 from ...errors import BrokerCapabilityError, RuntimeBoundaryError
@@ -210,6 +210,12 @@ class HyperliquidExternalFactAdapter:
     ) -> ExternalFactEnvelope[AccountSnapshot]:
         provenance = _provenance(raw, self._context)
         payload = _data(raw)
+        if _is_nautilus_account_state(payload):
+            return self._map_nautilus_account_state(
+                request_id=request_id,
+                payload=payload,
+                provenance=provenance,
+            )
         if not isinstance(payload.get("assetPositions"), list) or not isinstance(
             payload.get("marginSummary") or payload.get("crossMarginSummary"),
             Mapping,
@@ -238,6 +244,87 @@ class HyperliquidExternalFactAdapter:
             context=self._context,
             fact_type="account.snapshot",
             data=data,
+            request_id=request_id,
+            provenance=provenance,
+            raw_payload=payload,
+        )
+
+    def _map_nautilus_account_state(
+        self,
+        *,
+        request_id: str,
+        payload: Mapping[str, object],
+        provenance: Provenance,
+    ) -> ExternalFactEnvelope[AccountSnapshot]:
+        """Map Nautilus' canonical AccountState without guessing venue fields."""
+
+        _validate_account_identity(payload, self._context)
+        if payload.get("reported") is not True:
+            raise BrokerCapabilityError("account", "read", "account_state_unreported")
+        balances = payload.get("balances")
+        margins = payload.get("margins")
+        if not isinstance(balances, list) or not isinstance(margins, list):
+            raise BrokerCapabilityError("account", "read", "account_state_balance_margin_gap")
+        base_currency = str(payload.get("base_currency") or "").strip().upper()
+        if base_currency in {"NONE", "NULL"}:
+            base_currency = ""
+        if not base_currency:
+            currencies = {
+                str(row.get("currency") or "").strip().upper()
+                for row in balances
+                if isinstance(row, Mapping) and str(row.get("currency") or "").strip()
+            }
+            if currencies != {"USDC"}:
+                raise BrokerCapabilityError("account", "read", "account_base_currency_gap")
+            # Hyperliquid default perps expose one USDC collateral balance in
+            # Nautilus AccountState but omit AccountState.base_currency. The
+            # sole explicit collateral row is sufficient; multiple/ambiguous
+            # currencies remain a capability gap above.
+            base_currency = "USDC"
+        balance_rows = [
+            row
+            for row in balances
+            if isinstance(row, Mapping)
+            and str(row.get("currency") or "").strip().upper() == base_currency
+        ]
+        if len(balance_rows) != 1:
+            raise BrokerCapabilityError("account", "read", "account_state_balance_identity_gap")
+        balance = balance_rows[0]
+        total = _account_state_decimal(balance, "total", nonnegative=True)
+        free = _account_state_decimal(balance, "free", nonnegative=True)
+        locked = _account_state_decimal(balance, "locked", nonnegative=True)
+        if free + locked != total:
+            raise BrokerCapabilityError("account", "read", "account_state_balance_reconciliation_gap")
+        margin_used = Decimal("0")
+        for row in margins:
+            if not isinstance(row, Mapping):
+                raise BrokerCapabilityError("account", "read", "account_state_margin_identity_gap")
+            currency = str(row.get("currency") or "").strip().upper()
+            if currency != base_currency:
+                continue
+            margin_used += _account_state_decimal(row, "initial", nonnegative=True)
+        observation_id = str(payload.get("event_id") or "").strip()
+        if not observation_id:
+            raise BrokerCapabilityError("account", "read", "account_state_identity_gap")
+        snapshot = AccountSnapshot(
+            broker_id="hyperliquid",
+            account_address=self._context.identity.account_address or "",
+            equity=total,
+            balance=total,
+            withdrawable=free,
+            margin_used=margin_used,
+            exposure=None,
+            realized_pnl=None,
+            unrealized_pnl=None,
+            positions=(),
+            provenance=provenance,
+            environment=BrokerEnvironment.TESTNET,
+            observation_id=observation_id,
+        )
+        return ExternalFactEnvelope.create(
+            context=self._context,
+            fact_type="account.snapshot",
+            data=snapshot,
             request_id=request_id,
             provenance=provenance,
             raw_payload=payload,
@@ -319,3 +406,27 @@ def _validate_account_identity(
         text = str(value)
         if text != expected and not text.startswith(f"{expected}-"):
             raise ValueError("account_identity_mismatch")
+
+
+def _is_nautilus_account_state(payload: Mapping[str, object]) -> bool:
+    return (
+        str(payload.get("type") or "") == "AccountState"
+        and "balances" in payload
+        and "margins" in payload
+    )
+
+
+def _account_state_decimal(
+    row: Mapping[str, object],
+    field: str,
+    *,
+    nonnegative: bool,
+) -> Decimal:
+    value = row.get(field)
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise BrokerCapabilityError("account", "read", f"account_state_{field}_gap") from exc
+    if not result.is_finite() or (nonnegative and result < 0):
+        raise BrokerCapabilityError("account", "read", f"account_state_{field}_gap")
+    return result
