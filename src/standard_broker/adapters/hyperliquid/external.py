@@ -702,6 +702,10 @@ class NautilusHyperliquidTestnetBackend:
         )
         event = self._order_event(result)
         requested_cloid = self._optional_client_order_id_text(request)
+        event = self._normalize_report_client_identity(
+            event,
+            requested_client_order_id=requested_cloid,
+        )
         reported_cloid = event.get("cloid")
         if requested_cloid and reported_cloid is None:
             event["cloid"] = requested_cloid
@@ -746,17 +750,29 @@ class NautilusHyperliquidTestnetBackend:
         )
         requested_oid = str(request.get("oid") or "")
         requested_cloid = str(request.get("cloid") or request.get("client_order_id") or "")
+        requested_client_candidates = (
+            self._client_order_id_candidates(requested_cloid)
+            if requested_cloid
+            else ()
+        )
         rows: list[dict[str, object]] = []
         for report in result or []:
             event = self._fill_event(report, include_fee=True)
             reported_oid = str(event.get("oid") or "")
             reported_cloid = str(event.get("cloid") or "")
-            if requested_oid and reported_oid != requested_oid and requested_cloid and reported_cloid != requested_cloid:
+            if (
+                requested_oid
+                and reported_oid != requested_oid
+                and requested_cloid
+                and reported_cloid not in requested_client_candidates
+            ):
                 continue
             if requested_oid and not requested_cloid and reported_oid != requested_oid:
                 continue
-            if requested_cloid and not requested_oid and reported_cloid != requested_cloid:
+            if requested_cloid and not requested_oid and reported_cloid not in requested_client_candidates:
                 continue
+            if requested_cloid and reported_cloid in requested_client_candidates:
+                event["cloid"] = requested_cloid
             rows.append(event)
         return self._with_provenance({"fills": rows})
 
@@ -1083,6 +1099,46 @@ class NautilusHyperliquidTestnetBackend:
         return NautilusHyperliquidTestnetBackend._client_order_id(request)
 
     @staticmethod
+    def _client_order_id_candidates(value: object) -> tuple[str, ...]:
+        """Return the canonical ID and its deterministic native Hyperliquid CLOID."""
+
+        text = str(value or "").strip()
+        if not text:
+            return ()
+        candidates = [text]
+        if len(text) == 34 and text.startswith("0x"):
+            try:
+                from nautilus_trader.core import nautilus_pyo3
+
+                native = str(
+                    nautilus_pyo3.hyperliquid_cloid_from_client_order_id(
+                        nautilus_pyo3.ClientOrderId(text)
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - identity translation is a hard boundary.
+                raise RuntimeBoundaryError(
+                    "client_order_identity_normalization_failed",
+                    "Nautilus could not derive the native Hyperliquid client identity",
+                ) from exc
+            if native not in candidates:
+                candidates.append(native)
+        return tuple(candidates)
+
+    @classmethod
+    def _normalize_report_client_identity(
+        cls,
+        event: dict[str, object],
+        *,
+        requested_client_order_id: str | None,
+    ) -> dict[str, object]:
+        if not requested_client_order_id:
+            return event
+        reported = str(event.get("cloid") or "")
+        if reported and reported in cls._client_order_id_candidates(requested_client_order_id):
+            event["cloid"] = requested_client_order_id
+        return event
+
+    @staticmethod
     def _venue_order_id(request: Mapping[str, object]) -> object:
         value = request.get("oid") or request.get("venue_order_id")
         if value is None:
@@ -1193,13 +1249,16 @@ class NautilusHyperliquidTestnetBackend:
             return event
         order_id = str(event.get("oid") or request.get("oid") or "")
         client_id = str(event.get("cloid") or request.get("cloid") or "")
+        client_candidates = self._client_order_id_candidates(client_id) if client_id else ()
         for report in reports or []:
             mapping = self._to_mapping(report)
             report_oid = self._string_value(report, mapping, "venue_order_id", "oid")
             report_cloid = self._string_value(report, mapping, "client_order_id", "cloid")
-            if order_id and report_oid != order_id and client_id and report_cloid != client_id:
+            if order_id and report_oid != order_id and client_id and report_cloid not in client_candidates:
                 continue
             fill = self._fill_event(report, include_fee=True)
+            if client_id and str(fill.get("cloid") or "") in client_candidates:
+                fill["cloid"] = client_id
             event.update({key: value for key, value in fill.items() if value is not None})
             break
         return event
