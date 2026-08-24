@@ -16592,7 +16592,7 @@ auditable datafeed port; broker execution remains a separate port.
 
 # 2026-08-24 — Attended Testnet proof reaches known existing exposure (#958)
 
-## Observation
+## Observation (before RT-25 recovery)
 
 - Standard-broker PR #95 (`main@25a04be`) maps the observed Nautilus
   `AccountState` and supports account-wide clean-state snapshots through the
@@ -16604,7 +16604,48 @@ auditable datafeed port; broker execution remains a separate port.
 
 ## Next action
 
-- Park must confirm the exact cleanup digest through the isolated
-  `adopt-flatten` gate; after `FLAT_RECONCILED`, generate and confirm the
-  canonical old-Paper-DCA projection. See
+- At that time Park still needed to confirm the exact cleanup digest through
+  the isolated `adopt-flatten` gate; the later RT-25 recovery below supersedes
+  this interim blocker. See
+  `docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`.
+
+# 2026-08-24 — Reconcile the expired cleanup by explicit Broker identity (#980 / #981)
+
+## Decision
+
+- The existing ambiguous reduce-only flatten may be reconciled after plan and
+  confirmation expiry only when Park supplies the exact persisted Broker Order
+  ID. The lifecycle API itself fails closed without that identity; the CLI
+  cannot widen expiry for any exposure-changing action.
+- Recovery is read-only after the original submit: it performs Broker identity
+  recovery, one query, and one canonical facts read. No submit, cancel,
+  replace, retry, scheduler, Mainnet, or Live path is reachable from this
+  recovery action.
+- `FLAT_RECONCILED` requires the persisted flatten intent, client and Broker
+  identity, instrument/side, exact filled quantity, unique fill/fee coverage,
+  actual USDC fees, cursor/provenance, coherent/fresh account facts, and zero
+  position/open orders. Historical age is relaxed only for causal fill/fee
+  observations in this explicit recovery path.
+- The final state is evidence for the one cleanup close, not authorization to
+  start a new DCA cycle. A future DCA entry requires a new plan, confirmation,
+  and separately attended action.
+
+## Verification
+
+- Trading-system PR #981 merged as
+  `main@71e844147d6ea79c684c7ad21ef6c6197e191f51`.
+- Standard-broker PR #117 merged as
+  `main@d43d0bbb51e38da1186c0417778ed8ca0b9da76e`; the application dependency
+  pin was updated to this exact seam.
+- Hyperliquid Testnet Order ID `58400711187` reconciled to
+  `FLAT_RECONCILED`: two fills (`0.025` + `0.035` PAXG at `4642.500`), two
+  actual USDC fees (`0.05222800` + `0.07311900`), cursor `1787570302564`,
+  zero positions/open orders, and final facts digest
+  `sha256:f3caa991fd4a208a7f86533a12a5dd674c2ddc72883d83df21156d248b6dc28f`.
+- Standard-broker full suite: 303 passed. Trading-system RT-25 focused and
+  external seam suites: 46 and 27 passed. Final full trading-system suite:
+  3382 passed, 50 skipped, 6 warnings. Compileall, diff-check, and gitleaks
+  passed. Standards/spec review passed at `e3b6605`.
+- No credential value, new order, cancel, replace, retry, Dashboard, Cloudflare,
+  deployment, or cloud mutation was performed. Durable report:
   `docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`.

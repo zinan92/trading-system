@@ -1,16 +1,15 @@
-# Issue #958 — attended Hyperliquid Testnet proof (blocked, fail-closed)
+# Issue #958 — attended Hyperliquid Testnet proof (cleanup reconciled)
 
-Status: `BLOCKED`. The account is currently flat with no open orders, but the
-single ambiguous cleanup close has no public causal fill/fee evidence. Flat
-account state alone is not `FLAT_RECONCILED`, so no canonical DCA success claim
-is made.
+Status: `FLAT_RECONCILED` for the existing cleanup close. This is causal
+evidence for the one historical reduce-only flatten only; it is not a new DCA
+entry, a strategy-success claim, or Live/Mainnet readiness.
 
 ## Attempt boundary
 
 | Field | Evidence |
 |---|---|
-| Trading-system source | `main` after PR #975 merge `a951628372c26315d4f903669297e31105fd393d` |
-| Standard-broker source | `main` after PR #109 merge `1c0d9706be30ef444dd9aa2373743ab5d0f80834` |
+| Trading-system source | `main` after PR #981 merge `71e844147d6ea79c684c7ad21ef6c6197e191f51` |
+| Standard-broker source | `main` after PR #117 merge `d43d0bbb51e38da1186c0417778ed8ca0b9da76e` |
 | Runtime release identity in plan | `c9a31732b61f0289867a3b8e40cc26a380072bbc` |
 | Environment | Hyperliquid Testnet only |
 | Account | Park-confirmed master account; only fingerprint persisted: `sha256:75b327ae65b27db8eb8955fd922a291945da160ba52e9f64995ed9e430df0c56` |
@@ -28,51 +27,56 @@ canonical receipt was `UNKNOWN` with no broker order identity. This was the
 only submit; no cancel, retry, next-entry, scheduler, Mainnet, or Live action
 was performed afterward.
 
-The persisted client identity was recovered through the public seam. Querying
-that identity returned canonical `UNKNOWN` with reason `missing`; the public
-fill/fee read returned no matching fill and no fee. The system therefore kept
-the lifecycle blocked.
+The persisted client identity was recovered through the public seam. Hyperliquid
+Order History then supplied the exact venue Order ID `58400711187`. The final
+recovery path used only `recover → query → canonical facts read`; it did not
+submit, cancel, replace, retry, or infer identity from price/time/quantity.
 
-## Latest public facts
+## Final causal public facts
 
-The latest account-only public read was coherent/fresh and returned zero
-positions and zero open orders. The final causal read persisted by the
-lifecycle at approximately `10:17:20Z` is:
+The final explicit-broker recovery persisted at approximately `11:18:21Z` is:
 
 | Fact | Result |
 |---|---|
 | Position | `0` (`positions=[]`) |
 | Open orders | `0` (`open_orders=[]`) |
-| Fill facts | `0` |
-| Fee facts | `0` |
-| Cursor | `1787566641004` |
-| Snapshot | `coherent=false`, `freshness=unknown` because causal fill/fee observations are missing |
-| Final facts digest | `sha256:b2369648896415a586cc581ed7cd2cccafc49d3f8dafb7daa384883bc053a79c` |
-| Lifecycle status | `BLOCKED` / `facts_reconciliation_not_coherent` |
-| Next action | `notify_park_and_wait` |
+| Broker Order ID | `58400711187` |
+| Client Order ID | `0xc95e8360e8d6bf4c175718058051bfe3` |
+| Fill facts | `2` chunks: `0.025` + `0.035` PAXG, both at `4642.500` |
+| Fee facts | `2` actual USDC fees: `0.05222800` + `0.07311900` |
+| Fill side | `buy` (closing the persisted short) |
+| Cursor | `1787570302564` |
+| Snapshot | `coherent=true`, `freshness=fresh` |
+| Final facts digest | `sha256:f3caa991fd4a208a7f86533a12a5dd674c2ddc72883d83df21156d248b6dc28f` |
+| Lifecycle status | `FLAT_RECONCILED` |
+| Next action | `record_dca_result` |
 
-This is an explicit flat-but-not-causally-reconciled state. It must not be
-promoted to `FLAT_RECONCILED` or used to start a new DCA cycle.
+The two fills share the exact broker Order ID and persisted client identity;
+the public seam also returned zero position and zero open orders on the same
+cursor. This is the explicit causal flatten proof required by #980.
 
-After the RT-15/RT-16 public-seam fixes, a read-only redacted diagnostic saw
+The earlier flat-but-not-causally-reconciled snapshots remain in the append-only
+state journal as historical blockers; they are not the final state.
+
+Historical diagnostic before the exact venue OID was supplied: after the
+RT-15/RT-16 public-seam fixes, a read-only redacted diagnostic saw
 four instrument fill reports, zero reports carrying a client identity, zero
 matches to the recovered canonical/native client identity, zero canonical
 fills, and zero canonical fees. The diagnostic did not print raw provider
-payload, order IDs, prices, quantities, or credentials. This confirms that the
-remaining blocker is missing venue identity evidence, not an unreviewed
-price/time/quantity inference.
+payload, order IDs, prices, quantities, or credentials. That historical
+blocker was resolved by the explicit venue Order ID above; no price/time/
+quantity inference was used.
 
 ## Public seam and test evidence
 
-- standard-broker PR #103 added client-scoped fill recovery; PR #105 forwarded
-  the typed client scope to the native fill query; PR #107 normalized the
-  deterministic native CLOID and PR #109 rejected conflicting identities.
-- trading-system PR #973 passed the recovered client identity into final facts;
-  PR #975 persisted blocked final facts without weakening validation.
-- standard-broker full regression after PR #109: `291 passed, 2 skipped`; the
-  pinned Nautilus external-backend/canary suite passed `28` tests.
-- trading-system external lifecycle/canary regression after PR #975: `28
-  passed` (two existing collection warnings).
+- standard-broker PRs #103/#105/#107/#109/#114/#115/#117 now provide the
+  public client/OID recovery, distinct fill chunks, fee instrument context,
+  and local-fixture identity compatibility used by this host.
+- standard-broker clean RT-20 main (`d43d0bb`) full regression: `303 passed`.
+- trading-system RT-25 focused DCA/CLI regression: `46 passed`; external
+  canary/testnet seam regression: `27 passed`.
+- trading-system full regression against the RT-20 seam: `3382 passed`, `50
+  skipped`, `6` warnings. `compileall`, `diff-check`, and `gitleaks` passed.
 
 No raw provider payload or signer value is included in this evidence. The
 system remains Testnet-only, and this report does not advance soak, Live,
@@ -80,7 +84,7 @@ Mainnet, automatic promotion, or cloud deployment readiness.
 
 ## Next action
 
-Keep #958 open and do not start a new canonical DCA plan. A future continuation
-needs a new, explicitly scoped read/recovery decision and a public causal
-fill/fee fact (or a separately reviewed contract change); it must not infer
-success from the flat account snapshot.
+Do not start a new canonical DCA plan automatically. A future DCA run needs a
+new plan, matching Park confirmation, and a separately scoped attended action;
+the reconciled cleanup is not authorization to advance the strategy or enter a
+new position.

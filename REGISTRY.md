@@ -214,20 +214,49 @@
   `main@a951628372c26315d4f903669297e31105fd393d` persists blocked final
   facts without weakening the causal fill/fee gate. Focused external lifecycle
   and canary validation passed `28` tests.
-- The latest public account read is flat (`positions=[]`, `open_orders=[]`,
-  coherent/fresh). The latest final causal snapshot is explicitly
+- The pre-RT25 public account read was flat (`positions=[]`, `open_orders=[]`,
+  coherent/fresh). Its final causal snapshot was explicitly
   `BLOCKED` / `facts_reconciliation_not_coherent` with `fills=[]`, `fees=[]`,
   `signed_position_quantity=0`, and final-facts digest
   `sha256:b2369648896415a586cc581ed7cd2cccafc49d3f8dafb7daa384883bc053a79c`.
   The venue query still returns `missing` for the recovered order identity;
-  flat account state is not causal `FLAT_RECONCILED` evidence.
+  flat account state was not causal `FLAT_RECONCILED` evidence at that time.
 - A redacted RT-16 diagnostic saw four instrument fill reports, zero client
   identity fields, zero recovered-identity matches, zero canonical fills, and
   zero canonical fees. No raw provider payload or heuristic correlation was
   used.
-- Durable report: [`docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`](docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md).
-  #958 remains open. Do not start a new DCA cycle; the next continuation needs
-  a separately scoped recovery decision and public causal fill/fee evidence.
+- Durable historical report: [`docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`](docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md).
+  The pre-RT25 blocker is superseded by the explicit Broker-identity recovery
+  recorded below; do not start a new DCA cycle without a new plan and
+  confirmation.
+
+## 现在在哪里(2026-08-24, RT-25 explicit broker recovery)
+- TS-DCA-EXT-25 / #980 merged in trading-system PR #981 as
+  `main@71e844147d6ea79c684c7ad21ef6c6197e191f51`. The expired cleanup
+  lifecycle now accepts an explicit persisted Broker Order ID only through a
+  no-exposure `recover -> query -> canonical facts` path. Lifecycle-level
+  expiry remains fail-closed when no Broker ID is supplied; exposure-changing
+  actions remain expiry-blocked. Persisted flatten intent is bound to order,
+  instrument, side, quantity, price, environment, account/runtime/release/
+  capability, client identity, and reduce-only/close-position semantics.
+- The final attended Testnet recovery used Hyperliquid Order ID `58400711187`
+  and reached `FLAT_RECONCILED` with two canonical fill chunks (`0.025` and
+  `0.035` PAXG at `4642.500`), two actual USDC fees (`0.05222800` and
+  `0.07311900`), cursor `1787570302564`, zero positions, and zero open orders.
+  Final facts digest:
+  `sha256:f3caa991fd4a208a7f86533a12a5dd674c2ddc72883d83df21156d248b6dc28f`.
+- The application pin now consumes standard-broker RT-20 main after PR #117,
+  `standard-broker@d43d0bbb51e38da1186c0417778ed8ca0b9da76e`, including the
+  client-scoped facts seam and local-fixture identity compatibility. Clean
+  standard-broker validation passed 303 tests; RT-25 focused DCA/CLI and
+  external seam validation passed 46 and 27 tests; the full trading-system
+  regression passed 3382 with 50 skips and 6 warnings. Compileall,
+  diff-check, and gitleaks passed.
+- No new order, cancel, replace, retry, scheduler, Mainnet, Live, credential,
+  Dashboard, Cloudflare, or cloud mutation occurred. The cleanup proof does
+  not authorize a new DCA entry; a future run requires a new plan and Park
+  confirmation. Durable evidence remains in
+  [`docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`](docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md).
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
