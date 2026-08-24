@@ -259,3 +259,19 @@ def test_position_protection_profile_is_opt_in_and_exact() -> None:
     assert binding.transport_state == "external_testnet"
     assert binding.protection_capabilities is not None
     assert binding.protection_capabilities.supports("position_following") is True
+
+
+def test_position_protection_profile_blocks_unsupported_market_tp_before_runtime() -> None:
+    capabilities = enabled_testnet_position_protection_capabilities()
+    session = _profile_session(capabilities=capabilities)
+    runtime = _profile_runtime(session)
+    binding = build_hyperliquid_testnet_position_protection_binding_from_runtime(
+        context=_profile_context(session),
+        runtime=runtime,
+    )
+
+    with pytest.raises(BrokerCapabilityError, match="take_profit_market"):
+        binding.submit(_group())
+
+    assert runtime.preflight_calls == []
+    assert runtime.invoke_calls == []

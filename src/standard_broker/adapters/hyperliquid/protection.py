@@ -83,7 +83,10 @@ def enabled_external_testnet_position_protection_capabilities() -> ProtectionCap
         "fixed_size": False,
         "position_following": True,
         "position_level_tpsl": True,
-        "take_profit_market": True,
+        # Nautilus 1.230.0 exposes MarketIfTouchedOrder, but its public
+        # transformer does not accept MARKET_IF_TOUCHED. Keep this false
+        # until a pinned release supplies a compatible conversion.
+        "take_profit_market": False,
         "take_profit_limit": True,
         "stop_loss_market": True,
         "stop_loss_limit": True,

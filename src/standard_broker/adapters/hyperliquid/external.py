@@ -255,6 +255,11 @@ class NautilusHyperliquidTestnetBackend:
                 "protection_grouping_unsupported",
                 "external Testnet v1 only submits an existing-position positionTpsl group",
             )
+        if str(request.get("quantityPolicy") or "").strip().lower() != "position_following":
+            raise RuntimeBoundaryError(
+                "protection_quantity_policy_unsupported",
+                "external Testnet v1 requires position-following protection coverage",
+            )
         if not isinstance(legs, list) or len(legs) != 2:
             raise RuntimeBoundaryError(
                 "protection_group_invalid",
@@ -440,7 +445,6 @@ class NautilusHyperliquidTestnetBackend:
             from nautilus_trader.model.objects import Price, Quantity
             from nautilus_trader.model.orders import (
                 LimitIfTouchedOrder,
-                MarketIfTouchedOrder,
                 StopLimitOrder,
                 StopMarketOrder,
             )
@@ -476,6 +480,12 @@ class NautilusHyperliquidTestnetBackend:
             side = OrderSide.BUY if str(leg.get("side") or "").upper() == "B" else OrderSide.SELL
             execution = str(leg.get("execution") or "").lower()
             tpsl = str(leg.get("tpsl") or "").lower()
+            trigger_reference = str(leg.get("triggerReference") or "").strip().lower()
+            if trigger_reference != "mark":
+                raise RuntimeBoundaryError(
+                    "protection_trigger_reference_unsupported",
+                    "external Testnet v1 requires mark-price protection triggers",
+                )
             trigger = Price.from_str(str(leg.get("triggerPx") or "0"))
             limit_value = leg.get("limitPx")
             linked = [other for position, other in enumerate(client_ids) if position != index]
@@ -487,7 +497,7 @@ class NautilusHyperliquidTestnetBackend:
                 "order_side": side,
                 "quantity": quantity,
                 "trigger_price": trigger,
-                "trigger_type": TriggerType.DEFAULT,
+                "trigger_type": TriggerType.MARK_PRICE,
                 "init_id": UUID4(),
                 "ts_init": now_ns,
                 "time_in_force": TimeInForce.GTC,
@@ -501,7 +511,15 @@ class NautilusHyperliquidTestnetBackend:
                     "every external protection leg must be reduce-only",
                 )
             if tpsl == "tp" and execution == "market":
-                order = MarketIfTouchedOrder(**common)
+                # Nautilus 1.230.0 cannot convert MARKET_IF_TOUCHED at the
+                # public pyo3 transformer boundary. The capability matrix
+                # rejects this model before transport; keep the backend
+                # fail-closed for direct callers as well.
+                raise RuntimeBoundaryError(
+                    "protection_leg_unsupported",
+                    "take-profit market protection is unsupported by the pinned "
+                    "Nautilus conversion boundary; use take-profit limit",
+                )
             elif tpsl == "sl" and execution == "market":
                 order = StopMarketOrder(**common)
             elif tpsl == "tp" and execution == "limit":

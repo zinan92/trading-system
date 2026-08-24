@@ -5,6 +5,7 @@ import pytest
 from standard_broker.adapters.hyperliquid.profile import build_hyperliquid_testnet_host
 from standard_broker.adapters.hyperliquid.protection import (
     default_external_testnet_protection_capabilities,
+    enabled_external_testnet_position_protection_capabilities,
 )
 from standard_broker.errors import BrokerCapabilityError
 from standard_broker.external_host import ExternalHostRequest
@@ -58,6 +59,15 @@ def test_external_testnet_protection_profile_declares_gaps_without_emulation() -
     assert matrix.supports("position_following") is False
     assert matrix.supports("partial_fill_repair") is False
     assert "reduce_only" in matrix.missing_for(_group(), operation="submit")
+
+
+def test_enabled_position_protection_profile_matches_pinned_nautilus_models() -> None:
+    matrix = enabled_external_testnet_position_protection_capabilities()
+
+    assert matrix.supports("take_profit_market") is False
+    assert matrix.supports("take_profit_limit") is True
+    assert matrix.supports("stop_loss_market") is True
+    assert matrix.supports("stop_loss_limit") is True
 
 
 def test_external_host_blocks_protection_request_before_runtime_preflight_or_invoke() -> None:

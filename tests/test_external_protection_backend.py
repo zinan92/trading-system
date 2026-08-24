@@ -67,6 +67,7 @@ def _request() -> dict[str, object]:
         "instrumentId": "BTC-USD-PERP",
         "grouping": "positionTpsl",
         "quantity": "0.001",
+        "quantityPolicy": "position_following",
         "legs": [
             {
                 "side": "A",
@@ -74,6 +75,7 @@ def _request() -> dict[str, object]:
                 "execution": "market",
                 "triggerPx": "61000",
                 "reduceOnly": True,
+                "triggerReference": "mark",
             },
             {
                 "side": "A",
@@ -81,9 +83,72 @@ def _request() -> dict[str, object]:
                 "execution": "market",
                 "triggerPx": "59000",
                 "reduceOnly": True,
+                "triggerReference": "mark",
             },
         ],
     }
+
+
+def _supported_request() -> dict[str, object]:
+    request = _request()
+    request["legs"] = [
+        {
+            "side": "A",
+            "tpsl": "tp",
+            "execution": "limit",
+            "triggerPx": "61000",
+            "limitPx": "60950",
+            "reduceOnly": True,
+            "triggerReference": "mark",
+        },
+        {
+            "side": "A",
+            "tpsl": "sl",
+            "execution": "market",
+            "triggerPx": "59000",
+            "reduceOnly": True,
+            "triggerReference": "mark",
+        },
+    ]
+    return request
+
+
+def test_pinned_nautilus_public_protection_submit_accepts_tp_limit_and_sl_market(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("nautilus_trader")
+    backend = _backend(tmp_path)
+    backend.activate(release_sha="a" * 40)
+
+    captured: dict[str, object] = {}
+
+    def call(method: str, *args, **kwargs):
+        del kwargs
+        if method == "submit_orders":
+            captured["orders"] = args[0]
+            return [{"order_status": "OPEN", "venue_order_id": "group-1"}]
+        raise AssertionError(method)
+
+    backend._call = call
+    submitted = backend.invoke("protection_order", "submit", _supported_request())
+    orders = captured["orders"]
+
+    assert submitted["state"] == "submitted"
+    assert isinstance(orders, list)
+    assert len(orders) == 2
+    assert all(type(order).__module__.startswith("nautilus_trader") for order in orders)
+    assert [str(order.trigger_type) for order in orders] == ["MARK_PRICE", "MARK_PRICE"]
+    assert all(order.is_reduce_only for order in orders)
+    assert orders[0].linked_order_ids == [orders[1].client_order_id]
+    assert orders[1].linked_order_ids == [orders[0].client_order_id]
+
+
+def test_backend_rejects_tp_market_before_conversion(tmp_path: Path) -> None:
+    pytest.importorskip("nautilus_trader")
+    backend = _backend(tmp_path)
+
+    with pytest.raises(RuntimeBoundaryError, match="take-profit market"):
+        backend._build_protection_orders(_request())
 
 
 def test_external_protection_submit_and_query_are_redacted_and_cursorable(tmp_path: Path) -> None:
