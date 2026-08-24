@@ -1016,6 +1016,98 @@ class ExternalDcaLifecycle:
                 timestamp=timestamp,
             )
 
+    def reconcile_flatten(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        confirmation: Mapping[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        """Query one ambiguous flatten intent by its persisted idempotency key."""
+
+        with production_mutation_lock(self.output_root):
+            return self._reconcile_flatten(
+                plan,
+                confirmation=confirmation,
+                timestamp=timestamp,
+            )
+
+    def _reconcile_flatten(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        confirmation: Mapping[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        state = self._state(plan)
+        if state.get("status") not in {"BLOCKED", "FLATTEN_SUBMIT_INTENT_RESERVED"}:
+            return self._block(state, "flatten_reconcile_not_available", timestamp=timestamp)
+        if state.get("blocker") not in {
+            "flatten_submit_receipt_unknown",
+            "flatten_reconcile_query_receipt_unknown",
+            "flatten_not_filled",
+        }:
+            return self._block(state, "flatten_reconcile_not_available", timestamp=timestamp)
+        try:
+            self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
+            position_quantity = Decimal(str(state.get("position_quantity") or "0"))
+            if position_quantity <= 0:
+                raise ExternalDcaError("flatten_position_missing")
+            request = TestnetCanaryOrderRequest(
+                order_id=f"{plan.plan_id}:flatten",
+                instrument_id=plan.instrument_id,
+                side="sell" if plan.direction == "long" else "buy",
+                quantity=position_quantity,
+                order_type="limit",
+                limit_price=plan.close_price,
+                time_in_force="ioc",
+                idempotency_key=f"{plan.plan_id}:flatten:{position_quantity}:{plan.close_price}",
+                reduce_only=True,
+                close_position=True,
+            )
+            query_by_key = getattr(self.orders, "query_by_idempotency_key", None)
+            if not callable(query_by_key):
+                raise ExternalDcaError("flatten_reconcile_query_capability_missing")
+            queried = query_by_key(request.idempotency_key)
+            self._record_receipt(
+                state,
+                queried,
+                request=request,
+                timestamp=timestamp,
+                operation="flatten_reconcile_query",
+            )
+            if self._receipt_state(queried) != "filled":
+                return self._block(state, "flatten_not_filled", timestamp=timestamp)
+            close_id = str(getattr(queried, "order_id", "") or "").strip()
+            if not close_id:
+                raise ExternalDcaError("flatten_receipt_identity_missing")
+            bundle = self.facts.read_facts(
+                order_id=close_id,
+                instrument_id=plan.instrument_id,
+                now=_timestamp(timestamp, "timestamp"),
+            )
+            final = self._validate_facts(
+                plan,
+                bundle,
+                order_id=close_id,
+                timestamp=timestamp,
+                require_flat=True,
+            )
+            state["final_facts"] = self._safe_fact_bundle(bundle)
+            state["final_facts_digest"] = _digest(state["final_facts"])
+            if final[0] != 0:
+                raise ExternalDcaError("final_position_not_flat")
+            state["status"] = "FLAT_RECONCILED"
+            state["blocker"] = None
+            state["next_action"] = "record_dca_result"
+            self._event(state, "flat_reconciled_after_ambiguous_submit", timestamp=timestamp)
+            self._save(state)
+            return state
+        except ExternalDcaError as exc:
+            return self._block(state, str(exc), timestamp=timestamp)
+        except Exception as exc:  # noqa: BLE001 - unknown external outcome freezes.
+            return self._block(state, f"flatten_reconcile_unknown:{type(exc).__name__}", timestamp=timestamp)
+
     def _adopt_existing_position(
         self,
         plan: ExternalDcaPlan,
