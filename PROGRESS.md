@@ -176,6 +176,7 @@ The extracted package files are:
 - Extraction commit: `0f4a5df3a5c30bcd2e07dfc2e99ab8b0f8288cbc`
 - Commit message: `extract canonical dca and grid strategy foundation`
 - Remediation commits: `009fef4`, `b16bc93`, `b084c9a`, `074f172`, `754aa29`.
+- Merged PR commit: `71978c3daba43ae489095903c240bd50666366fa`.
 - The final verification metadata update is intentionally a separate local
   commit so this file can contain the actual extraction SHA without a
   self-referential commit hash.
@@ -184,7 +185,7 @@ The extracted package files are:
 
 New package command: `python3 -m pytest -q`
 
-Result after the acceptance-gap implementation: `48 passed in 4.19s`;
+Result after the acceptance-gap implementation: `48 passed in 3.69s`;
 skipped: `0`; failures: `0`.
 
 Compile command: `python3 -m compileall -q trading_strategy tests tools`
@@ -216,7 +217,7 @@ are rejected as expected.
 
 Secret scan command: `gitleaks dir --no-banner .`
 
-Result: scanned `668.45 KB`; `no leaks found`.
+Result: scanned `668.39 KB`; `no leaks found`.
 
 Ruff check: the source environment has no `ruff` executable (`RUFF_UNAVAILABLE`);
 there is no existing project ruff configuration to invoke. This is recorded as
@@ -232,10 +233,14 @@ Target repository check immediately after the extraction commit:
 
 ## Post-baseline source drift
 
-After the original extraction, the mutable source checkout moved to
-`e80a1a93e503d588fc4f48fc4c5c8cf1172191d5` and currently has unrelated dirty
-Broker files plus a changed `services/dca_plan.py`. The default capture command
-therefore fails closed with `source HEAD mismatch`; it is not treated as a new
-canonical baseline. The pinned Git-object capture uses the original
+After the original extraction, the mutable source checkout moved beyond the
+pinned baseline; at final audit it was
+`cc1a050cd5cc40b38c0a0bb9d056255dbb2e4019` on its own source branch. The
+default capture command therefore fails closed with `source HEAD mismatch`; it
+is not treated as a new canonical baseline. The pinned Git-object capture uses the original
 `b841800ee03fd98107063c0cbbf5144096a5c4c0` source and is the authoritative
-parity evidence for this repo. The source checkout was not modified.
+parity evidence for this repo. The source checkout was not modified by this
+task.
+
+Final merged main audit: `git status --porcelain` empty; `main` tracks
+`origin/main`; PR #2 is merged and Issue #1 is closed.
