@@ -1047,6 +1047,7 @@ class ExternalDcaLifecycle:
             "flatten_reconcile_query_receipt_unknown",
             "flatten_reconcile_unknown",
             "flatten_reconcile_not_available",
+            "facts_reconciliation_not_coherent",
             "flatten_not_filled",
         }:
             return self._block(state, "flatten_reconcile_not_available", timestamp=timestamp)
