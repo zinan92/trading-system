@@ -702,25 +702,59 @@ class NautilusHyperliquidTestnetBackend:
         )
         event = self._order_event(result)
         requested_cloid = self._optional_client_order_id_text(request)
+        requested_client_candidates = (
+            self._client_order_id_candidates(requested_cloid)
+            if requested_cloid
+            else ()
+        )
         event = self._normalize_report_client_identity(
             event,
             requested_client_order_id=requested_cloid,
         )
         reported_cloid = event.get("cloid")
+        requested_oid = self._optional_venue_order_id_text(request)
+        reported_oid = event.get("oid")
+        if (
+            requested_cloid
+            and reported_cloid == requested_cloid
+            and requested_oid
+            and reported_oid
+            and reported_oid != requested_oid
+        ):
+            raise RuntimeBoundaryError(
+                "order_identity_conflict",
+                "Hyperliquid status report venue identity conflicts with the requested identity",
+            )
+        if (
+            requested_cloid
+            and not reported_cloid
+            and requested_oid
+            and reported_oid
+            and reported_oid != requested_oid
+        ):
+            raise RuntimeBoundaryError(
+                "order_identity_conflict",
+                "Hyperliquid status report venue identity conflicts with the requested identity",
+            )
         if requested_cloid and reported_cloid is None:
             event["cloid"] = requested_cloid
         elif requested_cloid and reported_cloid != requested_cloid:
-            requested_oid = self._optional_venue_order_id_text(request)
-            reported_oid = event.get("oid")
-            same_venue_order = not requested_oid or not reported_oid or reported_oid == requested_oid
-            if event.get("status") in {"canceled", "rejected", "filled", "partially_filled"} and same_venue_order:
-                # A cancel-replace terminal report may carry the old CLOID
-                # while the query is keyed by the replacement identity.  The
-                # same-OID/status pair is terminal or fill-bearing and the
-                # requested identity is the only safe canonical owner at this
-                # point.  Non-terminal or cross-OID conflicts still fail
-                # closed below.
+            if reported_cloid in requested_client_candidates:
+                if requested_oid and reported_oid and reported_oid != requested_oid:
+                    raise RuntimeBoundaryError(
+                        "order_identity_conflict",
+                        "Hyperliquid status report venue identity conflicts with the requested identity",
+                    )
                 event["cloid"] = requested_cloid
+            elif not reported_cloid and event.get("status") in {"canceled", "rejected", "filled", "partially_filled"}:
+                same_venue_order = not requested_oid or not reported_oid or reported_oid == requested_oid
+                if same_venue_order:
+                    event["cloid"] = requested_cloid
+                else:
+                    raise RuntimeBoundaryError(
+                        "order_identity_conflict",
+                        "Hyperliquid status report venue identity conflicts with the requested identity",
+                    )
             else:
                 raise RuntimeBoundaryError(
                     "order_identity_conflict",
@@ -761,6 +795,8 @@ class NautilusHyperliquidTestnetBackend:
             reported_oid = str(event.get("oid") or "")
             reported_cloid = str(event.get("cloid") or "")
             if requested_cloid and reported_cloid and reported_cloid not in requested_client_candidates:
+                continue
+            if requested_oid and reported_oid and reported_oid != requested_oid:
                 continue
             if (
                 requested_oid
@@ -1257,6 +1293,8 @@ class NautilusHyperliquidTestnetBackend:
             report_oid = self._string_value(report, mapping, "venue_order_id", "oid")
             report_cloid = self._string_value(report, mapping, "client_order_id", "cloid")
             if client_id and report_cloid and report_cloid not in client_candidates:
+                continue
+            if order_id and report_oid and report_oid != order_id:
                 continue
             if order_id and report_oid != order_id and client_id and report_cloid not in client_candidates:
                 continue
