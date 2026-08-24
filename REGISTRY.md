@@ -305,6 +305,16 @@
   or cloud mutation occurred. #958 remains open for a separately re-planned,
   freshly confirmed protection-bearing Testnet round.
 
+## 现在在哪里(2026-08-25, exact standard-broker dependency pin)
+- TS-EXT-29 / #992 merged in trading-system PR #993 as
+  `main@9a2df8f5ed40c32478d022c89269e585de7115e9`. The external app
+  dependency, exact host SHA check, and focused fixture expectations now all
+  bind standard-broker `7a23054d3f8bcf4e3a17537dc3b8d3ebd361a70b`.
+- The old standard-broker SHA remains rejected by the external-host identity
+  contract. Focused external-host/composition validation passed 65 tests;
+  diff-check and gitleaks passed. No strategy, runtime, credential, Testnet,
+  scheduler, cloud, Mainnet/Live, or frontend mutation occurred.
+
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
   merged as `main@e9cd5c91dab026df4605bb14387fff9a22b0a214`. The attended Live DCA

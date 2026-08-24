@@ -16728,3 +16728,27 @@ auditable datafeed port; broker execution remains a separate port.
 - #958 remains open. The previous protection attempt failed closed and was
   flattened through the separately confirmed recovery plan; a new protection
   round still requires a new plan digest and fresh Park confirmation.
+
+# 2026-08-25 — Pin external standard-broker to the TP-limit seam (#992 / #993)
+
+## Decision
+
+- The external app and exact host identity contract now bind the reviewed
+  standard-broker merge `7a23054d3f8bcf4e3a17537dc3b8d3ebd361a70b`.
+- Older or wildcard standard-broker SHAs remain rejected. This pin change does
+  not alter strategy or protection semantics and does not authorize any
+  Testnet action.
+
+## Verification
+
+- Trading-system PR #993 merged as
+  `main@9a2df8f5ed40c32478d022c89269e585de7115e9`.
+- Focused external-host/composition validation passed 65 tests; diff-check and
+  gitleaks passed. No credentials, scheduler, cloud state, Mainnet/Live, or
+  frontend mutation occurred.
+
+## Gotchas
+
+- The TP-limit protection gate intentionally stays fail-closed if an old
+  standard-broker package is present; this exact pin is required before a new
+  protection-bearing Testnet round.
