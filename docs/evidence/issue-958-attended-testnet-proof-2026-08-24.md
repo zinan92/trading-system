@@ -1,54 +1,77 @@
-# Issue #958 — attended Hyperliquid Testnet proof (awaiting Park confirmation)
+# Issue #958 — attended Hyperliquid Testnet proof (blocked, fail-closed)
 
-Status: `blocked_existing_position` — the clean-slate read is now coherent and
-fresh, but the existing PAXG position is not flat. No canonical DCA proof claim
-has been made.
+Status: `BLOCKED`. The account is currently flat with no open orders, but the
+single ambiguous cleanup close has no public causal fill/fee evidence. Flat
+account state alone is not `FLAT_RECONCILED`, so no canonical DCA success claim
+is made.
 
 ## Attempt boundary
 
 | Field | Evidence |
 |---|---|
-| Trading-system source | `main@cf4fe8b32abad88ea0c0f5fb4ddca0f740c400b5` |
-| Standard-broker source | `main@25a04be00eadf9a1f6da7dad7204f68bcc1d1632` |
+| Trading-system source | `main` after PR #975 merge `a951628372c26315d4f903669297e31105fd393d` |
+| Standard-broker source | `main` after PR #105 merge `4e5cf2e22ff7a80b644e3171a165771c78313194` |
+| Runtime release identity in plan | `c9a31732b61f0289867a3b8e40cc26a380072bbc` |
 | Environment | Hyperliquid Testnet only |
-| Account | master account supplied by Park; only its redacted fingerprint was used |
+| Account | Park-confirmed master account; only fingerprint persisted: `sha256:75b327ae65b27db8eb8955fd922a291945da160ba52e9f64995ed9e430df0c56` |
 | Instrument | `PAXG-USD-PERP` |
-| Operation completed | public standard-broker account/facts read only |
-| Order submit/cancel/flatten | not invoked |
-| Mainnet/Live/scheduler/cloud | not invoked |
+| Plan | `cleanup-existing-paxg-20260824` |
+| Plan digest | `sha256:0526d28f04429f72a0b6b371be92aee1cd71ecf8c879dd7afaf7682ede9afa0b` |
+| Confirmation receipt digest | `sha256:ad66d3d79e555219bed5f2ff468afbffc8eeb19f409b59dad8950545b279c2bc` |
+| Cloudflare/dashboard/cloud mutation | not invoked |
 
-## Clean-slate read result
+## One attended cleanup action
 
-After standard-broker PR #95, the public binding returned:
+The existing short position was adopted at approximately `09:19:03Z` and one
+reduce-only close intent was submitted at approximately `09:19:04Z`. The
+canonical receipt was `UNKNOWN` with no broker order identity. This was the
+only submit; no cancel, retry, next-entry, scheduler, Mainnet, or Live action
+was performed afterward.
+
+The persisted client identity was recovered through the public seam. Querying
+that identity returned canonical `UNKNOWN` with reason `missing`; the public
+fill/fee read returned no matching fill and no fee. The system therefore kept
+the lifecycle blocked.
+
+## Latest public facts
+
+The latest account-only public read was coherent/fresh and returned zero
+positions and zero open orders. The final causal read persisted by the
+lifecycle at approximately `10:17:20Z` is:
 
 | Fact | Result |
 |---|---|
-| Position | `-0.060 PAXG-USD-PERP` |
-| Open orders | `0` |
-| Cursor | present |
-| Reconciliation | `coherent=true`, `freshness=fresh` |
-| Mutation | no submit/cancel/flatten |
+| Position | `0` (`positions=[]`) |
+| Open orders | `0` (`open_orders=[]`) |
+| Fill facts | `0` |
+| Fee facts | `0` |
+| Cursor | `1787566641004` |
+| Snapshot | `coherent=false`, `freshness=unknown` because causal fill/fee observations are missing |
+| Final facts digest | `sha256:b2369648896415a586cc581ed7cd2cccafc49d3f8dafb7daa384883bc053a79c` |
+| Lifecycle status | `BLOCKED` / `facts_reconciliation_not_coherent` |
+| Next action | `notify_park_and_wait` |
 
-The existing canary is therefore a known non-flat short, not a clean slate.
-The Trading System did not call a native venue API or infer a flat state.
+This is an explicit flat-but-not-causally-reconciled state. It must not be
+promoted to `FLAT_RECONCILED` or used to start a new DCA cycle.
 
-The signer value was not printed, logged, or persisted. The external runtime
-may resolve the signer internally for a read-only client; this evidence makes
-no claim that resolution was absent. No secret value escaped the boundary and
-no order mutation occurred.
+## Public seam and test evidence
 
-## Cleanup plan awaiting Park confirmation
+- standard-broker PR #103 added client-scoped fill recovery; PR #105 forwarded
+  the typed client scope to the native fill query.
+- trading-system PR #973 passed the recovered client identity into final facts;
+  PR #975 persisted blocked final facts without weakening validation.
+- standard-broker focused/full regression after PR #105: `287 passed, 1
+  skipped`.
+- trading-system external lifecycle/canary regression after PR #975: `28
+  passed` (two existing collection warnings).
 
-The isolated cleanup plan is `cleanup-existing-paxg-20260824` with digest
-`sha256:0526d28f04429f72a0b6b371be92aee1cd71ecf8c879dd7afaf7682ede9afa0b`.
-The local durable proposal is
-`cleanup-existing-paxg-20260824-proposal`, expiring at
-`2026-08-24T10:30:00+00:00`. No `confirmed` decision has been written.
+No raw provider payload or signer value is included in this evidence. The
+system remains Testnet-only, and this report does not advance soak, Live,
+Mainnet, automatic promotion, or cloud deployment readiness.
 
-Next action: Park must explicitly confirm that exact digest. Only then may the
-isolated `adopt-flatten` action read the position again, submit one reduce-only
-close, and require cursor-bound `FLAT_RECONCILED` evidence. A new canonical DCA
-start remains forbidden until that evidence exists.
+## Next action
 
-This is Testnet evidence only. It does not advance soak readiness, Live/Mainnet
-activation, automatic promotion, or any cloud deployment state.
+Keep #958 open and do not start a new canonical DCA plan. A future continuation
+needs a new, explicitly scoped read/recovery decision and a public causal
+fill/fee fact (or a separately reviewed contract change); it must not infer
+success from the flat account snapshot.
