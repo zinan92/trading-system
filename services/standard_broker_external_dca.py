@@ -1045,6 +1045,7 @@ class ExternalDcaLifecycle:
         if state.get("blocker") not in {
             "flatten_submit_receipt_unknown",
             "flatten_reconcile_query_receipt_unknown",
+            "flatten_reconcile_unknown",
             "flatten_not_filled",
         }:
             return self._block(state, "flatten_reconcile_not_available", timestamp=timestamp)
@@ -1068,6 +1069,22 @@ class ExternalDcaLifecycle:
             query_by_key = getattr(self.orders, "query_by_idempotency_key", None)
             if not callable(query_by_key):
                 raise ExternalDcaError("flatten_reconcile_query_capability_missing")
+            persisted_receipts = [
+                row
+                for row in state.get("receipts") or ()
+                if isinstance(row, Mapping) and row.get("operation") == "flatten_submit"
+            ]
+            client_order_id = str(
+                persisted_receipts[-1].get("client_order_id") if persisted_receipts else ""
+            ).strip()
+            recover_client = getattr(self.orders, "recover_client_order", None)
+            if not callable(recover_client) or not client_order_id:
+                raise ExternalDcaError("flatten_client_identity_missing")
+            recover_client(
+                request,
+                client_order_id=client_order_id,
+                state="unknown",
+            )
             queried = query_by_key(request.idempotency_key)
             self._record_receipt(
                 state,

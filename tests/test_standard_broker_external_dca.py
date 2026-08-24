@@ -190,8 +190,15 @@ class _Orders:
     def query_by_idempotency_key(self, idempotency_key: str):
         for receipt in self.receipts.values():
             if receipt.client_order_id == idempotency_key:
+                receipt.state = self.query_state
                 return receipt
         raise KeyError(idempotency_key)
+
+    def recover_client_order(self, request: TestnetCanaryOrderRequest, *, client_order_id: str, state: str):
+        receipt = self.receipts[request.order_id]
+        receipt.client_order_id = client_order_id
+        receipt.state = state
+        return receipt
 
     def cancel(self, order_id: str):
         receipt = self.receipts[order_id]
