@@ -138,7 +138,7 @@ def _args(
         values.extend(["--plan", str(plan_path)])
     if confirmation_path is not None:
         values.extend(["--confirmation", str(confirmation_path)])
-    if action in {"start", "reconcile-entry", "expire-reconcile", "adopt-flatten", "next-entry", "flatten"}:
+    if action in {"start", "reconcile-entry", "expire-reconcile", "adopt-flatten", "reconcile-flatten", "next-entry", "flatten"}:
         values.extend(
             [
                 "--secret-file",

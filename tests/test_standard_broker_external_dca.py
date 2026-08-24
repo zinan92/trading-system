@@ -187,6 +187,12 @@ class _Orders:
         receipt.state = "canceled" if order_id in self.cancelled else self.query_state
         return receipt
 
+    def query_by_idempotency_key(self, idempotency_key: str):
+        for receipt in self.receipts.values():
+            if receipt.client_order_id == idempotency_key:
+                return receipt
+        raise KeyError(idempotency_key)
+
     def cancel(self, order_id: str):
         receipt = self.receipts[order_id]
         self.cancelled.add(order_id)
@@ -656,6 +662,82 @@ def test_external_dca_adopts_existing_position_in_isolated_journal_before_flatte
     assert flattened["status"] == "FLAT_RECONCILED"
     assert orders.requests[-1].close_position is True
     assert protection.calls == []
+
+
+def test_external_dca_reconciles_unknown_flatten_without_resubmitting(tmp_path: Path) -> None:
+    plan, confirmation, _unused_lifecycle, _unused_orders, protection = _lifecycle(tmp_path)
+    _path, confirmation, output_root = _confirmation(tmp_path / "reconcile-flatten", plan)
+
+    class _ExistingFacts(_Facts):
+        def read_account_state(self, *, instrument_id: str, now: datetime) -> CanaryFactBundle:
+            del instrument_id, now
+            return _bundle(
+                self.plan,
+                order_id=f"{self.plan.plan_id}:existing",
+                position=self.plan.entry_quantities[0],
+                side="buy",
+                price=self.plan.entry_levels[0],
+            )
+
+    orders = _Orders()
+    lifecycle = ExternalDcaLifecycle(
+        output_root,
+        orders,
+        _ExistingFacts(plan),
+        protection,
+        journal_id="cleanup-reconcile-flatten",
+    )
+    lifecycle.adopt_existing_position(
+        plan,
+        bundle=_ExistingFacts(plan).read_account_state(instrument_id=plan.instrument_id, now=datetime.now(UTC)),
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    state = lifecycle.snapshot()
+    state["status"] = "BLOCKED"
+    state["blocker"] = "flatten_submit_receipt_unknown"
+    state["receipts"] = [
+        {
+            "operation": "flatten_submit",
+            "order_id": f"{plan.plan_id}:flatten",
+            "client_order_id": f"{plan.plan_id}:flatten:0.001:{plan.close_price}",
+            "broker_order_id": "",
+            "state": "unknown",
+            "quantity": str(plan.entry_quantities[0]),
+            "price": str(plan.close_price),
+            "side": "sell",
+            "instrument_id": plan.instrument_id,
+            "environment": "testnet",
+            "account_fingerprint": plan.account_fingerprint,
+            "runtime_id": plan.runtime_id,
+            "release_sha": plan.release_sha,
+            "capability_revision": plan.capability_revision,
+            "observed_at": NOW,
+        }
+    ]
+    lifecycle._save(state)
+
+    recovered_orders = _Orders(query_state="filled")
+    recovered_orders.receipts[f"{plan.plan_id}:flatten"] = _Receipt(
+        order_id=f"{plan.plan_id}:flatten",
+        state="filled",
+        client_order_id=f"{plan.plan_id}:flatten:{plan.entry_quantities[0]}:{plan.close_price}",
+        broker_order_id=f"broker:{plan.plan_id}:flatten",
+    )
+    recovered = ExternalDcaLifecycle(
+        output_root,
+        recovered_orders,
+        _Facts(plan),
+        protection,
+        journal_id="cleanup-reconcile-flatten",
+    )
+    reconciled = recovered.reconcile_flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    assert reconciled["status"] == "FLAT_RECONCILED"
+    assert recovered_orders.requests == []
 
 
 @pytest.mark.parametrize(

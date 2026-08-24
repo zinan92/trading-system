@@ -137,6 +137,24 @@ python3 -m pipelines.standard_broker_external_dca \
   --acknowledge I_UNDERSTAND_ONE_ATTENDED_EXTERNAL_DCA_TESTNET_ACTION
 ```
 
+If `adopt-flatten` returns `BLOCKED` with
+`flatten_submit_receipt_unknown`, do not run `adopt-flatten` again. Use the
+same confirmed cleanup plan once to query the persisted idempotency key:
+
+```bash
+python3 -m pipelines.standard_broker_external_dca \
+  --action reconcile-flatten \
+  --plan <path-to-explicit-cleanup-plan.json> \
+  --confirmation <path-to-fresh-cleanup-confirmation.json> \
+  --account-address <testnet-account-address> \
+  --secret-file <local-testnet-signer-file> \
+  --approval-id <human-testnet-approval-id> \
+  --approved-by park \
+  --output-root <output-root> \
+  --execute-testnet \
+  --acknowledge I_UNDERSTAND_ONE_ATTENDED_EXTERNAL_DCA_TESTNET_ACTION
+```
+
 ## One attended next entry
 
 After `start` reaches `PROTECTION_ACTIVE`, one additional approved ladder level
