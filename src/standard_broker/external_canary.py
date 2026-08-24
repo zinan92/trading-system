@@ -7,7 +7,7 @@ and exposes only the typed lifecycle needed by one attended canary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
@@ -193,10 +193,7 @@ class HyperliquidExternalSnapshotReader:
                     "canary_fee_fill_identity_mismatch",
                     "actual fee fact does not match the canonical fill",
                 )
-            fee_event = fill_fact.fee
-            if isinstance(fee_event, FeeEvent) and fee_event.provenance != provenance:
-                fee_event = replace(fee_event, provenance=provenance)
-            fee_events.append(fee_event)
+            fee_events.append(fill_fact.fee)
         fee_envelope = self._envelope(
             fact_type="canary.fees",
             data=tuple(fee_events),

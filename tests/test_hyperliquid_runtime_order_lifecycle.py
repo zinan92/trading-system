@@ -14,6 +14,7 @@ from standard_broker.adapters.hyperliquid import (
 )
 from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import OrderIdempotencyError
+from standard_broker.host import CanonicalPortQuery
 from standard_broker.models import AccountScope, BrokerEnvironment, SignerKind
 from standard_broker.orders import OrderIntent, OrderSide, OrderState, OrderType, TimeInForce
 from standard_broker.runtime import (
@@ -695,6 +696,30 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         backend.responses["open_orders"] = {"orders": [{"status": "open", "cloid": submitted.client_order_id}]}
         client_only_open_orders = adapter.open_orders("BTC-USD-PERP")
         self.assertEqual(client_only_open_orders[0].order_id, submitted.order_id)
+
+    def test_runtime_fee_fill_fact_query_forwards_canonical_instrument(self) -> None:
+        profile = CapabilityDescriptor(
+            broker_id="hyperliquid",
+            environment=BrokerEnvironment.PAPER,
+            operations={"fee": frozenset({"fill"})},
+            revision=REVISION,
+        )
+        runtime, backend = self.runtime(profile=profile)
+
+        runtime.invoke_fact(
+            "fee",
+            "fill",
+            CanonicalPortQuery(
+                subject="trade-1",
+                kind="fill",
+                instrument_id="BTC-USD-PERP",
+            ),
+        )
+
+        self.assertEqual(
+            backend.calls[-1][2],
+            {"fill_id": "trade-1", "instrument_id": "BTC-USD-PERP"},
+        )
 
     def test_client_scoped_fill_query_passes_cloid_to_runtime(self) -> None:
         adapter, backend = self.adapter(profile=capabilities("submit", "fills"))
