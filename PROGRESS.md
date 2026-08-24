@@ -148,7 +148,15 @@ The extracted package files are:
 - [x] Differential and reverse dependency tests pass.
 - [x] Source focused regression rerun passes.
 - [x] compileall, ruff-if-present, gitleaks, and source-preservation evidence recorded.
-- [ ] Target clean-worktree and extraction commit SHA recorded after commit.
+- [x] Target clean-worktree and extraction commit SHA recorded after commit.
+
+## Commits
+
+- Extraction commit: `0f4a5df3a5c30bcd2e07dfc2e99ab8b0f8288cbc`
+- Commit message: `extract canonical dca and grid strategy foundation`
+- The final verification metadata update is intentionally a separate local
+  commit so this file can contain the actual extraction SHA without a
+  self-referential commit hash.
 
 ## Final verification evidence (pre-commit)
 
@@ -195,3 +203,6 @@ Source preservation check: `git status --short --branch` after all source
 tests still shows only the pre-existing `CONTEXT.md` modification and the
 three pre-existing untracked ADRs. No source file in the forbidden or allowed
 strategy set was changed.
+
+Target repository check immediately after the extraction commit:
+`git status --porcelain` was empty before this metadata-only update.
