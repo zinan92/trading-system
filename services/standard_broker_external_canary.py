@@ -98,12 +98,22 @@ class StandardBrokerExternalCanaryAdapter:
     def cancel(self, order_id: str) -> object:
         return self._binding.cancel(order_id)
 
-    def read_facts(self, *, order_id: str, instrument_id: str, now: datetime) -> object:
-        bundle = self._binding.read_facts(
-            order_id=order_id,
-            instrument_id=instrument_id,
-            now=now,
-        )
+    def read_facts(
+        self,
+        *,
+        order_id: str,
+        instrument_id: str,
+        now: datetime,
+        client_order_id: str | None = None,
+    ) -> object:
+        kwargs = {
+            "order_id": order_id,
+            "instrument_id": instrument_id,
+            "now": now,
+        }
+        if client_order_id is not None:
+            kwargs["client_order_id"] = client_order_id
+        bundle = self._binding.read_facts(**kwargs)
         return self._convert_bundle(bundle)
 
     def read_account_state(self, *, instrument_id: str, now: datetime) -> object:
