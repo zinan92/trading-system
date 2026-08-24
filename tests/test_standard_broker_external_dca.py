@@ -79,10 +79,15 @@ def _plan(**overrides: object) -> ExternalDcaPlan:
     values = {**_plan_values(), **overrides}
     if "plan_digest" not in overrides:
         values["plan_digest"] = external_dca_plan_digest(values)
-    return ExternalDcaPlan.from_mapping(values)
+    return ExternalDcaPlan.from_mapping(values, allow_expired=True)
 
 
-def _confirmation(tmp_path: Path, plan: ExternalDcaPlan) -> tuple[Path, dict[str, object], Path]:
+def _confirmation(
+    tmp_path: Path,
+    plan: ExternalDcaPlan,
+    *,
+    confirmation_expires_at: str | None = None,
+) -> tuple[Path, dict[str, object], Path]:
     output_root = tmp_path / "outputs"
     ledger = ParkConfirmationLedger(output_root, park_user_id="park")
     proposal = ledger.create_proposal(
@@ -113,7 +118,7 @@ def _confirmation(tmp_path: Path, plan: ExternalDcaPlan) -> tuple[Path, dict[str
         "operator_id": "park",
         "proposal_id": proposal["proposal_id"],
         "receipt_digest": decision["receipt_digest"],
-        "expires_at": plan.expires_at,
+        "expires_at": confirmation_expires_at or plan.expires_at,
     }
     path = tmp_path / "confirmation.json"
     path.write_text(json.dumps(confirmation), encoding="utf-8")
@@ -134,6 +139,7 @@ class _Orders:
         self.receipts: dict[str, _Receipt] = {}
         self.submit_state = submit_state
         self.query_state = query_state if query_state is not None else submit_state
+        self.cancelled: set[str] = set()
 
     def preflight(self):
         return {
@@ -178,11 +184,12 @@ class _Orders:
 
     def query(self, order_id: str):
         receipt = self.receipts[order_id]
-        receipt.state = self.query_state
+        receipt.state = "canceled" if order_id in self.cancelled else self.query_state
         return receipt
 
     def cancel(self, order_id: str):
         receipt = self.receipts[order_id]
+        self.cancelled.add(order_id)
         receipt.state = "canceled"
         return receipt
 
@@ -320,6 +327,20 @@ class _Facts:
         price = self.plan.entry_levels[0] if order_id.endswith(":0") else self.plan.entry_levels[1]
         return _bundle(self.plan, order_id=order_id, position=position, side="buy", price=price, fill_quantity=self.plan.entry_quantities[0])
 
+    def read_account_state(self, *, instrument_id: str, now: datetime) -> CanaryFactBundle:
+        del instrument_id, now
+        return replace(
+            _bundle(
+                self.plan,
+                order_id=f"{self.plan.plan_id}:clean-state",
+                position=Decimal("0"),
+                side="buy",
+                price=self.plan.entry_levels[0],
+            ),
+            fills=(),
+            fees=(),
+        )
+
 
 def _lifecycle(tmp_path: Path, *, protection_state: ProtectionLifecycleState = ProtectionLifecycleState.ACTIVE):
     plan = _plan()
@@ -422,6 +443,8 @@ def test_external_dca_canonical_start_persists_source_and_normalized_facts(tmp_p
     assert prepared["source_strategy_plan_id"] == provenance.source_strategy_plan_id
     assert prepared["source_strategy_plan_digest"] == provenance.source_strategy_plan_digest
     assert prepared["execution_market_source"]["instrument_id"] == plan.instrument_id
+    assert prepared["clean_state_facts"]["reconciliation"]["signed_position_quantity"] == "0"
+    assert prepared["clean_state_facts_digest"].startswith("sha256:")
     assert state["entry_facts"]["account"]["account_fingerprint"] == plan.account_fingerprint
     assert state["entry_facts"]["reconciliation"]["freshness"] == "fresh"
     assert state["entry_facts"]["reconciliation"]["cursor"] == f"cursor:{orders.requests[0].order_id}"
@@ -431,13 +454,165 @@ def test_external_dca_canonical_start_persists_source_and_normalized_facts(tmp_p
 
 def test_external_dca_canonical_start_requires_source_provenance(tmp_path: Path) -> None:
     plan, confirmation, lifecycle, _orders, _protection = _lifecycle(tmp_path)
-    with pytest.raises(ExternalDcaError, match="canonical_strategy_plan_required"):
-        lifecycle.prepare(
-            plan,
-            confirmation=confirmation,
-            timestamp=NOW,
-            require_canonical=True,
-        )
+    state = lifecycle.prepare(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+        require_canonical=True,
+    )
+    assert state["status"] == "BLOCKED"
+    assert state["blocker"] == "canonical_strategy_plan_required"
+
+
+def test_external_dca_expired_plan_persists_identity_blocker_without_submit(tmp_path: Path) -> None:
+    plan = _plan(expires_at="2020-01-01T00:00:00+00:00")
+    _path, confirmation, output_root = _confirmation(
+        tmp_path,
+        plan,
+        confirmation_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    orders = _Orders()
+    lifecycle = ExternalDcaLifecycle(output_root, orders, _Facts(plan), _Protection())
+
+    state = lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+
+    assert state["status"] == "BLOCKED"
+    assert state["blocker"] == "plan_expired"
+    assert state["plan_id"] == plan.plan_id
+    assert state["plan_digest"] == plan.plan_digest
+    assert orders.requests == []
+
+
+def test_external_dca_expired_confirmation_persists_identity_blocker_without_submit(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, orders, _protection = _lifecycle(tmp_path)
+    expired_confirmation = {**confirmation, "expires_at": "2020-01-01T00:00:00+00:00"}
+
+    state = lifecycle.prepare(plan, confirmation=expired_confirmation, timestamp=NOW)
+
+    assert state["status"] == "BLOCKED"
+    assert state["blocker"] == "confirmation_expired"
+    assert state["plan_id"] == plan.plan_id
+    assert state["plan_digest"] == plan.plan_digest
+    assert orders.requests == []
+
+
+def test_external_dca_expired_resting_entry_can_be_cancelled_and_reconciled(tmp_path: Path) -> None:
+    plan = _plan(expires_at="2026-08-23T02:00:00+00:00")
+    _path, confirmation, output_root = _confirmation(
+        tmp_path,
+        plan,
+        confirmation_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    orders = _Orders(query_state="resting")
+    lifecycle = ExternalDcaLifecycle(output_root, orders, _Facts(plan), _Protection())
+    prepared = lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+    assert prepared["status"] == "WAITING_ENTRY"
+
+    state = lifecycle.reconcile_expired_entry(
+        plan,
+        confirmation=confirmation,
+        timestamp="2026-08-24T01:00:00+00:00",
+    )
+
+    assert state["status"] == "EXPIRED_RECONCILED"
+    assert state["blocker"] == "plan_expired"
+    assert state["next_action"] == "record_expired_entry_reconciliation"
+    assert orders.cancelled == {orders.requests[0].order_id}
+
+
+def test_external_dca_expired_fill_blocks_then_allows_explicit_unprotected_flatten(tmp_path: Path) -> None:
+    plan = _plan(expires_at="2026-08-23T01:01:00+00:00")
+    _path, confirmation, output_root = _confirmation(
+        tmp_path,
+        plan,
+        confirmation_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    orders = _Orders(query_state="filled")
+    protection = _Protection()
+    lifecycle = ExternalDcaLifecycle(output_root, orders, _Facts(plan), protection)
+    lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+
+    expired = lifecycle.reconcile_expired_entry(
+        plan,
+        confirmation=confirmation,
+        timestamp="2026-08-23T01:02:00+00:00",
+    )
+    assert expired["status"] == "EXPIRED_POSITION_BLOCKED"
+    assert expired["next_action"] == "attended_flatten_expired_position"
+
+    flat = lifecycle.flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp="2026-08-23T01:02:00+00:00",
+    )
+    assert flat["status"] == "FLAT_RECONCILED"
+    assert flat["protection"]["status"] == "not_present"
+    assert protection.calls == []
+
+
+def test_external_dca_fresh_process_recovery_never_resubmits_ambiguous_intent(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, orders, protection = _lifecycle(tmp_path)
+    lifecycle.prepare(plan, confirmation=confirmation, timestamp=NOW)
+    state = lifecycle.snapshot()
+    state["status"] = "ENTRY_SUBMIT_INTENT_RESERVED"
+    state["entry_order_id"] = orders.requests[0].order_id
+    state["entry_order_ids"] = [orders.requests[0].order_id]
+    lifecycle._save(state)
+
+    recovered_orders = _Orders(query_state="resting")
+    recovered_orders.receipts[orders.requests[0].order_id] = _Receipt(
+        order_id=orders.requests[0].order_id,
+        state="resting",
+        client_order_id=orders.requests[0].idempotency_key,
+        broker_order_id=f"broker:{orders.requests[0].order_id}",
+    )
+    recovered = ExternalDcaLifecycle(
+        lifecycle.output_root,
+        recovered_orders,
+        _Facts(plan),
+        protection,
+    )
+
+    state = recovered.prepare(plan, confirmation=confirmation, timestamp=NOW)
+    assert state["status"] == "RECOVERY_REQUIRED"
+    assert recovered_orders.requests == []
+    reconciled = recovered.reconcile_entry(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+    assert reconciled["status"] == "WAITING_ENTRY"
+    assert recovered_orders.requests == []
+
+
+def test_external_dca_clean_state_gate_blocks_existing_position_before_submit(tmp_path: Path) -> None:
+    plan = _plan()
+    _path, confirmation, output_root = _confirmation(tmp_path, plan)
+    protection = _Protection()
+
+    class _NonFlatFacts(_Facts):
+        def read_account_state(self, *, instrument_id: str, now: datetime) -> CanaryFactBundle:
+            del instrument_id, now
+            return _bundle(
+                self.plan,
+                order_id=f"{self.plan.plan_id}:clean-state",
+                position=self.plan.entry_quantities[0],
+                side="buy",
+                price=self.plan.entry_levels[0],
+            )
+
+    orders = _Orders()
+    lifecycle = ExternalDcaLifecycle(output_root, orders, _NonFlatFacts(plan), protection)
+    state = lifecycle.prepare(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+        canonical_provenance=_provenance(plan),
+        require_canonical=True,
+    )
+    assert state["status"] == "BLOCKED"
+    assert state["blocker"] == "clean_state_not_flat"
+    assert orders.requests == []
 
 
 @pytest.mark.parametrize(

@@ -286,7 +286,13 @@ class ExternalDcaPlan:
     expires_at: str
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any], *, now: datetime | None = None) -> "ExternalDcaPlan":
+    def from_mapping(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        now: datetime | None = None,
+        allow_expired: bool = False,
+    ) -> "ExternalDcaPlan":
         if not isinstance(value, Mapping):
             raise ExternalDcaError("plan_must_be_object")
         missing = [field for field in (*_PLAN_FIELDS, "plan_digest") if field not in value]
@@ -335,7 +341,7 @@ class ExternalDcaPlan:
             max_loss_usd=_decimal(value["max_loss_usd"], "max_loss_usd"),
             expires_at=_text(value["expires_at"], "expires_at"),
         )
-        plan.validate(now=now)
+        plan.validate(now=now, allow_expired=allow_expired)
         if plan.plan_digest != external_dca_plan_digest(plan.to_mapping()):
             raise ExternalDcaError("plan_digest_mismatch")
         return plan
@@ -377,7 +383,7 @@ class ExternalDcaPlan:
             "expires_at": self.expires_at,
         }
 
-    def validate(self, *, now: datetime | None = None) -> None:
+    def validate(self, *, now: datetime | None = None, allow_expired: bool = False) -> None:
         if self.plan_version < 1:
             raise ExternalDcaError("plan_version_invalid")
         if self.broker_id != "hyperliquid" or self.environment != "testnet":
@@ -429,7 +435,8 @@ class ExternalDcaPlan:
         if self.worst_case_loss_usd() > self.max_loss_usd:
             raise ExternalDcaError("worst_case_loss_exceeds_plan_limit")
         current = now.astimezone(timezone.utc) if now is not None else datetime.now(timezone.utc)
-        if _timestamp(self.expires_at, "expires_at") <= current:
+        expiry = _timestamp(self.expires_at, "expires_at")
+        if not allow_expired and expiry <= current:
             raise ExternalDcaError("plan_expired")
         if self.plan_digest != external_dca_plan_digest(self.to_mapping()):
             raise ExternalDcaError("plan_digest_mismatch")
@@ -441,6 +448,10 @@ class ExternalDcaPlan:
             gross += max(Decimal("0"), stop_distance) * quantity * self.contract_multiplier
         slippage = self.max_slippage * sum(self.entry_quantities, Decimal("0")) * self.contract_multiplier
         return gross + slippage + self.fee_budget_usd
+
+    def is_expired(self, *, now: datetime | None = None) -> bool:
+        current = now.astimezone(timezone.utc) if now is not None else datetime.now(timezone.utc)
+        return _timestamp(self.expires_at, "expires_at") <= current
 
 
 @runtime_checkable
@@ -455,6 +466,13 @@ class ExternalDcaOrderPort(Protocol):
 @runtime_checkable
 class ExternalDcaFactsPort(Protocol):
     def read_facts(self, *, order_id: str, instrument_id: str, now: datetime) -> CanaryFactBundle: ...
+
+
+@runtime_checkable
+class ExternalDcaCleanStatePort(Protocol):
+    """Optional public account-wide clean-state reader for canonical starts."""
+
+    def read_account_state(self, *, instrument_id: str, now: datetime) -> CanaryFactBundle: ...
 
 
 @runtime_checkable
@@ -524,31 +542,54 @@ class ExternalDcaLifecycle:
         require_canonical: bool = False,
     ) -> dict[str, Any]:
         now = _timestamp(timestamp, "timestamp")
-        normalized = plan if isinstance(plan, ExternalDcaPlan) else ExternalDcaPlan.from_mapping(plan, now=now)
-        normalized.validate(now=now)
+        normalized = (
+            plan
+            if isinstance(plan, ExternalDcaPlan)
+            else ExternalDcaPlan.from_mapping(plan, now=now, allow_expired=True)
+        )
         provenance = self._normalize_provenance(canonical_provenance)
-        if require_canonical and provenance is None:
-            raise ExternalDcaError("canonical_strategy_plan_required")
-        if provenance is not None:
-            if provenance.execution_market_source.instrument_id != normalized.instrument_id:
-                raise ExternalDcaError("canonical_execution_instrument_mismatch")
-            if provenance.execution_market_source.broker_id != normalized.broker_id:
-                raise ExternalDcaError("canonical_execution_broker_mismatch")
-            if provenance.execution_market_source.environment != normalized.environment:
-                raise ExternalDcaError("canonical_execution_environment_mismatch")
-        self._require_confirmation(normalized, confirmation, now)
         existing = self.snapshot()
         if existing:
             if existing.get("plan_digest") != normalized.plan_digest:
                 raise ExternalDcaError("persisted_plan_digest_mismatch")
             if provenance is not None and existing.get("canonical_provenance") != provenance.to_mapping():
                 raise ExternalDcaError("persisted_canonical_provenance_mismatch")
+            try:
+                self._require_confirmation(normalized, confirmation, now)
+            except ExternalDcaError as exc:
+                return self._block(existing, str(exc), timestamp=timestamp)
+            if existing.get("status") in {
+                "ENTRY_SUBMIT_INTENT_RESERVED",
+                "FLATTEN_SUBMIT_INTENT_RESERVED",
+            }:
+                existing["status"] = "RECOVERY_REQUIRED"
+                existing["blocker"] = "persisted_intent_requires_reconciliation"
+                existing["next_action"] = "attended_reconcile_entry_or_flatten"
+                self._event(existing, "recovery_required", timestamp=timestamp)
+                self._save(existing)
             return existing
         state = self._new_state(normalized, timestamp, provenance=provenance)
         self._save(state)
         try:
+            normalized.validate(now=now)
+            if require_canonical and provenance is None:
+                raise ExternalDcaError("canonical_strategy_plan_required")
+            if provenance is not None:
+                if provenance.execution_market_source.instrument_id != normalized.instrument_id:
+                    raise ExternalDcaError("canonical_execution_instrument_mismatch")
+                if provenance.execution_market_source.broker_id != normalized.broker_id:
+                    raise ExternalDcaError("canonical_execution_broker_mismatch")
+                if provenance.execution_market_source.environment != normalized.environment:
+                    raise ExternalDcaError("canonical_execution_environment_mismatch")
+            self._require_confirmation(normalized, confirmation, now)
             self._validate_preflight(normalized)
             self._validate_market_fact(normalized, now=now)
+            if require_canonical or provenance is not None:
+                clean_state = self._validate_clean_state(normalized, now=now)
+                state["clean_state_facts"] = self._safe_fact_bundle(clean_state)
+                state["clean_state_facts_digest"] = _digest(state["clean_state_facts"])
+                self._event(state, "clean_state_reconciled", timestamp=timestamp)
+                self._save(state)
             request = self._entry_request(normalized, 0)
             state["entry_intent"] = self._safe_request(request)
             state["status"] = "ENTRY_SUBMIT_INTENT_RESERVED"
@@ -608,6 +649,8 @@ class ExternalDcaLifecycle:
         timestamp: str,
     ) -> dict[str, Any]:
         state = self._state(plan)
+        if plan.is_expired(now=_timestamp(timestamp, "timestamp")):
+            return self._block(state, "plan_expired_before_protection", timestamp=timestamp)
         try:
             self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
         except ExternalDcaError as exc:
@@ -684,6 +727,133 @@ class ExternalDcaLifecycle:
                 timestamp=timestamp,
             )
 
+    def reconcile_expired_entry(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        confirmation: Mapping[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        """Cancel/query an entry after plan expiry without submitting exposure."""
+
+        with production_mutation_lock(self.output_root):
+            return self._reconcile_expired_entry(
+                plan,
+                confirmation=confirmation,
+                timestamp=timestamp,
+            )
+
+    def _reconcile_expired_entry(
+        self,
+        plan: ExternalDcaPlan,
+        *,
+        confirmation: Mapping[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        state = self._state(plan)
+        checked_at = _timestamp(timestamp, "timestamp")
+        if not plan.is_expired(now=checked_at):
+            return self._block(state, "plan_not_expired", timestamp=timestamp)
+        try:
+            self._require_confirmation(plan, confirmation, checked_at)
+        except ExternalDcaError as exc:
+            return self._block(state, str(exc), timestamp=timestamp)
+        if state.get("status") not in {
+            "WAITING_ENTRY",
+            "ENTRY_FILLED_PENDING_FACTS",
+            "ENTRY_SUBMIT_INTENT_RESERVED",
+            "RECOVERY_REQUIRED",
+        }:
+            return self._block(state, "expired_entry_reconcile_not_available", timestamp=timestamp)
+        order_ids = tuple(str(order_id) for order_id in state.get("entry_order_ids") or () if order_id)
+        if not order_ids and state.get("entry_order_id"):
+            order_ids = (str(state["entry_order_id"]),)
+        if not order_ids:
+            return self._block(state, "expired_entry_order_identity_missing", timestamp=timestamp)
+        try:
+            for order_id in order_ids:
+                entry_index = self._entry_index(plan, order_id)
+                request = self._entry_request(plan, entry_index)
+                self._recover_order_intent(state, request)
+                queried = self.orders.query(order_id)
+                self._record_receipt(
+                    state,
+                    queried,
+                    request=request,
+                    timestamp=timestamp,
+                    operation="expired_reconcile_query",
+                )
+                receipt_state = self._receipt_state(queried)
+                self._record_entry_outcome(state, receipt_state)
+                if receipt_state == "unknown":
+                    raise ExternalDcaError("expired_entry_query_unknown")
+                if receipt_state in {"filled", "partially_filled"}:
+                    state["entry_order_id"] = order_id
+                    state["status"] = "ENTRY_FILLED_PENDING_FACTS"
+                    bundle = self.facts.read_facts(
+                        order_id=order_id,
+                        instrument_id=plan.instrument_id,
+                        now=_timestamp(timestamp, "timestamp"),
+                    )
+                    position_quantity, average_entry, actual_fees = self._validate_facts(
+                        plan,
+                        bundle,
+                        order_id=order_id,
+                        timestamp=timestamp,
+                    )
+                    if position_quantity > 0:
+                        state["position_quantity"] = str(position_quantity)
+                        state["average_entry_price"] = str(average_entry)
+                        state["actual_fee_usd"] = str(actual_fees)
+                        state["entry_facts"] = self._safe_fact_bundle(bundle)
+                        state["entry_facts_digest"] = _digest(state["entry_facts"])
+                        state["status"] = "EXPIRED_POSITION_BLOCKED"
+                        state["blocker"] = "plan_expired_after_entry_fill"
+                        state["next_action"] = "attended_flatten_expired_position"
+                        self._event(state, "expired_entry_position_observed", timestamp=timestamp)
+                        self._save(state)
+                        return state
+                    continue
+                if receipt_state in {
+                    "submitting",
+                    "resting",
+                    "waiting_for_fill",
+                    "waiting_for_trigger",
+                    "partially_filled",
+                    "cancel_pending",
+                    "modify_pending",
+                }:
+                    canceled = self.orders.cancel(order_id)
+                    self._record_receipt(
+                        state,
+                        canceled,
+                        request=request,
+                        timestamp=timestamp,
+                        operation="expired_cancel",
+                    )
+                    if self._receipt_state(canceled) not in {"canceled", "rejected"}:
+                        raise ExternalDcaError("expired_entry_cancel_not_confirmed")
+                    queried_cancel = self.orders.query(order_id)
+                    self._record_receipt(
+                        state,
+                        queried_cancel,
+                        request=request,
+                        timestamp=timestamp,
+                        operation="expired_cancel_query",
+                    )
+                    if self._receipt_state(queried_cancel) not in {"canceled", "rejected"}:
+                        raise ExternalDcaError("expired_entry_cancel_query_not_confirmed")
+            state["status"] = "EXPIRED_RECONCILED"
+            state["blocker"] = "plan_expired"
+            state["next_action"] = "record_expired_entry_reconciliation"
+            self._event(state, "expired_entry_reconciled", timestamp=timestamp)
+            self._save(state)
+            return state
+        except ExternalDcaError as exc:
+            return self._block(state, str(exc), timestamp=timestamp)
+        except Exception as exc:  # noqa: BLE001 - ambiguous external state freezes.
+            return self._block(state, f"expired_entry_reconcile_unknown:{type(exc).__name__}", timestamp=timestamp)
+
     def _reconcile_entry(
         self,
         plan: ExternalDcaPlan,
@@ -693,13 +863,22 @@ class ExternalDcaLifecycle:
     ) -> dict[str, Any]:
         state = self._state(plan)
         now = _timestamp(timestamp, "timestamp")
+        if plan.is_expired(now=now):
+            return self._block(state, "plan_expired_requires_expiry_reconcile", timestamp=timestamp)
         try:
             self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
         except ExternalDcaError as exc:
             return self._block(state, str(exc), timestamp=timestamp)
-        if state.get("status") not in {"WAITING_ENTRY", "ENTRY_FILLED_PENDING_FACTS"}:
+        if state.get("status") not in {
+            "WAITING_ENTRY",
+            "ENTRY_FILLED_PENDING_FACTS",
+            "ENTRY_SUBMIT_INTENT_RESERVED",
+            "RECOVERY_REQUIRED",
+        }:
             return self._block(state, "entry_reconcile_not_available", timestamp=timestamp)
         order_id = str(state.get("entry_order_id") or "").strip()
+        if not order_id:
+            return self._block(state, "persisted_entry_order_identity_missing", timestamp=timestamp)
         try:
             request = self._entry_request(plan, self._entry_index(plan, order_id))
             self._recover_order_intent(state, request)
@@ -751,6 +930,8 @@ class ExternalDcaLifecycle:
     ) -> dict[str, Any]:
         state = self._state(plan)
         now = _timestamp(timestamp, "timestamp")
+        if plan.is_expired(now=now):
+            return self._block(state, "plan_expired", timestamp=timestamp)
         try:
             self._require_confirmation(plan, confirmation, now)
         except ExternalDcaError as exc:
@@ -825,8 +1006,14 @@ class ExternalDcaLifecycle:
             self._require_confirmation(plan, confirmation, _timestamp(timestamp, "timestamp"))
         except ExternalDcaError as exc:
             return self._block(state, str(exc), timestamp=timestamp)
-        if state.get("status") not in {"PROTECTION_ACTIVE", "WAITING_ENTRY", "ENTRY_FILLED_PENDING_FACTS"}:
-            raise ExternalDcaError("flatten_not_available")
+        if state.get("status") not in {
+            "PROTECTION_ACTIVE",
+            "WAITING_ENTRY",
+            "ENTRY_FILLED_PENDING_FACTS",
+            "RECOVERY_REQUIRED",
+            "EXPIRED_POSITION_BLOCKED",
+        }:
+            return self._block(state, "flatten_not_available", timestamp=timestamp)
         try:
             for order_id in tuple(state.get("entry_order_ids") or [state.get("entry_order_id")]):
                 if order_id and self._entry_is_open(state, str(order_id)):
@@ -856,19 +1043,26 @@ class ExternalDcaLifecycle:
             position_quantity = Decimal(str(state.get("position_quantity") or "0"))
             if position_quantity <= 0:
                 raise ExternalDcaError("flatten_position_missing")
-            group = self._protection_group(
-                plan,
-                state,
-                position_quantity,
-                Decimal(str(state.get("average_entry_price") or plan.entry_levels[0])),
-            )
-            canceled_protection = self.protection.cancel(group)
-            canceled_observation = getattr(canceled_protection, "observation", None)
-            if (
-                canceled_observation is None
-                or getattr(getattr(canceled_observation, "state", None), "value", "") != "canceled"
-            ):
-                raise ExternalDcaError("protection_cancel_not_confirmed")
+            if state.get("protection") and state["protection"].get("status") != "not_present":
+                group = self._protection_group(
+                    plan,
+                    state,
+                    position_quantity,
+                    Decimal(str(state.get("average_entry_price") or plan.entry_levels[0])),
+                )
+                canceled_protection = self.protection.cancel(group)
+                canceled_observation = getattr(canceled_protection, "observation", None)
+                if (
+                    canceled_observation is None
+                    or getattr(getattr(canceled_observation, "state", None), "value", "") != "canceled"
+                ):
+                    raise ExternalDcaError("protection_cancel_not_confirmed")
+            else:
+                state["protection"] = {
+                    "status": "not_present",
+                    "covered_quantity": "0",
+                    "reason": "expired_position_had_no_active_protection",
+                }
             request = TestnetCanaryOrderRequest(
                 order_id=f"{plan.plan_id}:flatten",
                 instrument_id=plan.instrument_id,
@@ -952,6 +1146,65 @@ class ExternalDcaLifecycle:
             raise ExternalDcaError("protection_runtime_identity_missing")
         if session.lifecycle_id != plan.runtime_id or session.capability_revision != plan.capability_revision:
             raise ExternalDcaError("protection_runtime_identity_mismatch")
+
+    def _validate_clean_state(self, plan: ExternalDcaPlan, *, now: datetime) -> CanaryFactBundle:
+        reader = getattr(self.facts, "read_account_state", None)
+        if not callable(reader):
+            raise ExternalDcaError("clean_state_reader_missing")
+        try:
+            bundle = reader(instrument_id=plan.instrument_id, now=now)
+        except Exception as exc:  # noqa: BLE001 - provider details stay at the boundary.
+            raise ExternalDcaError("clean_state_unknown") from exc
+        if not isinstance(bundle, CanaryFactBundle):
+            raise ExternalDcaError("clean_state_bundle_invalid")
+        account = bundle.account
+        reconciliation = bundle.reconciliation
+        if (
+            account is None
+            or reconciliation is None
+            or not reconciliation.coherent
+            or reconciliation.freshness != "fresh"
+            or reconciliation.canonical_schema != "ExternalReconciliationSnapshot"
+            or not _SHA256.fullmatch(str(reconciliation.evidence_digest or "").lower())
+            or not reconciliation.cursor
+        ):
+            raise ExternalDcaError("clean_state_reconciliation_not_coherent")
+        typed_facts = (account, reconciliation, *bundle.positions)
+        current = now.astimezone(timezone.utc)
+        for fact in typed_facts:
+            if getattr(fact, "cursor", reconciliation.cursor) != reconciliation.cursor:
+                raise ExternalDcaError("clean_state_cursor_mismatch")
+            if getattr(fact, "fact_digest", "") != canary_fact_digest(fact):
+                raise ExternalDcaError("clean_state_digest_invalid")
+            for field in ("observed_at", "occurred_at"):
+                value = getattr(fact, field, None)
+                if value is None:
+                    continue
+                observed = _timestamp(value, f"clean_state.{field}")
+                age = (current - observed).total_seconds()
+                if age < -300 or age > MAX_FACT_AGE_SECONDS:
+                    raise ExternalDcaError("clean_state_stale")
+            if getattr(fact, "account_fingerprint", plan.account_fingerprint) != plan.account_fingerprint:
+                raise ExternalDcaError("clean_state_account_identity_mismatch")
+            if getattr(fact, "runtime_id", plan.runtime_id) != plan.runtime_id:
+                raise ExternalDcaError("clean_state_runtime_identity_mismatch")
+            if getattr(fact, "release_sha", plan.release_sha) != plan.release_sha:
+                raise ExternalDcaError("clean_state_release_identity_mismatch")
+            if getattr(fact, "capability_revision", plan.capability_revision) != plan.capability_revision:
+                raise ExternalDcaError("clean_state_capability_identity_mismatch")
+            if getattr(fact, "transport_state", "external_testnet") != "external_testnet":
+                raise ExternalDcaError("clean_state_transport_identity_mismatch")
+        if tuple(bundle.open_orders) != tuple(reconciliation.open_order_ids):
+            raise ExternalDcaError("clean_state_open_order_reconciliation_mismatch")
+        signed_position = sum(
+            (position.signed_quantity for position in bundle.positions if position.instrument_id == plan.instrument_id),
+            Decimal("0"),
+        )
+        if signed_position != reconciliation.signed_position_quantity:
+            raise ExternalDcaError("clean_state_position_reconciliation_mismatch")
+        if signed_position != 0 or bundle.open_orders:
+            raise ExternalDcaError("clean_state_not_flat")
+        return bundle
 
     def _validate_market_fact(self, plan: ExternalDcaPlan, *, now: datetime) -> None:
         reader = getattr(self.orders, "market_fact", None)
