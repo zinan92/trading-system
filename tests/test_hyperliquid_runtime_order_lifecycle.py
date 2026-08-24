@@ -590,7 +590,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         with self.assertRaises(ValueError, msg="ambiguous hash-only identity must fail closed"):
             adapter.apply_fill({key: value for key, value in base.items() if key not in {"tid", "sz"}} | {"sz": "0.1"})
 
-    def test_tid_promotion_after_hash_only_identity_fails_closed(self) -> None:
+    def test_local_fixture_tid_promotion_enriches_hash_only_identity(self) -> None:
         adapter, _ = self.adapter()
         submitted = adapter.submit(self.intent())
         base = {
@@ -606,8 +606,44 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
 
         adapter.apply_fill(base)
 
-        with self.assertRaises(ValueError, msg="tid promotion after hash-only identity must fail closed"):
-            adapter.apply_fill({**base, "tid": "trade-promoted"})
+        promoted = adapter.apply_fill({**base, "tid": "trade-promoted"})
+
+        self.assertEqual(promoted.state, OrderState.FILLED)
+        self.assertEqual(len(adapter.fills), 1)
+
+    def test_local_fixture_shared_hash_keeps_distinct_tid_with_different_facts(self) -> None:
+        adapter, _ = self.adapter()
+        intent = self.intent(order_id="mixed-hash", key="cycle:mixed-hash").__class__(
+            order_id="mixed-hash",
+            instrument_id="BTC-USD-PERP",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=Decimal("0.2"),
+            limit_price=Decimal("65000"),
+            time_in_force=TimeInForce.GTC,
+            idempotency_key="cycle:mixed-hash",
+        )
+        submitted = adapter.submit(intent)
+        base = {
+            "coin": "BTC",
+            "side": "B",
+            "oid": 101,
+            "cloid": submitted.client_order_id,
+            "hash": "0xmixed-shared-hash",
+            "time": 1787313659000,
+        }
+
+        adapter.apply_fill({**base, "px": "65000", "sz": "0.1"})
+        adapter.apply_fill({**base, "tid": "trade-a", "px": "65000", "sz": "0.1"})
+        adapter.apply_fill({**base, "tid": "trade-b", "px": "65010", "sz": "0.1", "time": 1787313660000})
+        adapter.apply_fill({**base, "tid": "trade-a", "px": "65000", "sz": "0.1"})
+        adapter.apply_fill({**base, "tid": "trade-b", "px": "65010", "sz": "0.1", "time": 1787313660000})
+
+        self.assertEqual(len(adapter.fills), 2)
+        self.assertEqual(
+            sum((fill.quantity for fill in adapter.fills.values()), Decimal("0")),
+            Decimal("0.2"),
+        )
 
     def test_tid_replay_enriches_hash_alias_before_hash_only_replay(self) -> None:
         adapter, _ = self.adapter()

@@ -63,9 +63,10 @@ class HyperliquidOrderAdapter:
         self._environment = environment
         self._execution_scope = execution_scope
         self._mapping_revision = mapping_revision
-        self._transport_state = transport_state or (
-            "local_fixture" if local_only else "external_testnet"
-        )
+        derived_transport_state = "local_fixture" if local_only else "external_testnet"
+        if transport_state is not None and transport_state != derived_transport_state:
+            raise ValueError("transport_state does not match transport boundary")
+        self._transport_state = transport_state or derived_transport_state
         self._source = (
             "hyperliquid.exchange.fixture"
             if local_only
@@ -348,9 +349,16 @@ class HyperliquidOrderAdapter:
         if canonical_tid is not None:
             fill_id = canonical_tid
             identity_keys = {fill_id, f"tid:{canonical_tid}"}
-            if hash_key and hash_key in self._hash_fill_aliases.get(hash_key, set()):
-                raise ValueError("fill_identity_ambiguous")
             existing = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
+            if existing:
+                return fill_id, identity_keys, hash_key, True, existing
+            if hash_key and hash_key in self._hash_fill_aliases.get(hash_key, set()):
+                owners = self._hash_fill_aliases[hash_key]
+                if self._transport_state != "local_fixture" or len(owners) != 1:
+                    raise ValueError("fill_identity_ambiguous")
+                fill_id = next(iter(owners))
+                identity_keys.update({fill_id, f"hash:{hash_key}"})
+                existing.add(fill_id)
             return fill_id, identity_keys, hash_key, True, existing
         if hash_key is None:
             raise ValueError("Hyperliquid fill requires tid or hash")
@@ -396,9 +404,22 @@ class HyperliquidOrderAdapter:
                 or existing_fill.quantity != quantity
                 or existing_fill.side is not self._side(raw.get("side"))
             ):
-                raise ValueError("fill identity was reused with different canonical facts")
-            self._register_hash_alias(hash_key, existing_fill_id)
-            return receipt
+                if has_trade_id and self._transport_state == "local_fixture":
+                    canonical_tid = self._canonical_trade_id(raw.get("tid"))
+                    if canonical_tid is None:
+                        raise ValueError("fill_identity_ambiguous")
+                    fill_id = canonical_tid
+                    identity_keys = {fill_id, f"tid:{canonical_tid}"}
+                    existing_fill_id = None
+                else:
+                    raise ValueError("fill identity was reused with different canonical facts")
+            if existing_fill_id is None:
+                existing_fill_ids = set()
+            else:
+                for identity_key in identity_keys:
+                    self._fill_aliases[identity_key] = existing_fill_id
+                self._register_hash_alias(hash_key, existing_fill_id)
+                return receipt
 
         broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else receipt.broker_order_id
         pending_modify = receipt.order_id in self._pending_modifies
@@ -764,9 +785,20 @@ class HyperliquidOrderAdapter:
                     or existing_fill.quantity != quantity
                     or existing_fill.side is not self._side(filled["side"])
                 ):
-                    raise ValueError("fill identity was reused with different canonical facts")
-                self._register_hash_alias(hash_key, existing_fill_id)
-                return updated
+                    if has_trade_id and self._transport_state == "local_fixture":
+                        canonical_tid = self._canonical_trade_id(filled.get("tid"))
+                        if canonical_tid is None:
+                            raise ValueError("fill_identity_ambiguous")
+                        fill_id = canonical_tid
+                        identity_keys = {fill_id, f"tid:{canonical_tid}"}
+                        existing_fill_id = None
+                    else:
+                        raise ValueError("fill identity was reused with different canonical facts")
+                if existing_fill_id is not None:
+                    for identity_key in identity_keys:
+                        self._fill_aliases[identity_key] = existing_fill_id
+                    self._register_hash_alias(hash_key, existing_fill_id)
+                    return updated
             self._fills[fill_id] = OrderFill(
                 fill_id=fill_id,
                 order_id=updated.order_id,
