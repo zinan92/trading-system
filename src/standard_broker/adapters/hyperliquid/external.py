@@ -760,6 +760,8 @@ class NautilusHyperliquidTestnetBackend:
             event = self._fill_event(report, include_fee=True)
             reported_oid = str(event.get("oid") or "")
             reported_cloid = str(event.get("cloid") or "")
+            if requested_cloid and reported_cloid and reported_cloid not in requested_client_candidates:
+                continue
             if (
                 requested_oid
                 and reported_oid != requested_oid
@@ -1254,6 +1256,8 @@ class NautilusHyperliquidTestnetBackend:
             mapping = self._to_mapping(report)
             report_oid = self._string_value(report, mapping, "venue_order_id", "oid")
             report_cloid = self._string_value(report, mapping, "client_order_id", "cloid")
+            if client_id and report_cloid and report_cloid not in client_candidates:
+                continue
             if order_id and report_oid != order_id and client_id and report_cloid not in client_candidates:
                 continue
             fill = self._fill_event(report, include_fee=True)
