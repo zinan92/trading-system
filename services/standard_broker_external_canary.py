@@ -66,6 +66,26 @@ class StandardBrokerExternalCanaryAdapter:
             state=state,
         )
 
+    def recover_client_order(
+        self,
+        request: TestnetCanaryOrderRequest,
+        *,
+        client_order_id: str,
+        state: str,
+    ) -> object:
+        """Restore one persisted client identity without submitting."""
+
+        recover = getattr(self._binding, "recover_client_order", None)
+        if not callable(recover):
+            raise StandardBrokerExternalCanaryError(
+                "public binding does not support client identity recovery"
+            )
+        return recover(
+            self._intent(request),
+            client_order_id=client_order_id,
+            state=state,
+        )
+
     def query(self, order_id: str) -> object:
         return self._binding.query(order_id)
 
