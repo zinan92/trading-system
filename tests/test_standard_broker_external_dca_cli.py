@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -9,6 +10,8 @@ import pytest
 
 from pipelines import standard_broker_external_dca as cli
 from services.park_confirmation import ParkConfirmationLedger
+from services.dca_plan import build_dca_preview, build_dca_strategy_plan
+from services.dualtrack_config import DEFAULT_DUALTRACK_CONFIG
 from services.standard_broker_external_dca import ExternalDcaPlan, external_dca_plan_digest
 
 
@@ -129,6 +132,122 @@ def _args(tmp_path: Path, plan_path: Path, confirmation_path: Path | None = None
             ]
         )
     return values
+
+
+def _canonical_strategy_plan() -> dict[str, object]:
+    config = deepcopy(DEFAULT_DUALTRACK_CONFIG)
+    config["execution_contract"] = {
+        **config["execution_contract"],
+        "price_increment": "0.01",
+        "quantity_increment": "0.001",
+    }
+    market = {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "hyperliquid.external_testnet",
+        "symbol": "PAXG-USD-PERP",
+        "timeframe": "1m",
+        "latest_close": 4010.0,
+        "latest_timestamp": "2026-07-22T00:19:00+00:00",
+        "bars": [
+            {
+                "timestamp": f"2026-07-22T00:{index:02d}:00+00:00",
+                "open": 4010.0,
+                "high": 4011.0,
+                "low": 4009.0,
+                "close": 4010.0,
+            }
+            for index in range(20)
+        ],
+    }
+    preview = build_dca_preview(
+        "2026-07-22_NIGHT",
+        {
+            "direction": "long",
+            "dca": {
+                "entry_levels": [4004.0, 3996.0, 3988.0],
+                "target_price": 4050.0,
+                "stop_price": 3970.0,
+                "notional_per_addition": 500.0,
+                "max_additions": 3,
+                "loop_enabled": False,
+            },
+            "risk_budget": {"leverage": 10},
+        },
+        market=market,
+        account={"equity": 10_000},
+        config=config,
+    )
+    return build_dca_strategy_plan(
+        preview,
+        strategy_plan_id="strategy-plan-cli-parity",
+        version=1,
+        locked_at="2026-07-22T16:00:00+00:00",
+    )
+
+
+def _projection_binding() -> dict[str, object]:
+    return {
+        "plan_id": "hl-cli-projection-1",
+        "broker_id": "hyperliquid",
+        "environment": "testnet",
+        "profile_id": "hyperliquid-testnet-position-protection",
+        "account_fingerprint": "sha256:" + "a" * 64,
+        "runtime_id": "hl-runtime-cli-1",
+        "release_sha": "b" * 40,
+        "capability_revision": cli.PROTECTION_CAPABILITY_REVISION,
+        "instrument_id": "PAXG-USD-PERP",
+        "contract_multiplier": "1",
+        "quantity_step": "0.001",
+        "price_tick": "0.001",
+        "max_slippage": "5",
+        "max_notional": "1600",
+        "max_leverage": "10",
+        "account_equity": "10000",
+        "max_open_orders": 3,
+        "max_open_positions": 1,
+        "fee_budget_usd": "1",
+        "max_loss_usd": "50",
+        "time_in_force": "gtc",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+        "close_price": "4050",
+        "market_source": {
+            "source_id": "hyperliquid.external_testnet",
+            "broker_id": "hyperliquid",
+            "environment": "testnet",
+            "instrument_id": "PAXG-USD-PERP",
+            "execution_venue": True,
+        },
+    }
+
+
+def test_project_action_derives_external_plan_from_canonical_strategy_plan(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    strategy_path = tmp_path / "strategy-plan.json"
+    binding_path = tmp_path / "binding.json"
+    strategy_path.write_text(json.dumps(_canonical_strategy_plan()), encoding="utf-8")
+    binding_path.write_text(json.dumps(_projection_binding()), encoding="utf-8")
+
+    result_code = cli.main([
+        "--action",
+        "project",
+        "--plan",
+        str(strategy_path),
+        "--binding",
+        str(binding_path),
+    ])
+
+    result = json.loads(capsys.readouterr().out)
+    assert result_code == 0
+    assert result["status"] == "PROJECTED"
+    assert result["network_invoked"] is False
+    assert result["secret_resolved"] is False
+    assert result["source_strategy_plan_id"] == "strategy-plan-cli-parity"
+    assert result["projected_plan"]["instrument_id"] == "PAXG-USD-PERP"
+    assert result["canonical_semantics"]["loop_enabled"] is False
 
 
 def test_default_digest_is_read_only_and_redacts_secret_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -1,7 +1,9 @@
 """Attended external DCA Testnet operator entrypoint.
 
 The command is deliberately small at the boundary.  ``digest`` is the
-default local-only action; ``preflight`` starts the exact opt-in protection
+default local-only action; ``project`` derives an external plan from the
+canonical Paper DCA StrategyPlan without credentials or network; ``preflight``
+starts the exact opt-in protection
 runtime without resolving a signer or invoking a broker operation; ``start``,
 ``next-entry``, and ``flatten`` are the only exposure-changing actions and
 require a durable Park confirmation plus an explicit operator acknowledgement.
@@ -27,6 +29,10 @@ from services.standard_broker_external_dca import (
     ExternalDcaError,
     ExternalDcaLifecycle,
     ExternalDcaPlan,
+)
+from services.standard_broker_dca_projection import (
+    DcaProjectionError,
+    project_canonical_dca_plan,
 )
 
 
@@ -95,6 +101,15 @@ def _load_plan_mapping(path: Path) -> dict[str, Any]:
         document = document["plan"]
     if not isinstance(document, Mapping):
         raise ExternalDcaCliError("plan_must_be_object")
+    return {str(key): value for key, value in document.items()}
+
+
+def _load_binding_mapping(path: Path) -> dict[str, Any]:
+    document = _load_document(path)
+    if isinstance(document, Mapping) and isinstance(document.get("binding"), Mapping):
+        document = document["binding"]
+    if not isinstance(document, Mapping):
+        raise ExternalDcaCliError("binding_must_be_object")
     return {str(key): value for key, value in document.items()}
 
 
@@ -207,6 +222,8 @@ def _verify_durable_confirmation(
 
 
 def _require_operator_args(args: argparse.Namespace, *, action: str) -> None:
+    if action == "project" and not args.binding:
+        raise ExternalDcaCliError("binding_required")
     if action in {"preflight", "start", "reconcile-entry", "next-entry", "flatten"}:
         if not str(args.account_address or "").strip():
             raise ExternalDcaCliError("account_address_required")
@@ -670,16 +687,44 @@ def _digest_action(raw: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _project_action(raw: Mapping[str, Any], binding: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        projection = project_canonical_dca_plan(raw, binding=binding)
+    except DcaProjectionError as exc:
+        raise ExternalDcaCliError(_reason_code(exc)) from exc
+    source = projection.execution_market_source
+    return {
+        "status": "PROJECTED",
+        "action": "project",
+        "source_strategy_plan_id": projection.source_strategy_plan_id,
+        "source_strategy_plan_digest": projection.source_strategy_plan_digest,
+        "canonical_semantics": projection.canonical_semantics,
+        "source_market": projection.source_market,
+        "execution_market_source": {
+            "source_id": source.source_id,
+            "broker_id": source.broker_id,
+            "environment": source.environment,
+            "instrument_id": source.instrument_id,
+            "execution_venue": source.execution_venue,
+        },
+        "projected_plan": projection.plan,
+        "network_invoked": False,
+        "secret_resolved": False,
+        "next_action": "review_projection_and_create_confirmation",
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Attended external DCA Testnet action; default is local digest only."
     )
     parser.add_argument(
         "--action",
-        choices=("digest", "preflight", "start", "reconcile-entry", "next-entry", "flatten"),
+        choices=("digest", "project", "preflight", "start", "reconcile-entry", "next-entry", "flatten"),
         default="digest",
     )
     parser.add_argument("--plan", type=Path, required=True, help="JSON external DCA plan; no credentials")
+    parser.add_argument("--binding", type=Path, help="JSON non-secret Broker binding for project")
     parser.add_argument("--confirmation", type=Path, help="confirmed Park projection JSON/JSONL")
     parser.add_argument("--account-address", help="Hyperliquid Testnet account address")
     parser.add_argument("--secret-file", type=Path, help="local protected signer file (start/reconcile-entry/next-entry/flatten only)")
@@ -702,6 +747,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raw = _load_plan_mapping(args.plan)
         if args.action == "digest":
             result = _digest_action(raw)
+        elif args.action == "project":
+            result = _project_action(raw, _load_binding_mapping(Path(args.binding)))
         else:
             plan = _require_plan(raw)
             if args.action in {"start", "reconcile-entry", "next-entry", "flatten"}:
