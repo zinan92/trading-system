@@ -16,7 +16,7 @@ from services.market_source_binding import MarketSourceIdentity
 from services.instrument_binding import InstrumentBinding, InstrumentBindingError
 
 
-STANDARD_BROKER_EXTERNAL_RELEASE_SHA = "916b0eb241b50d5f46be08150eb3197996530552"
+STANDARD_BROKER_EXTERNAL_RELEASE_SHA = "7a23054d3f8bcf4e3a17537dc3b8d3ebd361a70b"
 STANDARD_BROKER_EXTERNAL_PROFILE = "hyperliquid-testnet-default"
 STANDARD_BROKER_RUNTIME_ADAPTER_ID = "nautilus-hyperliquid"
 STANDARD_BROKER_RUNTIME_VERSION = "1.230.0"
