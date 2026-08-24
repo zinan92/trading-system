@@ -21,6 +21,9 @@ STANDARD_BROKER_RUNTIME_ADAPTER_ID = "nautilus-hyperliquid"
 STANDARD_BROKER_RUNTIME_VERSION = "1.230.0"
 STANDARD_BROKER_RUNTIME_COMMIT = "8160730c7c550480b0a439fb11086a4c4de15f0b"
 STANDARD_BROKER_CAPABILITY_REVISION = "hyperliquid-testnet-runtime-v1"
+STANDARD_BROKER_EXTERNAL_MARKET_SOURCES = frozenset(
+    {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"}
+)
 STANDARD_BROKER_EXTERNAL_OPERATIONS = {
     "market_data": frozenset({"ticker"}),
     "instrument": frozenset({"read"}),
@@ -162,6 +165,10 @@ class StandardBrokerExternalTestnetExecutionAdapter:
         ):
             raise StandardBrokerExternalTestnetHostError(
                 "market_source_binding_mismatch"
+            )
+        if source_identity.source_id not in STANDARD_BROKER_EXTERNAL_MARKET_SOURCES:
+            raise StandardBrokerExternalTestnetHostError(
+                "unsupported_market_source"
             )
         if (
             runtime_identity.adapter_id != STANDARD_BROKER_RUNTIME_ADAPTER_ID

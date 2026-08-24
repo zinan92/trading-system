@@ -345,6 +345,27 @@ def test_external_testnet_bridge_rejects_market_binding_drift(tmp_path) -> None:
     assert runtime.invoke_calls == []
 
 
+def test_external_testnet_bridge_rejects_unsupported_market_source(tmp_path) -> None:
+    host, runtime = _host()
+    config = dict(_context(tmp_path, host).broker_config)
+    config["market_source"] = {
+        **config["market_source"],
+        "source_id": "binance_usdm_futures",
+    }
+
+    with pytest.raises(RuntimeError, match="unsupported_market_source"):
+        build_broker_execution_port(
+            BrokerBuildContext(
+                output_root=tmp_path / "outputs",
+                execution_mode="live",
+                live_trading_enabled=False,
+                broker_config=config,
+            )
+        )
+
+    assert runtime.invoke_calls == []
+
+
 @pytest.mark.parametrize(
     "profile",
     [
