@@ -194,6 +194,34 @@
   `coherent=true`, `freshness=fresh`, `-0.060 PAXG-USD-PERP`, and zero open
   orders; #958 remains open awaiting Park's exact cleanup-plan confirmation.
 
+## 现在在哪里(2026-08-24, Path A attended Testnet proof)
+- #958's exact Park confirmation was recorded for the isolated cleanup plan
+  `cleanup-existing-paxg-20260824` (plan digest
+  `sha256:0526d28f04429f72a0b6b371be92aee1cd71ecf8c879dd7afaf7682ede9afa0b`).
+  One reduce-only close was submitted exactly once; its canonical receipt was
+  `UNKNOWN` with no broker order identity. No retry, cancel, next-entry,
+  scheduler, Mainnet, Live, or cloud action followed.
+- Standard-broker PR #103 / `main@28d9a7b19f24f9f248a3002a92f306c7689cbe58`
+  added public client-scoped fill recovery. PR #105 /
+  `main@4e5cf2e22ff7a80b644e3171a165771c78313194` forwards the typed client
+  scope to the native fill query. The full standard-broker suite after #105
+  passed `287 passed, 1 skipped`.
+- Trading-system PR #973 / `main@5612cf2f875e5c0b7aae045d9a6a6d994694c309`
+  passes the recovered client identity into final facts. PR #975 /
+  `main@a951628372c26315d4f903669297e31105fd393d` persists blocked final
+  facts without weakening the causal fill/fee gate. Focused external lifecycle
+  and canary validation passed `28` tests.
+- The latest public account read is flat (`positions=[]`, `open_orders=[]`,
+  coherent/fresh). The latest final causal snapshot is explicitly
+  `BLOCKED` / `facts_reconciliation_not_coherent` with `fills=[]`, `fees=[]`,
+  `signed_position_quantity=0`, and final-facts digest
+  `sha256:b2369648896415a586cc581ed7cd2cccafc49d3f8dafb7daa384883bc053a79c`.
+  The venue query still returns `missing` for the recovered order identity;
+  flat account state is not causal `FLAT_RECONCILED` evidence.
+- Durable report: [`docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md`](docs/evidence/issue-958-attended-testnet-proof-2026-08-24.md).
+  #958 remains open. Do not start a new DCA cycle; the next continuation needs
+  a separately scoped recovery decision and public causal fill/fee evidence.
+
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
   merged as `main@e9cd5c91dab026df4605bb14387fff9a22b0a214`. The attended Live DCA
