@@ -65,9 +65,10 @@ class CanonicalPortQuery:
 
     subject: str | None = None
     kind: str | None = None
+    instrument_id: str | None = None
 
     def __post_init__(self) -> None:
-        for name in ("subject", "kind"):
+        for name in ("subject", "kind", "instrument_id"):
             value = getattr(self, name)
             if value is not None and (not value or value != value.strip()):
                 raise BrokerError(f"canonical query {name} must be non-empty when provided")

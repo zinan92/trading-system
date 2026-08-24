@@ -419,6 +419,8 @@ def test_order_snapshot_uses_client_scoped_fill_recovery_when_available(
         instruments=FakeInstruments(),
     )
     def fake_read_fact(**kwargs):
+        if kwargs["port"] == "fee":
+            assert kwargs["instrument_id"] == "PAXG-USD-PERP"
         data = _MappedFee() if kwargs["port"] == "fee" else ()
         return ExternalFactEnvelope.create(
             context=context,

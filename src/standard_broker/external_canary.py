@@ -7,7 +7,7 @@ and exposes only the typed lifecycle needed by one attended canary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
@@ -179,19 +179,24 @@ class HyperliquidExternalSnapshotReader:
                 operation="fill",
                 subject=fill.fill_id,
                 kind="fill",
+                instrument_id=instrument_id,
                 request_id=f"canary-fee:{fill.fill_id}",
-                mapper=lambda raw, fill_id=fill.fill_id: self._mapper.map_fill(
+                mapper=lambda raw, fill_id=fill.fill_id, broker_symbol=instrument.broker_symbol: self._mapper.map_fill(
                     request_id=f"canary-fee:{fill_id}",
+                    broker_symbol=broker_symbol,
                     raw=raw,
                 ),
             )
             fill_fact = mapped.data
-            if fill_fact.fill_id != fill.fill_id or fill_fact.order_id not in {None, fill.order_id}:
+            if fill_fact.fill_id != fill.fill_id or getattr(fill_fact, "order_id", None) not in {None, fill.order_id}:
                 raise RuntimeBoundaryError(
                     "canary_fee_fill_identity_mismatch",
                     "actual fee fact does not match the canonical fill",
                 )
-            fee_events.append(fill_fact.fee)
+            fee_event = fill_fact.fee
+            if isinstance(fee_event, FeeEvent) and fee_event.provenance != provenance:
+                fee_event = replace(fee_event, provenance=provenance)
+            fee_events.append(fee_event)
         fee_envelope = self._envelope(
             fact_type="canary.fees",
             data=tuple(fee_events),
@@ -252,14 +257,18 @@ class HyperliquidExternalSnapshotReader:
             max_observation_skew=timedelta(minutes=2),
         )
 
-    def _read_fact(self, *, port, operation, subject, kind, request_id, mapper):
+    def _read_fact(self, *, port, operation, subject, kind, instrument_id=None, request_id, mapper):
         return self._host.read_fact(
             request=ExternalHostRequest(
                 request_id=request_id,
                 request=CanonicalHostRequest(
                     port=port,
                     operation=operation,
-                    payload=CanonicalPortQuery(subject=subject, kind=kind),
+                    payload=CanonicalPortQuery(
+                        subject=subject,
+                        kind=kind,
+                        instrument_id=instrument_id,
+                    ),
                 ),
             ),
             mapper=mapper,
