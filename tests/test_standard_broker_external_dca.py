@@ -1438,3 +1438,129 @@ def test_reconcile_flatten_reuses_persisted_dynamic_emergency_price(tmp_path: Pa
     )
 
     assert reconciled["status"] == "FLAT_RECONCILED"
+
+
+def _risk_block_entry_state(lifecycle: ExternalDcaLifecycle, plan: ExternalDcaPlan) -> dict[str, object]:
+    order_id = f"{plan.plan_id}:entry:0"
+    state = lifecycle._new_state(plan, NOW)
+    state.update(
+        {
+            "status": "ENTRY_FILLED_PENDING_FACTS",
+            "blocker": "entry_fill_slippage_exceeded",
+            "entry_order_id": order_id,
+            "entry_order_ids": [order_id],
+        }
+    )
+    lifecycle._save(state)
+    return state
+
+
+def test_risk_block_recovery_keeps_stale_account_facts_blocked(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, _orders, protection = _lifecycle(tmp_path)
+    _risk_block_entry_state(lifecycle, plan)
+    bundle = _bundle(
+        plan,
+        order_id=f"{plan.plan_id}:entry:0",
+        position=plan.entry_quantities[0],
+        side="buy",
+        price=plan.entry_levels[0] + Decimal("20"),
+        fill_quantity=plan.entry_quantities[0],
+    )
+    old = "2020-01-01T00:00:00+00:00"
+    account = replace(bundle.account, observed_at=old)
+    account = replace(account, fact_digest=canary_fact_digest(account))
+    reconciliation = replace(bundle.reconciliation, observed_at=old)
+    reconciliation = replace(reconciliation, fact_digest=canary_fact_digest(reconciliation))
+    stale = replace(bundle, account=account, reconciliation=reconciliation)
+
+    blocked = lifecycle.on_entry_facts(
+        plan,
+        bundle=stale,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["blocker"] == "facts_stale"
+    assert protection.calls == []
+
+
+def test_risk_block_recovery_keeps_identity_mismatch_blocked(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, _orders, protection = _lifecycle(tmp_path)
+    _risk_block_entry_state(lifecycle, plan)
+    bundle = _bundle(
+        plan,
+        order_id=f"{plan.plan_id}:entry:0",
+        position=plan.entry_quantities[0],
+        side="buy",
+        price=plan.entry_levels[0] + Decimal("20"),
+        fill_quantity=plan.entry_quantities[0],
+    )
+    wrong_fill = replace(bundle.fills[0], client_order_id="client:wrong")
+    wrong_fill = replace(wrong_fill, fact_digest=canary_fact_digest(wrong_fill))
+    mismatched = replace(bundle, fills=(wrong_fill,))
+
+    blocked = lifecycle.on_entry_facts(
+        plan,
+        bundle=mismatched,
+        confirmation=confirmation,
+        timestamp=NOW,
+        expected_client_order_id="client:expected",
+    )
+
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["blocker"] == "fill_client_identity_mismatch"
+    assert protection.calls == []
+
+
+def test_risk_block_recovery_keeps_unknown_facts_blocked_without_retry(tmp_path: Path) -> None:
+    plan, confirmation, lifecycle, orders, protection = _lifecycle(tmp_path)
+    state = _risk_block_entry_state(lifecycle, plan)
+    order_id = str(state["entry_order_id"])
+    client_order_id = f"{plan.plan_id}:entry:0:{plan.entry_levels[0]}"
+    state["receipts"] = [
+        {
+            "operation": "submit",
+            "order_id": order_id,
+            "client_order_id": client_order_id,
+            "broker_order_id": f"broker:{order_id}",
+            "state": "filled",
+            "quantity": str(plan.entry_quantities[0]),
+            "price": str(plan.entry_levels[0]),
+            "side": "buy",
+            "instrument_id": plan.instrument_id,
+            "environment": "testnet",
+            "account_fingerprint": plan.account_fingerprint,
+            "runtime_id": plan.runtime_id,
+            "release_sha": plan.release_sha,
+            "capability_revision": plan.capability_revision,
+            "observed_at": NOW,
+        }
+    ]
+    lifecycle._save(state)
+    orders.receipts[order_id] = _Receipt(
+        order_id=order_id,
+        state="filled",
+        client_order_id=client_order_id,
+        broker_order_id=f"broker:{order_id}",
+    )
+
+    class _UnknownFacts(_Facts):
+        def read_facts(self, **_kwargs):
+            raise RuntimeError("facts unavailable")
+
+    recovered = ExternalDcaLifecycle(
+        output_root=lifecycle.output_root,
+        orders=orders,
+        facts=_UnknownFacts(plan),
+        protection=protection,
+    ).reconcile_entry(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+    )
+
+    assert recovered["status"] == "BLOCKED"
+    assert recovered["blocker"] == "entry_reconcile_unknown"
+    assert orders.requests == []
+    assert protection.calls == []
