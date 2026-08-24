@@ -122,6 +122,18 @@ class LifecycleStub:
             state=OrderState(state),
         )
 
+    def recover_client_order(self, intent: OrderIntent, *, client_order_id: str, state: str) -> OrderReceipt:
+        self.calls.append(("recover_client", intent))
+        return replace(
+            self._receipt(
+                self.runtime_session,
+                order_id=intent.order_id,
+                state=OrderState(state),
+            ),
+            client_order_id=client_order_id,
+            client_order_lineage=(client_order_id,),
+        )
+
     def cancel(self, order_id: str) -> OrderReceipt:
         self.calls.append(("cancel", order_id))
         return self._receipt(self.runtime_session, order_id=order_id, state=OrderState.CANCEL_PENDING)
@@ -231,6 +243,21 @@ def test_external_order_facade_preserves_ambiguous_unknown_without_retry() -> No
     assert result.state is OrderState.UNKNOWN
     assert result.reason == "ambiguous_submit:timeout"
     assert [call[0] for call in lifecycle.calls] == ["submit"]
+
+
+def test_external_order_facade_recovers_persisted_client_identity_without_submit() -> None:
+    adapter, lifecycle, _, runtime = _adapter()
+
+    result = adapter.recover_client_order(
+        _intent(),
+        client_order_id="0xclient-recovered",
+        state="unknown",
+    )
+
+    assert result.state is OrderState.UNKNOWN
+    assert result.client_order_id == "0xclient-recovered"
+    assert [call[0] for call in lifecycle.calls] == ["recover_client"]
+    assert runtime.invoke_calls == []
 
 
 def test_reduce_only_close_intent_remains_explicit_at_external_boundary() -> None:
