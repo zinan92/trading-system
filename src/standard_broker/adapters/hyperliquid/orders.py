@@ -79,6 +79,7 @@ class HyperliquidOrderAdapter:
         self._fills: dict[str, OrderFill] = {}
         self._fill_raws: dict[str, Mapping[str, object]] = {}
         self._fill_aliases: dict[str, str] = {}
+        self._hash_fill_aliases: dict[str, set[str]] = {}
         self._instrument_ids: dict[str, str] = {}
         self._sides: dict[str, OrderSide] = {}
         self._intents: dict[str, OrderIntent] = {}
@@ -96,6 +97,7 @@ class HyperliquidOrderAdapter:
             "_fills",
             "_fill_raws",
             "_fill_aliases",
+            "_hash_fill_aliases",
             "_instrument_ids",
             "_sides",
             "_intents",
@@ -329,24 +331,58 @@ class HyperliquidOrderAdapter:
             raise ValueError("Hyperliquid open-orders response must contain a list")
         return tuple(self.reconcile(row) for row in rows if isinstance(row, Mapping))
 
+    @staticmethod
+    def _canonical_trade_id(raw_tid: object) -> str | None:
+        if raw_tid is None or not str(raw_tid).strip():
+            return None
+        text = str(raw_tid).strip()
+        return str(int(raw_tid)) if type(raw_tid) is int or text.isdecimal() else text
+
+    def _prepare_fill_identity(
+        self,
+        raw: Mapping[str, object],
+    ) -> tuple[str, set[str], str | None, bool, set[str]]:
+        canonical_tid = self._canonical_trade_id(raw.get("tid"))
+        raw_hash = raw.get("hash")
+        hash_key = str(raw_hash).strip() if raw_hash is not None and str(raw_hash).strip() else None
+        if canonical_tid is not None:
+            fill_id = canonical_tid
+            identity_keys = {fill_id, f"tid:{canonical_tid}"}
+            if hash_key and hash_key in self._hash_fill_aliases.get(hash_key, set()):
+                raise ValueError("fill_identity_ambiguous")
+            existing = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
+            return fill_id, identity_keys, hash_key, True, existing
+        if hash_key is None:
+            raise ValueError("Hyperliquid fill requires tid or hash")
+        owners = self._hash_fill_aliases.get(hash_key, set())
+        if len(owners) > 1:
+            raise ValueError("fill_identity_ambiguous")
+        fill_id = next(iter(owners), hash_key)
+        identity_keys = {fill_id, f"hash:{hash_key}"}
+        existing = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
+        existing.update(owners)
+        return fill_id, identity_keys, hash_key, False, existing
+
+    def _register_hash_alias(self, hash_key: str | None, fill_id: str) -> None:
+        if hash_key is None:
+            return
+        owners = self._hash_fill_aliases.setdefault(hash_key, set())
+        owners.add(fill_id)
+        alias_key = f"hash:{hash_key}"
+        if len(owners) == 1:
+            self._fill_aliases[alias_key] = fill_id
+        else:
+            self._fill_aliases.pop(alias_key, None)
+
     def apply_fill(self, raw: Mapping[str, object]) -> OrderReceipt:
         self._validate_basic_fill(raw)
         receipt = self._find_receipt(raw)
         expected_side = self._sides.get(receipt.order_id)
         if expected_side is not None and raw.get("side") != ("B" if expected_side is OrderSide.BUY else "A"):
             raise ValueError("fill side conflicts with the canonical order side")
-        raw_tid = raw.get("tid")
-        raw_hash = raw.get("hash")
-        if raw_tid is None and raw_hash is None:
-            raise ValueError("Hyperliquid fill requires tid or hash")
-        canonical_tid = str(int(raw_tid)) if raw_tid is not None and (type(raw_tid) is int or (isinstance(raw_tid, str) and raw_tid.isdecimal())) else None
-        fill_id = canonical_tid or str(raw_hash)
-        identity_keys = {fill_id}
-        if canonical_tid is not None:
-            identity_keys.add(f"tid:{canonical_tid}")
-        if raw_hash is not None:
-            identity_keys.add(f"hash:{raw_hash}")
-        existing_fill_ids = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
+        fill_id, identity_keys, hash_key, has_trade_id, existing_fill_ids = self._prepare_fill_identity(raw)
+        if not has_trade_id and hash_key:
+            existing_fill_ids.update(self._hash_fill_aliases.get(hash_key, set()))
         if len(existing_fill_ids) > 1:
             raise ValueError("fill aliases resolve to different canonical fills")
         quantity = _decimal(raw["sz"])
@@ -361,6 +397,7 @@ class HyperliquidOrderAdapter:
                 or existing_fill.side is not self._side(raw.get("side"))
             ):
                 raise ValueError("fill identity was reused with different canonical facts")
+            self._register_hash_alias(hash_key, existing_fill_id)
             return receipt
 
         broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else receipt.broker_order_id
@@ -396,6 +433,7 @@ class HyperliquidOrderAdapter:
         self._fill_raws[fill_id] = dict(raw)
         for identity_key in identity_keys:
             self._fill_aliases[identity_key] = fill_id
+        self._register_hash_alias(hash_key, fill_id)
         state = OrderState.FILLED if new_filled == receipt.original_quantity else OrderState.PARTIALLY_FILLED
         return self._replace(
             receipt,
@@ -702,20 +740,19 @@ class HyperliquidOrderAdapter:
                 average_fill_price=average_fill_price,
                 broker_updated_at=self._event_timestamp(filled),
             )
-            fill_id = filled.get("tid") or filled.get("hash")
-            if fill_id is None or filled.get("side") is None or filled.get("time") is None:
+            if (
+                (filled.get("tid") is None and filled.get("hash") is None)
+                or filled.get("side") is None
+                or filled.get("time") is None
+            ):
                 return self._replace(
                     updated,
                     state=OrderState.UNKNOWN,
                     reason="filled_without_fill_identity",
                 )
-            fill_id = str(fill_id)
-            identity_keys = {fill_id}
-            if filled.get("tid") is not None:
-                identity_keys.add(f"tid:{fill_id}")
-            if filled.get("hash") is not None:
-                identity_keys.add(f"hash:{filled['hash']}")
-            existing_fill_ids = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
+            fill_id, identity_keys, hash_key, has_trade_id, existing_fill_ids = self._prepare_fill_identity(filled)
+            if not has_trade_id and hash_key:
+                existing_fill_ids.update(self._hash_fill_aliases.get(hash_key, set()))
             if len(existing_fill_ids) > 1:
                 raise ValueError("fill aliases resolve to different canonical fills")
             existing_fill_id = next(iter(existing_fill_ids), None)
@@ -728,6 +765,7 @@ class HyperliquidOrderAdapter:
                     or existing_fill.side is not self._side(filled["side"])
                 ):
                     raise ValueError("fill identity was reused with different canonical facts")
+                self._register_hash_alias(hash_key, existing_fill_id)
                 return updated
             self._fills[fill_id] = OrderFill(
                 fill_id=fill_id,
@@ -746,6 +784,7 @@ class HyperliquidOrderAdapter:
             self._fill_raws[fill_id] = raw_fill
             for identity_key in identity_keys:
                 self._fill_aliases[identity_key] = fill_id
+            self._register_hash_alias(hash_key, fill_id)
             return updated
         if status.get("error") is not None:
             return self._replace(
