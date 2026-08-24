@@ -142,6 +142,15 @@ class HyperliquidExternalSnapshotReader:
         # fees remain deliberately unscoped rather than querying a blank ID.
         account_wide = not order_id
         fills = tuple(self._order.query_fills(order_id=order_id)) if not account_wide else ()
+        if order_id and not fills:
+            # A fresh recovered lifecycle may not be able to resolve a venue
+            # order reference for the first scoped call. Query the same typed
+            # fill facade by instrument, then retain only the canonical order
+            # identity; unrelated historical fills cannot prove this close.
+            instrument_fills = tuple(
+                self._order.query_fills(instrument_id=instrument.broker_symbol)
+            )
+            fills = tuple(fill for fill in instrument_fills if fill.order_id == order_id)
         open_orders = tuple(self._order.open_orders(instrument_id))
         provenance = account_envelope.provenance
         fill_envelope = self._envelope(

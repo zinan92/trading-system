@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -249,6 +249,109 @@ def test_account_wide_snapshot_does_not_query_fills_for_blank_order_id(
     assert captured["fills"].fact.data == ()
     assert captured["fees"].fact.data == ()
     assert captured["open_orders"].fact.data == ()
+
+
+def test_order_snapshot_falls_back_to_instrument_fills_and_filters_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _profile_session()
+    context = _profile_context(session)
+    provenance = Provenance(
+        source="nautilus-hyperliquid.testnet",
+        execution_scope=session.execution_scope,
+        transport_state="external_testnet",
+        mapping_revision=session.capabilities.revision,
+        received_at=NOW,
+    )
+    @dataclass(frozen=True)
+    class _Fill:
+        fill_id: str = "fill-close"
+        order_id: str = "order-close"
+        occurred_at: datetime = NOW
+        client_order_id: str = "client-close"
+    @dataclass(frozen=True)
+    class _OtherFill:
+        fill_id: str = "fill-other"
+        order_id: str = "order-other"
+        occurred_at: datetime = NOW
+        client_order_id: str = "client-other"
+    @dataclass(frozen=True)
+    class _Fee:
+        fee_id: str
+        occurred_at: datetime
+    @dataclass(frozen=True)
+    class _MappedFee:
+        fill_id: str
+        order_id: str
+        fee: _Fee
+
+    matching = _Fill()
+    unrelated = _OtherFill()
+
+    class FakeOrder:
+        def query_fills(self, *, order_id=None, instrument_id=None):
+            if order_id is not None:
+                assert order_id == "order-close"
+                return ()
+            assert instrument_id == "PAXG"
+            return (matching, unrelated)
+
+        def open_orders(self, instrument_id: str):
+            del instrument_id
+            return ()
+
+    class FakeInstruments:
+        def get(self, instrument_id: str):
+            assert instrument_id == "PAXG-USD-PERP"
+            return SimpleNamespace(broker_symbol="PAXG")
+
+    class FakeMapper:
+        map_account = staticmethod(lambda **_kwargs: None)
+        map_positions = staticmethod(lambda **_kwargs: None)
+        map_fill = staticmethod(lambda **_kwargs: None)
+
+    reader = HyperliquidExternalSnapshotReader(
+        context=context,
+        host=SimpleNamespace(),
+        order=FakeOrder(),
+        facts_mapper=FakeMapper(),
+        instruments=FakeInstruments(),
+    )
+    def fake_read_fact(**kwargs):
+        data = (
+            _MappedFee("fill-close", "order-close", _Fee("fee-close", NOW))
+            if kwargs["port"] == "fee"
+            else ()
+        )
+        return ExternalFactEnvelope.create(
+            context=context,
+            fact_type=kwargs["port"],
+            data=data,
+            request_id=kwargs["request_id"],
+            provenance=provenance,
+        )
+
+    reader._read_fact = fake_read_fact
+    reader._envelope = lambda *, fact_type, data, provenance, request_id: ExternalFactEnvelope.create(
+        context=context,
+        fact_type=fact_type,
+        data=data,
+        request_id=request_id,
+        provenance=provenance,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_assemble(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        "standard_broker.external_canary.ExternalReconciliationSnapshot.assemble",
+        fake_assemble,
+    )
+    reader.read_reconciliation(order_id="order-close", instrument_id="PAXG-USD-PERP", now=NOW)
+
+    assert captured["fills"].fact.data == (matching,)
 
 
 def test_public_factory_composes_external_canary_binding_without_network() -> None:
