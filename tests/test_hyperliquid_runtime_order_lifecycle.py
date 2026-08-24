@@ -537,6 +537,58 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
             Decimal("0.1"),
         )
 
+    def test_hash_only_replay_absorbs_unique_tid_hash_identity(self) -> None:
+        adapter, _ = self.adapter()
+        submitted = adapter.submit(self.intent())
+        fill = {
+            "coin": "BTC",
+            "px": "65000",
+            "sz": "0.1",
+            "side": "B",
+            "time": 1787313659000,
+            "oid": 101,
+            "cloid": submitted.client_order_id,
+            "tid": "trade-with-hash",
+            "hash": "0xunique-order-transaction",
+        }
+
+        first = adapter.apply_fill(fill)
+        duplicate = adapter.apply_fill({key: value for key, value in fill.items() if key != "tid"})
+
+        self.assertEqual(first.state, OrderState.FILLED)
+        self.assertEqual(duplicate, first)
+        self.assertEqual(len(adapter.fills), 1)
+
+    def test_hash_only_replay_fails_closed_after_shared_tid_hash_identity(self) -> None:
+        adapter, _ = self.adapter()
+        submitted = adapter.submit(
+            self.intent(order_id="shared-hash", key="cycle:shared-hash").__class__(
+                order_id="shared-hash",
+                instrument_id="BTC-USD-PERP",
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                quantity=Decimal("0.2"),
+                limit_price=Decimal("65000"),
+                time_in_force=TimeInForce.GTC,
+                idempotency_key="cycle:shared-hash",
+            )
+        )
+        base = {
+            "coin": "BTC",
+            "px": "65000",
+            "side": "B",
+            "time": 1787313659000,
+            "oid": 101,
+            "cloid": submitted.client_order_id,
+            "hash": "0xshared-order-transaction",
+        }
+
+        adapter.apply_fill({**base, "sz": "0.1", "tid": "trade-a"})
+        adapter.apply_fill({**base, "sz": "0.1", "tid": "trade-b", "time": 1787313660000})
+
+        with self.assertRaises(ValueError, msg="ambiguous hash-only identity must fail closed"):
+            adapter.apply_fill({key: value for key, value in base.items() if key not in {"tid", "sz"}} | {"sz": "0.1"})
+
     def test_cancel_and_replace_preserve_order_lineage(self) -> None:
         adapter, _ = self.adapter()
         submitted = adapter.submit(self.intent())
