@@ -65,7 +65,12 @@ def _write_plan(tmp_path: Path) -> tuple[Path, ExternalDcaPlan]:
     return path, ExternalDcaPlan.from_mapping(values)
 
 
-def _write_confirmation(tmp_path: Path, plan: ExternalDcaPlan) -> tuple[Path, Path]:
+def _write_confirmation(
+    tmp_path: Path,
+    plan: ExternalDcaPlan,
+    *,
+    confirmation_expires_at: str | None = None,
+) -> tuple[Path, Path]:
     output_root = tmp_path / "outputs"
     ledger = ParkConfirmationLedger(output_root, park_user_id="park")
     proposal = ledger.create_proposal(
@@ -97,7 +102,7 @@ def _write_confirmation(tmp_path: Path, plan: ExternalDcaPlan) -> tuple[Path, Pa
         "park_user_id": "park",
         "proposal_id": proposal["proposal_id"],
         "receipt_digest": decision["receipt_digest"],
-        "expires_at": plan.expires_at,
+        "expires_at": confirmation_expires_at or plan.expires_at,
     }
     path = tmp_path / "confirmation.json"
     path.write_text(json.dumps(confirmation), encoding="utf-8")
@@ -133,7 +138,7 @@ def _args(
         values.extend(["--plan", str(plan_path)])
     if confirmation_path is not None:
         values.extend(["--confirmation", str(confirmation_path)])
-    if action in {"start", "reconcile-entry", "next-entry", "flatten"}:
+    if action in {"start", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
         values.extend(
             [
                 "--secret-file",
@@ -291,6 +296,66 @@ def test_default_digest_is_read_only_and_redacts_secret_path(tmp_path: Path, cap
     assert result["network_invoked"] is False
     assert result["secret_resolved"] is False
     assert secret_path not in json.dumps(result)
+
+
+def test_expired_digest_retains_plan_identity_and_never_builds_runtime(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    values = _plan_mapping()
+    values["expires_at"] = "2020-01-01T00:00:00+00:00"
+    values["plan_digest"] = external_dca_plan_digest(values)
+    plan_path = tmp_path / "expired-plan.json"
+    plan_path.write_text(json.dumps(values), encoding="utf-8")
+
+    assert cli.main(
+        [
+            "--action",
+            "digest",
+            "--plan",
+            str(plan_path),
+            "--output-root",
+            str(tmp_path / "outputs"),
+        ]
+    ) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["reason_code"] == "plan_expired"
+    assert result["plan_id"] == values["plan_id"]
+    assert result["plan_digest"] == values["plan_digest"]
+    assert result["network_invoked"] is False
+    assert result["secret_resolved"] is False
+    blockers = json.loads(
+        (tmp_path / "outputs" / "standard_broker_external_dca" / "cli-blockers.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert blockers[-1]["plan_digest"] == values["plan_digest"]
+
+
+def test_expired_preflight_blocks_before_external_builder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    values = _plan_mapping()
+    values["expires_at"] = "2020-01-01T00:00:00+00:00"
+    values["plan_digest"] = external_dca_plan_digest(values)
+    plan_path = tmp_path / "expired-preflight-plan.json"
+    plan_path.write_text(json.dumps(values), encoding="utf-8")
+    called = False
+
+    def fail_builder(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("expired preflight must not build the runtime")
+
+    monkeypatch.setattr(cli, "_build_external_protection", fail_builder)
+    argv = _args(tmp_path, plan_path, action="preflight")
+    assert cli.main(argv) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["reason_code"] == "plan_expired"
+    assert result["plan_id"] == values["plan_id"]
+    assert called is False
 
 
 def test_preflight_proves_opt_in_profile_without_network_or_secret_resolution(
@@ -684,3 +749,51 @@ def test_reconcile_entry_queries_once_without_submitting_another_order(
     assert result["status"] == "WAITING_ENTRY"
     assert result["action"] == "reconcile-entry"
     assert calls == ["reconcile_entry", "close"]
+
+
+def test_expire_reconcile_routes_to_cancel_reconcile_without_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    values = _plan_mapping()
+    values["expires_at"] = "2020-01-01T00:00:00+00:00"
+    values["plan_digest"] = external_dca_plan_digest(values)
+    plan_path = tmp_path / "expired-plan.json"
+    plan_path.write_text(json.dumps(values), encoding="utf-8")
+    plan = ExternalDcaPlan.from_mapping(values, allow_expired=True)
+    confirmation_path, _output_root = _write_confirmation(
+        tmp_path,
+        plan,
+        confirmation_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    calls: list[str] = []
+
+    class FakeLifecycle:
+        current_path = tmp_path / "outputs" / "standard_broker_external_dca" / "current.json"
+
+        def reconcile_expired_entry(self, *_args, **_kwargs):
+            calls.append("reconcile_expired_entry")
+            return {
+                "status": "EXPIRED_RECONCILED",
+                "blocker": "plan_expired",
+                "next_action": "record_expired_entry_reconciliation",
+            }
+
+        def snapshot(self):
+            return {
+                "status": "EXPIRED_RECONCILED",
+                "blocker": "plan_expired",
+                "next_action": "record_expired_entry_reconciliation",
+            }
+
+    runtime = SimpleNamespace(close=lambda: calls.append("close"))
+    binding = SimpleNamespace(protection=object())
+    monkeypatch.setattr(cli, "_build_external_protection", lambda *_args, **_kwargs: (runtime, binding))
+    monkeypatch.setattr(cli, "_build_lifecycle", lambda *_args, **_kwargs: (FakeLifecycle(), object()))
+
+    assert cli.main(_args(tmp_path, plan_path, confirmation_path, action="expire-reconcile")) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "EXPIRED_RECONCILED"
+    assert result["action"] == "expire-reconcile"
+    assert calls == ["reconcile_expired_entry", "close"]

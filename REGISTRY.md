@@ -151,6 +151,23 @@
   deployment, or Live/Mainnet action occurred. The exact DCA plan,
   confirmation, account/approval identity, and local pinned signer remain the
   next human inputs.
+- Path A canonical external DCA bridge / #953, #954, #955 merged in PRs
+  #959, #960, and #961; current trading-system main is
+  `main@0f3d8dc423a5a1a2eaeedfbbfe515020f3f95790`. The old Paper
+  `strategy-plan-v1` DCA is now the only attended external `start` source:
+  the CLI projects it through an explicit non-secret Hyperliquid Testnet
+  Broker/Instrument and execution-market binding, rejects hand-authored
+  fixed-quantity starts, and persists source strategy digest, canonical
+  semantics, market identity, normalized entry facts, cursor/freshness, and
+  normalized resting/filled/partial/rejected/canceled/unknown outcomes.
+  Protection still covers only reconciled owned quantity, no next entry is
+  automatic, and the runbook has the canonical projection/start commands.
+  Focused bridge/lifecycle validation passed 108 tests; compileall,
+  diff-check, and gitleaks passed. A full local run reached 3372 passed and
+  1 skipped with 32 unrelated dependency/readiness/browser failures in the
+  current checkout; no Testnet network, credential, order, deployment, or
+  cloud mutation occurred. #956 is next for expiry, GTC reconciliation,
+  clean-state admission, and terminal flatten.
 
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886

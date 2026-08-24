@@ -114,9 +114,13 @@ def _load_binding_mapping(path: Path) -> dict[str, Any]:
     return {str(key): value for key, value in document.items()}
 
 
-def _require_plan(raw: Mapping[str, Any]) -> ExternalDcaPlan:
+def _require_plan(
+    raw: Mapping[str, Any],
+    *,
+    allow_expired: bool = False,
+) -> ExternalDcaPlan:
     try:
-        return ExternalDcaPlan.from_mapping(raw, now=_now())
+        return ExternalDcaPlan.from_mapping(raw, now=_now(), allow_expired=allow_expired)
     except ExternalDcaError as exc:
         raise ExternalDcaCliError(_reason_code(exc)) from exc
 
@@ -128,6 +132,26 @@ def _require_account(plan: ExternalDcaPlan, account_address: str | None) -> str:
     if _account_fingerprint(value) != plan.account_fingerprint:
         raise ExternalDcaCliError("account_fingerprint_mismatch")
     return value
+
+
+def _expired_plan_blocker(plan: ExternalDcaPlan) -> ExternalDcaCliError:
+    return ExternalDcaCliError(
+        "plan_expired",
+        result={
+            "status": "BLOCKED",
+            "reason_code": "plan_expired",
+            "plan_id": plan.plan_id,
+            "plan_digest": plan.plan_digest,
+            "network_invoked": False,
+            "secret_resolved": False,
+            "next_action": "cancel_or_reconcile_existing_entry_before_new_confirmation",
+        },
+    )
+
+
+def _require_unexpired_plan(plan: ExternalDcaPlan) -> None:
+    if plan.is_expired(now=_now()):
+        raise _expired_plan_blocker(plan)
 
 
 def _load_confirmation_mapping(path: Path, *, plan: ExternalDcaPlan) -> dict[str, Any]:
@@ -233,17 +257,17 @@ def _require_operator_args(args: argparse.Namespace, *, action: str) -> None:
             raise ExternalDcaCliError("canonical_strategy_plan_required")
         if not args.binding:
             raise ExternalDcaCliError("binding_required")
-    elif action in {"digest", "preflight", "reconcile-entry", "next-entry", "flatten"}:
+    elif action in {"digest", "preflight", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
         if not args.plan:
             raise ExternalDcaCliError("plan_required")
-    if action in {"preflight", "start", "reconcile-entry", "next-entry", "flatten"}:
+    if action in {"preflight", "start", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
         if not str(args.account_address or "").strip():
             raise ExternalDcaCliError("account_address_required")
         if not str(args.approval_id or "").strip():
             raise ExternalDcaCliError("approval_id_required")
         if not str(args.approved_by or "").strip():
             raise ExternalDcaCliError("approved_by_required")
-    if action in {"start", "reconcile-entry", "next-entry", "flatten"}:
+    if action in {"start", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
         if not args.confirmation:
             raise ExternalDcaCliError("confirmation_required")
         if not args.secret_file:
@@ -432,6 +456,8 @@ def _state_result(
         "entry_outcome",
         "entry_facts",
         "entry_facts_digest",
+        "clean_state_facts",
+        "clean_state_facts_digest",
         "final_facts",
         "final_facts_digest",
     ):
@@ -694,6 +720,59 @@ def _reconcile_entry_action(
         _close_runtime(runtime)
 
 
+def _expire_reconcile_action(
+    plan: ExternalDcaPlan,
+    args: argparse.Namespace,
+    confirmation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Cancel/query-confirm an entry whose plan has expired; never submit."""
+
+    output_root = Path(args.output_root)
+    runtime: object | None = None
+    lifecycle: ExternalDcaLifecycle | None = None
+    try:
+        runtime, binding = _build_external_protection(plan, args, canary=True)
+        lifecycle, _adapter = _build_lifecycle(output_root, binding)
+        state = lifecycle.reconcile_expired_entry(
+            plan,
+            confirmation=confirmation,
+            timestamp=_timestamp(),
+        )
+        return _state_result(
+            action="expire-reconcile",
+            plan=plan,
+            state=state,
+            lifecycle=lifecycle,
+            secret_resolved=False,
+        )
+    except ExternalDcaError as exc:
+        if lifecycle is not None:
+            state = lifecycle.snapshot()
+            if state:
+                return _state_result(
+                    action="expire-reconcile",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=False,
+                )
+        raise ExternalDcaCliError(_reason_code(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - provider details stay redacted.
+        if lifecycle is not None:
+            state = lifecycle.snapshot()
+            if state:
+                return _state_result(
+                    action="expire-reconcile",
+                    plan=plan,
+                    state=state,
+                    lifecycle=lifecycle,
+                    secret_resolved=False,
+                )
+        raise ExternalDcaCliError(_reason_code(type(exc).__name__)) from exc
+    finally:
+        _close_runtime(runtime)
+
+
 def _write_cli_blocker(output_root: Path, plan: ExternalDcaPlan | None, reason_code: str) -> dict[str, Any]:
     path = output_root / "standard_broker_external_dca" / "cli-blockers.json"
     rows = load_json(path)
@@ -714,7 +793,9 @@ def _write_cli_blocker(output_root: Path, plan: ExternalDcaPlan | None, reason_c
 
 
 def _digest_action(raw: Mapping[str, Any]) -> dict[str, Any]:
-    plan = _require_plan(raw)
+    plan = _require_plan(raw, allow_expired=True)
+    if plan.is_expired(now=_now()):
+        raise _expired_plan_blocker(plan)
     return {
         "status": "DIGEST_ONLY",
         "action": "digest",
@@ -764,7 +845,11 @@ def _canonical_start_plan(
     binding = _load_binding_mapping(binding_path)
     try:
         projection = project_canonical_dca_plan(raw_strategy_plan, binding=binding)
-        plan = ExternalDcaPlan.from_mapping(projection.plan, now=_now())
+        plan = ExternalDcaPlan.from_mapping(
+            projection.plan,
+            now=_now(),
+            allow_expired=True,
+        )
         provenance = CanonicalDcaProvenance.from_projection(projection)
     except (DcaProjectionError, ExternalDcaError) as exc:
         raise ExternalDcaCliError(_reason_code(exc)) from exc
@@ -777,7 +862,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--action",
-        choices=("digest", "project", "preflight", "start", "reconcile-entry", "next-entry", "flatten"),
+        choices=("digest", "project", "preflight", "start", "reconcile-entry", "expire-reconcile", "next-entry", "flatten"),
         default="digest",
     )
     parser.add_argument(
@@ -812,6 +897,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _require_operator_args(args, action=args.action)
         if args.action == "digest":
             raw = _load_plan_mapping(Path(args.plan))
+            plan = _require_plan(raw, allow_expired=True)
+            if plan.is_expired(now=_now()):
+                raise _expired_plan_blocker(plan)
             result = _digest_action(raw)
         elif args.action == "project":
             raw = _load_plan_mapping(Path(args.plan))
@@ -821,6 +909,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 Path(args.strategy_plan),
                 Path(args.binding),
             )
+            _require_unexpired_plan(plan)
             _require_account(plan, args.account_address)
             confirmation = _load_confirmation_mapping(Path(args.confirmation), plan=plan)
             _verify_durable_confirmation(Path(args.output_root), plan=plan, confirmation=confirmation)
@@ -832,26 +921,34 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             raw = _load_plan_mapping(Path(args.plan))
-            plan = _require_plan(raw)
-            if args.action in {"start", "reconcile-entry", "next-entry", "flatten"}:
+            plan = _require_plan(raw, allow_expired=True)
+            if args.action in {"reconcile-entry", "expire-reconcile", "next-entry", "flatten"}:
+                if args.action != "expire-reconcile":
+                    _require_unexpired_plan(plan)
                 _require_account(plan, args.account_address)
                 confirmation = _load_confirmation_mapping(Path(args.confirmation), plan=plan)
                 _verify_durable_confirmation(Path(args.output_root), plan=plan, confirmation=confirmation)
                 if args.action == "reconcile-entry":
                     result = _reconcile_entry_action(plan, args, confirmation)
+                elif args.action == "expire-reconcile":
+                    result = _expire_reconcile_action(plan, args, confirmation)
                 elif args.action == "next-entry":
                     result = _next_entry_action(plan, args, confirmation)
                 else:
                     result = _flatten_action(plan, args, confirmation)
             else:
+                _require_unexpired_plan(plan)
                 _require_account(plan, args.account_address)
                 result = _preflight_action(plan, args)
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))
         return 0
     except ExternalDcaCliError as exc:
-        result = dict(exc.result)
-        if not result:
-            result = _write_cli_blocker(Path(args.output_root) if args is not None else DEFAULT_OUTPUT_ROOT, plan, exc.reason_code)
+        recorded = _write_cli_blocker(
+            Path(args.output_root) if args is not None else DEFAULT_OUTPUT_ROOT,
+            plan,
+            exc.reason_code,
+        )
+        result = {**recorded, **dict(exc.result)}
         result.setdefault("status", "BLOCKED")
         result.setdefault("reason_code", exc.reason_code)
         result.setdefault("next_action", "notify_park_and_wait")

@@ -16499,3 +16499,28 @@ auditable datafeed port; broker execution remains a separate port.
 - This remains Paper-only and default-off at installation.  No live,
   exchange-key, Cloud order, or position mutation was performed by the merge;
   exact-SHA deployment and natural-tick verification remain separate evidence.
+
+# 2026-08-24 — Run canonical DCA through the Hyperliquid Testnet lifecycle (#955)
+
+## Decision
+
+- Path A keeps the existing Paper `strategy-plan-v1` DCA as the only algorithmic
+  source. The attended external `start` command must project that plan through
+  the explicit non-secret Hyperliquid Testnet Broker/Instrument and execution
+  market binding; a hand-authored fixed-quantity external plan is rejected.
+- The lifecycle persists source strategy identity/digest, canonical semantics,
+  source and execution market identity, normalized entry outcomes, and
+  cursor-bound account/fill/fee/position/reconciliation facts. Protection is
+  sized from reconciled owned quantity, and no next entry is automatic.
+- Expiry, clean-state admission, GTC reconciliation, and terminal flatten stay
+  in the next issue (#956); this merge does not read credentials, call Testnet,
+  submit orders, or mutate cloud/deployment state.
+
+## Verification
+
+- Trading-system PR #961 merged as
+  `main@0f3d8dc423a5a1a2eaeedfbbfe515020f3f95790`.
+- Focused bridge/lifecycle validation passed 108 tests; compileall,
+  diff-check, and gitleaks passed. A full local run reached 3372 passed and
+  1 skipped with 32 unrelated local dependency/readiness/browser failures;
+  those failures do not touch the changed DCA/projection paths.

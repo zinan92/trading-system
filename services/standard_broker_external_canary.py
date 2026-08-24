@@ -86,6 +86,16 @@ class StandardBrokerExternalCanaryAdapter:
         )
         return self._convert_bundle(bundle)
 
+    def read_account_state(self, *, instrument_id: str, now: datetime) -> object:
+        """Read the public cursor-bound account snapshot without an order fill query."""
+
+        bundle = self._binding.read_facts(
+            order_id="",
+            instrument_id=instrument_id,
+            now=now,
+        )
+        return self._convert_bundle(bundle)
+
     @staticmethod
     def _intent(request: TestnetCanaryOrderRequest) -> object:
         if not isinstance(request, TestnetCanaryOrderRequest):
