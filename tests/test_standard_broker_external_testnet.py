@@ -165,6 +165,14 @@ def _context(tmp_path, host) -> BrokerBuildContext:
             "release_sha": RELEASE_SHA,
             "execution_scope": "hypercore:default",
             "standard_broker_release_sha": STANDARD_BROKER_SHA,
+            "instrument_id": "PAXG-USD-PERP",
+            "market_source": {
+                "source_id": "hyperliquid.external_testnet",
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+                "instrument_id": "PAXG-USD-PERP",
+                "execution_venue": True,
+            },
         },
     )
 
@@ -182,10 +190,14 @@ def test_external_testnet_bridge_preflights_public_host_without_broker_invocatio
     assert preflight["account_read_ready"] is False
     assert preflight["order_execution_ready"] is False
     assert preflight["upstream_account_read_ready"] is True
+    assert preflight["upstream_instrument_read_ready"] is True
     assert preflight["upstream_order_execution_ready"] is True
     assert preflight["broker_operation_invoked"] is False
     assert preflight["transport_profile"] == "hyperliquid-testnet-default"
     assert preflight["transport_state"] == "external_testnet"
+    assert preflight["instrument_id"] == "PAXG-USD-PERP"
+    assert preflight["market_source"]["source_id"] == "hyperliquid.external_testnet"
+    assert preflight["market_source_ready"] is True
     assert preflight["network_io"] is True
     assert preflight["real_money_eligible"] is False
     assert preflight["standard_broker_release_sha"] == STANDARD_BROKER_SHA
@@ -201,6 +213,8 @@ def test_external_testnet_bridge_descriptor_exposes_exact_nonsecret_profile(tmp_
     assert descriptor["broker_id"] == "hyperliquid"
     assert descriptor["transport_profile"] == "hyperliquid-testnet-default"
     assert descriptor["transport_state"] == "external_testnet"
+    assert descriptor["instrument_id"] == "PAXG-USD-PERP"
+    assert descriptor["market_source"]["source_id"] == "hyperliquid.external_testnet"
     assert descriptor["credential_env_names"] == []
     assert "fixture://api-agent" not in json.dumps(descriptor, sort_keys=True)
 
@@ -279,6 +293,46 @@ def test_external_testnet_bridge_rejects_credential_configuration(tmp_path) -> N
     config["credential_source"] = "HL_TESTNET_CREDENTIAL"
 
     with pytest.raises(RuntimeError, match="forbids credential"):
+        build_broker_execution_port(
+            BrokerBuildContext(
+                output_root=tmp_path / "outputs",
+                execution_mode="live",
+                live_trading_enabled=False,
+                broker_config=config,
+            )
+        )
+
+    assert runtime.invoke_calls == []
+
+
+@pytest.mark.parametrize("field", ["instrument_id", "market_source"])
+def test_external_testnet_bridge_requires_explicit_market_binding(tmp_path, field: str) -> None:
+    host, runtime = _host()
+    config = dict(_context(tmp_path, host).broker_config)
+    config.pop(field)
+
+    with pytest.raises(RuntimeError, match="missing|market_source"):
+        build_broker_execution_port(
+            BrokerBuildContext(
+                output_root=tmp_path / "outputs",
+                execution_mode="live",
+                live_trading_enabled=False,
+                broker_config=config,
+            )
+        )
+
+    assert runtime.invoke_calls == []
+
+
+def test_external_testnet_bridge_rejects_market_binding_drift(tmp_path) -> None:
+    host, runtime = _host()
+    config = dict(_context(tmp_path, host).broker_config)
+    config["market_source"] = {
+        **config["market_source"],
+        "instrument_id": "BTC-USD-PERP",
+    }
+
+    with pytest.raises(RuntimeError, match="market_source_binding_mismatch"):
         build_broker_execution_port(
             BrokerBuildContext(
                 output_root=tmp_path / "outputs",
