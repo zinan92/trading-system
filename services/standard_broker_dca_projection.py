@@ -197,6 +197,12 @@ def project_canonical_dca_plan(
         raise DcaProjectionError("binding_close_price_precision_mismatch")
 
     source_market = _source_market(strategy_plan)
+    if (
+        source_market["provider"] != spec.market_source.source_id
+        or source_market["symbol"] != spec.market_source.instrument_id
+    ):
+        raise DcaProjectionError("strategy_market_binding_mismatch")
+    aggregate_take_profit = _aggregate_take_profit(dca, target_price, strategy_plan)
     mapped: dict[str, Any] = {
         "plan_id": spec.plan_id,
         "plan_version": _positive_int(strategy_plan.get("version"), "strategy_plan_version"),
@@ -251,7 +257,7 @@ def project_canonical_dca_plan(
             "notional_per_addition": str(canonical_notional),
             "max_additions": max_additions,
             "loop_enabled": False,
-            "aggregate_take_profit": dict(dca.get("aggregate_take_profit") or {}),
+            "aggregate_take_profit": aggregate_take_profit,
             "target_price": str(target_price),
             "stop_price": str(stop_price),
         },
@@ -270,6 +276,39 @@ def _source_market(strategy_plan: Mapping[str, Any]) -> dict[str, str]:
         "symbol": _text(market.get("symbol"), "strategy_market_symbol"),
         "timeframe": _text(market.get("timeframe"), "strategy_market_timeframe"),
     }
+
+
+def _aggregate_take_profit(
+    dca: Mapping[str, Any],
+    target_price: Decimal,
+    strategy_plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = dca.get("aggregate_take_profit")
+    if not isinstance(value, Mapping):
+        raise DcaProjectionError("aggregate_take_profit_missing")
+    direction = _text(strategy_plan.get("direction"), "direction").lower()
+    expected = {
+        "side": "sell" if direction == "long" else "buy",
+        "event": "target",
+        "order_type": "limit",
+        "reduce_only": True,
+        "price": target_price,
+        "quantity_source": "reconciled_open_dca_round_quantity",
+        "replace_after_each_entry_fill": True,
+        "one_active_order_required": True,
+    }
+    for field, expected_value in expected.items():
+        actual = value.get(field)
+        if field == "price":
+            try:
+                matches = Decimal(str(actual)) == expected_value
+            except (InvalidOperation, TypeError, ValueError):
+                matches = False
+        else:
+            matches = actual == expected_value
+        if not matches:
+            raise DcaProjectionError("aggregate_take_profit_semantics_invalid")
+    return dict(value)
 
 
 def _text(value: object, field: str) -> str:

@@ -16,14 +16,18 @@ from services.standard_broker_dca_projection import (
 )
 
 
-def _market() -> dict:
+def _market(
+    *,
+    provider: str = "hyperliquid.external_testnet",
+    symbol: str = "PAXG-USD-PERP",
+) -> dict:
     price = 4_010.0
     return {
         "status": "ready",
         "fresh": True,
         "is_synthetic": False,
-        "provider": "binance_usdm_futures",
-        "symbol": "GOLD",
+        "provider": provider,
+        "symbol": symbol,
         "timeframe": "1m",
         "latest_close": price,
         "latest_timestamp": "2026-07-22T00:19:00+00:00",
@@ -40,7 +44,12 @@ def _market() -> dict:
     }
 
 
-def _strategy_plan() -> dict:
+def _strategy_plan(
+    *,
+    direction: str = "long",
+    provider: str = "hyperliquid.external_testnet",
+    symbol: str = "PAXG-USD-PERP",
+) -> dict:
     config = deepcopy(DEFAULT_DUALTRACK_CONFIG)
     config["execution_contract"] = {
         **config["execution_contract"],
@@ -50,18 +59,22 @@ def _strategy_plan() -> dict:
     preview = build_dca_preview(
         "2026-07-22_NIGHT",
         {
-            "direction": "long",
+            "direction": direction,
             "dca": {
-                "entry_levels": [4_004.0, 3_996.0, 3_988.0],
-                "target_price": 4_050.0,
-                "stop_price": 3_970.0,
+                "entry_levels": (
+                    [4_004.0, 3_996.0, 3_988.0]
+                    if direction == "long"
+                    else [4_016.0, 4_024.0, 4_032.0]
+                ),
+                "target_price": 4_050.0 if direction == "long" else 3_970.0,
+                "stop_price": 3_970.0 if direction == "long" else 4_050.0,
                 "notional_per_addition": 500.0,
                 "max_additions": 3,
                 "loop_enabled": False,
             },
             "risk_budget": {"leverage": 10},
         },
-        market=_market(),
+        market=_market(provider=provider, symbol=symbol),
         account={"equity": 10_000},
         config=config,
     )
@@ -116,13 +129,14 @@ def test_projection_preserves_canonical_dca_and_maps_fixed_notional_to_external_
     assert projection.source_strategy_plan_id == "strategy-plan-dca-parity"
     assert projection.source_strategy_plan_digest == source["plan_digest"]
     assert projection.source_market == {
-        "provider": "binance_usdm_futures",
-        "symbol": "GOLD",
+        "provider": "hyperliquid.external_testnet",
+        "symbol": "PAXG-USD-PERP",
         "timeframe": "1m",
     }
     assert projection.execution_market_source.source_id == "hyperliquid.external_testnet"
     assert projection.canonical_semantics["max_additions"] == 3
     assert projection.canonical_semantics["loop_enabled"] is False
+    assert projection.canonical_semantics["aggregate_take_profit"]["side"] == "sell"
     assert mapped["plan_id"] == "hl-dca-parity-1"
     assert mapped["plan_version"] == 7
     assert mapped["instrument_id"] == "PAXG-USD-PERP"
@@ -133,6 +147,19 @@ def test_projection_preserves_canonical_dca_and_maps_fixed_notional_to_external_
     assert mapped["close_price"] == "4050"
     assert source["dca"]["notional_per_addition"] == 500.0
     assert source["dca"]["loop_enabled"] is False
+
+
+def test_projection_preserves_short_dca_direction_and_aggregate_exit() -> None:
+    source = _strategy_plan(direction="short")
+    binding = {**_binding(), "close_price": "3970"}
+
+    projection = project_canonical_dca_plan(source, binding=binding)
+
+    assert projection.plan["direction"] == "short"
+    assert projection.plan["entry_levels"] == ["4016.0", "4024.0", "4032.0"]
+    assert projection.plan["target_price"] == "3970.0"
+    assert projection.plan["stop_price"] == "4050.0"
+    assert projection.canonical_semantics["aggregate_take_profit"]["side"] == "buy"
 
 
 def test_projection_rejects_non_dca_or_missing_canonical_plan_identity() -> None:
@@ -179,6 +206,13 @@ def test_projection_rejects_market_source_from_another_binding() -> None:
 
     with pytest.raises(DcaProjectionError, match="market_source_binding_mismatch"):
         project_canonical_dca_plan(_strategy_plan(), binding=binding)
+
+
+def test_projection_rejects_strategy_market_from_another_venue() -> None:
+    source = _strategy_plan(provider="binance_usdm_futures", symbol="GOLD")
+
+    with pytest.raises(DcaProjectionError, match="strategy_market_binding_mismatch"):
+        project_canonical_dca_plan(source, binding=_binding())
 
 
 def test_projection_uses_canonical_notional_when_source_rounding_is_lower() -> None:
