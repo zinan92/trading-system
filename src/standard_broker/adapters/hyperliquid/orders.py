@@ -339,12 +339,21 @@ class HyperliquidOrderAdapter:
         raw_hash = raw.get("hash")
         if raw_tid is None and raw_hash is None:
             raise ValueError("Hyperliquid fill requires tid or hash")
-        canonical_tid = str(int(raw_tid)) if raw_tid is not None and (type(raw_tid) is int or (isinstance(raw_tid, str) and raw_tid.isdecimal())) else None
+        canonical_tid = None
+        if raw_tid is not None and str(raw_tid).strip():
+            canonical_tid = (
+                str(int(raw_tid))
+                if type(raw_tid) is int or (isinstance(raw_tid, str) and raw_tid.isdecimal())
+                else str(raw_tid).strip()
+            )
         fill_id = canonical_tid or str(raw_hash)
         identity_keys = {fill_id}
         if canonical_tid is not None:
             identity_keys.add(f"tid:{canonical_tid}")
-        if raw_hash is not None:
+        elif raw_hash is not None:
+            # Hyperliquid may reuse one transaction hash for several trade
+            # chunks.  A reported trade ID is therefore the authoritative
+            # identity; hash aliases are only safe when no trade ID exists.
             identity_keys.add(f"hash:{raw_hash}")
         existing_fill_ids = {self._fill_aliases[key] for key in identity_keys if key in self._fill_aliases}
         if len(existing_fill_ids) > 1:

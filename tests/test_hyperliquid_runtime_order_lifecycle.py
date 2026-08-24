@@ -478,7 +478,7 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
             "time": 1787313659000,
             "oid": 101,
             "cloid": first.client_order_id,
-            "tid": 501,
+            "tid": "trade-chunk-a",
         }
         partial = adapter.apply_fill(fill)
         duplicate = adapter.apply_fill(fill)
@@ -501,6 +501,41 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(full.state, OrderState.FILLED)
         self.assertEqual(full.remaining_quantity, Decimal("0"))
+
+    def test_distinct_trade_chunks_sharing_transaction_hash_are_not_collapsed(self) -> None:
+        adapter, _ = self.adapter()
+        submitted = adapter.submit(self.intent())
+        first = {
+            "coin": "BTC",
+            "px": "65000",
+            "sz": "0.04",
+            "side": "B",
+            "time": 1787313659000,
+            "oid": 101,
+            "cloid": submitted.client_order_id,
+            "tid": 501,
+            "hash": "0xshared-order-transaction",
+        }
+        second = {
+            **first,
+            "px": "65010",
+            "sz": "0.06",
+            "time": 1787313660000,
+            "tid": "trade-chunk-b",
+        }
+
+        partial = adapter.apply_fill(first)
+        full = adapter.apply_fill(second)
+        duplicate = adapter.apply_fill(first)
+
+        self.assertEqual(partial.state, OrderState.PARTIALLY_FILLED)
+        self.assertEqual(full.state, OrderState.FILLED)
+        self.assertEqual(duplicate, full)
+        self.assertEqual(len(adapter.fills), 2)
+        self.assertEqual(
+            sum((fill.quantity for fill in adapter.fills.values()), Decimal("0")),
+            Decimal("0.1"),
+        )
 
     def test_cancel_and_replace_preserve_order_lineage(self) -> None:
         adapter, _ = self.adapter()
