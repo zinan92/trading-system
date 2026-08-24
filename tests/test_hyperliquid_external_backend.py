@@ -527,6 +527,48 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
             self.assertEqual(result["cloid"], "0xrequested-cloid")
             self.assertEqual(result["status"], "filled")
 
+    def test_terminal_query_rejects_missing_cloid_for_conflicting_venue_order(self) -> None:
+        class MissingCloidClient(FakeClient):
+            async def request_order_status_report(self, **kwargs: object) -> object:
+                self.calls.append(("request_order_status_report", (), kwargs))
+                return {
+                    "order_status": "FILLED",
+                    "venue_order_id": "9999",
+                    "instrument_id": "HYPE-USD-PERP.HYPERLIQUID",
+                    "order_side": "BUY",
+                    "price": "50",
+                    "filled_qty": "0.2",
+                    "quantity": "0.2",
+                    "ts_last": 1_800_000_000_000_000_000,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = MissingCloidClient()
+            session = self.session()
+            backend = NautilusHyperliquidTestnetBackend(
+                session=session,
+                config=HyperliquidTestnetBackendConfig(
+                    account_address=session.account.address,
+                    capabilities=session.capabilities,
+                ),
+                secrets=self.provider(directory),
+                client_factory=lambda private_key, account: client,
+            )
+
+            backend.activate(release_sha="a" * 40)
+            with self.assertRaises(RuntimeBoundaryError) as raised:
+                backend.invoke(
+                    "order_execution",
+                    "query",
+                    {
+                        "instrument_id": "HYPE-USD-PERP",
+                        "oid": "9001",
+                        "cloid": "0xrequested-cloid",
+                    },
+                )
+
+            self.assertEqual(raised.exception.reason_code, "order_identity_conflict")
+
     @unittest.skipUnless(
         importlib.util.find_spec("nautilus_trader") is not None,
         "external order mapping requires the optional testnet dependency",

@@ -725,6 +725,17 @@ class NautilusHyperliquidTestnetBackend:
                 "order_identity_conflict",
                 "Hyperliquid status report venue identity conflicts with the requested identity",
             )
+        if (
+            requested_cloid
+            and not reported_cloid
+            and requested_oid
+            and reported_oid
+            and reported_oid != requested_oid
+        ):
+            raise RuntimeBoundaryError(
+                "order_identity_conflict",
+                "Hyperliquid status report venue identity conflicts with the requested identity",
+            )
         if requested_cloid and reported_cloid is None:
             event["cloid"] = requested_cloid
         elif requested_cloid and reported_cloid != requested_cloid:
