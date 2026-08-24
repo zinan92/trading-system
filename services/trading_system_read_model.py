@@ -122,6 +122,32 @@ def project_trading_system_read_model(
         dca_lifecycle_source=source.get("dca_lifecycle"),
         grid_lifecycle_source=execution_source.get("grid_lifecycle"),
     )
+    external_dca = project_external_dca_lifecycle(
+        source.get("external_dca_lifecycle"),
+        completeness_issues=completeness_issues,
+    )
+    external_identity = _mapping(external_dca.get("identity"))
+    external_instrument = str(external_identity.get("instrument_id") or "").strip()
+    observed_market_symbol = str(market.get("symbol") or "").strip()
+    if external_dca.get("authoritative") and external_instrument and observed_market_symbol and external_instrument != observed_market_symbol:
+        external_dca["market_compatibility"] = {
+            "status": "blocked",
+            "reason": "external_instrument_does_not_match_dashboard_market",
+            "external_instrument_id": external_instrument,
+            "dashboard_market_symbol": observed_market_symbol,
+        }
+        external_dca["blockers"] = list(dict.fromkeys([
+            *(_list(external_dca.get("blockers"))),
+            "external_instrument_does_not_match_dashboard_market",
+        ]))
+        completeness_issues.append("external_instrument_does_not_match_dashboard_market")
+    elif external_dca.get("authoritative"):
+        external_dca["market_compatibility"] = {
+            "status": "pass",
+            "external_instrument_id": external_instrument,
+            "dashboard_market_symbol": observed_market_symbol,
+        }
+    execution["external_dca"] = external_dca
     unknown_order_count = execution["counts"]["unknown_order_count"]
     if unknown_order_count:
         completeness_issues.append("execution_order_state_unknown")
@@ -160,7 +186,10 @@ def project_trading_system_read_model(
         cycle=cycle,
         generated_at=generated_at,
     )
-    broker_view = _json_copy(_mapping(broker))
+    broker_view = project_external_dca_broker_view(
+        _json_copy(_mapping(broker)),
+        external_dca,
+    )
     if not broker_view:
         completeness_issues.append("broker_read_model_missing")
 
@@ -177,6 +206,7 @@ def project_trading_system_read_model(
             "migration": _json_copy(_mapping(source.get("migration"))),
         },
         "runtime": runtime,
+        "external_dca": external_dca,
         "execution": {
             **execution,
             "broker": broker_view,
@@ -677,6 +707,247 @@ def _project_grid_lifecycle(value: Any) -> dict[str, Any]:
         "lines": lines,
         "synthetic_candle_fill_inference": False,
     }
+
+
+_EXTERNAL_DCA_STATUS_LABELS = {
+    "WAITING_ENTRY": "等待入场成交",
+    "ENTRY_FILLED_PENDING_FACTS": "已成交，等待事实",
+    "PROTECTION_ACTIVE": "保护已激活",
+    "ENTRY_SUBMIT_INTENT_RESERVED": "入场提交意图已保留",
+    "RECOVERY_REQUIRED": "需要恢复/对账",
+    "FLATTEN_SUBMIT_INTENT_RESERVED": "平仓提交中",
+    "FLAT_RECONCILED": "已平仓并对账",
+    "FLATTENING": "平仓中",
+    "BLOCKED": "已阻塞",
+    "EXPIRED_RECONCILED": "计划过期，已撤单对账",
+    "EXPIRED_POSITION_BLOCKED": "计划过期后仍有持仓",
+    "unavailable": "暂无外部 DCA 生命周期",
+}
+
+
+def project_external_dca_lifecycle(
+    value: Any,
+    *,
+    completeness_issues: list[str] | None = None,
+) -> dict[str, Any]:
+    """Project the external DCA journal without inferring missing facts."""
+
+    issues = completeness_issues if completeness_issues is not None else []
+    source = _mapping(value)
+    base: dict[str, Any] = {
+        "schema_version": "standard-broker-external-dca-read-model-v1",
+        "source": "standard_broker_external_dca.current.json",
+        "authoritative": False,
+        "status": "unavailable",
+        "status_label": _EXTERNAL_DCA_STATUS_LABELS["unavailable"],
+        "identity": {
+            "strategy_plan_id": None,
+            "strategy_plan_digest": None,
+            "source_strategy_plan_id": None,
+            "source_strategy_plan_digest": None,
+            "strategy_session_id": None,
+            "strategy_revision_id": None,
+            "broker_id": None,
+            "environment": None,
+            "profile_id": None,
+            "capability_revision": None,
+            "instrument_id": None,
+            "account_fingerprint": None,
+        },
+        "market_source": {},
+        "counts": {
+            "order_count": None,
+            "open_order_count": None,
+            "fill_count": None,
+            "fee_count": None,
+            "position_count": None,
+        },
+        "facts": {
+            "position_quantity": None,
+            "average_entry_price": None,
+            "actual_fee_usd": None,
+            "cursor": None,
+            "freshness": "unknown",
+            "provenance": {},
+        },
+        "protection": {
+            "status": "unknown",
+            "covered_quantity": None,
+            "observation_digest": None,
+        },
+        "reconciliation": {
+            "status": "unknown",
+            "coherent": None,
+            "freshness": "unknown",
+            "cursor": None,
+            "open_order_ids": [],
+            "evidence_digest": None,
+        },
+        "blockers": [],
+        "next_action": "wait_for_external_dca_lifecycle",
+        "updated_at": None,
+    }
+    if not source:
+        return base
+
+    status = str(source.get("status") or "unknown").strip()
+    if status not in _EXTERNAL_DCA_STATUS_LABELS:
+        issues.append("external_dca_lifecycle_status_unknown")
+    identity = base["identity"]
+    identity.update(
+        {
+            "strategy_plan_id": source.get("plan_id"),
+            "strategy_plan_digest": source.get("plan_digest"),
+            "source_strategy_plan_id": source.get("source_strategy_plan_id"),
+            "source_strategy_plan_digest": source.get("source_strategy_plan_digest"),
+            "strategy_session_id": source.get("strategy_session_id"),
+            "strategy_revision_id": source.get("strategy_revision_id"),
+            "broker_id": source.get("broker_id"),
+            "environment": source.get("environment"),
+            "profile_id": source.get("profile_id"),
+            "capability_revision": source.get("capability_revision"),
+            "instrument_id": source.get("instrument_id"),
+            "account_fingerprint": source.get("account_fingerprint"),
+        }
+    )
+    entry_facts = _mapping(source.get("entry_facts"))
+    final_facts = _mapping(source.get("final_facts"))
+    facts = entry_facts or final_facts
+    receipts = [
+        _mapping(row)
+        for row in _list(source.get("receipts"))
+        if _mapping(row)
+    ]
+    if receipts:
+        base["counts"]["order_count"] = len(receipts)
+    reconciliation = _mapping(facts.get("reconciliation"))
+    positions = [
+        _mapping(row)
+        for row in _list(facts.get("positions"))
+        if _mapping(row)
+    ]
+    fills = [
+        _mapping(row)
+        for row in _list(facts.get("fills"))
+        if _mapping(row)
+    ]
+    fees = [
+        _mapping(row)
+        for row in _list(facts.get("fees"))
+        if _mapping(row)
+    ]
+    open_orders = _list(reconciliation.get("open_order_ids")) if reconciliation else None
+    if facts:
+        base["counts"] = {
+            "order_count": len(receipts),
+            "open_order_count": len(open_orders) if open_orders is not None else None,
+            "fill_count": len(fills),
+            "fee_count": len(fees),
+            "position_count": len(positions),
+        }
+        signed_position = sum(
+            float(row.get("signed_quantity"))
+            for row in positions
+            if _finite_or_none(row.get("signed_quantity")) is not None
+        )
+        position_quantity = _finite_or_none(source.get("position_quantity"))
+        if position_quantity is None and positions:
+            position_quantity = abs(signed_position)
+        first_fill = fills[0] if fills else {}
+        base["facts"] = {
+            "position_quantity": position_quantity,
+            "average_entry_price": _finite_or_none(source.get("average_entry_price")),
+            "actual_fee_usd": _finite_or_none(source.get("actual_fee_usd")),
+            "cursor": reconciliation.get("cursor"),
+            "freshness": str(reconciliation.get("freshness") or "unknown"),
+            "provenance": _json_copy(_mapping(facts.get("provenance"))),
+            "first_fill": {
+                "fill_id": first_fill.get("fill_id"),
+                "quantity": _finite_or_none(first_fill.get("quantity")),
+                "price": _finite_or_none(first_fill.get("price")),
+            } if first_fill else None,
+        }
+        base["reconciliation"] = {
+            "status": "pass" if reconciliation.get("coherent") is True and reconciliation.get("freshness") == "fresh" else "blocked" if reconciliation else "unknown",
+            "coherent": reconciliation.get("coherent"),
+            "freshness": reconciliation.get("freshness") or "unknown",
+            "cursor": reconciliation.get("cursor"),
+            "open_order_ids": list(open_orders or []),
+            "evidence_digest": reconciliation.get("evidence_digest"),
+        }
+    protection = _mapping(source.get("protection"))
+    confirmed = _mapping(protection.get("confirmed"))
+    protection_state = str(confirmed.get("state") or "").lower()
+    if protection.get("status") == "not_present":
+        protection_view = {"status": "not_present", "covered_quantity": 0.0, "observation_digest": None}
+    elif protection_state == "active":
+        protection_view = {
+            "status": "active",
+            "covered_quantity": _finite_or_none(protection.get("covered_quantity") or confirmed.get("covered_quantity")),
+            "observation_digest": confirmed.get("observation_digest"),
+        }
+    elif protection:
+        protection_view = {
+            "status": protection_state or "unknown",
+            "covered_quantity": _finite_or_none(protection.get("covered_quantity")),
+            "observation_digest": confirmed.get("observation_digest"),
+        }
+    else:
+        protection_view = base["protection"]
+    blockers = [str(item) for item in _list(source.get("blockers")) if str(item)]
+    if source.get("blocker"):
+        blockers.append(str(source["blocker"]))
+    if status == "PROTECTION_ACTIVE" and protection_view["status"] != "active":
+        issues.append("external_dca_protection_state_unconfirmed")
+        blockers.append("protection_state_unconfirmed")
+    if status == "FLAT_RECONCILED" and base["reconciliation"]["status"] != "pass":
+        issues.append("external_dca_flat_reconciliation_missing")
+        blockers.append("flat_reconciliation_missing")
+    market_source = _json_copy(_mapping(source.get("execution_market_source")))
+    base.update(
+        {
+            "authoritative": True,
+            "status": status,
+            "status_label": _EXTERNAL_DCA_STATUS_LABELS.get(status, "外部 DCA 状态未知"),
+            "market_source": market_source,
+            "protection": protection_view,
+            "blockers": list(dict.fromkeys(blockers)),
+            "next_action": source.get("next_action") or "notify_park_and_wait",
+            "updated_at": source.get("updated_at"),
+        }
+    )
+    return base
+
+
+def project_external_dca_broker_view(
+    base: Mapping[str, Any],
+    external_dca: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Overlay external Testnet identity without exposing credential state."""
+
+    result = _json_copy(_mapping(base))
+    identity = _mapping(external_dca.get("identity"))
+    broker_id = str(identity.get("broker_id") or "").strip()
+    environment = str(identity.get("environment") or "").strip()
+    if not broker_id or environment != "testnet":
+        return result
+    result.update(
+        {
+            "provider": broker_id,
+            "environment": environment,
+            "mode": "external_testnet_broker_port",
+            "display_label": "Hyperliquid Testnet",
+            "symbol": identity.get("instrument_id"),
+            "strategy_id": identity.get("strategy_plan_id"),
+            "profile": identity.get("profile_id") or result.get("profile"),
+            "external_testnet": True,
+            "credentials_present": None,
+            "armed": False,
+            "live_endpoint_allowed": False,
+            "ready": False if _mapping(external_dca.get("market_compatibility")).get("status") == "blocked" else None,
+        }
+    )
+    return result
 
 
 def _project_testnet_readiness(value: Any) -> dict[str, Any]:

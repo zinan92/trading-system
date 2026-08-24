@@ -78,6 +78,16 @@ def test_gridmind_labels_only_auditable_grid_lifecycle_loops() -> None:
     assert "renderGridLifecycle(execution)" in html.split("function render(){", 1)[1].split("function renderRobotControls", 1)[0]
 
 
+def test_gridmind_projects_external_dca_lifecycle_as_read_only_status_card() -> None:
+    html = _html()
+
+    assert 'id="externalDcaCard"' in html
+    assert "function renderExternalDcaLifecycle(lifecycle)" in html
+    assert "data?.external_dca||execution?.external_dca" in html
+    assert "source_strategy_plan_digest" in html
+    assert "保护 ${protection.status||\"unknown\"}" in html
+
+
 def test_gridmind_trade_activity_toasts_are_read_only_and_fail_silent() -> None:
     html = _html()
 

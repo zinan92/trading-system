@@ -26,6 +26,15 @@ ORAL_MARKET_VIEW = (
 )
 
 
+def test_dashboard_external_dca_loader_reads_latest_authoritative_row_without_network(tmp_path: Path) -> None:
+    path = tmp_path / "standard_broker_external_dca" / "current.json"
+    write_json(path, [{"status": "WAITING_ENTRY", "plan_id": "old"}, {"status": "BLOCKED", "plan_id": "current"}])
+
+    loaded = dashboard_server._load_external_dca_lifecycle(tmp_path)
+
+    assert loaded == {"status": "BLOCKED", "plan_id": "current"}
+
+
 def test_historical_diagnostic_market_forbids_future_or_untrusted_bars() -> None:
     base = {
         "status": "ready",
