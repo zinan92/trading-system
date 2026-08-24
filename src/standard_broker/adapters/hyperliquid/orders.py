@@ -222,7 +222,6 @@ class HyperliquidOrderAdapter:
                 "recovery_state_invalid",
                 "client recovery state is not canonical",
             ) from exc
-        self._validate_intent(intent)
         receipt = OrderReceipt(
             order_id=intent.order_id,
             broker_id="hyperliquid",
