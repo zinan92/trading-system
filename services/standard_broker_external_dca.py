@@ -1087,14 +1087,49 @@ class ExternalDcaLifecycle:
                 state="unknown",
             )
             queried = query_by_key(request.idempotency_key)
-            self._record_receipt(
-                state,
-                queried,
-                request=request,
-                timestamp=timestamp,
-                operation="flatten_reconcile_query",
-            )
-            if self._receipt_state(queried) != "filled":
+            query_state = self._receipt_state(queried)
+            try:
+                self._record_receipt(
+                    state,
+                    queried,
+                    request=request,
+                    timestamp=timestamp,
+                    operation="flatten_reconcile_query",
+                )
+            except ExternalDcaError:
+                if query_state != "unknown":
+                    raise
+            if query_state == "unknown":
+                close_id = str(getattr(queried, "order_id", "") or "").strip()
+                if not close_id:
+                    raise ExternalDcaError("flatten_receipt_identity_missing")
+                bundle = self.facts.read_facts(
+                    order_id=close_id,
+                    instrument_id=plan.instrument_id,
+                    now=_timestamp(timestamp, "timestamp"),
+                )
+                final = self._validate_facts(
+                    plan,
+                    bundle,
+                    order_id=close_id,
+                    timestamp=timestamp,
+                    require_flat=True,
+                )
+                state["final_facts"] = self._safe_fact_bundle(bundle)
+                state["final_facts_digest"] = _digest(state["final_facts"])
+                if final[0] == 0:
+                    state["status"] = "FLAT_RECONCILED"
+                    state["blocker"] = None
+                    state["next_action"] = "record_dca_result"
+                    state["flatten_outcome"] = "unknown_receipt_causal_fill_reconciled"
+                    self._event(
+                        state,
+                        "flat_reconciled_from_causal_facts",
+                        timestamp=timestamp,
+                    )
+                    self._save(state)
+                    return state
+            if query_state != "filled":
                 return self._block(state, "flatten_not_filled", timestamp=timestamp)
             close_id = str(getattr(queried, "order_id", "") or "").strip()
             if not close_id:
