@@ -818,6 +818,16 @@ def test_external_dca_reconciles_expired_plan_by_explicit_broker_identity_withou
     assert orders.requests == []
     assert orders.receipts[f"{plan.plan_id}:flatten"].broker_order_id == f"broker:{plan.plan_id}:flatten"
 
+    mismatch = lifecycle.reconcile_flatten(
+        plan,
+        confirmation=confirmation,
+        timestamp=NOW,
+        broker_order_id="broker:wrong-close",
+    )
+    assert mismatch["status"] == "BLOCKED"
+    assert mismatch["blocker"] == "flatten_reconcile_broker_identity_mismatch"
+    assert lifecycle.snapshot()["status"] == "FLAT_RECONCILED"
+
     replay = lifecycle.reconcile_flatten(
         plan,
         confirmation=confirmation,

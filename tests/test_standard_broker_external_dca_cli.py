@@ -197,6 +197,36 @@ def test_expired_confirmation_is_only_accepted_for_broker_identity_recovery(tmp_
     ).broker_order_id == "58400711187"
 
 
+def test_expired_reconcile_action_forwards_broker_id_without_exposure_methods(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = _plan_mapping()
+    values["expires_at"] = "2020-01-01T00:00:00+00:00"
+    values["plan_digest"] = external_dca_plan_digest(values)
+    plan = ExternalDcaPlan.from_mapping(values, allow_expired=True)
+    _confirmation_path, confirmation, output_root = _write_confirmation(tmp_path / "action", plan)
+    calls: list[object] = []
+    runtime = SimpleNamespace(close=lambda: calls.append("close"))
+    lifecycle = SimpleNamespace(
+        current_path=output_root / "state.json",
+        reconcile_flatten=lambda plan, **kwargs: calls.append((plan.plan_id, kwargs))
+        or {"status": "FLAT_RECONCILED", "next_action": "record_dca_result"},
+    )
+    monkeypatch.setattr(cli, "_build_external_protection", lambda *_args, **_kwargs: (runtime, object()))
+    monkeypatch.setattr(cli, "_build_lifecycle", lambda *_args, **_kwargs: (lifecycle, object()))
+
+    result = cli._reconcile_flatten_action(
+        plan,
+        SimpleNamespace(output_root=output_root, broker_order_id="58400711187"),
+        confirmation,
+    )
+
+    assert result["status"] == "FLAT_RECONCILED"
+    assert calls[0][1]["broker_order_id"] == "58400711187"
+    assert calls[-1] == "close"
+
+
 def _canonical_strategy_plan() -> dict[str, object]:
     config = deepcopy(DEFAULT_DUALTRACK_CONFIG)
     config["execution_contract"] = {

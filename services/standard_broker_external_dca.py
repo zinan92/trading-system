@@ -1045,8 +1045,30 @@ class ExternalDcaLifecycle:
         broker_order_id: str | None = None,
     ) -> dict[str, Any]:
         state = self._state(plan)
+        broker_order_id = str(broker_order_id or "").strip() or None
         if state.get("status") == "FLAT_RECONCILED":
-            return state
+            persisted_broker_order_id = str(
+                state.get("flatten_recovery_broker_order_id") or ""
+            ).strip()
+            if not persisted_broker_order_id:
+                persisted_broker_order_id = next(
+                    (
+                        str(row.get("broker_order_id") or "").strip()
+                        for row in reversed(state.get("receipts") or ())
+                        if isinstance(row, Mapping)
+                        and row.get("operation") == "flatten_reconcile_query"
+                        and str(row.get("broker_order_id") or "").strip()
+                    ),
+                    "",
+                )
+            if broker_order_id and broker_order_id == persisted_broker_order_id:
+                return state
+            replay = dict(state)
+            replay["status"] = "BLOCKED"
+            replay["blocker"] = "flatten_reconcile_broker_identity_mismatch"
+            replay["next_action"] = "notify_park_and_wait"
+            replay["updated_at"] = timestamp
+            return replay
         if state.get("status") not in {"BLOCKED", "FLATTEN_SUBMIT_INTENT_RESERVED"}:
             return self._block(state, "flatten_reconcile_not_available", timestamp=timestamp)
         if state.get("blocker") not in {
@@ -1062,7 +1084,6 @@ class ExternalDcaLifecycle:
         }:
             return self._block(state, "flatten_reconcile_not_available", timestamp=timestamp)
         try:
-            broker_order_id = str(broker_order_id or "").strip() or None
             self._require_confirmation(
                 plan,
                 confirmation,
@@ -1092,9 +1113,35 @@ class ExternalDcaLifecycle:
                 for row in state.get("receipts") or ()
                 if isinstance(row, Mapping) and row.get("operation") == "flatten_submit"
             ]
+            if not persisted_receipts:
+                raise ExternalDcaError("flatten_persisted_intent_missing")
+            persisted_intent = persisted_receipts[-1]
+            try:
+                persisted_quantity = Decimal(str(persisted_intent.get("quantity") or "0"))
+                persisted_price = Decimal(str(persisted_intent.get("price") or "0"))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise ExternalDcaError("flatten_persisted_intent_invalid") from exc
+            if (
+                str(persisted_intent.get("order_id") or "") != request.order_id
+                or str(persisted_intent.get("instrument_id") or "") != request.instrument_id
+                or str(persisted_intent.get("side") or "") != request.side
+                or persisted_quantity != request.quantity
+                or persisted_price != request.limit_price
+                or str(persisted_intent.get("environment") or "") != "testnet"
+                or str(persisted_intent.get("account_fingerprint") or "") != state["account_fingerprint"]
+                or str(persisted_intent.get("runtime_id") or "") != state["runtime_id"]
+                or str(persisted_intent.get("release_sha") or "") != state["release_sha"]
+                or str(persisted_intent.get("capability_revision") or "") != state["capability_revision"]
+            ):
+                raise ExternalDcaError("flatten_persisted_intent_mismatch")
             client_order_id = str(
-                persisted_receipts[-1].get("client_order_id") if persisted_receipts else ""
+                persisted_intent.get("client_order_id") or ""
             ).strip()
+            if not client_order_id:
+                raise ExternalDcaError("flatten_client_identity_missing")
+            persisted_broker_order_id = str(persisted_intent.get("broker_order_id") or "").strip()
+            if broker_order_id is not None and persisted_broker_order_id and persisted_broker_order_id != broker_order_id:
+                raise ExternalDcaError("flatten_broker_identity_mismatch")
             if broker_order_id is not None:
                 recover_broker = getattr(self.orders, "recover", None)
                 if not callable(recover_broker):
@@ -1162,6 +1209,7 @@ class ExternalDcaLifecycle:
                 state["blocker"] = None
                 state["next_action"] = "record_dca_result"
                 state["flatten_outcome"] = "explicit_broker_identity_causal_fill_reconciled"
+                state["flatten_recovery_broker_order_id"] = broker_order_id
                 self._event(
                     state,
                     "flat_reconciled_from_explicit_broker_identity",
