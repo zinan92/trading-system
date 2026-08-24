@@ -285,6 +285,26 @@
   readiness remain separate milestones. Durable evidence:
   [`docs/evidence/issue-958-canonical-dca-risk-recovery-2026-08-24.md`](docs/evidence/issue-958-canonical-dca-risk-recovery-2026-08-24.md).
 
+## 现在在哪里(2026-08-25, TP-limit protection seam alignment)
+- TS-DCA-EXT-28 / #988 merged in trading-system PR #989 as
+  `main@fcb5dcf8a78d9f7a84c3d7c5dd8e3dde810423fc`. The actual
+  `ExternalDcaLifecycle` path now emits an aggregate TP limit leg at the
+  canonical target price; SL remains market. The parallel Testnet lifecycle
+  builder is aligned as well.
+- The external DCA preflight requires `take_profit_limit` and explicitly
+  rejects a profile that still advertises `take_profit_market`, so an older
+  standard-broker seam remains a visible capability blocker instead of being
+  treated as ready.
+- The matching standard-broker protection contract is PR #119, merged as
+  `standard-broker@7a23054d3f8bcf4e3a17537dc3b8d3ebd361a70b`: pinned Nautilus
+  1.230.0 conversion is TP-limit + SL-market, mark-triggered, reduce-only,
+  sibling-linked, and position-following; TP-market remains unavailable.
+- Focused external DCA/CLI/lifecycle validation passed 74 tests with one
+  existing collection warning; compileall, diff-check, and gitleaks passed.
+  No Testnet action, credential resolution, scheduler, Mainnet/Live, frontend,
+  or cloud mutation occurred. #958 remains open for a separately re-planned,
+  freshly confirmed protection-bearing Testnet round.
+
 ## 现在在哪里(2026-08-22)
 - #862 / PR #877 plus boundary follow-ups #879, #881, #882, #885, and #886
   merged as `main@e9cd5c91dab026df4605bb14387fff9a22b0a214`. The attended Live DCA

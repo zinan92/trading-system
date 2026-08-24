@@ -16687,3 +16687,44 @@ auditable datafeed port; broker execution remains a separate port.
   scheduler, Mainnet/Live, Dashboard/cloud mutation, or automatic promotion.
 - Durable evidence:
   `docs/evidence/issue-958-canonical-dca-risk-recovery-2026-08-24.md`.
+
+# 2026-08-25 — Align canonical external DCA protection with TP-limit seam (#988 / #989)
+
+## Decision
+
+- Preserve the old Paper DCA algorithm and all entry, sizing, target, stop,
+  expiry, confirmation, reconciliation, and terminal semantics. Only the
+  broker-facing aggregate protection representation changes: TP is a limit
+  trigger with `limit_price == target_price`; SL remains market.
+- The CLI's protection preflight now requires `take_profit_limit` and rejects
+  any older capability profile that still advertises `take_profit_market`.
+  This makes a stale standard-broker release an explicit blocker rather than a
+  false-ready profile.
+- The actual `ExternalDcaLifecycle` path and the parallel Testnet lifecycle
+  path are both covered. No fallback to venue-native primitives, no strategy
+  rewrite, and no new order or scheduler path was added.
+
+## Verification
+
+- Trading-system PR #989 merged as
+  `main@fcb5dcf8a78d9f7a84c3d7c5dd8e3dde810423fc` after Standards PASS and the
+  corrected Spec review identified and fixed the real ExternalDcaLifecycle
+  path.
+- Standard-broker PR #119 merged as
+  `main@7a23054d3f8bcf4e3a17537dc3b8d3ebd361a70b`; its pinned Nautilus 1.230.0
+  public submit conversion proves TP-limit + SL-market with mark-price,
+  reduce-only, OCO sibling, and position-following semantics.
+- Focused trading-system validation: 74 passed, 1 existing collection
+  warning. Compileall, diff-check, and gitleaks passed. No Testnet action,
+  credential resolution, Mainnet/Live, scheduler/cloud, frontend, or
+  deployment mutation occurred.
+
+## Gotchas
+
+- The first implementation touched a parallel lifecycle only; the actual CLI
+  uses `services/standard_broker_external_dca.py`. The follow-up review caught
+  this path gap before merge, and the final test calls the real lifecycle
+  protection-group builder.
+- #958 remains open. The previous protection attempt failed closed and was
+  flattened through the separately confirmed recovery plan; a new protection
+  round still requires a new plan digest and fresh Park confirmation.
