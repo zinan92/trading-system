@@ -46,6 +46,10 @@ python3 -m pytest -q tests/test_dca_plan.py tests/test_dca_execution_lifecycle.p
 
 Result: `135 passed in 3.72s`; skipped: `0`; failures: `0`.
 
+Reconfirmed after remediation from a temporary `git archive` of pinned source
+ref `b841800ee03fd98107063c0cbbf5144096a5c4c0`: `135 passed in 3.85s`;
+skipped: `0`; failures: `0`.
+
 ### Full source baseline (complete)
 
 Command: `python3 -m pytest -q`
@@ -87,6 +91,7 @@ Detailed closure and line references will be expanded before extraction.
 | `services/dualtrack_costs.py` | Pure strategy cost helper subset | Grid simulation uses deterministic cost math; venue/runtime adapters are not imported by the extracted package. |
 | `services/venue_costs.py` | Pure cost helper subset | Plain cost-rule calculations only; no broker object or transport import. |
 | `services/grid_marketability.py` | Pure strategy validation helper | Direction/range blocker is a side-effect-free function. |
+| `services/grid_range_adjustment.py` | Pure strategy geometry algorithm | Running-Grid arithmetic/geometric edge adjustment, drag constraints, edge-order deduplication, and completed-fill re-arm; no execution or account access. |
 | `schemas/market_data.py` (`Bar` only) | Pure strategy value schema subset | Grid simulation needs the immutable OHLCV `Bar` value object; market envelopes/runtime remain outside. |
 | `tests/test_dca_plan.py` | Pure strategy characterization tests | Directly exercises DCA candidate, preview, plan projection, replay, and validation. |
 | `tests/test_grid_sizing.py` | Pure strategy characterization tests | Directly exercises Grid geometry, ATR, sizing, adaptive solver, precision, and risk behavior. |
@@ -119,6 +124,13 @@ The two read-only audits established the following import/behavior closure:
   plan and explicit replay use different field shapes (`price/tp/sl` versus
   `entry/take_profit`); Grid plan Hard Stop wins over ambiguous same-bar entry;
   partial Grid close requires entry-cancel confirmation before re-arm.
+- Provenance is fail-closed in two modes: the default mutable-checkout mode
+  requires the pinned HEAD and clean relevant files, while explicit
+  `--source-ref b841800...` captures from a local Git-object snapshot. Both
+  modes compare relevant source hashes against a committed expected digest map.
+- The boundary test identifies the real host module symbols
+  `ExternalDcaPlan`/`ExternalDcaLifecycle` and verifies neither the symbols nor
+  the host module are copied into the package.
 
 The extracted package files are:
 
@@ -126,6 +138,8 @@ The extracted package files are:
   command projection, and pure replay.
 - `trading_strategy/grid_sizing.py` — copied Grid preview/schema and adaptive
   sizing solver.
+- `trading_strategy/grid_range_adjustment.py` — pure running-Grid edge
+  geometry, drag constraints, deduplication, and re-arm projection.
 - `trading_strategy/grid_core.py` — copied conditional/explicit Grid replay,
   `GridLineLifecycle`, Hard Stop, and re-arm semantics.
 - `trading_strategy/precision.py`, `grid_marketability.py`, `costs.py`,
@@ -134,6 +148,10 @@ The extracted package files are:
   before implementation copying.
 - `tests/test_canonical_golden.py` and `tests/test_package_boundary.py` —
   differential/golden and reverse-boundary tests.
+- `tests/test_grid_range_adjustment.py`,
+  `tests/test_grid_adaptive_characterization.py`, and
+  `tests/test_capture_provenance.py` — remediation characterization and
+  provenance tests.
 
 ## Current status
 
@@ -149,43 +167,48 @@ The extracted package files are:
 - [x] Source focused regression rerun passes.
 - [x] compileall, ruff-if-present, gitleaks, and source-preservation evidence recorded.
 - [x] Target clean-worktree and extraction commit SHA recorded after commit.
+- [x] Pure Grid range-adjustment seam and source characterization tests added.
+- [x] DCA candidate and adaptive Grid characterization matrices added.
+- [x] Source-bound capture and real external DCA boundary checks hardened.
 
 ## Commits
 
 - Extraction commit: `0f4a5df3a5c30bcd2e07dfc2e99ab8b0f8288cbc`
 - Commit message: `extract canonical dca and grid strategy foundation`
+- Remediation commits: `009fef4`, `b16bc93`, `b084c9a`, `074f172`, `754aa29`.
 - The final verification metadata update is intentionally a separate local
   commit so this file can contain the actual extraction SHA without a
   self-referential commit hash.
 
-## Final verification evidence (pre-commit)
+## Final verification evidence
 
 New package command: `python3 -m pytest -q`
 
-Result after conditional Grid and provenance additions: `9 passed in 0.10s`;
+Result after the acceptance-gap implementation: `48 passed in 4.19s`;
 skipped: `0`; failures: `0`.
 
-Compile command: `python3 -m compileall -q trading_strategy tests`
+Compile command: `python3 -m compileall -q trading_strategy tests tools`
 
 Result: exit code `0`.
 
-Golden capture command: `python3 tools/capture_canonical_golden.py | diff -u tests/fixtures/canonical_golden.json -`
+Golden capture command: `python3 tools/capture_canonical_golden.py --source-ref b841800ee03fd98107063c0cbbf5144096a5c4c0 | diff -u tests/fixtures/canonical_golden.json -`
 
 Result: `GOLDEN_CAPTURE_DIFF_PASS`; fixture SHA-256 and source SHA are recorded
 in `tests/fixtures/canonical_golden.receipt.json`.
 
-Source-copy comparison command: compare the six copied source modules against
-their source counterparts after normalizing only the intentional internal
-import paths.
+Default mutable-checkout capture result: `DEFAULT_CAPTURE_FAIL_CLOSED` with
+`source HEAD mismatch` against the later source checkout drift.
 
-Result: `COPY_COMPARISON_PASS`, `modules_checked=6`,
-`differences_after_import_normalization=0`.
+Source-copy comparison command: `python3 tools/compare_pinned_source.py`
 
-Import scan command: AST scan over `trading_strategy/*.py` for forbidden roots
-`broker`, `dashboard`, `telegram`, `cloud`, `http`, `requests`, `httpx`,
-`boto3`, `websocket`, `services`, and `schemas`.
+Result: `PINNED_COPY_COMPARISON_PASS`, `modules_checked=7`,
+`source_ref=b841800ee03fd98107063c0cbbf5144096a5c4c0`.
 
-Result: `IMPORT_SCAN_PASS`, `forbidden_imports=0`.
+Import scan command: strict AST allowlist over `trading_strategy/*.py`, allowing
+only standard-library or package-local imports; paired with an I/O/network call
+scan.
+
+Result: `IMPORT_SCAN_PASS`, `IO_NETWORK_CALL_SCAN_PASS`, `violations=0`.
 
 Reverse-boundary tests include an attempted `NativeBrokerOrder` object
 injection and an import of the absent `trading_strategy.broker` module; both
@@ -193,7 +216,7 @@ are rejected as expected.
 
 Secret scan command: `gitleaks dir --no-banner .`
 
-Result: scanned `387.98 KB`; `no leaks found`.
+Result: scanned `668.45 KB`; `no leaks found`.
 
 Ruff check: the source environment has no `ruff` executable (`RUFF_UNAVAILABLE`);
 there is no existing project ruff configuration to invoke. This is recorded as
@@ -206,3 +229,13 @@ strategy set was changed.
 
 Target repository check immediately after the extraction commit:
 `git status --porcelain` was empty before this metadata-only update.
+
+## Post-baseline source drift
+
+After the original extraction, the mutable source checkout moved to
+`e80a1a93e503d588fc4f48fc4c5c8cf1172191d5` and currently has unrelated dirty
+Broker files plus a changed `services/dca_plan.py`. The default capture command
+therefore fails closed with `source HEAD mismatch`; it is not treated as a new
+canonical baseline. The pinned Git-object capture uses the original
+`b841800ee03fd98107063c0cbbf5144096a5c4c0` source and is the authoritative
+parity evidence for this repo. The source checkout was not modified.

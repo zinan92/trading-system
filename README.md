@@ -5,7 +5,7 @@ Independent local Strategy foundation extracted from
 `b841800ee03fd98107063c0cbbf5144096a5c4c0`.
 
 The package preserves the existing Canonical DCA and Grid plan/schema,
-precision, geometry, Hard Stop, rung lifecycle, re-arm, and pure DCA replay
+precision, geometry, range adjustment, Hard Stop, rung lifecycle, re-arm, and pure DCA replay
 semantics. It contains no runtime dependency on a broker, Dashboard,
 Telegram/Park authorization, Cloud runtime, network, credentials, or
 filesystem order execution.
@@ -20,7 +20,8 @@ into this package.
 
 ```bash
 python3 -m pytest -q
-python3 -m compileall -q trading_strategy tests
+python3 -m compileall -q trading_strategy tests tools
+python3 tools/capture_canonical_golden.py --source-ref b841800ee03fd98107063c0cbbf5144096a5c4c0 | diff -u tests/fixtures/canonical_golden.json -
 ```
 
 The golden fixture in `tests/fixtures/canonical_golden.json` was generated

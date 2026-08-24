@@ -20,6 +20,11 @@ from .grid_core import (
     simulate_conditional_grid,
     simulate_explicit_grid,
 )
+from .grid_range_adjustment import (
+    build_dragged_range,
+    build_range_extension,
+    range_adjustment_steps,
+)
 from .grid_sizing import (
     GRID_DIRECTIONS,
     GRID_MODES,
@@ -42,12 +47,15 @@ __all__ = [
     "GridResult",
     "GridStop",
     "build_adaptive_grid_preview",
+    "build_dragged_range",
     "build_dca_entry_commands",
     "build_dca_preview",
     "build_dca_strategy_plan",
     "build_deterministic_dca_candidate_payload_v1",
     "build_grid_preview",
+    "build_range_extension",
     "replay_dca_marks",
+    "range_adjustment_steps",
     "simulate_conditional_grid",
     "simulate_explicit_grid",
 ]

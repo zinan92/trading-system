@@ -11,6 +11,7 @@ from trading_strategy.dca_plan import (
     build_dca_entry_commands,
     build_dca_preview,
     build_dca_strategy_plan,
+    build_deterministic_dca_candidate_payload_v1,
     replay_dca_marks,
 )
 from trading_strategy.grid_core import (
@@ -317,6 +318,97 @@ def test_dca_loop_reopen_flag_remains_rejected() -> None:
             account={"equity": 10_000},
             config=_dca_config(),
         )
+
+
+@pytest.mark.parametrize(
+    ("direction", "levels", "target", "stop"),
+    [
+        (
+            "long",
+            [3994.0, 3979.2, 3964.4, 3949.6, 3934.8, 3920.0],
+            4040.0,
+            3880.0,
+        ),
+        (
+            "short",
+            [4006.0, 4020.8, 4035.6, 4050.4, 4065.2, 4080.0],
+            3960.0,
+            4120.0,
+        ),
+    ],
+)
+def test_dca_candidate_preserves_both_direction_contracts(
+    direction: str,
+    levels: list[float],
+    target: float,
+    stop: float,
+) -> None:
+    candidate = build_deterministic_dca_candidate_payload_v1(
+        direction=direction,
+        market_price=4000.0,
+    )
+
+    assert candidate["candidate_builder_version"] == "dca-smart-fill-v1"
+    assert candidate["dca"]["entry_levels"] == pytest.approx(levels)
+    assert candidate["dca"]["target_price"] == target
+    assert candidate["dca"]["stop_price"] == stop
+    assert candidate["dca"]["notional_per_addition"] == 2000.0
+    assert candidate["dca"]["max_additions"] == 6
+    assert candidate["dca"]["loop_enabled"] is False
+
+
+@pytest.mark.parametrize(
+    ("direction", "market_price", "expected_levels", "expected_target", "expected_stop"),
+    [
+        (
+            "long",
+            3906.25,
+            [3900.39, 3885.938, 3871.486, 3857.034, 3842.582, 3828.13],
+            3945.31,
+            3789.06,
+        ),
+        (
+            "long",
+            3900.25,
+            [3894.4, 3879.968, 3865.536, 3851.104, 3836.672, 3822.24],
+            3939.25,
+            3783.24,
+        ),
+        (
+            "short",
+            3906.25,
+            [3912.11, 3926.564, 3941.018, 3955.472, 3969.926, 3984.38],
+            3867.19,
+            4023.44,
+        ),
+        (
+            "short",
+            3900.25,
+            [3906.1, 3920.532, 3934.964, 3949.396, 3963.828, 3978.26],
+            3861.25,
+            4017.26,
+        ),
+    ],
+)
+def test_dca_candidate_preserves_float_boundary_rounding(
+    direction: str,
+    market_price: float,
+    expected_levels: list[float],
+    expected_target: float,
+    expected_stop: float,
+) -> None:
+    candidate = build_deterministic_dca_candidate_payload_v1(
+        direction=direction,
+        market_price=market_price,
+    )
+
+    assert candidate["dca"]["entry_levels"] == pytest.approx(
+        expected_levels,
+        rel=0,
+        abs=1e-12,
+    )
+    assert candidate["dca"]["target_price"] == expected_target
+    assert candidate["dca"]["stop_price"] == expected_stop
 
 
 def test_grid_conditional_replay_matches_locked_golden_stop_rearm_and_flatten() -> None:
