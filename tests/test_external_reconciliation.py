@@ -235,6 +235,22 @@ def test_external_reconciliation_snapshot_is_coherent_and_digest_bound() -> None
     assert snapshot.require_coherent() is snapshot
 
 
+def test_fee_payload_keeps_read_provenance_when_observation_timestamp_differs() -> None:
+    observations = _observations()
+    fee = _facts()["fees"][0]
+    fee = replace(fee, provenance=replace(fee.provenance, received_at=NOW + timedelta(seconds=1)))
+    fee_fact = _replace_fact(observations["fees"].fact, data=(fee,))
+    observations["fees"] = replace(
+        observations["fees"],
+        fact=fee_fact,
+        receipt_digest=fee_fact.fact_digest,
+    )
+
+    snapshot = _assemble(**observations)
+
+    assert snapshot.passed is True
+
+
 def test_mixed_cursor_fails_closed_as_explicit_non_pass() -> None:
     other = _observations(cursor_value=11)["fills"]
     snapshot = _assemble(fills=other)
