@@ -75,6 +75,16 @@ class ExternalDcaBindingSpec:
     def from_mapping(cls, value: object) -> "ExternalDcaBindingSpec":
         if not isinstance(value, Mapping):
             raise DcaProjectionError("binding_invalid")
+        forbidden = {
+            "secret",
+            "private_key",
+            "credential",
+            "credential_source",
+            "signed_payload",
+            "signature",
+        }.intersection(str(key) for key in value)
+        if forbidden:
+            raise DcaProjectionError("binding_secret_field_forbidden")
         required = (
             "plan_id", "broker_id", "environment", "profile_id",
             "account_fingerprint", "runtime_id", "release_sha",

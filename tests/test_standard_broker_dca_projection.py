@@ -208,6 +208,13 @@ def test_projection_rejects_market_source_from_another_binding() -> None:
         project_canonical_dca_plan(_strategy_plan(), binding=binding)
 
 
+def test_projection_rejects_secret_like_binding_fields() -> None:
+    binding = {**_binding(), "private_key": "must-not-be-accepted"}
+
+    with pytest.raises(DcaProjectionError, match="binding_secret_field_forbidden"):
+        project_canonical_dca_plan(_strategy_plan(), binding=binding)
+
+
 def test_projection_rejects_strategy_market_from_another_venue() -> None:
     source = _strategy_plan(provider="binance_usdm_futures", symbol="GOLD")
 
