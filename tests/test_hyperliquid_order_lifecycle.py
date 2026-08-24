@@ -88,6 +88,13 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             adapter.apply_fill({**hash_only, "cloid": submitted.client_order_id, "tid": "trade-promoted"})
 
+        with self.assertRaises(ValueError):
+            HyperliquidOrderAdapter(
+                transport=transport,
+                environment=BrokerEnvironment.TESTNET,
+                transport_state="local_fixture",
+            )
+
     def test_filled_submit_response_preserves_quantity_and_average_price(self) -> None:
         transport = InMemoryOrderTransport(
             submit_response={
