@@ -23,6 +23,41 @@ strategy type, range, leverage, TP, or SL creates a new immutable revision; the
 previous revision is never edited.
 _Avoid_: automatic rollover plan
 
+**Path A Testnet Slice**:
+The first bounded external Testnet proof of the Canonical DCA Strategy on one
+Hyperliquid `PAXG-USD-PERP` Strategy Session, using the existing Dashboard
+read/control contract and requiring canonical reconciliation and
+position-following protection before a next entry. Strategy extraction into a
+separate repository is a future direction and is outside this slice.
+_Avoid_: generic multi-Broker rollout, multi-asset portfolio, automatic Broker switching
+
+**Canonical DCA Strategy**:
+The previously established Paper DCA strategy contract is the algorithmic
+foundation for every Broker adaptation; a transport adaptation may add venue
+safety gates but must not replace its entry, sizing, aggregate-exit, or
+terminal semantics with a new DCA algorithm.
+_Avoid_: new external DCA algorithm, disposable Testnet strategy, rebuilt DCA foundation
+
+**Strategy Module**:
+A future Broker-neutral module that consumes canonical market/instrument facts
+and emits strategy intents without importing a Broker implementation or the
+Trading System composition root; the current repository still co-locates part
+of this logic with the Trading System host.
+_Avoid_: venue strategy, Broker-owned strategy, Dashboard strategy logic
+
+**Trading System Composition Root**:
+The host that binds Strategy, Data Feed, Broker, risk, authorization, lifecycle,
+read-model, and control contracts; it coordinates modules but does not redefine
+their domain algorithms or venue wire semantics.
+_Avoid_: strategy engine, Broker implementation, Dashboard backend
+
+**Broker Transport Substitution**:
+A change of Broker and environment binding that preserves the established
+Strategy, risk, control, read-model, and lifecycle contracts; the binding must
+also select an explicit matching Instrument and execution-grade market source,
+never silently mixing one venue's prices with another venue's execution.
+_Avoid_: strategy rewrite, hidden venue alias, Binance-price/Hyperliquid-order mixing
+
 **Strategy Terminal**:
 A strategy ends only because it reaches a strategy-level take profit or stop
 loss, or Park explicitly changes the strategy. A Recording Window boundary and
