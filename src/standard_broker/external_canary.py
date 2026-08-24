@@ -110,6 +110,7 @@ class HyperliquidExternalSnapshotReader:
         order_id: str,
         instrument_id: str,
         now: datetime,
+        client_order_id: str | None = None,
     ) -> ExternalReconciliationSnapshot:
         if now.tzinfo is None:
             raise ValueError("snapshot now must include timezone")
@@ -147,8 +148,14 @@ class HyperliquidExternalSnapshotReader:
             # order reference for the first scoped call. Query the same typed
             # fill facade by instrument, then retain only the canonical order
             # identity; unrelated historical fills cannot prove this close.
+            client_fills = getattr(self._order, "fills_by_client_order_id", None)
             instrument_fills = tuple(
-                self._order.query_fills(instrument_id=instrument.broker_symbol)
+                client_fills(
+                    client_order_id=client_order_id,
+                    instrument_id=instrument.broker_symbol,
+                )
+                if client_order_id and callable(client_fills)
+                else self._order.query_fills(instrument_id=instrument.broker_symbol)
             )
             fills = tuple(fill for fill in instrument_fills if fill.order_id == order_id)
         open_orders = tuple(self._order.open_orders(instrument_id))
@@ -276,6 +283,7 @@ class ExternalCanaryFactsReader(Protocol):
         order_id: str,
         instrument_id: str,
         now: datetime,
+        client_order_id: str | None = None,
     ) -> ExternalCanaryFactBundle:
         ...
 
@@ -293,6 +301,7 @@ class ExternalCanarySnapshotReader(Protocol):
         order_id: str,
         instrument_id: str,
         now: datetime,
+        client_order_id: str | None = None,
     ) -> ExternalReconciliationSnapshot:
         ...
 
@@ -326,11 +335,23 @@ class ExternalCanaryRuntimeFactsReader:
         if not isinstance(snapshot_reader, ExternalCanarySnapshotReader):
             raise TypeError("runtime fact reader requires a public reconciliation snapshot reader")
 
-    def read(self, *, order_id: str, instrument_id: str, now: datetime) -> ExternalCanaryFactBundle:
+    def read(
+        self,
+        *,
+        order_id: str,
+        instrument_id: str,
+        now: datetime,
+        client_order_id: str | None = None,
+    ) -> ExternalCanaryFactBundle:
+        snapshot_kwargs = {
+            "order_id": order_id,
+            "instrument_id": instrument_id,
+            "now": now,
+        }
+        if client_order_id is not None:
+            snapshot_kwargs["client_order_id"] = client_order_id
         snapshot = self._snapshot_reader.read_reconciliation(
-            order_id=order_id,
-            instrument_id=instrument_id,
-            now=now,
+            **snapshot_kwargs,
         )
         if not isinstance(snapshot, ExternalReconciliationSnapshot):
             raise RuntimeBoundaryError("canary_reconciliation_invalid", "snapshot reader returned a non-canonical snapshot")
@@ -640,8 +661,12 @@ class ExternalCanaryBinding:
         order_id: str,
         instrument_id: str,
         now: datetime,
+        client_order_id: str | None = None,
     ) -> ExternalCanaryFactBundle:
-        bundle = self._facts.read(order_id=order_id, instrument_id=instrument_id, now=now)
+        facts_kwargs = {"order_id": order_id, "instrument_id": instrument_id, "now": now}
+        if client_order_id is not None:
+            facts_kwargs["client_order_id"] = client_order_id
+        bundle = self._facts.read(**facts_kwargs)
         if not isinstance(bundle, ExternalCanaryFactBundle):
             raise RuntimeBoundaryError(
                 "canary_facts_invalid",
