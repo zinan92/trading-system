@@ -340,12 +340,17 @@ def _required_protection_capabilities(matrix: object) -> bool:
         "sibling_cancellation",
         "position_following",
         "position_level_tpsl",
-        "take_profit_market",
+        "take_profit_limit",
         "stop_loss_market",
         "position_coverage",
         "cancel_replace",
     }
-    return all(supports(name) is True for name in required)
+    if not all(supports(name) is True for name in required):
+        return False
+    # The pinned standard-broker seam deliberately disables TP-market. An
+    # older profile that still advertises it is not the reviewed contract and
+    # must remain a visible preflight blocker.
+    return supports("take_profit_market") is False
 
 
 def _preflight_action(plan: ExternalDcaPlan, args: argparse.Namespace) -> dict[str, Any]:
