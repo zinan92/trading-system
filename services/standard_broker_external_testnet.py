@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from services.broker_port import (
     BrokerCapabilities,
@@ -12,6 +12,8 @@ from services.broker_port import (
     BrokerOrderRequest,
     UnsupportedBrokerCapability,
 )
+from services.market_source_binding import MarketSourceIdentity
+from services.instrument_binding import InstrumentBinding, InstrumentBindingError
 
 
 STANDARD_BROKER_EXTERNAL_RELEASE_SHA = "916b0eb241b50d5f46be08150eb3197996530552"
@@ -20,6 +22,9 @@ STANDARD_BROKER_RUNTIME_ADAPTER_ID = "nautilus-hyperliquid"
 STANDARD_BROKER_RUNTIME_VERSION = "1.230.0"
 STANDARD_BROKER_RUNTIME_COMMIT = "8160730c7c550480b0a439fb11086a4c4de15f0b"
 STANDARD_BROKER_CAPABILITY_REVISION = "hyperliquid-testnet-runtime-v1"
+STANDARD_BROKER_EXTERNAL_MARKET_SOURCES = frozenset(
+    {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"}
+)
 STANDARD_BROKER_EXTERNAL_OPERATIONS = {
     "market_data": frozenset({"ticker"}),
     "instrument": frozenset({"read"}),
@@ -72,6 +77,8 @@ class StandardBrokerExternalPortDescriptor:
     transport_profile: str
     transport_state: str
     capabilities: tuple[str, ...]
+    instrument_binding: dict[str, object] = field(default_factory=dict)
+    market_source: dict[str, object] = field(default_factory=dict)
     credential_env_names: tuple[str, ...] = ()
     schema_version: str = "standard-broker-external-port-descriptor-v1"
 
@@ -85,6 +92,8 @@ class StandardBrokerExternalPortDescriptor:
             "transport_profile": self.transport_profile,
             "transport_state": self.transport_state,
             "capabilities": list(self.capabilities),
+            "instrument_binding": dict(self.instrument_binding),
+            "market_source": dict(self.market_source),
             "credential_env_names": list(self.credential_env_names),
         }
 
@@ -105,6 +114,8 @@ class StandardBrokerExternalTestnetExecutionAdapter:
         execution_scope: str,
         transport_profile: str,
         standard_broker_release_sha: str,
+        instrument_binding: Mapping[str, object],
+        market_source: Mapping[str, object],
     ) -> None:
         try:
             from standard_broker import BrokerEnvironment, ExternalBrokerHost
@@ -129,6 +140,18 @@ class StandardBrokerExternalTestnetExecutionAdapter:
         context = external_host.context
         runtime_identity = external_host.runtime_identity
         protection = external_host.protection_capabilities
+        try:
+            source_identity = MarketSourceIdentity.from_mapping(market_source)
+        except ValueError as exc:
+            raise StandardBrokerExternalTestnetHostError(str(exc)) from exc
+        try:
+            selected_instrument = InstrumentBinding.from_mapping(instrument_binding)
+        except InstrumentBindingError as exc:
+            raise StandardBrokerExternalTestnetHostError(str(exc)) from exc
+        if selected_instrument.mapping_revision != STANDARD_BROKER_CAPABILITY_REVISION:
+            raise StandardBrokerExternalTestnetHostError(
+                "instrument_mapping_revision_mismatch"
+            )
         if (
             identity.broker_id != "hyperliquid"
             or identity.environment is not BrokerEnvironment.TESTNET
@@ -142,6 +165,18 @@ class StandardBrokerExternalTestnetExecutionAdapter:
         ):
             raise StandardBrokerExternalTestnetHostError(
                 "external host identity does not match the trading-system binding"
+            )
+        if (
+            source_identity.broker_id != identity.broker_id
+            or source_identity.environment != "testnet"
+            or source_identity.instrument_id != selected_instrument.instrument_id
+        ):
+            raise StandardBrokerExternalTestnetHostError(
+                "market_source_binding_mismatch"
+            )
+        if source_identity.source_id not in STANDARD_BROKER_EXTERNAL_MARKET_SOURCES:
+            raise StandardBrokerExternalTestnetHostError(
+                "unsupported_market_source"
             )
         if (
             runtime_identity.adapter_id != STANDARD_BROKER_RUNTIME_ADAPTER_ID
@@ -166,6 +201,8 @@ class StandardBrokerExternalTestnetExecutionAdapter:
             )
 
         self._host = external_host
+        self._instrument_binding = selected_instrument
+        self._market_source = source_identity
         self._account_fingerprint = "sha256:" + hashlib.sha256(
             account_id.encode("utf-8")
         ).hexdigest()
@@ -180,6 +217,8 @@ class StandardBrokerExternalTestnetExecutionAdapter:
             "release_sha": release_sha,
             "standard_broker_release_sha": standard_broker_release_sha,
             "execution_scope": execution_scope,
+            "instrument_binding": selected_instrument.to_dict(),
+            "market_source": source_identity.to_dict(),
             "dry_run": True,
             "live_trading_enabled": False,
         }
@@ -198,6 +237,8 @@ class StandardBrokerExternalTestnetExecutionAdapter:
             transport_profile=self.broker_config["transport_profile"],
             transport_state=self.broker_config["transport_state"],
             capabilities=self.capabilities.names,
+            instrument_binding=self._instrument_binding.to_dict(),
+            market_source=self._market_source.to_dict(),
         )
 
     def preflight(self) -> dict[str, Any]:
@@ -231,13 +272,19 @@ class StandardBrokerExternalTestnetExecutionAdapter:
             "environment": "testnet",
             "transport_profile": self.broker_config["transport_profile"],
             "transport_state": "external_testnet",
+            "instrument_id": self._instrument_binding.instrument_id,
+            "instrument_binding": self._instrument_binding.to_dict(),
+            "market_source": self._market_source.to_dict(),
+            "market_source_ready": True,
             "host_ready": receipt.accepted is True,
             "ready": False,
             "strategy_ready": False,
             "protection_ready": False,
             "account_read_ready": False,
+            "instrument_read_ready": upstream.supports("instrument", "read"),
             "order_execution_ready": False,
             "upstream_account_read_ready": upstream.supports("account", "read"),
+            "upstream_instrument_read_ready": upstream.supports("instrument", "read"),
             "upstream_order_execution_ready": all(
                 upstream.supports("order_execution", operation)
                 for operation in order_operations

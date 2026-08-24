@@ -464,6 +464,8 @@ def _standard_broker_external_testnet_execution(
         "runtime_id",
         "release_sha",
         "standard_broker_release_sha",
+        "instrument_binding",
+        "market_source",
     )
     missing = [name for name in required if name not in context.broker_config]
     if missing:
@@ -483,6 +485,8 @@ def _standard_broker_external_testnet_execution(
             standard_broker_release_sha=str(
                 context.broker_config["standard_broker_release_sha"]
             ),
+            instrument_binding=context.broker_config["instrument_binding"],
+            market_source=context.broker_config["market_source"],
         )
     except StandardBrokerExternalTestnetHostError:
         raise

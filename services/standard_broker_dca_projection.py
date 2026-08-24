@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from typing import Any, Mapping
 
 from services.dca_plan import dca_strategy_plan_digest
+from services.market_source_binding import MarketSourceIdentity
 from services.standard_broker_external_dca import (
     ExternalDcaPlan,
     external_dca_plan_digest,
@@ -15,31 +16,6 @@ from services.standard_broker_external_dca import (
 
 class DcaProjectionError(ValueError):
     """Canonical DCA cannot be projected without changing its semantics."""
-
-
-@dataclass(frozen=True)
-class ExternalDcaMarketSource:
-    """Execution-grade market source identity selected by a Broker binding."""
-
-    source_id: str
-    broker_id: str
-    environment: str
-    instrument_id: str
-    execution_venue: bool
-
-    @classmethod
-    def from_mapping(cls, value: object) -> "ExternalDcaMarketSource":
-        if not isinstance(value, Mapping):
-            raise DcaProjectionError("market_source_invalid")
-        if value.get("execution_venue") is not True:
-            raise DcaProjectionError("market_source_not_execution_venue")
-        return cls(
-            source_id=_text(value.get("source_id"), "market_source_id"),
-            broker_id=_text(value.get("broker_id"), "market_source_broker_id").lower(),
-            environment=_text(value.get("environment"), "market_source_environment").lower(),
-            instrument_id=_text(value.get("instrument_id"), "market_source_instrument_id"),
-            execution_venue=True,
-        )
 
 
 @dataclass(frozen=True)
@@ -69,7 +45,7 @@ class ExternalDcaBindingSpec:
     time_in_force: str
     expires_at: str
     close_price: Decimal
-    market_source: ExternalDcaMarketSource
+    market_source: MarketSourceIdentity
 
     @classmethod
     def from_mapping(cls, value: object) -> "ExternalDcaBindingSpec":
@@ -97,7 +73,10 @@ class ExternalDcaBindingSpec:
         missing = [field for field in required if field not in value]
         if missing:
             raise DcaProjectionError("binding_fields_missing:" + ",".join(missing))
-        market_source = ExternalDcaMarketSource.from_mapping(value["market_source"])
+        try:
+            market_source = MarketSourceIdentity.from_mapping(value["market_source"])
+        except ValueError as exc:
+            raise DcaProjectionError(str(exc)) from exc
         spec = cls(
             plan_id=_text(value["plan_id"], "plan_id"),
             broker_id=_text(value["broker_id"], "broker_id").lower(),
@@ -142,7 +121,7 @@ class ExternalDcaPlanProjection:
     source_strategy_plan_digest: str
     canonical_semantics: dict[str, Any]
     source_market: dict[str, str]
-    execution_market_source: ExternalDcaMarketSource
+    execution_market_source: MarketSourceIdentity
 
 
 def project_canonical_dca_plan(
