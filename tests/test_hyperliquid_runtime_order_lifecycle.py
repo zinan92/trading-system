@@ -608,6 +608,30 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         with self.assertRaises(ValueError, msg="tid promotion after hash-only identity must fail closed"):
             adapter.apply_fill({**base, "tid": "trade-promoted"})
 
+    def test_tid_replay_enriches_hash_alias_before_hash_only_replay(self) -> None:
+        adapter, _ = self.adapter()
+        submitted = adapter.submit(self.intent())
+        base = {
+            "coin": "BTC",
+            "px": "65000",
+            "sz": "0.1",
+            "side": "B",
+            "time": 1787313659000,
+            "oid": 101,
+            "cloid": submitted.client_order_id,
+            "tid": "trade-enriched",
+        }
+
+        adapter.apply_fill(base)
+        enriched = adapter.apply_fill({**base, "hash": "0xenriched-hash"})
+        duplicate = adapter.apply_fill(
+            {key: value for key, value in base.items() if key != "tid"} | {"hash": "0xenriched-hash"}
+        )
+
+        self.assertEqual(enriched.state, OrderState.FILLED)
+        self.assertEqual(duplicate, enriched)
+        self.assertEqual(len(adapter.fills), 1)
+
     def test_cancel_and_replace_preserve_order_lineage(self) -> None:
         adapter, _ = self.adapter()
         submitted = adapter.submit(self.intent())

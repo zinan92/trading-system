@@ -397,6 +397,7 @@ class HyperliquidOrderAdapter:
                 or existing_fill.side is not self._side(raw.get("side"))
             ):
                 raise ValueError("fill identity was reused with different canonical facts")
+            self._register_hash_alias(hash_key, existing_fill_id)
             return receipt
 
         broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else receipt.broker_order_id
@@ -764,6 +765,7 @@ class HyperliquidOrderAdapter:
                     or existing_fill.side is not self._side(filled["side"])
                 ):
                     raise ValueError("fill identity was reused with different canonical facts")
+                self._register_hash_alias(hash_key, existing_fill_id)
                 return updated
             self._fills[fill_id] = OrderFill(
                 fill_id=fill_id,
