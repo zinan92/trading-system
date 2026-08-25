@@ -338,6 +338,16 @@ class PortfolioRiskGate:
                 "policy_id": policy.policy_id,
                 "policy_revision": policy.policy_revision,
             },
+            ownership={
+                "status": "owned",
+                "account_id": snapshot.account_id,
+                "portfolio_session_id": snapshot.portfolio_session_id,
+                "asset": candidate.asset,
+                "owner_type": "strategy",
+                "owner_id": candidate.strategy_session_id,
+                "strategy_session_id": candidate.strategy_session_id,
+                "strategy_revision_id": candidate.strategy_revision_id,
+            },
         )
         provenance = self._provenance(candidate, snapshot, policy, outcome, reasons)
         selection_id = _stable_id("selection", provenance, allocation.to_dict())
