@@ -19,7 +19,6 @@ from types import MappingProxyType
 from typing import Any, ClassVar
 
 
-PORTFOLIO_CONTRACTS_SCHEMA = "portfolio-contracts-v1"
 PORTFOLIO_SESSION_SCHEMA = "portfolio-session-v1"
 STRATEGY_POSITION_PLAN_SCHEMA = "strategy-position-plan-v1"
 STRATEGY_CANDIDATE_SET_SCHEMA = "strategy-candidate-set-v1"
@@ -37,7 +36,7 @@ Numberish = Decimal | str | int | float
 
 
 class _PortfolioContract:
-    schema_version: ClassVar[str] = PORTFOLIO_CONTRACTS_SCHEMA
+    schema_version: ClassVar[str]
 
     @property
     def digest(self) -> str:
@@ -281,6 +280,10 @@ class AssetAllocationSlice(_PortfolioContract):
     direction: str
     requested_quantity: Numberish
     effective_quantity: Numberish
+    source_strategy_plan_digest: str
+    position_action: str
+    position_management: Mapping[str, Any] = field(default_factory=dict)
+    protection_intent: Mapping[str, Any] = field(default_factory=dict)
     status: str = "accepted"
     execution_slice_id: str | None = None
     reasons: Sequence[str] = ()
@@ -295,6 +298,11 @@ class AssetAllocationSlice(_PortfolioContract):
         direction = _choice(self.direction, _DIRECTIONS, "allocation direction")
         requested = _decimal(self.requested_quantity, "requested allocation quantity", minimum=Decimal("0"))
         effective = _decimal(self.effective_quantity, "effective allocation quantity", minimum=Decimal("0"))
+        source_strategy_plan_digest = _required_text(
+            self.source_strategy_plan_digest,
+            "source strategy plan digest",
+        )
+        position_action = _choice(self.position_action, _POSITION_ACTIONS, "allocation position action")
         if effective > requested:
             raise ValueError("effective quantity cannot exceed requested quantity")
         if direction == "flat" and (requested != 0 or effective != 0):
@@ -311,6 +319,10 @@ class AssetAllocationSlice(_PortfolioContract):
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "requested_quantity", requested)
         object.__setattr__(self, "effective_quantity", effective)
+        object.__setattr__(self, "source_strategy_plan_digest", source_strategy_plan_digest)
+        object.__setattr__(self, "position_action", position_action)
+        object.__setattr__(self, "position_management", _object(self.position_management, "allocation position management"))
+        object.__setattr__(self, "protection_intent", _object(self.protection_intent, "allocation protection intent"))
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "execution_slice_id", execution_slice_id)
         object.__setattr__(self, "reasons", reasons)
@@ -326,6 +338,10 @@ class AssetAllocationSlice(_PortfolioContract):
             "direction": self.direction,
             "requested_quantity": _decimal_text(self.requested_quantity),
             "effective_quantity": _decimal_text(self.effective_quantity),
+            "source_strategy_plan_digest": self.source_strategy_plan_digest,
+            "position_action": self.position_action,
+            "position_management": _thaw(self.position_management),
+            "protection_intent": _thaw(self.protection_intent),
             "status": self.status,
             "execution_slice_id": self.execution_slice_id,
             "reasons": list(self.reasons),
@@ -360,10 +376,10 @@ class ExecutionSlice(_PortfolioContract):
         object.__setattr__(self, "allocation_id", allocation_id)
         object.__setattr__(self, "asset", asset)
         object.__setattr__(self, "broker_binding", _object(self.broker_binding, "execution broker binding"))
-        object.__setattr__(self, "orders", _mapping_rows(self.orders, "execution orders"))
+        object.__setattr__(self, "orders", _mapping_rows(self.orders, "execution orders", canonical=True))
         object.__setattr__(self, "position", _object(self.position, "execution position"))
         object.__setattr__(self, "protection", _object(self.protection, "execution protection"))
-        object.__setattr__(self, "fills", _mapping_rows(self.fills, "execution fills"))
+        object.__setattr__(self, "fills", _mapping_rows(self.fills, "execution fills", canonical=True))
         object.__setattr__(self, "reconciliation", _object(self.reconciliation, "execution reconciliation"))
         object.__setattr__(self, "status", _required_text(self.status, "execution status").lower())
 
@@ -411,21 +427,31 @@ class PortfolioSnapshot(_PortfolioContract):
         observed_at = _aware_iso(self.observed_at, "portfolio snapshot observed_at")
         equity = _decimal(self.equity, "snapshot equity")
         available_cash = _decimal(self.available_cash, "snapshot available cash")
-        positions = _mapping_rows(self.positions, "snapshot positions")
-        open_orders = _mapping_rows(self.open_orders, "snapshot open orders")
+        positions = _mapping_rows(self.positions, "snapshot positions", canonical=True)
+        open_orders = _mapping_rows(self.open_orders, "snapshot open orders", canonical=True)
         allocations = tuple(self.allocation_slices)
         executions = tuple(self.execution_slices)
         if not all(isinstance(item, AssetAllocationSlice) for item in allocations):
             raise TypeError("snapshot allocation_slices must be AssetAllocationSlice contracts")
         if not all(isinstance(item, ExecutionSlice) for item in executions):
             raise TypeError("snapshot execution_slices must be ExecutionSlice contracts")
-        allocation_ids = {item.allocation_id for item in allocations}
-        execution_ids = {item.execution_slice_id for item in executions}
+        allocation_id_values = [item.allocation_id for item in allocations]
+        execution_id_values = [item.execution_slice_id for item in executions]
+        if len(set(allocation_id_values)) != len(allocation_id_values):
+            raise ValueError("snapshot allocation ids must be unique")
+        if len(set(execution_id_values)) != len(execution_id_values):
+            raise ValueError("snapshot execution slice ids must be unique")
+        allocation_ids = set(allocation_id_values)
+        execution_by_id = {item.execution_slice_id: item for item in executions}
         for item in allocations:
             if item.portfolio_session_id != portfolio_session_id:
                 raise ValueError("snapshot allocation portfolio session identity mismatch")
-            if item.execution_slice_id is not None and item.execution_slice_id not in execution_ids:
-                raise ValueError("snapshot allocation references an unknown execution slice")
+            if item.execution_slice_id is not None:
+                execution = execution_by_id.get(item.execution_slice_id)
+                if execution is None:
+                    raise ValueError("snapshot allocation references an unknown execution slice")
+                if execution.asset != item.asset:
+                    raise ValueError("snapshot allocation and execution asset identity mismatch")
         for item in executions:
             if item.portfolio_session_id != portfolio_session_id:
                 raise ValueError("snapshot execution portfolio session identity mismatch")
@@ -433,7 +459,7 @@ class PortfolioSnapshot(_PortfolioContract):
                 raise ValueError("snapshot execution references an unknown allocation")
         ownership = _ownership_rows(self.ownership_facts, portfolio_session_id, account_id)
         for row in (*positions, *open_orders):
-            _check_row_scope(row, portfolio_session_id, account_id)
+            _check_row_scope(row, portfolio_session_id, account_id, required=True)
         if not isinstance(self.coherent, bool) or not isinstance(self.fresh, bool):
             raise TypeError("snapshot coherent and fresh flags must be bool")
         object.__setattr__(self, "snapshot_id", snapshot_id)
@@ -444,8 +470,8 @@ class PortfolioSnapshot(_PortfolioContract):
         object.__setattr__(self, "available_cash", available_cash)
         object.__setattr__(self, "positions", positions)
         object.__setattr__(self, "open_orders", open_orders)
-        object.__setattr__(self, "allocation_slices", allocations)
-        object.__setattr__(self, "execution_slices", executions)
+        object.__setattr__(self, "allocation_slices", tuple(sorted(allocations, key=lambda item: item.allocation_id)))
+        object.__setattr__(self, "execution_slices", tuple(sorted(executions, key=lambda item: item.execution_slice_id)))
         object.__setattr__(self, "ownership_facts", ownership)
         object.__setattr__(self, "provenance", _object(self.provenance, "snapshot provenance"))
 
@@ -477,6 +503,7 @@ class PortfolioSelection(_PortfolioContract):
     portfolio_session_id: str
     candidate_set_id: str
     policy_id: str
+    policy_revision: str
     snapshot_id: str
     created_at: str
     selected_allocations: Sequence[AssetAllocationSlice] = ()
@@ -489,6 +516,7 @@ class PortfolioSelection(_PortfolioContract):
         portfolio_session_id = _required_text(self.portfolio_session_id, "selection portfolio session id")
         candidate_set_id = _required_text(self.candidate_set_id, "selection candidate set id")
         policy_id = _required_text(self.policy_id, "selection policy id")
+        policy_revision = _required_text(self.policy_revision, "selection policy revision")
         snapshot_id = _required_text(self.snapshot_id, "selection snapshot id")
         created_at = _aware_iso(self.created_at, "portfolio selection created_at")
         allocations = tuple(self.selected_allocations)
@@ -501,10 +529,15 @@ class PortfolioSelection(_PortfolioContract):
             if item.portfolio_session_id != portfolio_session_id:
                 raise ValueError("selection allocation portfolio session identity mismatch")
         rejected = _rejection_rows(self.rejected_candidates)
+        selected_candidate_ids = {item.candidate_id for item in allocations}
+        rejected_candidate_ids = {str(row["candidate_id"]) for row in rejected}
+        if selected_candidate_ids & rejected_candidate_ids:
+            raise ValueError("selection cannot both select and reject the same candidate")
         object.__setattr__(self, "selection_id", selection_id)
         object.__setattr__(self, "portfolio_session_id", portfolio_session_id)
         object.__setattr__(self, "candidate_set_id", candidate_set_id)
         object.__setattr__(self, "policy_id", policy_id)
+        object.__setattr__(self, "policy_revision", policy_revision)
         object.__setattr__(self, "snapshot_id", snapshot_id)
         object.__setattr__(self, "created_at", created_at)
         object.__setattr__(self, "selected_allocations", tuple(sorted(allocations, key=lambda item: item.allocation_id)))
@@ -518,6 +551,7 @@ class PortfolioSelection(_PortfolioContract):
             "portfolio_session_id": self.portfolio_session_id,
             "candidate_set_id": self.candidate_set_id,
             "policy_id": self.policy_id,
+            "policy_revision": self.policy_revision,
             "snapshot_id": self.snapshot_id,
             "created_at": self.created_at,
             "selected_allocations": [item.to_dict() for item in self.selected_allocations],
@@ -534,6 +568,7 @@ class PortfolioRiskHold(_PortfolioContract):
     portfolio_session_id: str
     candidate_set_id: str
     policy_id: str
+    policy_revision: str
     snapshot_id: str
     created_at: str
     reason_code: str
@@ -548,6 +583,7 @@ class PortfolioRiskHold(_PortfolioContract):
         portfolio_session_id = _required_text(self.portfolio_session_id, "risk hold portfolio session id")
         candidate_set_id = _required_text(self.candidate_set_id, "risk hold candidate set id")
         policy_id = _required_text(self.policy_id, "risk hold policy id")
+        policy_revision = _required_text(self.policy_revision, "risk hold policy revision")
         snapshot_id = _required_text(self.snapshot_id, "risk hold snapshot id")
         created_at = _aware_iso(self.created_at, "risk hold created_at")
         reason_code = _required_text(self.reason_code, "risk hold reason code").lower()
@@ -561,6 +597,7 @@ class PortfolioRiskHold(_PortfolioContract):
         object.__setattr__(self, "portfolio_session_id", portfolio_session_id)
         object.__setattr__(self, "candidate_set_id", candidate_set_id)
         object.__setattr__(self, "policy_id", policy_id)
+        object.__setattr__(self, "policy_revision", policy_revision)
         object.__setattr__(self, "snapshot_id", snapshot_id)
         object.__setattr__(self, "created_at", created_at)
         object.__setattr__(self, "reason_code", reason_code)
@@ -575,6 +612,7 @@ class PortfolioRiskHold(_PortfolioContract):
             "portfolio_session_id": self.portfolio_session_id,
             "candidate_set_id": self.candidate_set_id,
             "policy_id": self.policy_id,
+            "policy_revision": self.policy_revision,
             "snapshot_id": self.snapshot_id,
             "created_at": self.created_at,
             "reason_code": self.reason_code,
@@ -583,42 +621,6 @@ class PortfolioRiskHold(_PortfolioContract):
             "decision_provenance": _thaw(self.decision_provenance),
             "blocks_new_entries": self.blocks_new_entries,
         }
-
-
-def build_portfolio_session(**kwargs: Any) -> PortfolioSession:
-    return PortfolioSession(**kwargs)
-
-
-def build_strategy_position_plan(**kwargs: Any) -> StrategyPositionPlan:
-    return StrategyPositionPlan(**kwargs)
-
-
-def build_strategy_candidate_set(**kwargs: Any) -> StrategyCandidateSet:
-    return StrategyCandidateSet(**kwargs)
-
-
-def build_portfolio_policy(**kwargs: Any) -> PortfolioPolicy:
-    return PortfolioPolicy(**kwargs)
-
-
-def build_asset_allocation_slice(**kwargs: Any) -> AssetAllocationSlice:
-    return AssetAllocationSlice(**kwargs)
-
-
-def build_execution_slice(**kwargs: Any) -> ExecutionSlice:
-    return ExecutionSlice(**kwargs)
-
-
-def build_portfolio_snapshot(**kwargs: Any) -> PortfolioSnapshot:
-    return PortfolioSnapshot(**kwargs)
-
-
-def build_portfolio_selection(**kwargs: Any) -> PortfolioSelection:
-    return PortfolioSelection(**kwargs)
-
-
-def build_portfolio_risk_hold(**kwargs: Any) -> PortfolioRiskHold:
-    return PortfolioRiskHold(**kwargs)
 
 
 def _required_text(value: Any, label: str) -> str:
@@ -697,7 +699,12 @@ def _object(value: Any, label: str) -> Mapping[str, Any]:
     return _freeze(plain)
 
 
-def _mapping_rows(value: Any, label: str) -> tuple[Mapping[str, Any], ...]:
+def _mapping_rows(
+    value: Any,
+    label: str,
+    *,
+    canonical: bool = False,
+) -> tuple[Mapping[str, Any], ...]:
     if isinstance(value, (str, bytes, Mapping)):
         raise TypeError(f"{label} must be a sequence of objects")
     try:
@@ -707,6 +714,8 @@ def _mapping_rows(value: Any, label: str) -> tuple[Mapping[str, Any], ...]:
     result: list[Mapping[str, Any]] = []
     for row in rows:
         result.append(_object(row, label))
+    if canonical:
+        return tuple(sorted(result, key=lambda row: json.dumps(_thaw(row), sort_keys=True, separators=(",", ":"))))
     return tuple(result)
 
 
@@ -745,8 +754,10 @@ def _ownership_rows(value: Any, portfolio_session_id: str, account_id: str) -> t
         item = dict(_thaw(row))
         asset = _asset(item.get("asset"), "ownership asset")
         item["asset"] = asset
-        _check_row_scope(item, portfolio_session_id, account_id)
-        owner_key = tuple(item.get(name) for name in ("owner_type", "owner_id"))
+        _check_row_scope(item, portfolio_session_id, account_id, required=True)
+        item["owner_type"] = _required_text(item.get("owner_type"), "ownership owner type")
+        item["owner_id"] = _required_text(item.get("owner_id"), "ownership owner id")
+        owner_key = (item["owner_type"], item["owner_id"])
         previous = owners_by_asset.setdefault(asset, owner_key)
         if previous != owner_key:
             raise ValueError("conflicting ownership facts for asset")
@@ -761,7 +772,20 @@ def _check_scope(scope: Mapping[str, Any], portfolio_session_id: str, account_id
         raise ValueError("account scope identity mismatch")
 
 
-def _check_row_scope(row: Mapping[str, Any], portfolio_session_id: str, account_id: str) -> None:
+def _check_row_scope(
+    row: Mapping[str, Any],
+    portfolio_session_id: str,
+    account_id: str,
+    *,
+    required: bool = False,
+) -> None:
+    if required:
+        for key, label in (
+            ("portfolio_session_id", "portfolio session ownership identity"),
+            ("account_id", "account ownership identity"),
+        ):
+            if key not in row or not isinstance(row[key], str) or not row[key].strip():
+                raise ValueError(f"{label} is required")
     if "portfolio_session_id" in row and row["portfolio_session_id"] != portfolio_session_id:
         raise ValueError("portfolio session ownership scope mismatch")
     if "account_id" in row and row["account_id"] != account_id:
@@ -825,13 +849,4 @@ __all__ = [
     "PortfolioSnapshot",
     "StrategyCandidateSet",
     "StrategyPositionPlan",
-    "build_asset_allocation_slice",
-    "build_execution_slice",
-    "build_portfolio_policy",
-    "build_portfolio_risk_hold",
-    "build_portfolio_selection",
-    "build_portfolio_session",
-    "build_portfolio_snapshot",
-    "build_strategy_candidate_set",
-    "build_strategy_position_plan",
 ]

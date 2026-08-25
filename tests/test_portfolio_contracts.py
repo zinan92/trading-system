@@ -1,5 +1,5 @@
 import json
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal
 from types import MappingProxyType
 
@@ -62,6 +62,7 @@ def _policy() -> PortfolioPolicy:
 
 
 def _snapshot(session: PortfolioSession) -> PortfolioSnapshot:
+    plan = _plan()
     allocation = AssetAllocationSlice(
         portfolio_session_id=session.portfolio_session_id,
         allocation_id="allocation-btc",
@@ -70,6 +71,10 @@ def _snapshot(session: PortfolioSession) -> PortfolioSnapshot:
         direction="long",
         requested_quantity="0.003",
         effective_quantity="0.003",
+        source_strategy_plan_digest=plan.digest,
+        position_action=plan.position_action,
+        position_management=plan.position_management,
+        protection_intent=plan.protection_intent,
         status="accepted",
         execution_slice_id="execution-btc",
         reasons=(),
@@ -95,7 +100,14 @@ def _snapshot(session: PortfolioSession) -> PortfolioSnapshot:
         observed_at="2026-08-25T04:01:00+00:00",
         equity="1000.00",
         available_cash="760.00",
-        positions=({"asset": "BTC", "quantity": "0.003", "account_id": session.account_id},),
+        positions=(
+            {
+                "asset": "BTC",
+                "quantity": "0.003",
+                "portfolio_session_id": session.portfolio_session_id,
+                "account_id": session.account_id,
+            },
+        ),
         open_orders=(),
         allocation_slices=(allocation,),
         execution_slices=(execution,),
@@ -104,6 +116,7 @@ def _snapshot(session: PortfolioSession) -> PortfolioSnapshot:
                 "asset": "BTC",
                 "portfolio_session_id": session.portfolio_session_id,
                 "account_id": session.account_id,
+                "owner_type": "strategy",
                 "owner_id": "strategy-session-1",
             },
         ),
@@ -230,12 +243,14 @@ def test_snapshot_rejects_conflicting_ownership_facts_before_evaluation():
                     "asset": "BTC",
                     "portfolio_session_id": session.portfolio_session_id,
                     "account_id": session.account_id,
+                    "owner_type": "strategy",
                     "owner_id": "owner-a",
                 },
                 {
                     "asset": "BTC",
                     "portfolio_session_id": session.portfolio_session_id,
                     "account_id": session.account_id,
+                    "owner_type": "strategy",
                     "owner_id": "owner-b",
                 },
             ),
@@ -258,8 +273,130 @@ def test_snapshot_rejects_conflicting_ownership_facts_before_evaluation():
                     direction="long",
                     requested_quantity="0.003",
                     effective_quantity="0.003",
+                    source_strategy_plan_digest=_plan().digest,
+                    position_action="add",
                 ),
             ),
+        )
+
+
+def test_snapshot_requires_complete_identity_and_rejects_scope_or_timestamp_conflicts():
+    session = _session()
+    with pytest.raises(ValueError, match="portfolio session ownership identity"):
+        PortfolioSnapshot(
+            snapshot_id="snapshot-missing-scope",
+            portfolio_session_id=session.portfolio_session_id,
+            account_id=session.account_id,
+            observed_at="2026-08-25T04:01:00+00:00",
+            equity="1000",
+            available_cash="760",
+            positions=({"asset": "BTC", "account_id": session.account_id},),
+        )
+    with pytest.raises(ValueError, match="owner type"):
+        PortfolioSnapshot(
+            snapshot_id="snapshot-missing-owner",
+            portfolio_session_id=session.portfolio_session_id,
+            account_id=session.account_id,
+            observed_at="2026-08-25T04:01:00+00:00",
+            equity="1000",
+            available_cash="760",
+            ownership_facts=(
+                {
+                    "asset": "BTC",
+                    "portfolio_session_id": session.portfolio_session_id,
+                    "account_id": session.account_id,
+                    "owner_id": "strategy-session-1",
+                },
+            ),
+        )
+    with pytest.raises(ValueError, match="timezone"):
+        PortfolioSnapshot(
+            snapshot_id="snapshot-naive-time",
+            portfolio_session_id=session.portfolio_session_id,
+            account_id=session.account_id,
+            observed_at="2026-08-25T04:01:00",
+            equity="1000",
+            available_cash="760",
+        )
+    with pytest.raises(ValueError, match="account scope"):
+        PortfolioSession(
+            portfolio_session_id=session.portfolio_session_id,
+            strategy_session_id=session.strategy_session_id,
+            account_id=session.account_id,
+            session_revision_id=session.session_revision_id,
+            opened_at="2026-08-25T04:00:00+00:00",
+            account_scope={"account_id": "other-account"},
+        )
+
+
+def test_snapshot_canonicalizes_unordered_facts_and_rejects_cross_asset_or_duplicate_links():
+    session = _session()
+    plan = _plan()
+    allocation = AssetAllocationSlice(
+        portfolio_session_id=session.portfolio_session_id,
+        allocation_id="allocation-btc",
+        candidate_id="candidate-btc",
+        asset="BTC",
+        direction="long",
+        requested_quantity="0.003",
+        effective_quantity="0.003",
+        source_strategy_plan_digest=plan.digest,
+        position_action="add",
+        execution_slice_id="execution-btc",
+    )
+    execution = ExecutionSlice(
+        execution_slice_id="execution-btc",
+        portfolio_session_id=session.portfolio_session_id,
+        allocation_id=allocation.allocation_id,
+        asset="BTC",
+        broker_binding={"broker_id": "fixture", "environment": "paper"},
+        orders=(
+            {"client_order_id": "order-b", "status": "pending"},
+            {"client_order_id": "order-a", "status": "pending"},
+        ),
+        fills=(),
+    )
+    snapshot_kwargs = {
+        "portfolio_session_id": session.portfolio_session_id,
+        "account_id": session.account_id,
+        "observed_at": "2026-08-25T04:01:00+00:00",
+        "equity": "1000",
+        "available_cash": "760",
+        "allocation_slices": (allocation,),
+        "execution_slices": (execution,),
+    }
+    first = PortfolioSnapshot(
+        snapshot_id="snapshot-order-a",
+        positions=(
+            {"asset": "ETH", "quantity": "0.1", "portfolio_session_id": session.portfolio_session_id, "account_id": session.account_id},
+            {"asset": "BTC", "quantity": "0.003", "portfolio_session_id": session.portfolio_session_id, "account_id": session.account_id},
+        ),
+        **snapshot_kwargs,
+    )
+    second = PortfolioSnapshot(
+        snapshot_id="snapshot-order-a",
+        positions=tuple(reversed(first.positions)),
+        **{key: value for key, value in snapshot_kwargs.items() if key != "positions"},
+    )
+    assert first.digest == second.digest
+    assert execution.digest == replace(execution, orders=tuple(reversed(execution.orders))).digest
+
+    mismatched_execution = replace(execution, asset="ETH")
+    with pytest.raises(ValueError, match="asset identity"):
+        PortfolioSnapshot(
+            snapshot_id="snapshot-asset-conflict",
+            positions=(),
+            allocation_slices=(allocation,),
+            execution_slices=(mismatched_execution,),
+            **{key: value for key, value in snapshot_kwargs.items() if key not in {"allocation_slices", "execution_slices"}},
+        )
+    with pytest.raises(ValueError, match="allocation ids"):
+        PortfolioSnapshot(
+            snapshot_id="snapshot-duplicate-allocation",
+            positions=(),
+            allocation_slices=(allocation, allocation),
+            execution_slices=(),
+            **{key: value for key, value in snapshot_kwargs.items() if key not in {"allocation_slices", "execution_slices"}},
         )
 
 
@@ -270,6 +407,7 @@ def test_selection_preserves_requested_and_effective_size_without_upsizing():
         portfolio_session_id=session.portfolio_session_id,
         candidate_set_id="candidate-set-1",
         policy_id="portfolio-policy-1",
+        policy_revision="2026-08-25-a",
         snapshot_id="snapshot-1",
         created_at="2026-08-25T04:02:00+00:00",
         selected_allocations=(
@@ -281,6 +419,10 @@ def test_selection_preserves_requested_and_effective_size_without_upsizing():
                 direction="long",
                 requested_quantity="0.006",
                 effective_quantity="0.003",
+                source_strategy_plan_digest=_plan().digest,
+                position_action="add",
+                position_management={"add_on": "next_entry"},
+                protection_intent={"stop": "strategy-owned"},
                 status="scaled",
                 reasons=("single_asset_cap",),
             ),
@@ -293,11 +435,16 @@ def test_selection_preserves_requested_and_effective_size_without_upsizing():
     assert selection.selected_allocations[0].effective_quantity == Decimal("0.003")
     assert selection.to_dict()["selected_allocations"][0]["requested_quantity"] == "0.006"
     assert selection.to_dict()["selected_allocations"][0]["effective_quantity"] == "0.003"
+    assert selection.to_dict()["selected_allocations"][0]["source_strategy_plan_digest"].startswith("sha256:")
+    assert selection.to_dict()["selected_allocations"][0]["position_action"] == "add"
+    assert selection.to_dict()["selected_allocations"][0]["protection_intent"] == {"stop": "strategy-owned"}
+    assert selection.digest != replace(selection, policy_revision="2026-08-26-b").digest
     assert selection.digest == PortfolioSelection(
         selection_id="selection-1",
         portfolio_session_id=session.portfolio_session_id,
         candidate_set_id="candidate-set-1",
         policy_id="portfolio-policy-1",
+        policy_revision="2026-08-25-a",
         snapshot_id="snapshot-1",
         created_at="2026-08-25T04:02:00+00:00",
         selected_allocations=tuple(reversed(selection.selected_allocations)),
@@ -314,6 +461,20 @@ def test_selection_preserves_requested_and_effective_size_without_upsizing():
             direction="long",
             requested_quantity="0.003",
             effective_quantity="0.004",
+            source_strategy_plan_digest=_plan().digest,
+            position_action="add",
+        )
+    with pytest.raises(ValueError, match="both select and reject"):
+        PortfolioSelection(
+            selection_id="selection-overlap",
+            portfolio_session_id=session.portfolio_session_id,
+            candidate_set_id="candidate-set-1",
+            policy_id="portfolio-policy-1",
+            policy_revision="2026-08-25-a",
+            snapshot_id="snapshot-1",
+            created_at="2026-08-25T04:02:00+00:00",
+            selected_allocations=selection.selected_allocations,
+            rejected_candidates=({"candidate_id": "candidate-btc", "reason": "also-rejected"},),
         )
 
 
@@ -337,6 +498,7 @@ def test_execution_slice_and_hold_are_immutable_serializable_and_provenance_rich
         portfolio_session_id=session.portfolio_session_id,
         candidate_set_id="candidate-set-1",
         policy_id="portfolio-policy-1",
+        policy_revision="2026-08-25-a",
         snapshot_id="snapshot-unknown",
         created_at="2026-08-25T04:03:00+00:00",
         reason_code="unknown_non_zero_exposure",
@@ -351,3 +513,5 @@ def test_execution_slice_and_hold_are_immutable_serializable_and_provenance_rich
     assert hold.digest.startswith("sha256:")
     with pytest.raises(FrozenInstanceError):
         hold.message = "changed"
+    with pytest.raises(ValueError, match="must block"):
+        replace(hold, blocks_new_entries=False)

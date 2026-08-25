@@ -30,6 +30,18 @@ remain the top-level decision and lifecycle owners rather than creating one
 independent strategy per asset.
 _Avoid_: asset-owned strategy session, one top-level lifecycle per asset
 
+**Portfolio Snapshot**:
+The immutable, account-scoped fact set used for one Portfolio evaluation. It
+binds equity, cash, positions, open orders, allocation/execution slices,
+ownership, freshness, and coherence to one Portfolio Session identity.
+_Avoid_: live account query, mutable portfolio cache, asset-only snapshot
+
+**Portfolio Policy**:
+The versioned set of Portfolio-level concentration, capacity, exposure, margin,
+loss, and cash-buffer limits. It is a subtractive gate configuration and does
+not generate strategy signals or increase a Strategy Position Plan.
+_Avoid_: strategy sizing algorithm, Broker capability profile, auto-rebalance rule
+
 **Asset Allocation Slice**:
 The Portfolio Session's current allocation intent for one asset. It records how
 much of the Portfolio is assigned to that asset, but it does not own the
