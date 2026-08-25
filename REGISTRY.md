@@ -34,20 +34,25 @@
   read model projects one Portfolio summary/slices and explicit rebalance
   evidence while preserving the single-asset path.
 - PORT-07/#1003 merged as PR #1011 at
-  `main@cdf28c29d1bb69d4a0196b7d4c6defed0aca50c8` (current `origin/main`):
+  `main@cdf28c29d1bb69d4a0196b7d4c6defed0aca50c8`; the unified review-fix
+  PR #1013 is merged at `main@eacdea52459060d5c0e6f904d8c31ed720dd9469`
+  (current `origin/main`):
   the read-only composition root evaluates CandidateSet → Portfolio Gate →
   ownership hold → read model, and prepares a BTC Testnet candidate from
   canonical local instrument facts by recalculating quantity from strategy
   notional. It does not submit an order or resolve credentials.
 - Focused composition/portfolio/read-model plus standard-broker regression
-  validation currently passes 169 tests (one existing collection warning);
-  final full-suite validation and the requested single unified Claude Sonnet
-  review are still pending. No network, credential, Testnet order, scheduler,
-  cloud, Mainnet, Live, or Dashboard mutation was performed.
+  validation passes 171 tests (one existing collection warning). Clean full
+  pytest is `3473 passed, 1 skipped, 9 failed`; the nine failures are limited
+  to an existing Dashboard drag test, local standard-broker symbol mismatch,
+  and Testnet preflight/control fixtures. Compileall, diff-check, and gitleaks
+  pass. Unified Claude Sonnet review of the complete set passed on the second
+  review after the two P2 fixes; receipts are recorded in the handoff. No
+  network, credential, Testnet order, scheduler, cloud, Mainnet, Live, or
+  Dashboard mutation was performed.
 
-_下一步_: run the final full local validation from this exact `main`, then
-perform one unified Claude Sonnet review of the complete #997–#1003 change set;
-do not start BTC Testnet execution from this read-only tracer bullet.
+_下一步_: keep the BTC path read-only until a separate attended Testnet
+execution contract is explicitly authorized; the unified review is complete.
 
 ## 现在在哪里(2026-08-23)
 - #888 / PR #889 merged as

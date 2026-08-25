@@ -43,11 +43,23 @@ Date: 2026-08-25
   `main@c54863e0611129ffc6ce6be20378c9a6f6a1ca1a`; PORT-06/#1002 PR #1010
   merged at `main@41ba9d09f89ea7ddbd9afa8070f974ce25b60371`.
 - PORT-07/#1003 PR #1011 merged at
-  `main@cdf28c29d1bb69d4a0196b7d4c6defed0aca50c8` (current main). The
-  focused composition/portfolio/read-model and standard-broker regression set
-  passed 169 tests with compileall, diff-check, and gitleaks passing. Full
-  suite and the requested single unified Claude Sonnet review remain pending;
-  these tickets have not authorized any Testnet order.
+  `main@cdf28c29d1bb69d4a0196b7d4c6defed0aca50c8`; unified review-fix PR #1013
+  merged at `main@eacdea52459060d5c0e6f904d8c31ed720dd9469` (current main).
+  Focused composition/portfolio/read-model and standard-broker regression set
+  passed 171 tests with compileall, diff-check, and gitleaks passing. Clean
+  full pytest passed 3473, skipped 1, and failed 9 existing environment/
+  dependency/browser cases unrelated to this change. The complete unified
+  Claude Sonnet review passed on review 2 after fixing two P2 findings; no
+  third review was needed. These tickets have not authorized any Testnet order.
+
+### Unified Claude review receipts
+
+- Review 1: actual model `claude-sonnet-5`, session
+  `a874e6e5-334c-48b6-a4b2-e8d876182d4d`, verified receipt
+  `/Users/wendy/.codex/cc-receipts/2026-08-25/20260825T083927Z_3d7de682-da46-497c-82d7-ac337ccc63d0.json`; two P2 findings were fixed in PR #1013.
+- Review 2: actual model `claude-sonnet-5`, session
+  `85da379e-e437-49bf-9bff-71c1a569c5ff`, verified receipt
+  `/Users/wendy/.codex/cc-receipts/2026-08-25/20260825T085030Z_ab1d3b00-5826-47c1-a4ad-91f4f3b29d79.json`; final verdict `PASS`.
 
 ## Keep ambiguous Testnet cleanup blocked without causal fill/fee evidence (Issues #958, #972, #974, #976, #978)
 
