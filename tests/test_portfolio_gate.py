@@ -113,6 +113,9 @@ def test_accept_unchanged_keeps_requested_size_and_strategy_semantics():
     assert allocation.position_action == plan.position_action
     assert allocation.position_management == plan.position_management
     assert allocation.protection_intent == plan.protection_intent
+    assert allocation.ownership["status"] == "owned"
+    assert allocation.ownership["account_id"] == "account-1"
+    assert allocation.ownership["strategy_revision_id"] == "dca-revision-1"
     assert result.policy_revision == "2026-08-25-a"
     assert result.decision_provenance["outcome"] == "ACCEPT_UNCHANGED"
 
