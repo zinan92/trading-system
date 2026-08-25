@@ -746,6 +746,110 @@ class PortfolioRiskHold(_PortfolioContract):
 
 
 @dataclass(frozen=True)
+class PortfolioRebalanceDecision(_PortfolioContract):
+    """Explicit before/after evidence for replacing existing allocations."""
+
+    decision_id: str
+    portfolio_session_id: str
+    old_selection: PortfolioSelection
+    new_selection: PortfolioSelection
+    policy_id: str
+    policy_revision: str
+    requested_reductions: Sequence[AssetAllocationSlice]
+    requested_additions: Sequence[AssetAllocationSlice]
+    reasons: Sequence[str]
+    decision_provenance: Mapping[str, Any]
+    state: str = "proposed"
+    schema_version: ClassVar[str] = "portfolio-rebalance-decision-v1"
+
+    def __post_init__(self) -> None:
+        decision_id = _required_text(self.decision_id, "rebalance decision id")
+        portfolio_session_id = _required_text(self.portfolio_session_id, "rebalance portfolio session id")
+        policy_id = _required_text(self.policy_id, "rebalance policy id")
+        policy_revision = _required_text(self.policy_revision, "rebalance policy revision")
+        if not isinstance(self.old_selection, PortfolioSelection) or not isinstance(self.new_selection, PortfolioSelection):
+            raise TypeError("rebalance old_selection and new_selection must be PortfolioSelection contracts")
+        if self.old_selection.selection_id == self.new_selection.selection_id:
+            raise ValueError("rebalance old and new selection must differ")
+        for label, selection in (("old", self.old_selection), ("new", self.new_selection)):
+            if selection.portfolio_session_id != portfolio_session_id:
+                raise ValueError(f"rebalance {label} selection portfolio session mismatch")
+            if selection.policy_id != policy_id or selection.policy_revision != policy_revision:
+                raise ValueError(f"rebalance {label} selection policy identity mismatch")
+        reductions = tuple(self.requested_reductions)
+        additions = tuple(self.requested_additions)
+        if not reductions or not additions:
+            raise ValueError("rebalance decision requires both reductions and additions")
+        if not all(isinstance(item, AssetAllocationSlice) for item in (*reductions, *additions)):
+            raise TypeError("rebalance reductions and additions must be AssetAllocationSlice contracts")
+        reduction_ids = [item.allocation_id for item in reductions]
+        addition_ids = [item.allocation_id for item in additions]
+        if len(set(reduction_ids)) != len(reduction_ids) or len(set(addition_ids)) != len(addition_ids):
+            raise ValueError("rebalance allocation ids must be unique within each side")
+        if set(reduction_ids) & set(addition_ids):
+            raise ValueError("rebalance cannot reduce and add the same allocation")
+        old_by_id = {item.allocation_id: item for item in self.old_selection.selected_allocations}
+        new_by_id = {item.allocation_id: item for item in self.new_selection.selected_allocations}
+        for item in reductions:
+            previous = old_by_id.get(item.allocation_id)
+            if previous is None:
+                raise ValueError("rebalance reduction is not present in old selection")
+            if not _allocation_semantics_match(item, previous):
+                raise ValueError("rebalance reduction rewrites Strategy semantics")
+            if item.effective_quantity > previous.effective_quantity:
+                raise ValueError("rebalance reduction cannot increase quantity")
+            if (
+                item.effective_notional is not None
+                and previous.effective_notional is not None
+                and item.effective_notional > previous.effective_notional
+            ):
+                raise ValueError("rebalance reduction cannot increase notional")
+        for item in additions:
+            current = new_by_id.get(item.allocation_id)
+            if current is None:
+                raise ValueError("rebalance addition is not present in new selection")
+            if item.allocation_id in old_by_id:
+                raise ValueError("rebalance addition must be a new allocation")
+            if not _allocation_semantics_match(item, current):
+                raise ValueError("rebalance addition rewrites Strategy semantics")
+            if item.effective_quantity > current.effective_quantity:
+                raise ValueError("rebalance addition exceeds new selection quantity")
+            if (
+                item.effective_notional is not None
+                and current.effective_notional is not None
+                and item.effective_notional > current.effective_notional
+            ):
+                raise ValueError("rebalance addition exceeds new selection notional")
+        reasons = _text_tuple(self.reasons, "rebalance reasons")
+        state = _choice(self.state, frozenset({"proposed", "confirmed", "rejected", "applied"}), "rebalance state")
+        object.__setattr__(self, "decision_id", decision_id)
+        object.__setattr__(self, "portfolio_session_id", portfolio_session_id)
+        object.__setattr__(self, "policy_id", policy_id)
+        object.__setattr__(self, "policy_revision", policy_revision)
+        object.__setattr__(self, "requested_reductions", tuple(sorted(reductions, key=lambda item: item.allocation_id)))
+        object.__setattr__(self, "requested_additions", tuple(sorted(additions, key=lambda item: item.allocation_id)))
+        object.__setattr__(self, "reasons", reasons)
+        object.__setattr__(self, "decision_provenance", _object(self.decision_provenance, "rebalance decision provenance"))
+        object.__setattr__(self, "state", state)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "decision_id": self.decision_id,
+            "portfolio_session_id": self.portfolio_session_id,
+            "old_selection": self.old_selection.to_dict(),
+            "new_selection": self.new_selection.to_dict(),
+            "policy_id": self.policy_id,
+            "policy_revision": self.policy_revision,
+            "requested_reductions": [item.to_dict() for item in self.requested_reductions],
+            "requested_additions": [item.to_dict() for item in self.requested_additions],
+            "reasons": list(self.reasons),
+            "decision_provenance": _thaw(self.decision_provenance),
+            "state": self.state,
+        }
+
+
+@dataclass(frozen=True)
 class PortfolioOwnershipRecord(_PortfolioContract):
     """Durable ownership evidence for one account/asset execution slice."""
 
@@ -1003,6 +1107,21 @@ def _ownership_payload(
     return _freeze(plain)
 
 
+def _allocation_semantics_match(left: AssetAllocationSlice, right: AssetAllocationSlice) -> bool:
+    return all(
+        getattr(left, field_name) == getattr(right, field_name)
+        for field_name in (
+            "candidate_id",
+            "asset",
+            "direction",
+            "source_strategy_plan_digest",
+            "position_action",
+            "position_management",
+            "protection_intent",
+        )
+    )
+
+
 def _mapping_rows(
     value: Any,
     label: str,
@@ -1149,6 +1268,7 @@ __all__ = [
     "PORTFOLIO_RISK_HOLD_SCHEMA",
     "PORTFOLIO_OWNERSHIP_SCHEMA",
     "PORTFOLIO_OWNERSHIP_ASSESSMENT_SCHEMA",
+    "PortfolioRebalanceDecision",
     "PORTFOLIO_SELECTION_SCHEMA",
     "PORTFOLIO_SESSION_SCHEMA",
     "PORTFOLIO_SNAPSHOT_SCHEMA",
