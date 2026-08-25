@@ -225,6 +225,9 @@ class PortfolioPolicy(_PortfolioContract):
     max_margin_pct: Numberish | None = None
     max_loss_pct: Numberish | None = None
     min_cash_buffer_pct: Numberish | None = None
+    max_leverage: Numberish | None = None
+    min_order_quantity: Numberish | None = None
+    min_order_notional: Numberish | None = None
     provenance: Mapping[str, Any] = field(default_factory=dict)
     schema_version: ClassVar[str] = PORTFOLIO_POLICY_SCHEMA
 
@@ -246,12 +249,30 @@ class PortfolioPolicy(_PortfolioContract):
                 ("min_cash_buffer_pct", self.min_cash_buffer_pct),
             )
         }
+        max_leverage = (
+            None
+            if self.max_leverage is None
+            else _positive_decimal(self.max_leverage, "max_leverage")
+        )
+        min_order_quantity = (
+            None
+            if self.min_order_quantity is None
+            else _positive_decimal(self.min_order_quantity, "min_order_quantity")
+        )
+        min_order_notional = (
+            None
+            if self.min_order_notional is None
+            else _positive_decimal(self.min_order_notional, "min_order_notional")
+        )
         object.__setattr__(self, "policy_id", policy_id)
         object.__setattr__(self, "policy_revision", policy_revision)
         object.__setattr__(self, "max_single_asset_aum_pct", single_cap)
         object.__setattr__(self, "max_active_assets", active_assets)
         for name, value in optional_limits.items():
             object.__setattr__(self, name, value)
+        object.__setattr__(self, "max_leverage", max_leverage)
+        object.__setattr__(self, "min_order_quantity", min_order_quantity)
+        object.__setattr__(self, "min_order_notional", min_order_notional)
         object.__setattr__(self, "provenance", _object(self.provenance, "portfolio policy provenance"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -265,6 +286,9 @@ class PortfolioPolicy(_PortfolioContract):
             "max_margin_pct": _optional_decimal_text(self.max_margin_pct),
             "max_loss_pct": _optional_decimal_text(self.max_loss_pct),
             "min_cash_buffer_pct": _optional_decimal_text(self.min_cash_buffer_pct),
+            "max_leverage": _optional_decimal_text(self.max_leverage),
+            "min_order_quantity": _optional_decimal_text(self.min_order_quantity),
+            "min_order_notional": _optional_decimal_text(self.min_order_notional),
             "provenance": _thaw(self.provenance),
         }
 
@@ -284,6 +308,8 @@ class AssetAllocationSlice(_PortfolioContract):
     position_action: str
     position_management: Mapping[str, Any] = field(default_factory=dict)
     protection_intent: Mapping[str, Any] = field(default_factory=dict)
+    requested_notional: Numberish | None = None
+    effective_notional: Numberish | None = None
     status: str = "accepted"
     execution_slice_id: str | None = None
     reasons: Sequence[str] = ()
@@ -303,6 +329,24 @@ class AssetAllocationSlice(_PortfolioContract):
             "source strategy plan digest",
         )
         position_action = _choice(self.position_action, _POSITION_ACTIONS, "allocation position action")
+        requested_notional = (
+            None
+            if self.requested_notional is None
+            else _decimal(self.requested_notional, "requested allocation notional", minimum=Decimal("0"))
+        )
+        effective_notional = (
+            requested_notional
+            if self.effective_notional is None and requested_notional is not None
+            else (
+                None
+                if self.effective_notional is None
+                else _decimal(self.effective_notional, "effective allocation notional", minimum=Decimal("0"))
+            )
+        )
+        if requested_notional is None and effective_notional is not None:
+            raise ValueError("effective allocation notional requires requested notional")
+        if requested_notional is not None and effective_notional is not None and effective_notional > requested_notional:
+            raise ValueError("effective notional cannot exceed requested notional")
         if effective > requested:
             raise ValueError("effective quantity cannot exceed requested quantity")
         if direction == "flat" and (requested != 0 or effective != 0):
@@ -312,9 +356,14 @@ class AssetAllocationSlice(_PortfolioContract):
             None if self.execution_slice_id is None else _required_text(self.execution_slice_id, "execution slice id")
         )
         reasons = _text_tuple(self.reasons, "allocation reasons")
-        if effective < requested and (status != "scaled" or not reasons):
+        downscaled = effective < requested or (
+            requested_notional is not None
+            and effective_notional is not None
+            and effective_notional < requested_notional
+        )
+        if downscaled and (status != "scaled" or not reasons):
             raise ValueError("downscaled allocation requires scaled status and a reason")
-        if effective == requested and status == "scaled":
+        if not downscaled and status == "scaled":
             raise ValueError("scaled allocation must reduce effective quantity")
         object.__setattr__(self, "portfolio_session_id", portfolio_session_id)
         object.__setattr__(self, "allocation_id", allocation_id)
@@ -327,6 +376,8 @@ class AssetAllocationSlice(_PortfolioContract):
         object.__setattr__(self, "position_action", position_action)
         object.__setattr__(self, "position_management", _object(self.position_management, "allocation position management"))
         object.__setattr__(self, "protection_intent", _object(self.protection_intent, "allocation protection intent"))
+        object.__setattr__(self, "requested_notional", requested_notional)
+        object.__setattr__(self, "effective_notional", effective_notional)
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "execution_slice_id", execution_slice_id)
         object.__setattr__(self, "reasons", reasons)
@@ -346,6 +397,8 @@ class AssetAllocationSlice(_PortfolioContract):
             "position_action": self.position_action,
             "position_management": _thaw(self.position_management),
             "protection_intent": _thaw(self.protection_intent),
+            "requested_notional": _optional_decimal_text(self.requested_notional),
+            "effective_notional": _optional_decimal_text(self.effective_notional),
             "status": self.status,
             "execution_slice_id": self.execution_slice_id,
             "reasons": list(self.reasons),
@@ -414,6 +467,11 @@ class PortfolioSnapshot(_PortfolioContract):
     observed_at: str
     equity: Numberish
     available_cash: Numberish
+    total_exposure: Numberish = Decimal("0")
+    margin_used: Numberish = Decimal("0")
+    leverage: Numberish = Decimal("0")
+    loss_pct: Numberish = Decimal("0")
+    cash_buffer_pct: Numberish | None = None
     positions: Sequence[Mapping[str, Any]] = ()
     open_orders: Sequence[Mapping[str, Any]] = ()
     allocation_slices: Sequence[AssetAllocationSlice] = ()
@@ -431,6 +489,15 @@ class PortfolioSnapshot(_PortfolioContract):
         observed_at = _aware_iso(self.observed_at, "portfolio snapshot observed_at")
         equity = _decimal(self.equity, "snapshot equity")
         available_cash = _decimal(self.available_cash, "snapshot available cash")
+        total_exposure = _decimal(self.total_exposure, "snapshot total exposure", minimum=Decimal("0"))
+        margin_used = _decimal(self.margin_used, "snapshot margin used", minimum=Decimal("0"))
+        leverage = _decimal(self.leverage, "snapshot leverage", minimum=Decimal("0"))
+        loss_pct = _decimal(self.loss_pct, "snapshot loss pct")
+        cash_buffer_pct = (
+            None
+            if self.cash_buffer_pct is None
+            else _percentage(self.cash_buffer_pct, "snapshot cash_buffer_pct", strictly_positive=False)
+        )
         positions = _mapping_rows(self.positions, "snapshot positions", canonical=True)
         open_orders = _mapping_rows(self.open_orders, "snapshot open orders", canonical=True)
         allocations = tuple(self.allocation_slices)
@@ -477,6 +544,11 @@ class PortfolioSnapshot(_PortfolioContract):
         object.__setattr__(self, "observed_at", observed_at)
         object.__setattr__(self, "equity", equity)
         object.__setattr__(self, "available_cash", available_cash)
+        object.__setattr__(self, "total_exposure", total_exposure)
+        object.__setattr__(self, "margin_used", margin_used)
+        object.__setattr__(self, "leverage", leverage)
+        object.__setattr__(self, "loss_pct", loss_pct)
+        object.__setattr__(self, "cash_buffer_pct", cash_buffer_pct)
         object.__setattr__(self, "positions", positions)
         object.__setattr__(self, "open_orders", open_orders)
         object.__setattr__(self, "allocation_slices", tuple(sorted(allocations, key=lambda item: item.allocation_id)))
@@ -493,6 +565,11 @@ class PortfolioSnapshot(_PortfolioContract):
             "observed_at": self.observed_at,
             "equity": _decimal_text(self.equity),
             "available_cash": _decimal_text(self.available_cash),
+            "total_exposure": _decimal_text(self.total_exposure),
+            "margin_used": _decimal_text(self.margin_used),
+            "leverage": _decimal_text(self.leverage),
+            "loss_pct": _decimal_text(self.loss_pct),
+            "cash_buffer_pct": _optional_decimal_text(self.cash_buffer_pct),
             "positions": _thaw(self.positions),
             "open_orders": _thaw(self.open_orders),
             "allocation_slices": [item.to_dict() for item in self.allocation_slices],
@@ -679,6 +756,13 @@ def _percentage(value: Any, label: str, *, strictly_positive: bool) -> Decimal:
         raise ValueError(f"{label} must be positive")
     if rendered > Decimal("100"):
         raise ValueError(f"{label} must be between 0 and 100")
+    return rendered
+
+
+def _positive_decimal(value: Any, label: str) -> Decimal:
+    rendered = _decimal(value, label, minimum=Decimal("0"))
+    if rendered <= 0:
+        raise ValueError(f"{label} must be positive")
     return rendered
 
 
