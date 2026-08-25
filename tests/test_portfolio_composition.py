@@ -147,3 +147,42 @@ def test_composition_replaces_gate_result_with_ownership_hold_and_emits_no_effec
     assert result.effective_allocations == ()
     assert result.execution_requests == ()
     assert result.read_model["status"] == "held"
+
+
+def test_composition_requires_real_current_selection_for_rebalance_validation():
+    from tests.test_portfolio_rebalance import _allocation, _decision, _selection
+
+    old = _allocation("ETH", "candidate-old", 1)
+    new = _allocation("SOL", "candidate-new", 1)
+    old_selection = _selection("selection-old", (old,))
+    new_selection = _selection("selection-new", (new,))
+    decision = _decision(
+        old_selection,
+        new_selection,
+        old,
+        new,
+    )
+    with pytest.raises(ValueError, match="current selection"):
+        compose_portfolio_read_only(
+            _candidate_set(),
+            _snapshot(),
+            _policy(),
+            rebalance_decision=decision,
+        )
+    with pytest.raises(ValueError, match="stale"):
+        compose_portfolio_read_only(
+            _candidate_set(),
+            _snapshot(),
+            _policy(),
+            rebalance_decision=decision,
+            current_selection=new_selection,
+        )
+    with pytest.raises(ValueError, match="duplicate"):
+        compose_portfolio_read_only(
+            _candidate_set(),
+            _snapshot(),
+            _policy(),
+            rebalance_decision=decision,
+            current_selection=old_selection,
+            seen_decision_ids=(decision.decision_id,),
+        )

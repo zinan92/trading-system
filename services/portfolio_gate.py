@@ -470,6 +470,10 @@ def _project_selection(snapshot: PortfolioSnapshot, allocation: AssetAllocationS
         return snapshot
     total_exposure = snapshot.total_exposure + notional
     leverage = total_exposure / snapshot.equity if snapshot.equity > 0 else snapshot.leverage
+    projected_allocation = replace(
+        allocation,
+        provenance={**_thaw(allocation.provenance), "virtual_projection": True},
+    )
     return replace(
         snapshot,
         total_exposure=total_exposure,
@@ -477,7 +481,7 @@ def _project_selection(snapshot: PortfolioSnapshot, allocation: AssetAllocationS
         leverage=leverage,
         available_cash=snapshot.available_cash - notional,
         cash_buffer_pct=None,
-        allocation_slices=(*snapshot.allocation_slices, allocation),
+        allocation_slices=(*snapshot.allocation_slices, projected_allocation),
     )
 
 
@@ -488,8 +492,20 @@ def _asset_exposure(snapshot: PortfolioSnapshot, asset: str) -> Decimal:
         if str(row.get("asset", "")).upper() == asset
     ]
     position_values = [value for value in position_values if value is not None]
+    position_total = sum((abs(value) for value in position_values), Decimal("0"))
+    staged_total = sum(
+        (
+            allocation.effective_notional or Decimal("0")
+            for allocation in snapshot.allocation_slices
+            if allocation.asset == asset
+            and allocation.provenance.get("virtual_projection") is True
+        ),
+        Decimal("0"),
+    )
+    if staged_total:
+        return position_total + staged_total
     if position_values:
-        return sum((abs(value) for value in position_values), Decimal("0"))
+        return position_total
     return sum(
         (
             allocation.effective_notional or Decimal("0")

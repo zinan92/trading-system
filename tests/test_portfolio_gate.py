@@ -50,6 +50,7 @@ def _snapshot(
     loss_pct: str = "0",
     cash_buffer_pct: str | None = None,
     allocations: tuple[AssetAllocationSlice, ...] = (),
+    positions=(),
     coherent: bool = True,
     fresh: bool = True,
 ):
@@ -65,6 +66,7 @@ def _snapshot(
         leverage=leverage,
         loss_pct=loss_pct,
         cash_buffer_pct=cash_buffer_pct,
+        positions=positions,
         allocation_slices=allocations,
         coherent=coherent,
         fresh=fresh,
@@ -315,6 +317,38 @@ def test_ranked_candidate_set_scales_same_asset_and_keeps_free_capacity():
     assert result.selected_allocations[1].effective_notional == Decimal("50")
     assert result.selected_allocations[1].status == "scaled"
     assert "single_asset_concentration" in result.selected_allocations[1].reasons
+
+
+def test_ranked_same_asset_candidates_combine_real_position_and_staged_exposure():
+    candidate_set = StrategyCandidateSet(
+        candidate_set_id="candidate-set-real-position",
+        strategy_session_id="strategy-session-1",
+        strategy_revision_id="dca-revision-1",
+        created_at="2026-08-25T04:00:00+00:00",
+        candidates=(
+            _plan(candidate_id="candidate-btc-1", notional="100", rank=1),
+            _plan(candidate_id="candidate-btc-2", notional="100", rank=2),
+        ),
+    )
+    result = PortfolioRiskGate().evaluate(
+        candidate_set,
+        _snapshot(
+            positions=(
+                {
+                    "asset": "BTC",
+                    "notional": "250",
+                    "portfolio_session_id": "portfolio-session-1",
+                    "account_id": "account-1",
+                },
+            )
+        ),
+        _policy(),
+    )
+
+    assert isinstance(result, PortfolioSelection)
+    assert len(result.selected_allocations) == 1
+    assert result.selected_allocations[0].effective_notional == Decimal("50")
+    assert result.rejected_candidates[0]["reason"] == "single_asset_concentration"
 
 
 def test_ranked_candidate_set_replay_is_digest_stable_for_input_order():
