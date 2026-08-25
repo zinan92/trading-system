@@ -16,12 +16,14 @@ from datetime import date, datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any
 
+from schemas.portfolio import PortfolioRiskHold, PortfolioSelection, PortfolioSnapshot
 from services.accounting_projection_core import OPEN_ORDER_STATES
 from services.order_lifecycle import LEGAL_TRANSITIONS, ORDER_STATES, TERMINAL_STATES
 
 
 TRADING_SYSTEM_READ_MODEL_SCHEMA = "trading-system-read-model-v1"
 PARK_CURRENT_STRATEGY_SCHEMA = "park-current-strategy-summary-v1"
+PORTFOLIO_READ_MODEL_SCHEMA = "portfolio-read-model-v1"
 
 _DIRECTION_LABELS = {
     "neutral": "中性",
@@ -73,6 +75,150 @@ class TradingSystemReadModel:
 
     def to_dict(self) -> dict[str, Any]:
         return _thaw(self.payload)
+
+
+def project_portfolio_read_model(
+    selection_value: PortfolioSelection | PortfolioRiskHold | Mapping[str, Any] | None,
+    snapshot_value: PortfolioSnapshot | Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Project one immutable Portfolio Selection/Hold without inferring facts."""
+
+    selection = _contract_dict(selection_value)
+    snapshot = _contract_dict(snapshot_value)
+    if not selection:
+        return None
+    is_hold = bool(selection.get("hold_id"))
+    selection_id = selection.get("selection_id")
+    execution_slices = {
+        str(row.get("execution_slice_id")): row
+        for row in _list(snapshot.get("execution_slices"))
+        if _mapping(row).get("execution_slice_id")
+    }
+    source_allocations = _list(selection.get("selected_allocations"))
+    if not source_allocations and is_hold:
+        source_allocations = _list(snapshot.get("allocation_slices"))
+    allocations = [
+        _project_portfolio_slice(_mapping(row), execution_slices, held=is_hold)
+        for row in source_allocations
+        if _mapping(row)
+    ]
+    rejected = [
+        {
+            **_public_copy(_mapping(row)),
+            "status": "rejected",
+            "effective_quantity": None,
+            "effective_notional": None,
+            "ownership": None,
+            "orders": None,
+            "position": None,
+            "protection": None,
+            "fills": None,
+            "fees": None,
+            "reconciliation": None,
+            "next_action": None,
+        }
+        for row in _list(selection.get("rejected_candidates"))
+        if _mapping(row)
+    ]
+    provenance = _public_copy(
+        _mapping(selection.get("decision_provenance"))
+        or _mapping(selection.get("provenance"))
+    )
+    if is_hold:
+        status = "held"
+    else:
+        status = {
+            "ACCEPT_UNCHANGED": "accepted",
+            "SCALE_DOWN": "scaled",
+            "REJECT": "rejected",
+            "SELECT_CANDIDATES": "selected",
+        }.get(str(provenance.get("outcome") or ""), str(selection.get("status") or "unknown"))
+    policy_revision = selection.get("policy_revision") or _mapping(snapshot.get("provenance")).get("policy_revision")
+    summary = {
+        "aum": _finite_or_none(snapshot.get("equity")),
+        "exposure": _finite_or_none(snapshot.get("total_exposure")),
+        "margin": _finite_or_none(snapshot.get("margin_used")),
+        "asset_count": len(allocations),
+        "policy_revision": policy_revision,
+        "selection_id": selection_id,
+        "snapshot_id": selection.get("snapshot_id") or snapshot.get("snapshot_id"),
+        "policy_id": selection.get("policy_id"),
+        "status": status,
+        "read_only": True,
+    }
+    return {
+        "schema_version": PORTFOLIO_READ_MODEL_SCHEMA,
+        "present": True,
+        "status": status,
+        "summary": summary,
+        "selection": {
+            "selection_id": selection_id,
+            "candidate_set_id": selection.get("candidate_set_id"),
+            "snapshot_id": selection.get("snapshot_id") or snapshot.get("snapshot_id"),
+            "policy_id": selection.get("policy_id"),
+            "policy_revision": policy_revision,
+            "decision_provenance": provenance,
+        },
+        "allocations": allocations,
+        "rejected_candidates": rejected,
+        "risk_hold": _public_copy(selection) if is_hold else None,
+        "snapshot_provenance": _public_copy(_mapping(snapshot.get("provenance"))),
+        "read_only": True,
+    }
+
+
+def _project_portfolio_slice(
+    allocation: Mapping[str, Any],
+    execution_slices: Mapping[str, Mapping[str, Any]],
+    *,
+    held: bool = False,
+) -> dict[str, Any]:
+    execution = _mapping(execution_slices.get(str(allocation.get("execution_slice_id") or "")))
+    has_execution = bool(execution)
+    provenance = _mapping(allocation.get("provenance"))
+    execution_provenance = _mapping(execution.get("provenance"))
+    reconciliation = _public_copy(_mapping(execution.get("reconciliation"))) if has_execution else None
+    status = "held" if held else allocation.get("status")
+    if (
+        not held
+        and str(allocation.get("effective_quantity") or "") in {"0", "0.0", "0.00"}
+        and str(_mapping(reconciliation).get("status") or "").lower() in {"flat", "reconciled", "closed"}
+    ):
+        status = "flat"
+    return {
+        "allocation_id": allocation.get("allocation_id"),
+        "execution_slice_id": allocation.get("execution_slice_id"),
+        "candidate_id": allocation.get("candidate_id"),
+        "candidate_rank": allocation.get("candidate_rank"),
+        "asset": allocation.get("asset"),
+        "direction": allocation.get("direction"),
+        "status": status,
+        "requested_quantity": allocation.get("requested_quantity"),
+        "effective_quantity": allocation.get("effective_quantity"),
+        "requested_notional": allocation.get("requested_notional"),
+        "effective_notional": allocation.get("effective_notional"),
+        "reasons": _public_copy(_list(allocation.get("reasons"))),
+        "source_strategy_plan_digest": allocation.get("source_strategy_plan_digest"),
+        "position_action": allocation.get("position_action"),
+        "position_management": _public_copy(_mapping(allocation.get("position_management"))),
+        "protection_intent": _public_copy(_mapping(allocation.get("protection_intent"))),
+        "ownership": _public_copy(_mapping(allocation.get("ownership"))) or None,
+        "orders": _public_copy(_list(execution.get("orders"))) if has_execution else None,
+        "position": _public_copy(_mapping(execution.get("position"))) if has_execution else None,
+        "protection": _public_copy(_mapping(execution.get("protection"))) if has_execution else None,
+        "fills": _public_copy(_list(execution.get("fills"))) if has_execution else None,
+        "fees": _public_copy(_mapping(execution.get("fees"))) if has_execution else None,
+        "reconciliation": reconciliation,
+        "next_action": provenance.get("next_action") or execution_provenance.get("next_action") or None,
+    }
+
+
+def _contract_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, (PortfolioSelection, PortfolioRiskHold, PortfolioSnapshot)):
+        return _json_copy(value.to_dict())
+    if isinstance(value, Mapping):
+        return _json_copy(value)
+    return {}
 
 
 def project_trading_system_read_model(
@@ -192,6 +338,13 @@ def project_trading_system_read_model(
     )
     if not broker_view:
         completeness_issues.append("broker_read_model_missing")
+    portfolio_source = source.get("portfolio_selection")
+    if portfolio_source is None:
+        portfolio_source = source.get("portfolio_risk_hold")
+    portfolio_view = project_portfolio_read_model(
+        portfolio_source,
+        source.get("portfolio_snapshot"),
+    )
 
     core = {
         "cycle": cycle,
@@ -234,6 +387,8 @@ def project_trading_system_read_model(
             "command_authority": False,
         },
     }
+    if portfolio_view is not None:
+        core["portfolio"] = portfolio_view
     snapshot_id = _snapshot_id(core)
     payload = {
         "contract": {
@@ -1660,6 +1815,34 @@ def _json_copy(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, bool)):
         return value
     return str(value)
+
+
+_SENSITIVE_PUBLIC_KEYS = frozenset(
+    {
+        "api_key",
+        "api_secret",
+        "private_key",
+        "secret",
+        "credential",
+        "authorization",
+        "signature",
+        "wallet_key",
+    }
+)
+
+
+def _public_copy(value: Any) -> Any:
+    """Copy public read facts while excluding credential/signature fields."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _public_copy(item)
+            for key, item in value.items()
+            if str(key).strip().lower() not in _SENSITIVE_PUBLIC_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_public_copy(item) for item in value]
+    return _json_copy(value)
 
 
 def _freeze(value: Any) -> Any:

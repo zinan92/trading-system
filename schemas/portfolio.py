@@ -433,6 +433,7 @@ class ExecutionSlice(_PortfolioContract):
     position: Mapping[str, Any] = field(default_factory=dict)
     protection: Mapping[str, Any] = field(default_factory=dict)
     fills: Sequence[Mapping[str, Any]] = ()
+    fees: Mapping[str, Any] = field(default_factory=dict)
     reconciliation: Mapping[str, Any] = field(default_factory=dict)
     status: str = "pending"
     ownership: Mapping[str, Any] = field(default_factory=dict)
@@ -452,6 +453,7 @@ class ExecutionSlice(_PortfolioContract):
         object.__setattr__(self, "position", _object(self.position, "execution position"))
         object.__setattr__(self, "protection", _object(self.protection, "execution protection"))
         object.__setattr__(self, "fills", _mapping_rows(self.fills, "execution fills", canonical=True))
+        object.__setattr__(self, "fees", _object(self.fees, "execution fees"))
         object.__setattr__(self, "reconciliation", _object(self.reconciliation, "execution reconciliation"))
         object.__setattr__(self, "status", _required_text(self.status, "execution status").lower())
         object.__setattr__(self, "ownership", _ownership_payload(self.ownership, portfolio_session_id, asset, "execution"))
@@ -468,6 +470,7 @@ class ExecutionSlice(_PortfolioContract):
             "position": _thaw(self.position),
             "protection": _thaw(self.protection),
             "fills": _thaw(self.fills),
+            "fees": _thaw(self.fees),
             "reconciliation": _thaw(self.reconciliation),
             "status": self.status,
             "ownership": _thaw(self.ownership),
