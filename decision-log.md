@@ -1,5 +1,54 @@
 # Decision Log
 
+## Build one Portfolio composition seam before multi-asset execution (Issues #996–#1003)
+
+Date: 2026-08-25
+
+### Decision
+
+- Keep the existing canonical Paper DCA Strategy semantics and make the
+  Trading System the composition root: Strategy emits ranked, sized,
+  position-managed candidates; the Portfolio Gate can accept unchanged, scale
+  down, or reject; it can never upsize, change direction, or rewrite
+  protection/position-management intent.
+- Use one account-scoped Portfolio Session with Asset Allocation/Execution
+  Slices. Ownership, freshness, cursor, cross-margin, and unknown exposure are
+  explicit evidence. Manual/unowned exposure blocks by default; explicit
+  adoption is durable; a flat causal reconciled slice may be removed without
+  flattening unrelated assets; unknown shared-account facts create a Portfolio
+  Risk Hold.
+- Ranked selection does not replace existing allocations. Replacing one
+  requires an immutable Portfolio Rebalance Decision with before/after
+  selections, requested reductions/additions, effective sizes, reasons, policy
+  revision, and provenance. The read model projects this evidence only and
+  never creates an execution request.
+- The composition tracer bullet is Paper/read-only. BTC preparation is local
+  and deterministic from canonical Hyperliquid Testnet BTC instrument facts;
+  quantity is recalculated from the Strategy notional and is never copied from
+  PAXG. No Broker/network/credential/scheduler/cloud/Mainnet/Live action is
+  reachable from this seam.
+
+### Verification
+
+- PORT-01/#997 PR #1004 merged at
+  `main@70b12581b7a34a2ce4a1852a8052a519c47c69ac`.
+- PORT-02/#998 PR #1005 merged at
+  `main@b3b78028916848ff2d858c4dfbf7f1b740c7eb3a`; PORT-03/#999 PR #1006
+  merged at `main@19ad27a3be455f64f6daedbfff4a080289d7ae23`.
+- PORT-04/#1000 PR #1007 merged at
+  `main@98abd586d26ed1e6312fb53de6e074f3e09d801c`; ownership binding follow-up
+  PR #1008 merged at
+  `main@5460b4eb5b8913517572b14f04655d22ed9dbcdd`.
+- PORT-05/#1001 PR #1009 merged at
+  `main@c54863e0611129ffc6ce6be20378c9a6f6a1ca1a`; PORT-06/#1002 PR #1010
+  merged at `main@41ba9d09f89ea7ddbd9afa8070f974ce25b60371`.
+- PORT-07/#1003 PR #1011 merged at
+  `main@cdf28c29d1bb69d4a0196b7d4c6defed0aca50c8` (current main). The
+  focused composition/portfolio/read-model and standard-broker regression set
+  passed 169 tests with compileall, diff-check, and gitleaks passing. Full
+  suite and the requested single unified Claude Sonnet review remain pending;
+  these tickets have not authorized any Testnet order.
+
 ## Keep ambiguous Testnet cleanup blocked without causal fill/fee evidence (Issues #958, #972, #974, #976, #978)
 
 Date: 2026-08-24
