@@ -16,7 +16,12 @@ from datetime import date, datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any
 
-from schemas.portfolio import PortfolioRiskHold, PortfolioSelection, PortfolioSnapshot
+from schemas.portfolio import (
+    PortfolioRebalanceDecision,
+    PortfolioRiskHold,
+    PortfolioSelection,
+    PortfolioSnapshot,
+)
 from services.accounting_projection_core import OPEN_ORDER_STATES
 from services.order_lifecycle import LEGAL_TRANSITIONS, ORDER_STATES, TERMINAL_STATES
 
@@ -80,6 +85,7 @@ class TradingSystemReadModel:
 def project_portfolio_read_model(
     selection_value: PortfolioSelection | PortfolioRiskHold | Mapping[str, Any] | None,
     snapshot_value: PortfolioSnapshot | Mapping[str, Any] | None = None,
+    rebalance_value: PortfolioRebalanceDecision | Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Project one immutable Portfolio Selection/Hold without inferring facts."""
 
@@ -146,7 +152,7 @@ def project_portfolio_read_model(
         "status": status,
         "read_only": True,
     }
-    return {
+    result = {
         "schema_version": PORTFOLIO_READ_MODEL_SCHEMA,
         "present": True,
         "status": status,
@@ -165,6 +171,10 @@ def project_portfolio_read_model(
         "snapshot_provenance": _public_copy(_mapping(snapshot.get("provenance"))),
         "read_only": True,
     }
+    rebalance = _contract_dict(rebalance_value)
+    if rebalance:
+        result["rebalance"] = _project_rebalance_read_model(rebalance)
+    return result
 
 
 def _project_portfolio_slice(
@@ -214,11 +224,29 @@ def _project_portfolio_slice(
 
 
 def _contract_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, (PortfolioSelection, PortfolioRiskHold, PortfolioSnapshot)):
+    if isinstance(value, (PortfolioRebalanceDecision, PortfolioSelection, PortfolioRiskHold, PortfolioSnapshot)):
         return _json_copy(value.to_dict())
     if isinstance(value, Mapping):
         return _json_copy(value)
     return {}
+
+
+def _project_rebalance_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
+    old_selection = _mapping(value.get("old_selection"))
+    new_selection = _mapping(value.get("new_selection"))
+    return {
+        "decision_id": value.get("decision_id"),
+        "state": value.get("state"),
+        "old_selection_id": old_selection.get("selection_id"),
+        "new_selection_id": new_selection.get("selection_id"),
+        "policy_id": value.get("policy_id"),
+        "policy_revision": value.get("policy_revision"),
+        "requested_reductions": _public_copy(_list(value.get("requested_reductions"))),
+        "requested_additions": _public_copy(_list(value.get("requested_additions"))),
+        "reasons": _public_copy(_list(value.get("reasons"))),
+        "decision_provenance": _public_copy(_mapping(value.get("decision_provenance"))),
+        "read_only": True,
+    }
 
 
 def project_trading_system_read_model(
@@ -344,6 +372,7 @@ def project_trading_system_read_model(
     portfolio_view = project_portfolio_read_model(
         portfolio_source,
         source.get("portfolio_snapshot"),
+        source.get("portfolio_rebalance_decision"),
     )
 
     core = {
