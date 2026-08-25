@@ -23,6 +23,52 @@ strategy type, range, leverage, TP, or SL creates a new immutable revision; the
 previous revision is never edited.
 _Avoid_: automatic rollover plan
 
+**Portfolio Session**:
+The account-scoped execution identity created by one Strategy Session. It may
+allocate across multiple assets at the same time; the Strategy and Portfolio
+remain the top-level decision and lifecycle owners rather than creating one
+independent strategy per asset.
+_Avoid_: asset-owned strategy session, one top-level lifecycle per asset
+
+**Portfolio Snapshot**:
+The immutable, account-scoped fact set used for one Portfolio evaluation. It
+binds equity, cash, positions, open orders, allocation/execution slices,
+ownership, freshness, and coherence to one Portfolio Session identity.
+_Avoid_: live account query, mutable portfolio cache, asset-only snapshot
+
+**Portfolio Policy**:
+The versioned set of Portfolio-level concentration, capacity, exposure, margin,
+loss, and cash-buffer limits. It is a subtractive gate configuration and does
+not generate strategy signals or increase a Strategy Position Plan.
+_Avoid_: strategy sizing algorithm, Broker capability profile, auto-rebalance rule
+
+**Asset Allocation Slice**:
+The Portfolio Session's current allocation intent for one asset. It records how
+much of the Portfolio is assigned to that asset, but it does not own the
+strategy algorithm or become a separate Strategy Session.
+_Avoid_: asset strategy, isolated strategy identity
+
+**Execution Slice**:
+The Broker-bound orders, position, protection, fills, and reconciliation facts
+used to realize one Asset Allocation Slice. It has local execution state, while
+the Portfolio Session owns allocation, risk, and continuation decisions.
+_Avoid_: independent asset lifecycle, venue-owned strategy authority
+
+**Portfolio Risk Hold**:
+A Portfolio-level pause on new entries when an Asset Allocation Slice has an
+unknown non-zero exposure or when shared-account margin/risk cannot be proven
+independent. A flat, causally reconciled slice may be removed while unrelated
+slices continue only when the Portfolio can still prove the account-wide risk
+and ownership boundaries.
+_Avoid_: automatic flatten of every asset, ignoring an unknown position
+
+**Portfolio Risk Gate**:
+The fixed Portfolio constraint boundary applied to a Strategy Position Plan. It
+may accept the requested plan unchanged, scale exposure down, or reject it. It
+may never increase exposure, change direction, or rewrite the Strategy's
+position-management semantics.
+_Avoid_: second strategy, alpha generator, position-size augmenter
+
 **Path A Testnet Slice**:
 The first bounded external Testnet proof of the Canonical DCA Strategy on one
 Hyperliquid `PAXG-USD-PERP` Strategy Session, using the existing Dashboard
@@ -40,10 +86,37 @@ _Avoid_: new external DCA algorithm, disposable Testnet strategy, rebuilt DCA fo
 
 **Strategy Module**:
 A future Broker-neutral module that consumes canonical market/instrument facts
-and emits strategy intents without importing a Broker implementation or the
+and emits strategy intents—including desired position size, position management,
+and exit/protection intent—without importing a Broker implementation or the
 Trading System composition root; the current repository still co-locates part
 of this logic with the Trading System host.
 _Avoid_: venue strategy, Broker-owned strategy, Dashboard strategy logic
+
+**Strategy Position Plan**:
+The Strategy's complete desired position expression for an asset or candidate
+set: when to enter, how much to hold, how to add or reduce, and how to exit or
+protect the position. It is the source of strategy semantics before Portfolio
+risk constraints are applied.
+_Avoid_: raw signal without sizing, Portfolio allocation decision, Broker order
+
+**Strategy Candidate Set**:
+The Strategy's ranked collection of asset-specific Position Plans considered at
+one Portfolio evaluation. Ranking and desired size come from the Strategy; the
+Portfolio Gate may accept only a feasible subset.
+_Avoid_: Portfolio-approved holdings, unranked asset universe
+
+**Portfolio Selection**:
+The immutable result of applying Portfolio constraints to a Strategy Candidate
+Set: accepted assets, effective sizes, rejected candidates, and the reasons for
+any downward scaling or rejection.
+_Avoid_: rewritten Strategy plan, hidden allocation mutation
+
+**Portfolio Rebalance Decision**:
+An explicit decision to reduce or exit existing Asset Allocation Slices in order
+to admit different candidates. Rebalance is not an automatic consequence of a
+new opportunity ranking and must preserve the old and new allocation evidence.
+_Avoid_: automatic rotation, hidden replacement, Strategy revision
+
 
 **Trading System Composition Root**:
 The host that binds Strategy, Data Feed, Broker, risk, authorization, lifecycle,
