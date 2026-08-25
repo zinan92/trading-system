@@ -8,6 +8,7 @@ from schemas.portfolio import (
     PortfolioRiskHold,
     PortfolioSelection,
     PortfolioSnapshot,
+    StrategyCandidateSet,
     StrategyPositionPlan,
 )
 from services.portfolio_gate import PortfolioRiskGate
@@ -232,3 +233,110 @@ def test_evaluation_is_deterministic_and_has_no_broker_side_effect_surface():
     assert first.digest == second.digest
     assert not hasattr(gate, "submit")
     assert not hasattr(gate, "cancel")
+
+
+def test_ranked_candidate_set_processes_ties_by_stable_candidate_identity():
+    candidate_set = StrategyCandidateSet(
+        candidate_set_id="candidate-set-ties",
+        strategy_session_id="strategy-session-1",
+        strategy_revision_id="dca-revision-1",
+        created_at="2026-08-25T04:00:00+00:00",
+        candidates=(
+            _plan(candidate_id="candidate-b", asset="BETA", rank=1, notional="20"),
+            _plan(candidate_id="candidate-a", asset="ALPHA", rank=1, notional="20"),
+        ),
+    )
+    result = PortfolioRiskGate().evaluate(candidate_set, _snapshot(), _policy(max_active_assets=10))
+
+    assert isinstance(result, PortfolioSelection)
+    assert [item.candidate_id for item in result.selected_allocations] == [
+        "candidate-a",
+        "candidate-b",
+    ]
+    assert result.candidate_set_id == "candidate-set-ties"
+
+
+def test_ranked_candidate_set_caps_one_hundred_candidates_without_replacement():
+    candidates = tuple(
+        _plan(
+            candidate_id=f"candidate-{index:03d}",
+            asset=f"ASSET-{index:03d}",
+            rank=index + 1,
+            notional="20",
+        )
+        for index in range(100)
+    )
+    candidate_set = StrategyCandidateSet(
+        candidate_set_id="candidate-set-100",
+        strategy_session_id="strategy-session-1",
+        strategy_revision_id="dca-revision-1",
+        created_at="2026-08-25T04:00:00+00:00",
+        candidates=candidates,
+    )
+    result = PortfolioRiskGate().evaluate(candidate_set, _snapshot(), _policy(max_active_assets=10))
+
+    assert isinstance(result, PortfolioSelection)
+    assert len(result.selected_allocations) == 10
+    assert len(result.rejected_candidates) == 90
+    assert [item.candidate_id for item in result.selected_allocations] == [
+        f"candidate-{index:03d}" for index in range(10)
+    ]
+    assert result.decision_provenance["selected_count"] == 10
+
+
+def test_ranked_candidate_set_scales_same_asset_and_keeps_free_capacity():
+    existing = _allocation("OLD-ASSET", 1)
+    candidate_set = StrategyCandidateSet(
+        candidate_set_id="candidate-set-scale",
+        strategy_session_id="strategy-session-1",
+        strategy_revision_id="dca-revision-1",
+        created_at="2026-08-25T04:00:00+00:00",
+        candidates=(
+            _plan(candidate_id="candidate-btc-1", notional="250", rank=1),
+            _plan(candidate_id="candidate-btc-2", notional="250", rank=2),
+            _plan(candidate_id="candidate-new", asset="NEW-ASSET", notional="100", rank=3),
+        ),
+    )
+    result = PortfolioRiskGate().evaluate(
+        candidate_set,
+        _snapshot(allocations=(existing,)),
+        _policy(max_active_assets=3),
+    )
+
+    assert isinstance(result, PortfolioSelection)
+    assert [item.candidate_id for item in result.selected_allocations] == [
+        "candidate-btc-1",
+        "candidate-btc-2",
+        "candidate-new",
+    ]
+    assert result.selected_allocations[1].effective_notional == Decimal("50")
+    assert result.selected_allocations[1].status == "scaled"
+    assert "single_asset_concentration" in result.selected_allocations[1].reasons
+
+
+def test_ranked_candidate_set_replay_is_digest_stable_for_input_order():
+    plans = (
+        _plan(candidate_id="candidate-b", asset="BETA", rank=2, notional="20"),
+        _plan(candidate_id="candidate-a", asset="ALPHA", rank=1, notional="20"),
+    )
+    first_set = StrategyCandidateSet(
+        candidate_set_id="candidate-set-replay",
+        strategy_session_id="strategy-session-1",
+        strategy_revision_id="dca-revision-1",
+        created_at="2026-08-25T04:00:00+00:00",
+        candidates=plans,
+    )
+    second_set = StrategyCandidateSet(
+        candidate_set_id="candidate-set-replay",
+        strategy_session_id="strategy-session-1",
+        strategy_revision_id="dca-revision-1",
+        created_at="2026-08-25T04:00:00+00:00",
+        candidates=tuple(reversed(plans)),
+    )
+    gate = PortfolioRiskGate()
+    assert first_set.digest == second_set.digest
+    assert gate.evaluate(first_set, _snapshot(), _policy()).digest == gate.evaluate(
+        second_set,
+        _snapshot(),
+        _policy(),
+    ).digest

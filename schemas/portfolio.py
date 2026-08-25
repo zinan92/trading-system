@@ -184,11 +184,8 @@ class StrategyCandidateSet(_PortfolioContract):
         if not all(isinstance(item, StrategyPositionPlan) for item in candidates):
             raise TypeError("candidate set candidates must be StrategyPositionPlan contracts")
         candidate_ids = [item.candidate_id for item in candidates]
-        ranks = [item.candidate_rank for item in candidates]
         if len(set(candidate_ids)) != len(candidate_ids):
             raise ValueError("candidate set candidate ids must be unique")
-        if len(set(ranks)) != len(ranks):
-            raise ValueError("candidate set ranks must be unique")
         for item in candidates:
             if item.strategy_session_id != strategy_session_id:
                 raise ValueError("candidate set strategy session identity mismatch")
@@ -198,7 +195,11 @@ class StrategyCandidateSet(_PortfolioContract):
         object.__setattr__(self, "strategy_session_id", strategy_session_id)
         object.__setattr__(self, "strategy_revision_id", strategy_revision_id)
         object.__setattr__(self, "created_at", created_at)
-        object.__setattr__(self, "candidates", tuple(sorted(candidates, key=lambda item: item.candidate_rank)))
+        object.__setattr__(
+            self,
+            "candidates",
+            tuple(sorted(candidates, key=lambda item: (item.candidate_rank, item.candidate_id))),
+        )
         object.__setattr__(self, "provenance", _object(self.provenance, "candidate set provenance"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -310,6 +311,7 @@ class AssetAllocationSlice(_PortfolioContract):
     protection_intent: Mapping[str, Any] = field(default_factory=dict)
     requested_notional: Numberish | None = None
     effective_notional: Numberish | None = None
+    candidate_rank: int | None = None
     status: str = "accepted"
     execution_slice_id: str | None = None
     reasons: Sequence[str] = ()
@@ -351,6 +353,11 @@ class AssetAllocationSlice(_PortfolioContract):
             raise ValueError("effective quantity cannot exceed requested quantity")
         if direction == "flat" and (requested != 0 or effective != 0):
             raise ValueError("flat allocation must have zero requested and effective quantity")
+        candidate_rank = (
+            None
+            if self.candidate_rank is None
+            else _positive_int(self.candidate_rank, "allocation candidate rank")
+        )
         status = _choice(self.status, _SELECTION_STATUSES, "allocation status")
         execution_slice_id = (
             None if self.execution_slice_id is None else _required_text(self.execution_slice_id, "execution slice id")
@@ -378,6 +385,7 @@ class AssetAllocationSlice(_PortfolioContract):
         object.__setattr__(self, "protection_intent", _object(self.protection_intent, "allocation protection intent"))
         object.__setattr__(self, "requested_notional", requested_notional)
         object.__setattr__(self, "effective_notional", effective_notional)
+        object.__setattr__(self, "candidate_rank", candidate_rank)
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "execution_slice_id", execution_slice_id)
         object.__setattr__(self, "reasons", reasons)
@@ -399,6 +407,7 @@ class AssetAllocationSlice(_PortfolioContract):
             "protection_intent": _thaw(self.protection_intent),
             "requested_notional": _optional_decimal_text(self.requested_notional),
             "effective_notional": _optional_decimal_text(self.effective_notional),
+            "candidate_rank": self.candidate_rank,
             "status": self.status,
             "execution_slice_id": self.execution_slice_id,
             "reasons": list(self.reasons),
@@ -629,7 +638,20 @@ class PortfolioSelection(_PortfolioContract):
         object.__setattr__(self, "policy_revision", policy_revision)
         object.__setattr__(self, "snapshot_id", snapshot_id)
         object.__setattr__(self, "created_at", created_at)
-        object.__setattr__(self, "selected_allocations", tuple(sorted(allocations, key=lambda item: item.allocation_id)))
+        object.__setattr__(
+            self,
+            "selected_allocations",
+            tuple(
+                sorted(
+                    allocations,
+                    key=lambda item: (
+                        item.candidate_rank if item.candidate_rank is not None else 10**12,
+                        item.candidate_id,
+                        item.allocation_id,
+                    ),
+                )
+            ),
+        )
         object.__setattr__(self, "rejected_candidates", rejected)
         object.__setattr__(self, "decision_provenance", _object(self.decision_provenance, "selection decision provenance"))
 
