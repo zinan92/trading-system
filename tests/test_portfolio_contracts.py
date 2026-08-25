@@ -327,6 +327,9 @@ def test_snapshot_requires_complete_identity_and_rejects_scope_or_timestamp_conf
             opened_at="2026-08-25T04:00:00+00:00",
             account_scope={"account_id": "other-account"},
         )
+    utc_session = _session()
+    offset_session = replace(utc_session, opened_at="2026-08-25T12:00:00+08:00")
+    assert utc_session.digest == offset_session.digest
 
 
 def test_snapshot_canonicalizes_unordered_facts_and_rejects_cross_asset_or_duplicate_links():
@@ -396,6 +399,22 @@ def test_snapshot_canonicalizes_unordered_facts_and_rejects_cross_asset_or_dupli
             positions=(),
             allocation_slices=(allocation, allocation),
             execution_slices=(),
+            **{key: value for key, value in snapshot_kwargs.items() if key not in {"allocation_slices", "execution_slices"}},
+        )
+    with pytest.raises(ValueError, match="link identity"):
+        PortfolioSnapshot(
+            snapshot_id="snapshot-link-conflict",
+            positions=(),
+            allocation_slices=(replace(allocation, allocation_id="allocation-eth"),),
+            execution_slices=(execution,),
+            **{key: value for key, value in snapshot_kwargs.items() if key not in {"allocation_slices", "execution_slices"}},
+        )
+    with pytest.raises(ValueError, match="execution references"):
+        PortfolioSnapshot(
+            snapshot_id="snapshot-duplicate-execution-ref",
+            positions=(),
+            allocation_slices=(allocation, replace(allocation, allocation_id="allocation-btc-2")),
+            execution_slices=(execution,),
             **{key: value for key, value in snapshot_kwargs.items() if key not in {"allocation_slices", "execution_slices"}},
         )
 
@@ -475,6 +494,47 @@ def test_selection_preserves_requested_and_effective_size_without_upsizing():
             created_at="2026-08-25T04:02:00+00:00",
             selected_allocations=selection.selected_allocations,
             rejected_candidates=({"candidate_id": "candidate-btc", "reason": "also-rejected"},),
+        )
+    with pytest.raises(ValueError, match="candidate ids"):
+        PortfolioSelection(
+            selection_id="selection-duplicate-candidate",
+            portfolio_session_id=session.portfolio_session_id,
+            candidate_set_id="candidate-set-1",
+            policy_id="portfolio-policy-1",
+            policy_revision="2026-08-25-a",
+            snapshot_id="snapshot-1",
+            created_at="2026-08-25T04:02:00+00:00",
+            selected_allocations=(
+                selection.selected_allocations[0],
+                replace(selection.selected_allocations[0], allocation_id="allocation-btc-2"),
+            ),
+        )
+    with pytest.raises(ValueError, match="downscaled allocation"):
+        AssetAllocationSlice(
+            portfolio_session_id=session.portfolio_session_id,
+            allocation_id="allocation-unexplained-scale",
+            candidate_id="candidate-btc",
+            asset="BTC",
+            direction="long",
+            requested_quantity="0.006",
+            effective_quantity="0.003",
+            source_strategy_plan_digest=_plan().digest,
+            position_action="add",
+            status="accepted",
+        )
+    with pytest.raises(ValueError, match="scaled allocation"):
+        AssetAllocationSlice(
+            portfolio_session_id=session.portfolio_session_id,
+            allocation_id="allocation-no-scale",
+            candidate_id="candidate-btc",
+            asset="BTC",
+            direction="long",
+            requested_quantity="0.003",
+            effective_quantity="0.003",
+            source_strategy_plan_digest=_plan().digest,
+            position_action="add",
+            status="scaled",
+            reasons=("capacity",),
         )
 
 

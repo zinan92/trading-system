@@ -13,7 +13,7 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Any, ClassVar
@@ -312,6 +312,10 @@ class AssetAllocationSlice(_PortfolioContract):
             None if self.execution_slice_id is None else _required_text(self.execution_slice_id, "execution slice id")
         )
         reasons = _text_tuple(self.reasons, "allocation reasons")
+        if effective < requested and (status != "scaled" or not reasons):
+            raise ValueError("downscaled allocation requires scaled status and a reason")
+        if effective == requested and status == "scaled":
+            raise ValueError("scaled allocation must reduce effective quantity")
         object.__setattr__(self, "portfolio_session_id", portfolio_session_id)
         object.__setattr__(self, "allocation_id", allocation_id)
         object.__setattr__(self, "candidate_id", candidate_id)
@@ -441,6 +445,9 @@ class PortfolioSnapshot(_PortfolioContract):
             raise ValueError("snapshot allocation ids must be unique")
         if len(set(execution_id_values)) != len(execution_id_values):
             raise ValueError("snapshot execution slice ids must be unique")
+        allocation_execution_ids = [item.execution_slice_id for item in allocations if item.execution_slice_id is not None]
+        if len(set(allocation_execution_ids)) != len(allocation_execution_ids):
+            raise ValueError("snapshot allocation execution references must be unique")
         allocation_ids = set(allocation_id_values)
         execution_by_id = {item.execution_slice_id: item for item in executions}
         for item in allocations:
@@ -452,6 +459,8 @@ class PortfolioSnapshot(_PortfolioContract):
                     raise ValueError("snapshot allocation references an unknown execution slice")
                 if execution.asset != item.asset:
                     raise ValueError("snapshot allocation and execution asset identity mismatch")
+                if execution.allocation_id != item.allocation_id:
+                    raise ValueError("snapshot allocation and execution link identity mismatch")
         for item in executions:
             if item.portfolio_session_id != portfolio_session_id:
                 raise ValueError("snapshot execution portfolio session identity mismatch")
@@ -523,8 +532,11 @@ class PortfolioSelection(_PortfolioContract):
         if not all(isinstance(item, AssetAllocationSlice) for item in allocations):
             raise TypeError("selection selected_allocations must be AssetAllocationSlice contracts")
         allocation_ids = [item.allocation_id for item in allocations]
+        candidate_ids = [item.candidate_id for item in allocations]
         if len(set(allocation_ids)) != len(allocation_ids):
             raise ValueError("selection allocation ids must be unique")
+        if len(set(candidate_ids)) != len(candidate_ids):
+            raise ValueError("selection candidate ids must be unique")
         for item in allocations:
             if item.portfolio_session_id != portfolio_session_id:
                 raise ValueError("selection allocation portfolio session identity mismatch")
@@ -689,7 +701,7 @@ def _aware_iso(value: Any, label: str) -> str:
         raise ValueError(f"{label} is invalid") from exc
     if parsed.tzinfo is None:
         raise ValueError(f"{label} must include timezone")
-    return parsed.isoformat()
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _object(value: Any, label: str) -> Mapping[str, Any]:
@@ -840,6 +852,14 @@ def _digest(value: Any) -> str:
 
 __all__ = [
     "ASSET_ALLOCATION_SLICE_SCHEMA",
+    "EXECUTION_SLICE_SCHEMA",
+    "PORTFOLIO_POLICY_SCHEMA",
+    "PORTFOLIO_RISK_HOLD_SCHEMA",
+    "PORTFOLIO_SELECTION_SCHEMA",
+    "PORTFOLIO_SESSION_SCHEMA",
+    "PORTFOLIO_SNAPSHOT_SCHEMA",
+    "STRATEGY_CANDIDATE_SET_SCHEMA",
+    "STRATEGY_POSITION_PLAN_SCHEMA",
     "AssetAllocationSlice",
     "ExecutionSlice",
     "PortfolioPolicy",
