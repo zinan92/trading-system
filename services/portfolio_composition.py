@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -59,6 +59,8 @@ def compose_portfolio_read_only(
     policy: PortfolioPolicy,
     *,
     rebalance_decision: PortfolioRebalanceDecision | None = None,
+    current_selection: PortfolioSelection | None = None,
+    seen_decision_ids: Iterable[str] = (),
 ) -> PortfolioCompositionResult:
     """Compose Gate, ownership, optional rebalance evidence, and read model."""
 
@@ -66,10 +68,13 @@ def compose_portfolio_read_only(
     _require_type(snapshot, PortfolioSnapshot, "snapshot")
     _require_type(policy, PortfolioPolicy, "policy")
     if rebalance_decision is not None:
+        if current_selection is None:
+            raise ValueError("current selection is required to validate a rebalance decision")
         PortfolioRebalanceRegistry().validate(
             rebalance_decision,
-            current_selection=rebalance_decision.old_selection,
+            current_selection=current_selection,
             current_policy=policy,
+            seen_decision_ids=seen_decision_ids,
         )
     ownership = PortfolioOwnershipRegistry().evaluate(snapshot, policy)
     gate_result = PortfolioRiskGate().evaluate(candidate_set, snapshot, policy)
