@@ -28,6 +28,8 @@ ASSET_ALLOCATION_SLICE_SCHEMA = "asset-allocation-slice-v1"
 EXECUTION_SLICE_SCHEMA = "execution-slice-v1"
 PORTFOLIO_SELECTION_SCHEMA = "portfolio-selection-v1"
 PORTFOLIO_RISK_HOLD_SCHEMA = "portfolio-risk-hold-v1"
+PORTFOLIO_OWNERSHIP_SCHEMA = "portfolio-ownership-v1"
+PORTFOLIO_OWNERSHIP_ASSESSMENT_SCHEMA = "portfolio-ownership-assessment-v1"
 
 _DIRECTIONS = frozenset({"long", "short", "flat"})
 _POSITION_ACTIONS = frozenset({"open", "add", "reduce", "exit", "hold"})
@@ -316,6 +318,7 @@ class AssetAllocationSlice(_PortfolioContract):
     execution_slice_id: str | None = None
     reasons: Sequence[str] = ()
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    ownership: Mapping[str, Any] = field(default_factory=dict)
     schema_version: ClassVar[str] = ASSET_ALLOCATION_SLICE_SCHEMA
 
     def __post_init__(self) -> None:
@@ -390,6 +393,7 @@ class AssetAllocationSlice(_PortfolioContract):
         object.__setattr__(self, "execution_slice_id", execution_slice_id)
         object.__setattr__(self, "reasons", reasons)
         object.__setattr__(self, "provenance", _object(self.provenance, "allocation provenance"))
+        object.__setattr__(self, "ownership", _ownership_payload(self.ownership, portfolio_session_id, asset, "allocation"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -412,6 +416,7 @@ class AssetAllocationSlice(_PortfolioContract):
             "execution_slice_id": self.execution_slice_id,
             "reasons": list(self.reasons),
             "provenance": _thaw(self.provenance),
+            "ownership": _thaw(self.ownership),
         }
 
 
@@ -430,6 +435,7 @@ class ExecutionSlice(_PortfolioContract):
     fills: Sequence[Mapping[str, Any]] = ()
     reconciliation: Mapping[str, Any] = field(default_factory=dict)
     status: str = "pending"
+    ownership: Mapping[str, Any] = field(default_factory=dict)
     schema_version: ClassVar[str] = EXECUTION_SLICE_SCHEMA
 
     def __post_init__(self) -> None:
@@ -448,6 +454,7 @@ class ExecutionSlice(_PortfolioContract):
         object.__setattr__(self, "fills", _mapping_rows(self.fills, "execution fills", canonical=True))
         object.__setattr__(self, "reconciliation", _object(self.reconciliation, "execution reconciliation"))
         object.__setattr__(self, "status", _required_text(self.status, "execution status").lower())
+        object.__setattr__(self, "ownership", _ownership_payload(self.ownership, portfolio_session_id, asset, "execution"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -463,6 +470,7 @@ class ExecutionSlice(_PortfolioContract):
             "fills": _thaw(self.fills),
             "reconciliation": _thaw(self.reconciliation),
             "status": self.status,
+            "ownership": _thaw(self.ownership),
         }
 
 
@@ -734,6 +742,146 @@ class PortfolioRiskHold(_PortfolioContract):
         }
 
 
+@dataclass(frozen=True)
+class PortfolioOwnershipRecord(_PortfolioContract):
+    """Durable ownership evidence for one account/asset execution slice."""
+
+    ownership_id: str
+    portfolio_session_id: str
+    account_id: str
+    asset: str
+    owner_type: str
+    owner_id: str
+    status: str
+    strategy_session_id: str | None = None
+    strategy_revision_id: str | None = None
+    adoption_id: str | None = None
+    adopted_at: str | None = None
+    provenance: Mapping[str, Any] = field(default_factory=dict)
+    schema_version: ClassVar[str] = PORTFOLIO_OWNERSHIP_SCHEMA
+
+    def __post_init__(self) -> None:
+        ownership_id = _required_text(self.ownership_id, "ownership id")
+        portfolio_session_id = _required_text(self.portfolio_session_id, "ownership portfolio session id")
+        account_id = _required_text(self.account_id, "ownership account id")
+        asset = _asset(self.asset, "ownership asset")
+        owner_type = _required_text(self.owner_type, "ownership owner type")
+        owner_id = _required_text(self.owner_id, "ownership owner id")
+        status = _choice(self.status, frozenset({"owned", "unowned", "adopted", "unknown"}), "ownership status")
+        strategy_session_id = None if self.strategy_session_id is None else _required_text(self.strategy_session_id, "ownership strategy session id")
+        strategy_revision_id = None if self.strategy_revision_id is None else _required_text(self.strategy_revision_id, "ownership strategy revision id")
+        adoption_id = None if self.adoption_id is None else _required_text(self.adoption_id, "ownership adoption id")
+        adopted_at = None if self.adopted_at is None else _aware_iso(self.adopted_at, "ownership adopted_at")
+        if status in {"owned", "adopted"} and (strategy_session_id is None or strategy_revision_id is None):
+            raise ValueError(f"{status} ownership requires strategy session and revision")
+        if status == "adopted" and (adoption_id is None or adopted_at is None):
+            raise ValueError("adopted ownership requires adoption id and timestamp")
+        object.__setattr__(self, "ownership_id", ownership_id)
+        object.__setattr__(self, "portfolio_session_id", portfolio_session_id)
+        object.__setattr__(self, "account_id", account_id)
+        object.__setattr__(self, "asset", asset)
+        object.__setattr__(self, "owner_type", owner_type)
+        object.__setattr__(self, "owner_id", owner_id)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "strategy_session_id", strategy_session_id)
+        object.__setattr__(self, "strategy_revision_id", strategy_revision_id)
+        object.__setattr__(self, "adoption_id", adoption_id)
+        object.__setattr__(self, "adopted_at", adopted_at)
+        object.__setattr__(self, "provenance", _object(self.provenance, "ownership provenance"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "ownership_id": self.ownership_id,
+            "portfolio_session_id": self.portfolio_session_id,
+            "account_id": self.account_id,
+            "asset": self.asset,
+            "owner_type": self.owner_type,
+            "owner_id": self.owner_id,
+            "status": self.status,
+            "strategy_session_id": self.strategy_session_id,
+            "strategy_revision_id": self.strategy_revision_id,
+            "adoption_id": self.adoption_id,
+            "adopted_at": self.adopted_at,
+            "provenance": _thaw(self.provenance),
+        }
+
+
+@dataclass(frozen=True)
+class PortfolioOwnershipAssessment(_PortfolioContract):
+    """Read-only classification of ownership and slice failure scope."""
+
+    assessment_id: str
+    portfolio_session_id: str
+    snapshot_id: str
+    status: str
+    owned_assets: Sequence[str] = ()
+    blocked_assets: Sequence[str] = ()
+    frozen_assets: Sequence[str] = ()
+    removable_assets: Sequence[str] = ()
+    adoption_required_assets: Sequence[str] = ()
+    evidence: Sequence[PortfolioOwnershipRecord] = ()
+    portfolio_risk_hold: PortfolioRiskHold | None = None
+    blocks_new_allocations: bool = True
+    provenance: Mapping[str, Any] = field(default_factory=dict)
+    schema_version: ClassVar[str] = PORTFOLIO_OWNERSHIP_ASSESSMENT_SCHEMA
+
+    def __post_init__(self) -> None:
+        assessment_id = _required_text(self.assessment_id, "ownership assessment id")
+        portfolio_session_id = _required_text(self.portfolio_session_id, "assessment portfolio session id")
+        snapshot_id = _required_text(self.snapshot_id, "assessment snapshot id")
+        status = _choice(
+            self.status,
+            frozenset({"owned", "unowned_block", "unknown_hold", "flat_removable", "mixed"}),
+            "ownership assessment status",
+        )
+        asset_sets = {
+            name: tuple(sorted({_asset(item, f"assessment {name} asset") for item in value}))
+            for name, value in (
+                ("owned_assets", self.owned_assets),
+                ("blocked_assets", self.blocked_assets),
+                ("frozen_assets", self.frozen_assets),
+                ("removable_assets", self.removable_assets),
+                ("adoption_required_assets", self.adoption_required_assets),
+            )
+        }
+        evidence = tuple(self.evidence)
+        if not all(isinstance(item, PortfolioOwnershipRecord) for item in evidence):
+            raise TypeError("ownership assessment evidence must be PortfolioOwnershipRecord contracts")
+        if status == "unknown_hold" and self.portfolio_risk_hold is None:
+            raise ValueError("unknown ownership assessment requires PortfolioRiskHold")
+        if self.portfolio_risk_hold is not None and self.portfolio_risk_hold.portfolio_session_id != portfolio_session_id:
+            raise ValueError("ownership assessment risk hold portfolio session mismatch")
+        if not isinstance(self.blocks_new_allocations, bool):
+            raise TypeError("ownership assessment blocks_new_allocations must be bool")
+        object.__setattr__(self, "assessment_id", assessment_id)
+        object.__setattr__(self, "portfolio_session_id", portfolio_session_id)
+        object.__setattr__(self, "snapshot_id", snapshot_id)
+        object.__setattr__(self, "status", status)
+        for name, value in asset_sets.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "evidence", tuple(sorted(evidence, key=lambda item: item.ownership_id)))
+        object.__setattr__(self, "provenance", _object(self.provenance, "ownership assessment provenance"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "assessment_id": self.assessment_id,
+            "portfolio_session_id": self.portfolio_session_id,
+            "snapshot_id": self.snapshot_id,
+            "status": self.status,
+            "owned_assets": list(self.owned_assets),
+            "blocked_assets": list(self.blocked_assets),
+            "frozen_assets": list(self.frozen_assets),
+            "removable_assets": list(self.removable_assets),
+            "adoption_required_assets": list(self.adoption_required_assets),
+            "evidence": [item.to_dict() for item in self.evidence],
+            "portfolio_risk_hold": None if self.portfolio_risk_hold is None else self.portfolio_risk_hold.to_dict(),
+            "blocks_new_allocations": self.blocks_new_allocations,
+            "provenance": _thaw(self.provenance),
+        }
+
+
 def _required_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} is required")
@@ -814,6 +962,41 @@ def _object(value: Any, label: str) -> Mapping[str, Any]:
     plain = _plain_json(value)
     if not isinstance(plain, dict):
         raise TypeError(f"{label} must be an object")
+    return _freeze(plain)
+
+
+def _ownership_payload(
+    value: Any,
+    portfolio_session_id: str,
+    asset: str,
+    label: str,
+) -> Mapping[str, Any]:
+    plain = _plain_json(value)
+    if not isinstance(plain, dict):
+        raise TypeError(f"{label} ownership must be an object")
+    if not plain:
+        return _freeze(plain)
+    for key in ("status", "account_id", "portfolio_session_id", "asset", "owner_type", "owner_id"):
+        if not isinstance(plain.get(key), str) or not plain[key].strip():
+            raise ValueError(f"{label} ownership {key} is required")
+    status = plain["status"].strip().lower()
+    if status not in {"owned", "unowned", "adopted", "unknown"}:
+        raise ValueError(f"unsupported {label} ownership status: {status}")
+    if plain["portfolio_session_id"] != portfolio_session_id:
+        raise ValueError(f"{label} ownership portfolio session identity mismatch")
+    if plain["asset"].strip().upper() != asset:
+        raise ValueError(f"{label} ownership asset identity mismatch")
+    if status in {"owned", "adopted"}:
+        for key in ("strategy_session_id", "strategy_revision_id"):
+            if not isinstance(plain.get(key), str) or not plain[key].strip():
+                raise ValueError(f"{label} ownership {key} is required for {status} state")
+    if status == "adopted":
+        for key in ("adoption_id", "adopted_at"):
+            if not isinstance(plain.get(key), str) or not plain[key].strip():
+                raise ValueError(f"{label} ownership {key} is required for adopted state")
+        plain["adopted_at"] = _aware_iso(plain["adopted_at"], f"{label} ownership adopted_at")
+    plain["status"] = status
+    plain["asset"] = asset
     return _freeze(plain)
 
 
@@ -961,6 +1144,8 @@ __all__ = [
     "EXECUTION_SLICE_SCHEMA",
     "PORTFOLIO_POLICY_SCHEMA",
     "PORTFOLIO_RISK_HOLD_SCHEMA",
+    "PORTFOLIO_OWNERSHIP_SCHEMA",
+    "PORTFOLIO_OWNERSHIP_ASSESSMENT_SCHEMA",
     "PORTFOLIO_SELECTION_SCHEMA",
     "PORTFOLIO_SESSION_SCHEMA",
     "PORTFOLIO_SNAPSHOT_SCHEMA",
@@ -970,6 +1155,8 @@ __all__ = [
     "ExecutionSlice",
     "PortfolioPolicy",
     "PortfolioRiskHold",
+    "PortfolioOwnershipRecord",
+    "PortfolioOwnershipAssessment",
     "PortfolioSelection",
     "PortfolioSession",
     "PortfolioSnapshot",
