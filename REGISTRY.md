@@ -12,6 +12,43 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-25, multi-asset Portfolio seam)
+- PORT-01/#997 merged as PR #1004 at `main@70b12581b7a34a2ce4a1852a8052a519c47c69ac`:
+  immutable Portfolio Session, Strategy Position Plan/Candidate Set, Policy,
+  Snapshot, Allocation/Execution Slice, Selection, and Risk Hold contracts;
+  glossary/ADR `docs/adr/0005-multi-asset-portfolio-session-and-risk-gate.md`
+  are aligned.
+- PORT-02/#998 merged as PR #1005 at `main@b3b78028916848ff2d858c4dfbf7f1b740c7eb3a`;
+  PORT-03/#999 merged as PR #1006 at
+  `main@19ad27a3be455f64f6daedbfff4a080289d7ae23`: the pure subtractive gate
+  now handles one candidate and deterministic ranked multi-candidate selection.
+- PORT-04/#1000 merged as PR #1007 at
+  `main@98abd586d26ed1e6312fb53de6e074f3e09d801c`; its ownership evidence
+  binding follow-up merged as PR #1008 at
+  `main@5460b4eb5b8913517572b14f04655d22ed9dbcdd`. Manual/unowned exposure
+  blocks by default; adoption is explicit; unknown/cross-margin facts hold;
+  flat causal slices are removable without flattening unrelated assets.
+- PORT-05/#1001 merged as PR #1009 at
+  `main@c54863e0611129ffc6ce6be20378c9a6f6a1ca1a`; PORT-06/#1002 merged as
+  PR #1010 at `main@41ba9d09f89ea7ddbd9afa8070f974ce25b60371`: the existing
+  read model projects one Portfolio summary/slices and explicit rebalance
+  evidence while preserving the single-asset path.
+- PORT-07/#1003 merged as PR #1011 at
+  `main@cdf28c29d1bb69d4a0196b7d4c6defed0aca50c8` (current `origin/main`):
+  the read-only composition root evaluates CandidateSet → Portfolio Gate →
+  ownership hold → read model, and prepares a BTC Testnet candidate from
+  canonical local instrument facts by recalculating quantity from strategy
+  notional. It does not submit an order or resolve credentials.
+- Focused composition/portfolio/read-model plus standard-broker regression
+  validation currently passes 169 tests (one existing collection warning);
+  final full-suite validation and the requested single unified Claude Sonnet
+  review are still pending. No network, credential, Testnet order, scheduler,
+  cloud, Mainnet, Live, or Dashboard mutation was performed.
+
+_下一步_: run the final full local validation from this exact `main`, then
+perform one unified Claude Sonnet review of the complete #997–#1003 change set;
+do not start BTC Testnet execution from this read-only tracer bullet.
+
 ## 现在在哪里(2026-08-23)
 - #888 / PR #889 merged as
   `main@30034298c056edf38e880b46f896f70c5f3823a8`, consuming the public
