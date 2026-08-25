@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -19,6 +20,7 @@ from schemas.portfolio import (
     PortfolioRiskHold,
     PortfolioSelection,
     PortfolioSnapshot,
+    StrategyCandidateSet,
     StrategyPositionPlan,
 )
 
@@ -44,24 +46,127 @@ _REASON_MESSAGES = {
 
 
 class PortfolioRiskGate:
-    """Evaluate one candidate without increasing or rewriting Strategy intent."""
+    """Evaluate one candidate or ranked candidate set subtractively."""
 
     schema_version = PORTFOLIO_GATE_SCHEMA
 
     def evaluate(
         self,
-        candidate: StrategyPositionPlan,
+        candidate: StrategyPositionPlan | StrategyCandidateSet,
         snapshot: PortfolioSnapshot,
         policy: PortfolioPolicy,
     ) -> PortfolioSelection | PortfolioRiskHold:
+        if isinstance(candidate, StrategyCandidateSet):
+            return self.evaluate_candidates(candidate, snapshot, policy)
         _require_contract(candidate, StrategyPositionPlan, "candidate")
         _require_contract(snapshot, PortfolioSnapshot, "snapshot")
         _require_contract(policy, PortfolioPolicy, "policy")
+        return self._evaluate_one(
+            candidate,
+            snapshot,
+            policy,
+            candidate_set_id=_candidate_set_id(candidate),
+        )
+
+    def evaluate_candidates(
+        self,
+        candidate_set: StrategyCandidateSet,
+        snapshot: PortfolioSnapshot,
+        policy: PortfolioPolicy,
+    ) -> PortfolioSelection | PortfolioRiskHold:
+        """Process a ranked set against a virtual snapshot, never replacing slices."""
+
+        _require_contract(candidate_set, StrategyCandidateSet, "candidate set")
+        _require_contract(snapshot, PortfolioSnapshot, "snapshot")
+        _require_contract(policy, PortfolioPolicy, "policy")
+        if not candidate_set.candidates:
+            provenance = {
+                "gate_schema": self.schema_version,
+                "candidate_set_id": candidate_set.candidate_set_id,
+                "snapshot_id": snapshot.snapshot_id,
+                "policy_id": policy.policy_id,
+                "policy_revision": policy.policy_revision,
+                "outcome": "EMPTY_CANDIDATE_SET",
+                "reasons": [],
+            }
+            return PortfolioSelection(
+                selection_id=_stable_id("selection", provenance),
+                portfolio_session_id=snapshot.portfolio_session_id,
+                candidate_set_id=candidate_set.candidate_set_id,
+                policy_id=policy.policy_id,
+                policy_revision=policy.policy_revision,
+                snapshot_id=snapshot.snapshot_id,
+                created_at=snapshot.observed_at,
+                selected_allocations=(),
+                rejected_candidates=(),
+                decision_provenance=provenance,
+            )
+
+        working_snapshot = snapshot
+        selected: list[AssetAllocationSlice] = []
+        rejected: list[Mapping[str, Any]] = []
+        for plan in candidate_set.candidates:
+            result = self._evaluate_one(
+                plan,
+                working_snapshot,
+                policy,
+                candidate_set_id=candidate_set.candidate_set_id,
+            )
+            if isinstance(result, PortfolioRiskHold):
+                return result
+            if result.selected_allocations:
+                allocation = result.selected_allocations[0]
+                selected.append(allocation)
+                if _increases_exposure(plan):
+                    working_snapshot = _project_selection(working_snapshot, allocation)
+            else:
+                rejected.extend(result.rejected_candidates)
+
+        provenance = {
+            "gate_schema": self.schema_version,
+            "candidate_set_id": candidate_set.candidate_set_id,
+            "candidate_set_digest": candidate_set.digest,
+            "snapshot_id": snapshot.snapshot_id,
+            "policy_id": policy.policy_id,
+            "policy_revision": policy.policy_revision,
+            "outcome": "SELECT_CANDIDATES",
+            "processed_count": len(candidate_set.candidates),
+            "selected_count": len(selected),
+            "rejected_count": len(rejected),
+        }
+        return PortfolioSelection(
+            selection_id=_stable_id(
+                "selection",
+                {
+                    "provenance": provenance,
+                    "selected": [item.to_dict() for item in selected],
+                    "rejected": [_thaw(item) for item in rejected],
+                },
+            ),
+            portfolio_session_id=snapshot.portfolio_session_id,
+            candidate_set_id=candidate_set.candidate_set_id,
+            policy_id=policy.policy_id,
+            policy_revision=policy.policy_revision,
+            snapshot_id=snapshot.snapshot_id,
+            created_at=snapshot.observed_at,
+            selected_allocations=tuple(selected),
+            rejected_candidates=tuple(rejected),
+            decision_provenance=provenance,
+        )
+
+    def _evaluate_one(
+        self,
+        candidate: StrategyPositionPlan,
+        snapshot: PortfolioSnapshot,
+        policy: PortfolioPolicy,
+        *,
+        candidate_set_id: str,
+    ) -> PortfolioSelection | PortfolioRiskHold:
 
         if not snapshot.coherent:
-            return self._hold(candidate, snapshot, policy, "snapshot_not_coherent")
+            return self._hold(candidate, snapshot, policy, "snapshot_not_coherent", candidate_set_id=candidate_set_id)
         if not snapshot.fresh:
-            return self._hold(candidate, snapshot, policy, "snapshot_stale")
+            return self._hold(candidate, snapshot, policy, "snapshot_stale", candidate_set_id=candidate_set_id)
 
         increasing = _increases_exposure(candidate)
         if not increasing:
@@ -74,29 +179,30 @@ class PortfolioRiskGate:
                 status="accepted",
                 reasons=(),
                 outcome="ACCEPT_UNCHANGED",
+                candidate_set_id=candidate_set_id,
             )
 
         if snapshot.equity <= 0:
-            return self._reject(candidate, snapshot, policy, "invalid_equity")
+            return self._reject(candidate, snapshot, policy, "invalid_equity", candidate_set_id=candidate_set_id)
         requested_notional = candidate.requested_notional
         if requested_notional is None:
-            return self._reject(candidate, snapshot, policy, "missing_requested_notional")
+            return self._reject(candidate, snapshot, policy, "missing_requested_notional", candidate_set_id=candidate_set_id)
         if requested_notional <= 0:
-            return self._reject(candidate, snapshot, policy, "non_positive_notional")
+            return self._reject(candidate, snapshot, policy, "non_positive_notional", candidate_set_id=candidate_set_id)
         if (
             policy.min_order_quantity is not None
             and candidate.requested_quantity < policy.min_order_quantity
         ):
-            return self._reject(candidate, snapshot, policy, "below_minimum_quantity")
+            return self._reject(candidate, snapshot, policy, "below_minimum_quantity", candidate_set_id=candidate_set_id)
         if (
             policy.min_order_notional is not None
             and requested_notional < policy.min_order_notional
         ):
-            return self._reject(candidate, snapshot, policy, "below_minimum_notional")
+            return self._reject(candidate, snapshot, policy, "below_minimum_notional", candidate_set_id=candidate_set_id)
 
         early_blocker = self._early_blocker(candidate, snapshot, policy)
         if early_blocker is not None:
-            return self._reject(candidate, snapshot, policy, early_blocker)
+            return self._reject(candidate, snapshot, policy, early_blocker, candidate_set_id=candidate_set_id)
 
         caps = self._available_caps(candidate, snapshot, policy, requested_notional)
         effective_notional = requested_notional
@@ -116,16 +222,17 @@ class PortfolioRiskGate:
                 status="accepted",
                 reasons=(),
                 outcome="ACCEPT_UNCHANGED",
+                candidate_set_id=candidate_set_id,
             )
 
         if effective_notional <= 0:
-            return self._reject(candidate, snapshot, policy, reasons[0])
+            return self._reject(candidate, snapshot, policy, reasons[0], candidate_set_id=candidate_set_id)
 
         effective_quantity = candidate.requested_quantity * effective_notional / requested_notional
         if policy.min_order_quantity is not None and effective_quantity < policy.min_order_quantity:
-            return self._reject(candidate, snapshot, policy, "scaled_below_minimum_quantity")
+            return self._reject(candidate, snapshot, policy, "scaled_below_minimum_quantity", candidate_set_id=candidate_set_id)
         if policy.min_order_notional is not None and effective_notional < policy.min_order_notional:
-            return self._reject(candidate, snapshot, policy, "scaled_below_minimum_notional")
+            return self._reject(candidate, snapshot, policy, "scaled_below_minimum_notional", candidate_set_id=candidate_set_id)
         return self._selection(
             candidate,
             snapshot,
@@ -135,6 +242,7 @@ class PortfolioRiskGate:
             status="scaled",
             reasons=tuple(dict.fromkeys(reasons)),
             outcome="SCALE_DOWN",
+            candidate_set_id=candidate_set_id,
         )
 
     def _early_blocker(
@@ -204,6 +312,7 @@ class PortfolioRiskGate:
         status: str,
         reasons: tuple[str, ...],
         outcome: str,
+        candidate_set_id: str,
     ) -> PortfolioSelection:
         allocation = AssetAllocationSlice(
             portfolio_session_id=snapshot.portfolio_session_id,
@@ -219,6 +328,7 @@ class PortfolioRiskGate:
             protection_intent=candidate.protection_intent,
             requested_notional=candidate.requested_notional,
             effective_notional=effective_notional,
+            candidate_rank=candidate.candidate_rank,
             status=status,
             reasons=reasons,
             provenance={
@@ -234,7 +344,7 @@ class PortfolioRiskGate:
         return PortfolioSelection(
             selection_id=selection_id,
             portfolio_session_id=snapshot.portfolio_session_id,
-            candidate_set_id=_candidate_set_id(candidate),
+            candidate_set_id=candidate_set_id,
             policy_id=policy.policy_id,
             policy_revision=policy.policy_revision,
             snapshot_id=snapshot.snapshot_id,
@@ -249,6 +359,8 @@ class PortfolioRiskGate:
         snapshot: PortfolioSnapshot,
         policy: PortfolioPolicy,
         reason: str,
+        *,
+        candidate_set_id: str,
     ) -> PortfolioSelection:
         provenance = self._provenance(candidate, snapshot, policy, "REJECT", (reason,))
         row = {
@@ -266,7 +378,7 @@ class PortfolioRiskGate:
         return PortfolioSelection(
             selection_id=_stable_id("selection", provenance, row),
             portfolio_session_id=snapshot.portfolio_session_id,
-            candidate_set_id=_candidate_set_id(candidate),
+            candidate_set_id=candidate_set_id,
             policy_id=policy.policy_id,
             policy_revision=policy.policy_revision,
             snapshot_id=snapshot.snapshot_id,
@@ -282,12 +394,14 @@ class PortfolioRiskGate:
         snapshot: PortfolioSnapshot,
         policy: PortfolioPolicy,
         reason: str,
+        *,
+        candidate_set_id: str,
     ) -> PortfolioRiskHold:
         provenance = self._provenance(candidate, snapshot, policy, "PORTFOLIO_RISK_HOLD", (reason,))
         return PortfolioRiskHold(
             hold_id=_stable_id("hold", provenance),
             portfolio_session_id=snapshot.portfolio_session_id,
-            candidate_set_id=_candidate_set_id(candidate),
+            candidate_set_id=candidate_set_id,
             policy_id=policy.policy_id,
             policy_revision=policy.policy_revision,
             snapshot_id=snapshot.snapshot_id,
@@ -336,6 +450,25 @@ def _active_assets(snapshot: PortfolioSnapshot) -> set[str]:
         for allocation in snapshot.allocation_slices
         if allocation.effective_quantity > 0 and allocation.direction != "flat"
     }
+
+
+def _project_selection(snapshot: PortfolioSnapshot, allocation: AssetAllocationSlice) -> PortfolioSnapshot:
+    """Project one accepted exposure into a private virtual snapshot for replay."""
+
+    notional = allocation.effective_notional or Decimal("0")
+    if notional <= 0:
+        return snapshot
+    total_exposure = snapshot.total_exposure + notional
+    leverage = total_exposure / snapshot.equity if snapshot.equity > 0 else snapshot.leverage
+    return replace(
+        snapshot,
+        total_exposure=total_exposure,
+        margin_used=snapshot.margin_used + notional,
+        leverage=leverage,
+        available_cash=snapshot.available_cash - notional,
+        cash_buffer_pct=None,
+        allocation_slices=(*snapshot.allocation_slices, allocation),
+    )
 
 
 def _asset_exposure(snapshot: PortfolioSnapshot, asset: str) -> Decimal:
