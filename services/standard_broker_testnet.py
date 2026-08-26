@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
-from schemas.market_data import PaperOrder
 from services.broker_port import (
     BrokerCapabilities,
     BrokerCancelRequest,
@@ -242,7 +241,10 @@ class StandardBrokerTestnetExecutionAdapter:
     def fact_ledger(self) -> Any:
         return self._ledger
 
-    def preflight(self) -> dict[str, Any]:
+    def preflight(self, *, strategy_family: str | None = None) -> dict[str, Any]:
+        family = str(strategy_family or "").strip().lower()
+        if family not in {"", "dca", "grid"}:
+            raise ValueError("strategy_family must be dca or grid")
         required_operations = {
             "order_execution": {"submit", "cancel", "replace", "query", "open_orders"},
             "account": {"read"},
@@ -258,10 +260,13 @@ class StandardBrokerTestnetExecutionAdapter:
                 "sibling_cancellation",
                 "position_following",
                 "position_level_tpsl",
-                "take_profit_market",
                 "stop_loss_market",
             },
         }
+        if family in {"", "grid"}:
+            required_operations["protection_order"].add("take_profit_market")
+        else:
+            required_operations["protection_order"].add("take_profit_limit")
         capability_gaps = [
             f"{port}.{operation}"
             for port, operations in required_operations.items()

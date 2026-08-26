@@ -573,6 +573,313 @@ class TestnetAutomationCoordinator:
         }
         return self._record(state)
 
+    def start_dca_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        confirmation: Mapping[str, Any],
+        market: Mapping[str, Any],
+        broker: object,
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Start the canonical DCA lifecycle for the selected slice."""
+
+        current = self._require_strategy_slice(plan, family="dca", expected_status="candidate_selected")
+        observed_at = self._timestamp(timestamp)
+        self._validate_testnet_confirmation(plan, current, confirmation)
+        self._validate_authoritative_market(market)
+        self._validate_lifecycle_preflight(broker, strategy_family="dca")
+        from services.dca_testnet_lifecycle import DcaTestnetLifecycle
+
+        lifecycle = DcaTestnetLifecycle(self.output_root, broker)
+        try:
+            state = lifecycle.start(dict(plan), timestamp=observed_at)
+        except Exception as exc:  # noqa: BLE001 - persist lifecycle blocker at the Coordinator seam.
+            return self._publish_dca_state(
+                current,
+                dict(plan),
+                {
+                    "status": "blocked_reconciliation",
+                    "blocker": f"dca_start_failed:{type(exc).__name__}:{exc}",
+                    "next_action": "notify_park_and_wait",
+                },
+                observed_at=observed_at,
+            )
+        return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
+
+    def advance_dca_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        broker: object,
+        fill: Mapping[str, Any] | None = None,
+        price: float | None = None,
+        market: Mapping[str, Any] | None = None,
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Apply one canonical DCA fill or market event through the Coordinator."""
+
+        current = self._require_strategy_slice(plan, family="dca")
+        if current.get("status") not in {
+            "dca_running",
+            "dca_interrupted",
+            "dca_blocked",
+        }:
+            raise TestnetCoordinatorError("dca_session_not_active")
+        observed_at = self._timestamp(timestamp)
+        if market is not None:
+            self._validate_authoritative_market(market)
+        from services.dca_testnet_lifecycle import DcaTestnetLifecycle
+
+        lifecycle = DcaTestnetLifecycle(self.output_root, broker)
+        try:
+            if fill is not None:
+                state = lifecycle.on_fill(dict(plan), dict(fill), timestamp=observed_at)
+            elif price is not None:
+                state = lifecycle.on_market_event(
+                    dict(plan),
+                    price=float(price),
+                    timestamp=observed_at,
+                )
+            else:
+                raise TestnetCoordinatorError("dca_event_required")
+        except TestnetCoordinatorError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - retain the lifecycle blocker.
+            try:
+                state = lifecycle.snapshot(dict(plan))
+            except Exception:
+                state = {
+                    "status": "blocked_reconciliation",
+                    "blocker": f"dca_event_failed:{type(exc).__name__}:{exc}",
+                    "next_action": "notify_park_and_wait",
+                }
+        return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
+
+    def interrupt_dca_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        broker: object,
+        reason: str = "manual_interrupt",
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Cancel pending DCA entries while preserving the current position."""
+
+        current = self._require_strategy_slice(plan, family="dca")
+        observed_at = self._timestamp(timestamp)
+        from services.dca_testnet_lifecycle import DcaTestnetLifecycle
+
+        state = DcaTestnetLifecycle(self.output_root, broker).interrupt(
+            dict(plan),
+            timestamp=observed_at,
+            reason=reason,
+        )
+        return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
+
+    def resume_dca_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        broker: object,
+        confirmation: Mapping[str, Any],
+        market: Mapping[str, Any],
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Resume an interrupted DCA session after fresh host validation."""
+
+        current = self._require_strategy_slice(plan, family="dca")
+        if current.get("status") != "dca_interrupted":
+            raise TestnetCoordinatorError("dca_session_not_interrupted")
+        observed_at = self._timestamp(timestamp)
+        self._validate_testnet_confirmation(plan, current, confirmation)
+        self._validate_authoritative_market(market)
+        self._validate_lifecycle_preflight(broker, strategy_family="dca")
+        from services.dca_testnet_lifecycle import DcaTestnetLifecycle
+
+        state = DcaTestnetLifecycle(self.output_root, broker).resume(
+            dict(plan),
+            timestamp=observed_at,
+        )
+        return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
+
+    def _require_strategy_slice(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        family: str,
+        expected_status: str | None = None,
+    ) -> dict[str, Any]:
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        if expected_status is not None and current.get("status") != expected_status:
+            raise TestnetCoordinatorError("candidate_selection_required")
+        if str(current.get("strategy_family") or "").lower() != family:
+            raise TestnetCoordinatorError("strategy_family_mismatch")
+        if not isinstance(plan, Mapping):
+            raise TestnetCoordinatorError("strategy_plan_invalid")
+        plan_family = str(plan.get("strategy_type") or plan.get("strategy_family") or "").lower()
+        if plan_family and plan_family != family:
+            raise TestnetCoordinatorError("strategy_family_mismatch")
+        instrument_id = str(
+            plan.get("instrument_id")
+            or (plan.get("execution_context") or {}).get("instrument_id")
+            or ""
+        )
+        if instrument_id != str(current.get("selected_instrument_id") or ""):
+            raise TestnetCoordinatorError(
+                "selected_instrument_mismatch",
+                {"selected_instrument_id": current.get("selected_instrument_id"), "plan_instrument_id": instrument_id},
+            )
+        for field in ("strategy_session_id", "strategy_revision_id", "plan_digest"):
+            if str(plan.get(field) or "") != str(current.get(field) or ""):
+                raise TestnetCoordinatorError("strategy_plan_identity_mismatch", {"field": field})
+        return current
+
+    @staticmethod
+    def _validate_testnet_confirmation(
+        plan: Mapping[str, Any],
+        current: Mapping[str, Any],
+        confirmation: Mapping[str, Any],
+    ) -> None:
+        from services.strategy_control_plane import StrategyControlMachineError
+
+        def blocked(reason: str) -> None:
+            raise StrategyControlMachineError(
+                "testnet_confirmation_blocked",
+                {"reason": reason, "plan_digest": plan.get("plan_digest")},
+            )
+
+        if not isinstance(confirmation, Mapping):
+            blocked("confirmation_required")
+        if confirmation.get("execution_authorized") is not True:
+            blocked("execution_authorized_required")
+        if str(confirmation.get("execution_environment") or "").lower() != "testnet":
+            blocked("testnet_confirmation_required")
+        if str(confirmation.get("plan_digest") or "") != str(plan.get("plan_digest") or ""):
+            blocked("plan_digest_mismatch")
+        if str(confirmation.get("activation_id") or "") != str(current.get("activation_id") or ""):
+            blocked("activation_identity_mismatch")
+        if not str(confirmation.get("confirmation_id") or "").strip():
+            blocked("confirmation_id_required")
+
+    def _validate_authoritative_market(self, market: Mapping[str, Any]) -> None:
+        from services.strategy_control_plane import StrategyControlMachineError
+
+        if (
+            not isinstance(market, Mapping)
+            or market.get("execution_ready") is not True
+            or market.get("fresh") is not True
+            or market.get("is_synthetic") is True
+            or market.get("fallback_policy") not in {"none", None}
+        ):
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {
+                    "execution_ready": market.get("execution_ready") if isinstance(market, Mapping) else None,
+                    "fresh": market.get("fresh") if isinstance(market, Mapping) else None,
+                },
+            )
+
+    @staticmethod
+    def _validate_lifecycle_preflight(
+        broker: object,
+        *,
+        strategy_family: str,
+    ) -> dict[str, Any]:
+        from services.strategy_control_plane import StrategyControlMachineError
+
+        try:
+            try:
+                preflight = broker.preflight(strategy_family=strategy_family)
+            except TypeError:
+                preflight = broker.preflight()
+        except Exception as exc:  # noqa: BLE001 - normalize unknown preflight.
+            raise StrategyControlMachineError(
+                "testnet_preflight_blocked",
+                {"reason": f"preflight_unknown:{type(exc).__name__}"},
+            ) from exc
+        if not isinstance(preflight, Mapping):
+            raise StrategyControlMachineError("testnet_preflight_blocked", dict(preflight) if isinstance(preflight, Mapping) else {})
+        gaps = {
+            str(value)
+            for value in preflight.get("capability_gaps") or ()
+            if str(value).strip()
+        }
+        # The canonical DCA aggregate TP uses a limit leg.  The local
+        # standard-broker fixture advertises a market-TP gap because it also
+        # serves Grid; that gap is irrelevant to DCA, while every other
+        # protection/account/environment failure remains a hard blocker.
+        dca_only_market_tp_gap = (
+            strategy_family == "dca"
+            and gaps
+            and gaps <= {"protection_order.take_profit_market"}
+            and getattr(broker, "protection_adapter", None) is not None
+        )
+        ready = preflight.get("ready") is True or dca_only_market_tp_gap
+        protection_ready = preflight.get("protection_ready") is True or dca_only_market_tp_gap
+        if (
+            not ready
+            or str(preflight.get("environment") or "").lower() != "testnet"
+            or preflight.get("real_money_eligible") is not False
+            or not protection_ready
+            or preflight.get("account_read_ready") is not True
+        ):
+            raise StrategyControlMachineError("testnet_preflight_blocked", dict(preflight))
+        if dca_only_market_tp_gap:
+            preflight = {
+                **dict(preflight),
+                "ready": True,
+                "protection_ready": True,
+                "strategy_capability_exceptions": ["protection_order.take_profit_market"],
+            }
+        return dict(preflight)
+
+    def _publish_dca_state(
+        self,
+        current: Mapping[str, Any],
+        plan: Mapping[str, Any],
+        lifecycle: Mapping[str, Any],
+        *,
+        observed_at: str,
+    ) -> dict[str, Any]:
+        lifecycle_state = str(lifecycle.get("status") or "blocked")
+        if lifecycle_state == "interrupted":
+            status = "dca_interrupted"
+            enabled = False
+        elif lifecycle_state in {"terminal", "stopped"} or lifecycle.get("sealed") is True:
+            status = "dca_terminal"
+            enabled = False
+        elif lifecycle_state.startswith("blocked") or lifecycle_state in {"budget_exhausted", "target_triggered"}:
+            status = "dca_blocked" if lifecycle_state.startswith("blocked") else "dca_running"
+            enabled = not lifecycle_state.startswith("blocked")
+        else:
+            status = "dca_running"
+            enabled = True
+        next_action = str(lifecycle.get("next_action") or "await_fill_or_next_entry")
+        if lifecycle.get("park_notification_required") or lifecycle_state in {"terminal", "stopped"}:
+            next_action = "notify_park_and_wait"
+        state = {
+            **dict(current),
+            "event": "dca_lifecycle_observed",
+            "action": "dca_lifecycle",
+            "status": status,
+            "occurred_at": observed_at,
+            "dca_lifecycle_status": lifecycle_state,
+            "dca_lifecycle": json.loads(json.dumps(dict(lifecycle), sort_keys=True)),
+            "plan_digest": plan.get("plan_digest"),
+            "execution_enabled": enabled,
+            "execution_ready": enabled,
+            "execution_blocker": lifecycle.get("blocker"),
+            "next_action": next_action,
+            "execution_mutation": lifecycle_state not in {"blocked_protection", "blocked_reconciliation", "blocked_risk"},
+            "network_operation_invoked": False,
+            "blocker": lifecycle.get("blocker"),
+        }
+        state["lifecycle"] = state["dca_lifecycle"]
+        return self._record(state)
+
     def _record(self, state: Mapping[str, Any]) -> dict[str, Any]:
         row = dict(state)
         events = self._read_events()

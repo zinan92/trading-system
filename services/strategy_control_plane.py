@@ -6967,7 +6967,10 @@ class StrategyControlPlane:
                 "testnet_adapter_required",
                 {"adapter": str(getattr(adapter, "name", ""))},
             )
-        preflight = adapter.preflight()
+        try:
+            preflight = adapter.preflight(strategy_family="dca")
+        except TypeError:
+            preflight = adapter.preflight()
         if (
             preflight.get("ready") is not True
             or preflight.get("environment") != "testnet"

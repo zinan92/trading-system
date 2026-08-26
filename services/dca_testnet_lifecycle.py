@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
-from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -13,7 +11,6 @@ from services.broker_port import BrokerCancelRequest, BrokerOrderRequest
 from services.journal_store import load_json, write_json
 from services.standard_broker_testnet import (
     StandardBrokerTestnetExecutionAdapter,
-    StandardBrokerTestnetHostError,
 )
 
 
@@ -131,6 +128,75 @@ class DcaTestnetLifecycle:
             self._record_event(state, "entry_submitted", timestamp=timestamp)
         if state["status"] == "starting":
             state["status"] = "waiting_entry"
+        state["updated_at"] = timestamp
+        self._save(state)
+        return self.snapshot(plan)
+
+    def interrupt(
+        self,
+        plan: dict[str, Any],
+        *,
+        timestamp: str,
+        reason: str = "manual_interrupt",
+    ) -> dict[str, Any]:
+        """Pause one DCA session without flattening its known position."""
+
+        state = self._state(plan)
+        if state["status"] in {
+            "terminal",
+            "sealed",
+            "blocked_reconciliation",
+            "blocked_risk_flattening",
+            "stopped",
+        }:
+            return self.snapshot(plan)
+        if not self._cancel_entries(state, timestamp=timestamp, reason=reason):
+            state["updated_at"] = timestamp
+            self._save(state)
+            return self.snapshot(plan)
+        state["status"] = "interrupted"
+        state["manual_interrupt"] = True
+        state["next_action"] = "await_resume"
+        self._record_event(
+            state,
+            "manual_interrupt",
+            timestamp=timestamp,
+            reason=str(reason or "manual_interrupt"),
+        )
+        state["updated_at"] = timestamp
+        self._save(state)
+        return self.snapshot(plan)
+
+    def resume(self, plan: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
+        """Resume an interrupted DCA session after the host revalidates it."""
+
+        state = self._state(plan)
+        if state["status"] != "interrupted":
+            return self.snapshot(plan)
+        if self.broker.protection_adapter is None or self.broker.account_adapter is None:
+            self._block(state, "capability_gap:resume_revalidation", timestamp=timestamp)
+            self._save(state)
+            return self.snapshot(plan)
+        if state["positions"] and state.get("protection", {}).get("status") != "active":
+            self._block(state, "protection_revalidation_required", timestamp=timestamp)
+            self._save(state)
+            return self.snapshot(plan)
+        try:
+            self._submit_next_entry(plan, state, timestamp=timestamp)
+        except DcaTestnetLifecycleError:
+            self._save(state)
+            return self.snapshot(plan)
+        if state["status"] not in {
+            "budget_exhausted",
+            "blocked_protection",
+            "blocked_reconciliation",
+            "blocked_risk",
+            "blocked_risk_flattening",
+        }:
+            state["status"] = "open" if state["positions"] else "waiting_entry"
+            state["next_action"] = "await_fill_or_next_entry"
+        state["manual_interrupt"] = False
+        self._record_event(state, "manual_resume", timestamp=timestamp)
         state["updated_at"] = timestamp
         self._save(state)
         return self.snapshot(plan)
