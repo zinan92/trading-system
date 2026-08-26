@@ -52,9 +52,25 @@ class TestnetSoakReadiness:
 
     __test__ = False
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        *,
+        window_count: int = WINDOW_COUNT,
+        required_day_count: int = 7,
+        root_name: str | None = None,
+        schema_version: str = SOAK_SCHEMA,
+    ) -> None:
         self.output_root = Path(output_root)
-        self.root = self.output_root / "dualtrack" / "testnet_soak"
+        if type(window_count) is not int or window_count <= 0:
+            raise ValueError("window_count must be a positive integer")
+        if type(required_day_count) is not int or required_day_count <= 0:
+            raise ValueError("required_day_count must be a positive integer")
+        self.window_count = window_count
+        self.window_hours = WINDOW_HOURS
+        self.required_day_count = required_day_count
+        self.schema_version = str(schema_version or SOAK_SCHEMA)
+        self.root = self.output_root / (root_name or "dualtrack/testnet_soak")
         self.windows_path = self.root / "windows.json"
         self.receipts_path = self.root / "readiness_receipts.json"
         self.recording = ParkRecordingTrack(self.output_root)
@@ -77,20 +93,20 @@ class TestnetSoakReadiness:
     def record_window(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         identity = self._identity(observation)
         index = int(observation.get("window_index") or 0)
-        if not 0 <= index < WINDOW_COUNT:
+        if not 0 <= index < self.window_count:
             raise TestnetSoakError("window_index_out_of_range")
         starts_at = str(observation.get("starts_at") or "")
         ends_at = str(observation.get("ends_at") or "")
         start = _parse_timestamp(starts_at)
         end = _parse_timestamp(ends_at)
-        if end - start != timedelta(hours=WINDOW_HOURS):
+        if end - start != timedelta(hours=self.window_hours):
             raise TestnetSoakError("recording_window_not_12_hours")
         self.receipts()
         all_windows = self.windows()
         if self._journal_errors:
             blocker = {"code": "readiness_journal_corrupt", "journals": dict(self._journal_errors)}
             self._persist_invalidated_receipt({"status": "blocked", "blockers": [blocker], "receipt_digest": ""})
-            return {"schema_version": SOAK_SCHEMA, "event": "window_blocked", "window_index": index, **identity, "environment": "testnet", "status": "blocked", "blockers": [blocker], "next_action": "notify_park_and_wait"}
+            return {"schema_version": self.schema_version, "event": "window_blocked", "window_index": index, **identity, "environment": "testnet", "status": "blocked", "blockers": [blocker], "next_action": "notify_park_and_wait"}
         existing = next((row for row in all_windows if row.get("window_index") == index), None)
         if existing is not None:
             if self._window_identity(existing) != identity:
@@ -145,7 +161,7 @@ class TestnetSoakReadiness:
             review = self.recording.review(record_window_id=window_id)
             reviews = load_json(self.root / "reviews.json")
             if not any(isinstance(item, Mapping) and item.get("record_window_id") == window_id and item.get("review_digest") == _digest(review) for item in reviews):
-                reviews.append({"schema_version": SOAK_SCHEMA, "event": "window_review", "record_window_id": window_id, "review": review, "review_digest": _digest(review)})
+                reviews.append({"schema_version": self.schema_version, "event": "window_review", "record_window_id": window_id, "review": review, "review_digest": _digest(review)})
                 write_json(self.root / "reviews.json", reviews)
             if package.get("status") == "complete":
                 package = self.recording.mark_review_complete(record_window_id=window_id)
@@ -153,7 +169,7 @@ class TestnetSoakReadiness:
             blockers.append({"code": getattr(exc, "code", "recording_review_failed"), "detail": str(exc)})
             package = {"status": "blocked", "error": getattr(exc, "code", "recording_review_failed")}
         row = {
-            "schema_version": SOAK_SCHEMA,
+            "schema_version": self.schema_version,
             "event": "window_recorded",
             "window_index": index,
             "record_window_id": window_id,
@@ -228,8 +244,8 @@ class TestnetSoakReadiness:
         blockers.extend({"code": "readiness_journal_corrupt", "journal": name, "detail": detail} for name, detail in self._journal_errors.items())
         if rows and not self._rows_integrity_ok(rows):
             blockers.append({"code": "soak_window_integrity_failed"})
-        if len(rows) != WINDOW_COUNT or [int(row.get("window_index")) if row.get("window_index") is not None else -1 for row in rows] != list(range(WINDOW_COUNT)):
-            blockers.append({"code": "soak_window_count_incomplete", "expected": WINDOW_COUNT, "actual": len(rows)})
+        if len(rows) != self.window_count or [int(row.get("window_index")) if row.get("window_index") is not None else -1 for row in rows] != list(range(self.window_count)):
+            blockers.append({"code": "soak_window_count_incomplete", "expected": self.window_count, "actual": len(rows)})
         if rows:
             identity = self._window_identity(rows[0])
             if any(self._window_identity(row) != identity for row in rows):
@@ -275,7 +291,7 @@ class TestnetSoakReadiness:
             for category in REQUIRED_GATE_EVIDENCE
         }
         receipt = {
-            "schema_version": SOAK_SCHEMA,
+            "schema_version": self.schema_version,
             "event": "readiness_receipt",
             "environment": "testnet",
             **identity,
@@ -283,8 +299,8 @@ class TestnetSoakReadiness:
             "source_attestation": source_attestation,
             "window_count": len(rows),
             "day_count": len(rows) // 2,
-            "required_window_count": WINDOW_COUNT,
-            "required_day_count": 7,
+            "required_window_count": self.window_count,
+            "required_day_count": self.required_day_count,
             "status": "ready" if not blockers else "blocked",
             "blockers": blockers,
             "live_enabled": False,
@@ -308,7 +324,7 @@ class TestnetSoakReadiness:
         if self._journal_errors:
             blocker = {"code": "readiness_journal_corrupt", "journals": dict(self._journal_errors)}
             self._persist_invalidated_receipt({"status": "blocked", "blockers": [blocker], "receipt_digest": ""})
-            return {"status": "blocked", "environment": "testnet", "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": [blocker], "live_enabled": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait"}
+            return {"status": "blocked", "environment": "testnet", "window_count": len(rows), "required_window_count": self.window_count, "day_count": len(rows) // 2, "blockers": [blocker], "live_enabled": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait"}
         if receipt is not None:
             status = str(receipt.get("status") or "incomplete")
             if not self._receipt_integrity_ok(receipt, rows):
@@ -321,8 +337,8 @@ class TestnetSoakReadiness:
                 age = _parse_timestamp(now) - _parse_timestamp(str(receipt.get("created_at") or now))
                 if age > timedelta(hours=24):
                     status = "stale"
-            return {"status": status, "environment": "testnet", "broker_id": receipt.get("broker_id"), "release_sha": receipt.get("release_sha"), "account_fingerprint": receipt.get("account_fingerprint"), "source_attestation": dict(receipt.get("source_attestation") or {}), "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": list(receipt.get("blockers") or []), "critical_gate_results": dict(receipt.get("critical_gate_results") or {}), "live_enabled": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait" if status == "blocked" else "refresh_soak_evidence" if status == "stale" else receipt.get("next_action")}
-        return {"status": "incomplete" if rows else "missing", "environment": "testnet", "broker_id": None, "release_sha": None, "account_fingerprint": None, "source_attestation": {}, "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": [], "live_enabled": False, "live_writes_enabled": False, "next_action": "continue_soak" if rows else "start_attended_testnet_soak"}
+            return {"status": status, "environment": "testnet", "broker_id": receipt.get("broker_id"), "release_sha": receipt.get("release_sha"), "account_fingerprint": receipt.get("account_fingerprint"), "source_attestation": dict(receipt.get("source_attestation") or {}), "window_count": len(rows), "required_window_count": self.window_count, "day_count": len(rows) // 2, "blockers": list(receipt.get("blockers") or []), "critical_gate_results": dict(receipt.get("critical_gate_results") or {}), "live_enabled": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait" if status == "blocked" else "refresh_soak_evidence" if status == "stale" else receipt.get("next_action")}
+        return {"status": "incomplete" if rows else "missing", "environment": "testnet", "broker_id": None, "release_sha": None, "account_fingerprint": None, "source_attestation": {}, "window_count": len(rows), "required_window_count": self.window_count, "day_count": len(rows) // 2, "blockers": [], "live_enabled": False, "live_writes_enabled": False, "next_action": "continue_soak" if rows else "start_attended_testnet_soak"}
 
     @staticmethod
     def _identity(value: Mapping[str, Any]) -> dict[str, str]:
@@ -480,7 +496,8 @@ class TestnetSoakReadiness:
         attestation = observation.get("source_attestation") if isinstance(observation.get("source_attestation"), Mapping) else {}
         attestation_tree = str(attestation.get("tree_sha") or attestation.get("source_tree_sha") or "")
         attestation_release = str(attestation.get("release_sha") or attestation.get("source_sha") or "")
-        valid_hex = lambda value: len(value) in {40, 64} and all(char in "0123456789abcdefABCDEF" for char in value)
+        def valid_hex(value: str) -> bool:
+            return len(value) in {40, 64} and all(char in "0123456789abcdefABCDEF" for char in value)
         try:
             current = current_source_attestation(Path(__file__).resolve().parents[1])
         except Exception:
