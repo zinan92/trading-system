@@ -158,7 +158,7 @@ def test_external_protection_submit_and_query_are_redacted_and_cursorable(tmp_pa
     backend._instrument = lambda request: SimpleNamespace(id="BTC-USD-PERP.HYPERLIQUID")
 
     def call(method: str, *args, **kwargs):
-        del args, kwargs
+        del args
         if method == "submit_orders":
             return [
                 {"order_status": "OPEN", "venue_order_id": "1001", "client_order_id": "tp"},
@@ -167,8 +167,8 @@ def test_external_protection_submit_and_query_are_redacted_and_cursorable(tmp_pa
         if method == "request_order_status_report":
             return {
                 "order_status": "OPEN",
-                "venue_order_id": "1001",
-                "client_order_id": "tp",
+                "venue_order_id": str(kwargs.get("venue_order_id") or ""),
+                "client_order_id": str(kwargs.get("client_order_id") or ""),
                 "quantity": "0.001",
             }
         raise AssertionError(method)
@@ -196,14 +196,14 @@ def test_external_protection_accepts_group_level_submit_report_and_queries_child
     backend._instrument = lambda request: SimpleNamespace(id="BTC-USD-PERP.HYPERLIQUID")
 
     def call(method: str, *args, **kwargs):
-        del args, kwargs
+        del args
         if method == "submit_orders":
             return [{"order_status": "OPEN", "venue_order_id": "group-1"}]
         if method == "request_order_status_report":
             return {
                 "order_status": "OPEN",
                 "venue_order_id": "child-1",
-                "client_order_id": "child",
+                "client_order_id": str(kwargs.get("client_order_id") or ""),
                 "quantity": "0.001",
             }
         raise AssertionError(method)
@@ -219,6 +219,41 @@ def test_external_protection_accepts_group_level_submit_report_and_queries_child
     assert submitted["state"] == "submitted"
     assert queried["state"] == "active"
     assert queried["covered_quantity"] == "0.001"
+
+
+def test_external_protection_query_identity_conflict_is_unknown_and_uncovered(tmp_path: Path) -> None:
+    backend = _backend(tmp_path)
+    backend.activate(release_sha="a" * 40)
+    backend._build_protection_orders = lambda request: ["tp-order", "sl-order"]
+    backend._instrument = lambda request: SimpleNamespace(id="BTC-USD-PERP.HYPERLIQUID")
+
+    def call(method: str, *args, **kwargs):
+        del args, kwargs
+        if method == "submit_orders":
+            return [
+                {"order_status": "OPEN", "venue_order_id": "1001", "client_order_id": "tp"},
+                {"order_status": "OPEN", "venue_order_id": "1002", "client_order_id": "sl"},
+            ]
+        if method == "request_order_status_report":
+            return {
+                "order_status": "OPEN",
+                "venue_order_id": "wrong-order",
+                "client_order_id": "wrong-cloid",
+                "quantity": "0.001",
+            }
+        raise AssertionError(method)
+
+    backend._call = call
+    backend.invoke("protection_order", "submit", _request())
+    queried = backend.invoke(
+        "protection_order",
+        "query",
+        {"protectionId": "dca-protection:1"},
+    )
+
+    assert queried["state"] == "unknown"
+    assert queried["accepted"] is False
+    assert queried["covered_quantity"] == "0"
 
 
 def test_external_protection_rejects_group_level_rejected_report(tmp_path: Path) -> None:

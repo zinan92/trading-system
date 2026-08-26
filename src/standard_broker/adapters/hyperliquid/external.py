@@ -19,6 +19,7 @@ from ...models import BrokerEnvironment, Provenance, SignerKind
 from ...runtime import BrokerRuntimeSession, RuntimeBoundaryError, SignerReference
 from .bridge import NautilusAdapterMetadata
 from .credentials import LocalFileSecretProvider
+from .protection import enabled_external_testnet_position_protection_capabilities
 
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 NAUTILUS_HYPERLIQUID_VERSION = "1.230.0"
@@ -51,7 +52,12 @@ def enabled_testnet_position_protection_capabilities(
 
     capabilities = default_testnet_capabilities(revision)
     operations = dict(capabilities.operations)
-    operations["protection_order"] = frozenset({"submit", "cancel", "replace", "query"})
+    protection = enabled_external_testnet_position_protection_capabilities()
+    operations["protection_order"] = frozenset(
+        capability
+        for capability, supported in protection.values.items()
+        if supported
+    )
     return CapabilityDescriptor(
         broker_id=capabilities.broker_id,
         environment=capabilities.environment,
@@ -300,6 +306,7 @@ class NautilusHyperliquidTestnetBackend:
                         protection_id,
                         index,
                         leg,
+                        quantity=request.get("quantity"),
                     ),
                 }
                 for index, leg in enumerate(legs)
@@ -358,7 +365,6 @@ class NautilusHyperliquidTestnetBackend:
                 covered_quantity=Decimal("0"),
                 rows=(),
             )
-        instrument = self._instrument(request)
         rows: list[dict[str, object]] = []
         for row in old_rows:
             if not isinstance(row, Mapping):
@@ -369,7 +375,13 @@ class NautilusHyperliquidTestnetBackend:
                     venue_order_id=row.get("oid") or None,
                     client_order_id=row.get("cloid") or None,
                 )
-                rows.append(self._protection_report(report))
+                normalized = self._protection_report(report)
+                if not self._protection_identity_matches(row, normalized):
+                    raise RuntimeBoundaryError(
+                        "protection_identity_conflict",
+                        "Hyperliquid protection status report conflicts with its requested identity",
+                    )
+                rows.append(normalized)
             except Exception:
                 rows.append(
                     {
@@ -383,7 +395,6 @@ class NautilusHyperliquidTestnetBackend:
         if state == "active" and (covered is None or covered <= 0):
             state = "unknown"
             covered = Decimal("0")
-        del instrument
         self._protection_orders[protection_id] = {"request": dict(request), "rows": tuple(rows)}
         return self._protection_observation(
             protection_id=protection_id,
@@ -494,7 +505,14 @@ class NautilusHyperliquidTestnetBackend:
         if not isinstance(legs, list):
             raise RuntimeBoundaryError("protection_group_invalid", "protection legs must be a list")
         client_ids = [
-            ClientOrderId(self._protection_client_id(str(request.get("protectionId")), index, leg))
+            ClientOrderId(
+                self._protection_client_id(
+                    str(request.get("protectionId")),
+                    index,
+                    leg,
+                    quantity=request.get("quantity"),
+                )
+            )
             for index, leg in enumerate(legs)
             if isinstance(leg, Mapping)
         ]
@@ -575,9 +593,15 @@ class NautilusHyperliquidTestnetBackend:
         return result
 
     @staticmethod
-    def _protection_client_id(protection_id: str, index: int, leg: object) -> str:
+    def _protection_client_id(
+        protection_id: str,
+        index: int,
+        leg: object,
+        *,
+        quantity: object,
+    ) -> str:
         digest = hashlib.sha256(
-            f"{protection_id}|{index}|{str(leg)}".encode("utf-8")
+            f"{protection_id}|{index}|{str(leg)}|{str(quantity)}".encode("utf-8")
         ).hexdigest()[:28]
         return f"SBP-{digest}"
 
@@ -595,6 +619,24 @@ class NautilusHyperliquidTestnetBackend:
             "quantity": quantity,
             "time": event.get("time"),
         }
+
+    @classmethod
+    def _protection_identity_matches(
+        cls,
+        requested: Mapping[str, object],
+        observed: Mapping[str, object],
+    ) -> bool:
+        requested_oid = str(requested.get("oid") or "").strip()
+        requested_cloid = str(requested.get("cloid") or "").strip()
+        observed_oid = str(observed.get("oid") or "").strip()
+        observed_cloid = str(observed.get("cloid") or "").strip()
+        if requested_oid and observed_oid and requested_oid != observed_oid:
+            return False
+        if requested_cloid:
+            if observed_cloid:
+                return observed_cloid in cls._client_order_id_candidates(requested_cloid)
+            return bool(requested_oid and observed_oid == requested_oid)
+        return bool(requested_oid and observed_oid == requested_oid)
 
     @staticmethod
     def _protection_state(rows: list[dict[str, object]]) -> str:

@@ -183,7 +183,11 @@ class HyperliquidRuntimeProtectionAdapter:
             )
 
     def reconcile(self, group: ProtectionGroup) -> ProtectionReceipt:
-        """Confirm protection through an explicit Broker/fixture observation."""
+        """Confirm protection through a fresh Broker/fixture observation.
+
+        A successful full-coverage observation may recover a previously frozen
+        lifecycle without submitting or modifying an order.
+        """
 
         with self._lock:
             self._last_operations[group.protection_id] = "query"
@@ -249,7 +253,7 @@ class HyperliquidRuntimeProtectionAdapter:
                     group,
                     filled_quantity=filled_quantity,
                 )
-                self._require("partial_fill_repair_position_following")
+                self._require("partial_fill_repair")
             except Exception as error:
                 self._freeze(group.protection_id, error)
                 raise
@@ -265,7 +269,7 @@ class HyperliquidRuntimeProtectionAdapter:
         group: ProtectionGroup,
         *,
         owned_quantity: Decimal,
-    ) -> ProtectionReceipt | ProtectionLifecycleStatus:
+    ) -> ProtectionReceipt:
         """Keep protection coverage aligned with the currently owned quantity."""
 
         with self._lock:
@@ -284,7 +288,7 @@ class HyperliquidRuntimeProtectionAdapter:
             if group.quantity_policy is ProtectionQuantityPolicy.POSITION_FOLLOWING:
                 if owned_quantity != group.quantity:
                     try:
-                        self._require("partial_fill_repair_position_following")
+                        self._require("partial_fill_repair")
                     except Exception as error:
                         self._freeze(group.protection_id, error)
                         raise
@@ -533,24 +537,6 @@ class HyperliquidRuntimeProtectionAdapter:
 
     def _require(self, operation: str) -> None:
         self._runtime.session.capabilities.require("protection_order", operation)
-
-    def _coverage_status_or_freeze(self, protection_id: str) -> ProtectionLifecycleStatus:
-        status = self.status(protection_id)
-        if status.state in {ProtectionLifecycleState.SUBMITTED, ProtectionLifecycleState.ACTIVE}:
-            return status
-        if status.state is ProtectionLifecycleState.FROZEN:
-            raise BrokerCapabilityError(
-                "protection_order",
-                "position_coverage",
-                "frozen_protection_requires_explicit_retry",
-            )
-        error = BrokerCapabilityError(
-            "protection_order",
-            "position_coverage",
-            "protection coverage is not active",
-        )
-        self._freeze(protection_id, error)
-        raise error
 
     @staticmethod
     def _serialize(

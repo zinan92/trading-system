@@ -308,6 +308,12 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
             ),
             "unknown",
         )
+        self.assertEqual(
+            NautilusHyperliquidTestnetBackend._protection_state(
+                [{"status": "partially_filled"}, {"status": "resting"}]
+            ),
+            "unknown",
+        )
 
     def test_protection_coverage_uses_the_lowest_observed_leg_quantity(self) -> None:
         self.assertEqual(
@@ -324,12 +330,24 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
                 [{"quantity": "0.20"}, {}]
             )
         )
-        self.assertEqual(
-            NautilusHyperliquidTestnetBackend._protection_state(
-                [{"status": "partially_filled"}, {"status": "resting"}]
-            ),
-            "unknown",
+
+    def test_protection_client_identity_changes_when_repair_quantity_changes(self) -> None:
+        leg = {"tpsl": "sl", "triggerPx": "59000", "reduceOnly": True}
+
+        original = NautilusHyperliquidTestnetBackend._protection_client_id(
+            "protect-1",
+            0,
+            leg,
+            quantity="0.20",
         )
+        repaired = NautilusHyperliquidTestnetBackend._protection_client_id(
+            "protect-1",
+            0,
+            leg,
+            quantity="0.04",
+        )
+
+        self.assertNotEqual(original, repaired)
 
     def test_submit_protection_rejects_non_active_leg_observations(self) -> None:
         class ProtectionSubmitClient(FakeClient):

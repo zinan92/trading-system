@@ -135,7 +135,7 @@ class HyperliquidRuntimeProtectionTests(unittest.TestCase):
             "fixed_size",
             "position_following",
             "position_level_tpsl",
-            "partial_fill_repair_position_following",
+            "partial_fill_repair",
         )
 
     def test_submit_serializes_reduce_only_group_and_siblings(self) -> None:
