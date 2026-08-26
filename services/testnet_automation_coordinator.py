@@ -634,6 +634,79 @@ class TestnetAutomationCoordinator:
         }
         return self._record(state)
 
+    def record_soak_window(
+        self,
+        observation: Mapping[str, Any],
+        *,
+        strategy_family: str,
+        instrument_id: str = "BTC-USD-PERP",
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record one immutable Testnet automation evidence window."""
+
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        from services.testnet_automation_readiness import TestnetAutomationReadiness
+
+        readiness = TestnetAutomationReadiness(
+            self.output_root,
+            strategy_family=strategy_family,
+            instrument_id=instrument_id,
+        )
+        row = readiness.record_window(dict(observation))
+        status = "soak_blocked" if row.get("status") != "pass" else "soak_in_progress"
+        state = {
+            **current,
+            "event": "soak_window_recorded",
+            "action": "record_soak_window",
+            "status": status,
+            "occurred_at": self._timestamp(timestamp),
+            "soak": readiness.public_status(now=self._timestamp(timestamp)),
+            "soak_window": row,
+            "execution_enabled": False if status == "soak_blocked" else current.get("execution_enabled") is True,
+            "execution_ready": False if status == "soak_blocked" else current.get("execution_ready") is True,
+            "next_action": "notify_park_and_wait" if status == "soak_blocked" else "continue_soak",
+            "blocker": next(iter(row.get("blockers") or []), None),
+        }
+        return self._record(state)
+
+    def finalize_soak(
+        self,
+        *,
+        strategy_family: str,
+        instrument_id: str = "BTC-USD-PERP",
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Finalize the two-window Testnet readiness evidence for one mode."""
+
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        from services.testnet_automation_readiness import TestnetAutomationReadiness
+
+        readiness = TestnetAutomationReadiness(
+            self.output_root,
+            strategy_family=strategy_family,
+            instrument_id=instrument_id,
+        )
+        receipt = readiness.finalize(now=now)
+        ready = receipt.get("status") == "ready"
+        state = {
+            **current,
+            "event": "soak_finalized",
+            "action": "finalize_soak",
+            "status": "soak_ready" if ready else "soak_blocked",
+            "occurred_at": self._timestamp(now),
+            "soak": readiness.public_status(now=now),
+            "soak_receipt": receipt,
+            "execution_enabled": False,
+            "execution_ready": False,
+            "next_action": "continue_progressive_expansion" if ready else "notify_park_and_wait",
+            "blocker": None if ready else next(iter(receipt.get("blockers") or []), None),
+        }
+        return self._record(state)
+
     def start_dca_session(
         self,
         plan: Mapping[str, Any],

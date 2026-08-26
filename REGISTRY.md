@@ -54,6 +54,58 @@
 _下一步_: keep the BTC path read-only until a separate attended Testnet
 execution contract is explicitly authorized; the unified review is complete.
 
+## 现在在哪里(2026-08-26, Hyperliquid Testnet Coordinator rollout)
+
+- The Wayfinder map and its final rollout decision are complete. The current
+  spec is [SPEC: Hyperliquid Testnet automated Grid/DCA via Testnet Automation
+  Coordinator](https://github.com/zinan92/trading-system/issues/1023); the
+  implementation queue is TS-TESTNET-01 through TS-TESTNET-08.
+- TS-TESTNET-01 / #1024 merged as PR #1032 at
+  `main@094a46b76ae24a9675f40d780d66b100b130c73d`: the public Coordinator
+  binds exact Testnet activation identity, persists status and operator
+  intents, and remains execution-disabled until later capability gates.
+- TS-TESTNET-02 / #1025 merged as PR #1033 at
+  `main@15d719535149f2730b6e4a694faf43630b94aa82`: all default-perp inventory
+  stays visible, market-quality eligibility is source-bound, and one asset is
+  selected through the subtractive Portfolio Gate.
+- TS-TESTNET-03 / #1026 merged as PR #1034 at
+  `main@ee19d70a59de07015619abf1bad45a599b832ea6`: the canonical BTC
+  transport canary requires explicit execution, typed facts, actual-quantity
+  protection, fees/positions/cursor reconciliation, and flat evidence;
+  default protection gaps remain explicit blockers.
+- TS-TESTNET-04 / #1027 merged as PR #1035 at
+  `main@24f355c2fbf17cf2eac12a703760b07b40d5c74b`: the old DCA lifecycle is
+  driven through the Coordinator with aggregate protection, next-entry gates,
+  terminal notification wait, and non-flattening interrupt/resume.
+- TS-TESTNET-05 / #1028 merged as PR #1036 at
+  `main@02d6a5d900cc20dc9631db2b3fa0e4c2fc764734`: the old Grid lifecycle is
+  driven through the Coordinator with rung cycles, re-arm, Hard Stop terminal
+  behavior, protection, and non-flattening interrupt/resume.
+- TS-TESTNET-06 / #1029 merged as PR #1037 at
+  `main@6222ce20bdecf74016d998388591402110cfefe6`: Testnet scheduler
+  ownership is Cloud-only with owner/epoch lock, restart-before-resume
+  reconciliation, duplicate-tick idempotence, and terminal operator wait.
+- TS-TESTNET-07 / #1030 merged as PR #1038 at
+  `main@b5d2589a2fea07441b7cb0433cecce8d8b1e5092`: progressive pair admission
+  keeps the full universe searchable, applies bounded per-pair canaries, and
+  separates pair-local blockers from Portfolio Risk Holds.
+- TS-TESTNET-08 / #1031 is the current release candidate in PR #1039: the
+  two-window Testnet readiness contract, mode-scoped CLI, and attended
+  acceptance runbook are present; after merge this section remains the
+  canonical rollout handoff.
+- Focused implementation validation currently passes 126 cases across the
+  Coordinator, candidate selection, transport canary, DCA/Grid lifecycles,
+  scheduler, expansion, and readiness contracts. No credential was read, no
+  external Testnet order was submitted, and no Mainnet/Live or cloud mutation
+  occurred. The external standard-broker default profile still reports its
+  declared protection capability gap; the system must remain blocked until a
+  matching public capability is available.
+
+_下一步_: merge the final readiness PR, run the full clean-suite verification,
+then perform the single unified Claude Sonnet review requested by Park. Only
+after that review passes may a separately attended Testnet activation be
+considered.
+
 ## 现在在哪里(2026-08-23)
 - #888 / PR #889 merged as
   `main@30034298c056edf38e880b46f896f70c5f3823a8`, consuming the public
