@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,11 @@ def _observation(index: int, *, family: str = "dca", instrument: str = "BTC-USD-
                 "starts_at": start.isoformat(),
                 "ends_at": (start + timedelta(hours=12)).isoformat(),
                 "status": payload.get("status", "pass"),
+                "source": "runtime",
+                "observed_at": (start + timedelta(hours=6)).isoformat(),
             }
+            if category == "market_freshness_trust":
+                artifact.update({"fresh": True, "trusted": True})
             path.write_text(__import__("json").dumps(artifact), encoding="utf-8")
             payload.update({
                 "artifact_ref": str(path),
@@ -64,6 +69,8 @@ def _observation(index: int, *, family: str = "dca", instrument: str = "BTC-USD-
                 "starts_at": start.isoformat(),
                 "ends_at": (start + timedelta(hours=12)).isoformat(),
                 "status": "pass",
+                "source": "runtime",
+                "observed_at": (start + timedelta(hours=6)).isoformat(),
             }
             path.write_text(__import__("json").dumps(artifact), encoding="utf-8")
             evidence_payload[category] = {
@@ -199,3 +206,38 @@ def test_coordinator_projects_soak_window_and_final_receipt(tmp_path: Path, monk
     )
     assert result["status"] == "soak_ready"
     assert result["soak"]["window_count"] == 2
+
+
+def test_automation_soak_cli_records_one_window_without_network(tmp_path: Path, monkeypatch) -> None:
+    attestation = {
+        "status": "verified",
+        "source_sha": "b" * 40,
+        "source_tree_sha": "c" * 40,
+        "tracked_tree_clean": True,
+    }
+    monkeypatch.setattr(soak_module, "current_source_attestation", lambda *_args, **_kwargs: attestation)
+    observation = _observation(0, artifact_root=tmp_path, family="grid")
+    observation_path = tmp_path / "observation.json"
+    observation_path.write_text(json.dumps(observation), encoding="utf-8")
+    artifacts = [
+        f"{category}={payload['artifact_ref']}"
+        for category, payload in observation["evidence"].items()
+        if payload.get("artifact_kind")
+    ]
+    from pipelines.testnet_soak import main
+
+    result = main(
+        [
+            "--output-root",
+            str(tmp_path / "outputs"),
+            "--observation",
+            str(observation_path),
+            "--automation",
+            "--strategy-family",
+            "grid",
+            "--instrument-id",
+            "BTC-USD-PERP",
+            *sum((["--artifact", item] for item in artifacts), []),
+        ]
+    )
+    assert result == 0

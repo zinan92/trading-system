@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from services.testnet_soak_readiness import TestnetSoakError, TestnetSoakReadiness
+from services.testnet_automation_readiness import TestnetAutomationReadiness
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,6 +20,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--observation", required=True, help="JSON observation containing identity/window/gates")
     parser.add_argument("--artifact", action="append", default=[], metavar="CATEGORY=PATH")
     parser.add_argument("--finalize", action="store_true")
+    parser.add_argument("--automation", action="store_true", help="Use the two-window BTC automation readiness contract")
+    parser.add_argument("--strategy-family", choices=("dca", "grid"))
+    parser.add_argument("--instrument-id", default="BTC-USD-PERP")
     args = parser.parse_args(argv)
     try:
         observation = json.loads(Path(args.observation).read_text(encoding="utf-8"))
@@ -28,7 +32,16 @@ def main(argv: list[str] | None = None) -> int:
             if not separator or not category or not path:
                 raise TestnetSoakError("artifact_argument_invalid")
             artifacts[category] = path
-        soak = TestnetSoakReadiness(Path(args.output_root))
+        if args.automation:
+            if not args.strategy_family:
+                raise TestnetSoakError("strategy_family_required_for_automation_readiness")
+            soak = TestnetAutomationReadiness(
+                Path(args.output_root),
+                strategy_family=args.strategy_family,
+                instrument_id=args.instrument_id,
+            )
+        else:
+            soak = TestnetSoakReadiness(Path(args.output_root))
         row = soak.record_window_from_artifacts(observation, artifact_paths=artifacts)
         result = {"status": row["status"], "window": row}
         if args.finalize:
