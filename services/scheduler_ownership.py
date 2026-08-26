@@ -21,12 +21,16 @@ class SchedulerOwnershipStore:
         output_root: Path,
         *,
         now: Callable[[], datetime] | None = None,
+        scope: str = "paper_only",
     ) -> None:
         self.output_root = Path(output_root)
         self.now = now or (lambda: datetime.now(timezone.utc))
-        self.path = (
-            self.output_root / "cloud" / "scheduler_ownership" / "current.json"
-        )
+        normalized_scope = str(scope or "").strip().lower()
+        if normalized_scope not in {"paper_only", "testnet_only"}:
+            raise ValueError("scheduler ownership scope invalid")
+        self.scope = normalized_scope
+        base = "cloud/scheduler_ownership" if normalized_scope == "paper_only" else "testnet_automation/scheduler_ownership"
+        self.path = self.output_root / base / "current.json"
 
     def current(self) -> dict[str, Any]:
         rows = load_json(self.path)
@@ -95,8 +99,12 @@ class SchedulerOwnershipStore:
         action: str,
     ) -> dict[str, Any]:
         payload = {
-            "schema_version": "paper-scheduler-ownership-v1",
-            "scope": "paper_only",
+            "schema_version": (
+                "paper-scheduler-ownership-v1"
+                if self.scope == "paper_only"
+                else "testnet-scheduler-ownership-v1"
+            ),
+            "scope": self.scope,
             "status": status,
             "active_owner_id": active_owner_id,
             "previous_owner_id": previous_owner_id,
