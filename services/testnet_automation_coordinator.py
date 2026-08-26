@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from services.journal_store import load_json, write_json
 
@@ -570,6 +570,67 @@ class TestnetAutomationCoordinator:
             "execution_mutation": True,
             "network_operation_invoked": True,
             "blocker": None,
+        }
+        return self._record(state)
+
+    def progressive_expand(
+        self,
+        candidates: Sequence[Mapping[str, Any]],
+        *,
+        preflight: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+        canary: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]],
+        equity: Any,
+        command_id: str | None = None,
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Admit the next ranked pair without creating concurrent slices."""
+
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        activation_id = str(current.get("activation_id") or "")
+        normalized_command_id = self._command_id(command_id, "progressive_expand", activation_id)
+        replay = self._replay(normalized_command_id)
+        if replay is not None:
+            return replay
+        from services.testnet_progressive_expansion import TestnetProgressiveExpansion
+
+        result = TestnetProgressiveExpansion().admit_ranked(
+            candidates,
+            preflight=preflight,
+            canary=canary,
+            equity=equity,
+        )
+        expansion_status = str(result.get("status") or "blocked")
+        if expansion_status == "admitted":
+            status = "candidate_admitted"
+            next_action = "await_strategy_activation"
+        elif expansion_status == "portfolio_hold":
+            status = "portfolio_held"
+            next_action = "notify_park_and_wait"
+        else:
+            status = "candidate_blocked"
+            next_action = "await_candidate_revalidation"
+        state = {
+            **current,
+            "event": "progressive_expansion_admitted" if expansion_status == "admitted" else "progressive_expansion_blocked",
+            "action": "progressive_expand",
+            "status": status,
+            "command_id": normalized_command_id,
+            "occurred_at": self._timestamp(timestamp),
+            "expansion": result,
+            "selected_asset": result.get("selected_asset"),
+            "selected_instrument_id": result.get("selected_instrument_id"),
+            "global_hold": result.get("global_hold") is True,
+            "ready": expansion_status == "admitted",
+            "execution_enabled": False,
+            "execution_ready": False,
+            "execution_blocker": result.get("blocker") or "capability_gap:execution",
+            "next_action": next_action,
+            "execution_mutation": False,
+            "network_operation_invoked": False,
+            "secret_material_present": False,
+            "blocker": result.get("blocker"),
         }
         return self._record(state)
 
