@@ -11,6 +11,9 @@ from standard_broker.adapters.hyperliquid import (
     NautilusHyperliquidRuntime,
     NautilusRuntimeConfig,
 )
+from standard_broker.adapters.hyperliquid.external import (
+    enabled_testnet_position_protection_capabilities,
+)
 from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import BrokerCapabilityError
 from standard_broker.models import BrokerEnvironment
@@ -53,18 +56,16 @@ def _approved_testnet_runtime(capabilities, calls, *, accepted: bool):
 
         def invoke(self, port: str, operation: str, request: object):
             calls.append((port, operation, request))
-            return SimpleNamespace(
-                accepted=accepted,
-                broker_id="hyperliquid",
-                environment=BrokerEnvironment.TESTNET,
-                provenance=Provenance(
-                    source="testnet.fixture",
-                    execution_scope="hypercore:default",
-                    transport_state="local_fixture",
-                    mapping_revision="testnet-protection-v1",
-                    received_at=datetime.now(UTC),
-                ),
-            )
+            state = {"query": "active", "cancel": "canceled"}.get(operation, "submitted")
+            return {
+                "protection_id": "protect-1",
+                "operation": operation,
+                "state": state,
+                "accepted": accepted,
+                "covered_quantity": "0.1" if operation == "query" else "0",
+                "order_ids": ["protection-order-1", "protection-order-2"],
+                "observation_digest": "sha256:" + "d" * 64,
+            }
 
     approval = ExternalEnvironmentApproval(
         environment=BrokerEnvironment.TESTNET,
@@ -272,6 +273,31 @@ class HyperliquidProtectionTests(unittest.TestCase):
                 owned_quantity=Decimal("0.04"),
             )
         self.assertIn("partial_fill_protection_gap", str(raised.exception))
+
+    def test_shipped_testnet_profile_admits_supported_position_protection(self) -> None:
+        capabilities = enabled_testnet_position_protection_capabilities()
+        group = replace(
+            self.long_group(quantity_policy=ProtectionQuantityPolicy.POSITION_FOLLOWING),
+            take_profit=ProtectionLeg(
+                protection_type=ProtectionType.TAKE_PROFIT,
+                execution=ProtectionExecution.LIMIT,
+                trigger_price=Decimal(66000),
+                limit_price=Decimal(65950),
+            ),
+            stop_loss=ProtectionLeg(
+                protection_type=ProtectionType.STOP_LOSS,
+                execution=ProtectionExecution.MARKET,
+                trigger_price=Decimal(64000),
+            ),
+        )
+        adapter = HyperliquidRuntimeProtectionAdapter(
+            runtime=_approved_testnet_runtime(capabilities, [], accepted=True)
+        )
+
+        receipt = adapter.submit(group)
+
+        self.assertTrue(receipt.accepted)
+        self.assertEqual(adapter.status(group.protection_id).state, ProtectionLifecycleState.SUBMITTED)
 
     def test_unaccepted_testnet_protection_receipt_freezes_before_coverage(self) -> None:
         capabilities = CapabilityDescriptor(

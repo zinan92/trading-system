@@ -1,7 +1,9 @@
 """Paper-safe compatibility boundary for the Nautilus Hyperliquid adapter."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 import re
 
@@ -94,6 +96,11 @@ class NautilusRuntimeReceipt:
     lifecycle_id: str
     release_sha: str | None
     provenance: Provenance
+    state: str | None = None
+    covered_quantity: Decimal | None = None
+    order_ids: tuple[str, ...] = ()
+    observation_digest: str | None = None
+    protection_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -418,13 +425,87 @@ class NautilusHyperliquidRuntime:
         """Invoke and return a canonical receipt without provider-native payloads."""
 
         request = self._normalize_runtime_request(request)
-        self._invoke_native(port, operation, request)
+        result = self._invoke_native(port, operation, request)
+        accepted = True
+        state = None
+        covered_quantity = None
+        order_ids: tuple[str, ...] = ()
+        observation_digest = None
+        protection_id = None
+        if port == "protection_order":
+            if not isinstance(result, Mapping):
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation must be a canonical mapping",
+                )
+            raw_protection_id = result.get("protection_id")
+            if not isinstance(raw_protection_id, str) or not raw_protection_id.strip():
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation identity is required",
+                )
+            protection_id = raw_protection_id.strip()
+            raw_operation = result.get("operation")
+            if not isinstance(raw_operation, str) or raw_operation.strip().lower() != operation:
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation operation does not match the requested operation",
+                )
+            raw_state = result.get("state")
+            if not isinstance(raw_state, str) or not raw_state.strip():
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation state is required",
+                )
+            state = raw_state.strip().lower()
+            raw_accepted = result.get("accepted")
+            if not isinstance(raw_accepted, bool):
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation accepted flag is required",
+                )
+            accepted = raw_accepted
+            raw_covered_quantity = result.get("covered_quantity")
+            if raw_covered_quantity is None:
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation covered quantity is required",
+                )
+            try:
+                covered_quantity = Decimal(str(raw_covered_quantity))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation covered quantity is not numeric",
+                ) from exc
+            if not covered_quantity.is_finite() or covered_quantity < 0:
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation covered quantity is invalid",
+                )
+            raw_order_ids = result.get("order_ids", ())
+            if not isinstance(raw_order_ids, (list, tuple)) or not all(
+                isinstance(order_id, str) and order_id.strip() for order_id in raw_order_ids
+            ):
+                raise NautilusRuntimeError(
+                    "protection_receipt_invalid",
+                    "protection observation order identities are invalid",
+                )
+            order_ids = tuple(order_id.strip() for order_id in raw_order_ids)
+            if result.get("observation_digest") is not None:
+                raw_observation_digest = result["observation_digest"]
+                if not isinstance(raw_observation_digest, str) or not raw_observation_digest.strip():
+                    raise NautilusRuntimeError(
+                        "protection_receipt_invalid",
+                        "protection observation digest is invalid",
+                    )
+                observation_digest = raw_observation_digest.strip()
         return NautilusRuntimeReceipt(
             broker_id=self._session.broker_id,
             environment=self._session.environment,
             port=port,
             operation=operation,
-            accepted=True,
+            accepted=accepted,
             adapter_version=self._metadata.version,
             adapter_commit=self._metadata.commit,
             invocation_performed=self._invocation_performed,
@@ -445,6 +526,11 @@ class NautilusHyperliquidRuntime:
                 ),
                 mapping_revision=self._session.capabilities.revision,
             ),
+            state=state,
+            covered_quantity=covered_quantity,
+            order_ids=order_ids,
+            observation_digest=observation_digest,
+            protection_id=protection_id,
         )
 
     def invoke_fact(self, port: str, operation: str, request: object) -> object:

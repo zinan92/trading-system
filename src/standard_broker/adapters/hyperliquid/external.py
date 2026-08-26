@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import inspect
 import hashlib
 from importlib.metadata import PackageNotFoundError, version as package_version
@@ -19,6 +19,7 @@ from ...models import BrokerEnvironment, Provenance, SignerKind
 from ...runtime import BrokerRuntimeSession, RuntimeBoundaryError, SignerReference
 from .bridge import NautilusAdapterMetadata
 from .credentials import LocalFileSecretProvider
+from .protection import enabled_external_testnet_position_protection_capabilities
 
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 NAUTILUS_HYPERLIQUID_VERSION = "1.230.0"
@@ -51,7 +52,12 @@ def enabled_testnet_position_protection_capabilities(
 
     capabilities = default_testnet_capabilities(revision)
     operations = dict(capabilities.operations)
-    operations["protection_order"] = frozenset({"submit", "cancel", "replace", "query"})
+    protection = enabled_external_testnet_position_protection_capabilities()
+    operations["protection_order"] = frozenset(
+        capability
+        for capability, supported in protection.values.items()
+        if supported
+    )
     return CapabilityDescriptor(
         broker_id=capabilities.broker_id,
         environment=capabilities.environment,
@@ -279,7 +285,15 @@ class NautilusHyperliquidTestnetBackend:
             # child CLOIDs are deterministic and can be queried individually
             # once the user-events stream assigns their venue order IDs.
             group_row = self._protection_report(reports[0])
-            if group_row["status"] in {"unknown", "rejected", "canceled", "cancelled"}:
+            if group_row["status"] in {
+                "unknown",
+                "rejected",
+                "canceled",
+                "cancelled",
+                "filled",
+                "partially_filled",
+                "partial",
+            }:
                 raise RuntimeBoundaryError(
                     "protection_group_submit_rejected",
                     "Nautilus returned a non-accepted positionTpsl group report",
@@ -292,6 +306,7 @@ class NautilusHyperliquidTestnetBackend:
                         protection_id,
                         index,
                         leg,
+                        quantity=request.get("quantity"),
                     ),
                 }
                 for index, leg in enumerate(legs)
@@ -309,7 +324,23 @@ class NautilusHyperliquidTestnetBackend:
         return self._protection_observation(
             protection_id=protection_id,
             operation="submit",
-            state="submitted" if all(row["status"] not in {"unknown", "rejected"} for row in rows) else "unknown",
+            state=(
+                "submitted"
+                if all(
+                    row["status"]
+                    not in {
+                        "unknown",
+                        "rejected",
+                        "canceled",
+                        "cancelled",
+                        "filled",
+                        "partially_filled",
+                        "partial",
+                    }
+                    for row in rows
+                )
+                else "unknown"
+            ),
             covered_quantity=Decimal("0"),
             rows=rows,
         )
@@ -334,7 +365,6 @@ class NautilusHyperliquidTestnetBackend:
                 covered_quantity=Decimal("0"),
                 rows=(),
             )
-        instrument = self._instrument(request)
         rows: list[dict[str, object]] = []
         for row in old_rows:
             if not isinstance(row, Mapping):
@@ -345,7 +375,13 @@ class NautilusHyperliquidTestnetBackend:
                     venue_order_id=row.get("oid") or None,
                     client_order_id=row.get("cloid") or None,
                 )
-                rows.append(self._protection_report(report))
+                normalized = self._protection_report(report)
+                if not self._protection_identity_matches(row, normalized):
+                    raise RuntimeBoundaryError(
+                        "protection_identity_conflict",
+                        "Hyperliquid protection status report conflicts with its requested identity",
+                    )
+                rows.append(normalized)
             except Exception:
                 rows.append(
                     {
@@ -355,9 +391,10 @@ class NautilusHyperliquidTestnetBackend:
                     }
                 )
         state = self._protection_state(rows)
-        quantity = Decimal(str(request.get("quantity") or "0"))
-        covered = quantity if state == "active" else Decimal("0")
-        del instrument
+        covered = self._protection_covered_quantity(rows) if state == "active" else Decimal("0")
+        if state == "active" and (covered is None or covered <= 0):
+            state = "unknown"
+            covered = Decimal("0")
         self._protection_orders[protection_id] = {"request": dict(request), "rows": tuple(rows)}
         return self._protection_observation(
             protection_id=protection_id,
@@ -398,11 +435,12 @@ class NautilusHyperliquidTestnetBackend:
                 venue_order_id=self._optional_venue_order_id(row),
             )
         observed = self._query_protection(protection_id)
-        return {
-            **dict(observed),
-            "operation": "cancel",
-            "state": "canceled" if observed.get("state") == "canceled" else "unknown",
-        }
+        state = "canceled" if observed.get("state") == "canceled" else "unknown"
+        return self._rewrite_protection_observation(
+            observed,
+            operation="cancel",
+            state=state,
+        )
 
     def _replace_protection(self, request: Mapping[str, object]) -> Mapping[str, object]:
         protection_id = str(request.get("protectionId") or "").strip()
@@ -420,10 +458,11 @@ class NautilusHyperliquidTestnetBackend:
                 rows=(),
             )
         submitted = self._submit_protection(request)
-        return {
-            **dict(submitted),
-            "operation": "replace",
-        }
+        return self._rewrite_protection_observation(
+            submitted,
+            operation="replace",
+            state=str(submitted.get("state") or "unknown"),
+        )
 
     def _build_protection_orders(self, request: Mapping[str, object]) -> list[object]:
         """Build Nautilus order objects for one positionTpsl group."""
@@ -466,7 +505,14 @@ class NautilusHyperliquidTestnetBackend:
         if not isinstance(legs, list):
             raise RuntimeBoundaryError("protection_group_invalid", "protection legs must be a list")
         client_ids = [
-            ClientOrderId(self._protection_client_id(str(request.get("protectionId")), index, leg))
+            ClientOrderId(
+                self._protection_client_id(
+                    str(request.get("protectionId")),
+                    index,
+                    leg,
+                    quantity=request.get("quantity"),
+                )
+            )
             for index, leg in enumerate(legs)
             if isinstance(leg, Mapping)
         ]
@@ -547,14 +593,22 @@ class NautilusHyperliquidTestnetBackend:
         return result
 
     @staticmethod
-    def _protection_client_id(protection_id: str, index: int, leg: object) -> str:
+    def _protection_client_id(
+        protection_id: str,
+        index: int,
+        leg: object,
+        *,
+        quantity: object,
+    ) -> str:
         digest = hashlib.sha256(
-            f"{protection_id}|{index}|{str(leg)}".encode("utf-8")
+            f"{protection_id}|{index}|{str(leg)}|{str(quantity)}".encode("utf-8")
         ).hexdigest()[:28]
         return f"SBP-{digest}"
 
     def _protection_report(self, report: object) -> dict[str, object]:
         event = self._order_event(report)
+        mapping = self._to_mapping(report)
+        quantity = self._string_value(report, mapping, "quantity", "sz", "size") or event.get("sz")
         return {
             "status": str(event.get("status") or "unknown").lower(),
             "oid": event.get("oid"),
@@ -562,8 +616,27 @@ class NautilusHyperliquidTestnetBackend:
             "side": event.get("side"),
             "px": event.get("px"),
             "sz": event.get("sz"),
+            "quantity": quantity,
             "time": event.get("time"),
         }
+
+    @classmethod
+    def _protection_identity_matches(
+        cls,
+        requested: Mapping[str, object],
+        observed: Mapping[str, object],
+    ) -> bool:
+        requested_oid = str(requested.get("oid") or "").strip()
+        requested_cloid = str(requested.get("cloid") or "").strip()
+        observed_oid = str(observed.get("oid") or "").strip()
+        observed_cloid = str(observed.get("cloid") or "").strip()
+        if requested_oid and observed_oid and requested_oid != observed_oid:
+            return False
+        if requested_cloid:
+            if observed_cloid:
+                return observed_cloid in cls._client_order_id_candidates(requested_cloid)
+            return bool(requested_oid and observed_oid == requested_oid)
+        return bool(requested_oid and observed_oid == requested_oid)
 
     @staticmethod
     def _protection_state(rows: list[dict[str, object]]) -> str:
@@ -572,9 +645,31 @@ class NautilusHyperliquidTestnetBackend:
             return "unknown"
         if statuses and statuses <= {"canceled", "cancelled"}:
             return "canceled"
-        if statuses <= {"resting", "waiting_for_trigger", "waiting_for_fill", "filled", "partially_filled"}:
+        if statuses & {"filled", "partially_filled", "partial"}:
+            return "unknown"
+        if statuses <= {"resting", "waiting_for_trigger", "waiting_for_fill"}:
             return "active"
         return "unknown"
+
+    @staticmethod
+    def _protection_covered_quantity(
+        rows: list[dict[str, object]],
+    ) -> Decimal | None:
+        """Return the shared coverage of all active protection legs."""
+
+        quantities: list[Decimal] = []
+        for row in rows:
+            raw_quantity = row.get("quantity")
+            if raw_quantity is None:
+                return None
+            try:
+                quantity = Decimal(str(raw_quantity))
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+            if not quantity.is_finite() or quantity < 0:
+                return None
+            quantities.append(quantity)
+        return min(quantities) if quantities else None
 
     def _protection_observation(
         self,
@@ -601,6 +696,26 @@ class NautilusHyperliquidTestnetBackend:
             }
         )
         result["observation_digest"] = digest_canonical(result)
+        return result
+
+    @staticmethod
+    def _rewrite_protection_observation(
+        observation: Mapping[str, object],
+        *,
+        operation: str,
+        state: str,
+    ) -> Mapping[str, object]:
+        """Rewrite a canonical observation and re-seal its final contents."""
+
+        result = dict(observation)
+        result["operation"] = operation
+        result["state"] = state
+        result["accepted"] = state not in {"unknown", "rejected"}
+        if state == "unknown":
+            result["covered_quantity"] = "0"
+        result["observation_digest"] = digest_canonical(
+            {key: value for key, value in result.items() if key != "observation_digest"}
+        )
         return result
 
     def _submit(self, request: Mapping[str, object]) -> Mapping[str, object]:

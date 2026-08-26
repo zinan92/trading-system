@@ -183,7 +183,11 @@ class HyperliquidRuntimeProtectionAdapter:
             )
 
     def reconcile(self, group: ProtectionGroup) -> ProtectionReceipt:
-        """Confirm protection through an explicit Broker/fixture observation."""
+        """Confirm protection through a fresh Broker/fixture observation.
+
+        A successful full-coverage observation may recover a previously frozen
+        lifecycle without submitting or modifying an order.
+        """
 
         with self._lock:
             self._last_operations[group.protection_id] = "query"
@@ -201,6 +205,13 @@ class HyperliquidRuntimeProtectionAdapter:
                         "query",
                         "protection_query_not_accepted",
                     )
+                self._validate_runtime_state(
+                    runtime_receipt,
+                    operation="query",
+                    expected_states={"active"},
+                    group=group,
+                    require_coverage=True,
+                )
             except Exception as error:
                 self._freeze(group.protection_id, error)
                 raise
@@ -210,6 +221,7 @@ class HyperliquidRuntimeProtectionAdapter:
                 reason=None,
                 attempts=0,
             )
+            self._last_errors.pop(group.protection_id, None)
             return ProtectionReceipt(
                 protection_id=group.protection_id,
                 parent_order_id=group.parent_order_id,
@@ -241,7 +253,7 @@ class HyperliquidRuntimeProtectionAdapter:
                     group,
                     filled_quantity=filled_quantity,
                 )
-                self._require("partial_fill_repair_position_following")
+                self._require("partial_fill_repair")
             except Exception as error:
                 self._freeze(group.protection_id, error)
                 raise
@@ -257,7 +269,7 @@ class HyperliquidRuntimeProtectionAdapter:
         group: ProtectionGroup,
         *,
         owned_quantity: Decimal,
-    ) -> ProtectionReceipt | ProtectionLifecycleStatus:
+    ) -> ProtectionReceipt:
         """Keep protection coverage aligned with the currently owned quantity."""
 
         with self._lock:
@@ -276,7 +288,7 @@ class HyperliquidRuntimeProtectionAdapter:
             if group.quantity_policy is ProtectionQuantityPolicy.POSITION_FOLLOWING:
                 if owned_quantity != group.quantity:
                     try:
-                        self._require("partial_fill_repair_position_following")
+                        self._require("partial_fill_repair")
                     except Exception as error:
                         self._freeze(group.protection_id, error)
                         raise
@@ -285,7 +297,7 @@ class HyperliquidRuntimeProtectionAdapter:
                         operation="replace",
                         success_state=ProtectionLifecycleState.SUBMITTED,
                     )
-                return self._coverage_status_or_freeze(group.protection_id)
+                return self.reconcile(group)
             if owned_quantity != group.quantity:
                 error = BrokerCapabilityError(
                     "protection_order",
@@ -294,7 +306,7 @@ class HyperliquidRuntimeProtectionAdapter:
                 )
                 self._freeze(group.protection_id, error)
                 raise error
-            return self._coverage_status_or_freeze(group.protection_id)
+            return self.reconcile(group)
 
     def retry(
         self,
@@ -319,6 +331,8 @@ class HyperliquidRuntimeProtectionAdapter:
                 )
             retry_group = self._last_groups[group.protection_id]
             operation = plan.operation
+            if operation == "query":
+                return self.reconcile(retry_group)
             success_state = (
                 ProtectionLifecycleState.CANCELED
                 if operation == "cancel"
@@ -423,6 +437,16 @@ class HyperliquidRuntimeProtectionAdapter:
                     operation,
                     "protection_receipt_not_accepted",
                 )
+            self._validate_runtime_state(
+                runtime_receipt,
+                operation=operation,
+                expected_states=(
+                    {"canceled"}
+                    if operation == "cancel"
+                    else {"submitted", "active"}
+                ),
+                group=group,
+            )
         except Exception as error:
             self._freeze(group.protection_id, error)
             raise
@@ -446,6 +470,55 @@ class HyperliquidRuntimeProtectionAdapter:
             release_sha=runtime_receipt.release_sha,
         )
 
+    @staticmethod
+    def _validate_runtime_state(
+        runtime_receipt: object,
+        *,
+        operation: str,
+        expected_states: set[str],
+        group: ProtectionGroup,
+        require_coverage: bool = False,
+    ) -> None:
+        observed_protection_id = getattr(runtime_receipt, "protection_id", None)
+        if not isinstance(observed_protection_id, str) or not observed_protection_id.strip():
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation identity is required",
+            )
+        if observed_protection_id != group.protection_id:
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation identity does not match the requested group",
+            )
+        state = getattr(runtime_receipt, "state", None)
+        if not isinstance(state, str) or not state.strip():
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation state is required",
+            )
+        if state.lower() not in expected_states:
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                f"protection observation state {state!r} is not one of {sorted(expected_states)}",
+            )
+        covered_quantity = getattr(runtime_receipt, "covered_quantity", None)
+        if not isinstance(covered_quantity, Decimal):
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation covered quantity is required",
+            )
+        if require_coverage and covered_quantity < group.quantity:
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation coverage is below the requested group quantity",
+            )
+
     def _require_group_capabilities(self, group: ProtectionGroup, operation: str) -> None:
         self._require(operation)
         self._require("reduce_only")
@@ -464,24 +537,6 @@ class HyperliquidRuntimeProtectionAdapter:
 
     def _require(self, operation: str) -> None:
         self._runtime.session.capabilities.require("protection_order", operation)
-
-    def _coverage_status_or_freeze(self, protection_id: str) -> ProtectionLifecycleStatus:
-        status = self.status(protection_id)
-        if status.state in {ProtectionLifecycleState.SUBMITTED, ProtectionLifecycleState.ACTIVE}:
-            return status
-        if status.state is ProtectionLifecycleState.FROZEN:
-            raise BrokerCapabilityError(
-                "protection_order",
-                "position_coverage",
-                "frozen_protection_requires_explicit_retry",
-            )
-        error = BrokerCapabilityError(
-            "protection_order",
-            "position_coverage",
-            "protection coverage is not active",
-        )
-        self._freeze(protection_id, error)
-        raise error
 
     @staticmethod
     def _serialize(

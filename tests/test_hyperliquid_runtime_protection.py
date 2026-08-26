@@ -7,6 +7,7 @@ from standard_broker.adapters.hyperliquid import (
     NautilusAdapterMetadata,
     NautilusHyperliquidRuntime,
     NautilusRuntimeConfig,
+    NautilusRuntimeError,
     ProtectionLifecycleState,
     RateLimitError,
 )
@@ -34,6 +35,7 @@ class FakeProtectionBackend:
     def __init__(self, profile: CapabilityDescriptor) -> None:
         self.calls: list[tuple[str, str, object]] = []
         self.fail_with: BaseException | None = None
+        self.response: object | None = None
         self.metadata = NautilusAdapterMetadata(
             package="nautilus-hyperliquid",
             version="1.230.0",
@@ -45,7 +47,18 @@ class FakeProtectionBackend:
         self.calls.append((port, operation, request))
         if self.fail_with is not None:
             raise self.fail_with
-        return {"status": "ok"}
+        if self.response is not None:
+            return self.response
+        state = {"query": "active", "cancel": "canceled"}.get(operation, "submitted")
+        return {
+            "protection_id": "protect-1",
+            "operation": operation,
+            "state": state,
+            "accepted": True,
+            "covered_quantity": "0.1" if operation == "query" else "0",
+            "order_ids": ["protection-order-1", "protection-order-2"],
+            "observation_digest": "sha256:" + "c" * 64,
+        }
 
 
 class HyperliquidRuntimeProtectionTests(unittest.TestCase):
@@ -112,6 +125,7 @@ class HyperliquidRuntimeProtectionTests(unittest.TestCase):
             "cancel",
             "replace",
             "cancel_replace",
+            "query",
             "reduce_only",
             "mark_price_trigger",
             "take_profit_market",
@@ -121,7 +135,7 @@ class HyperliquidRuntimeProtectionTests(unittest.TestCase):
             "fixed_size",
             "position_following",
             "position_level_tpsl",
-            "partial_fill_repair_position_following",
+            "partial_fill_repair",
         )
 
     def test_submit_serializes_reduce_only_group_and_siblings(self) -> None:
@@ -201,7 +215,8 @@ class HyperliquidRuntimeProtectionTests(unittest.TestCase):
             replace(group, quantity=Decimal("0.04")),
             owned_quantity=Decimal("0.04"),
         )
-        self.assertEqual(confirmed.state, ProtectionLifecycleState.SUBMITTED)
+        self.assertEqual(confirmed.operation, "query")
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.ACTIVE)
 
     def test_position_coverage_reconciliation_tracks_owned_quantity(self) -> None:
         runtime, backend = self.runtime(*self.full_operations())
@@ -282,6 +297,144 @@ class HyperliquidRuntimeProtectionTests(unittest.TestCase):
             adapter.cancel(self.group())
 
         self.assertEqual(backend.calls, [])
+
+    def test_retry_after_reconcile_rate_limit_rechecks_coverage(self) -> None:
+        runtime, backend = self.runtime(*self.full_operations())
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+        group = self.group()
+        backend.fail_with = RateLimitError(retry_after_seconds=0.1, side_effect_free=True)
+
+        with self.assertRaises(RateLimitError):
+            adapter.reconcile(group)
+
+        backend.fail_with = None
+        backend.response = {
+            "protection_id": "protect-1",
+            "operation": "query",
+            "state": "active",
+            "accepted": True,
+            "covered_quantity": "0",
+            "order_ids": ["protection-order-1"],
+        }
+
+        self.assertEqual(adapter.retry_plan(group, attempt=1).operation, "query")
+        with self.assertRaisesRegex(BrokerCapabilityError, "coverage"):
+            adapter.retry(group, attempt=1, delay_elapsed=True)
+
+        self.assertEqual([call[1] for call in backend.calls], ["query", "query"])
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
+
+    def test_equal_position_coverage_requires_fresh_broker_observation(self) -> None:
+        runtime, backend = self.runtime(*self.full_operations())
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+        group = self.group()
+        adapter.submit(group)
+        backend.response = {
+            "protection_id": "protect-1",
+            "operation": "query",
+            "state": "active",
+            "accepted": True,
+            "covered_quantity": "0",
+            "order_ids": ["protection-order-1"],
+        }
+
+        with self.assertRaisesRegex(BrokerCapabilityError, "coverage"):
+            adapter.reconcile_position_coverage(
+                group,
+                owned_quantity=group.quantity,
+            )
+
+        self.assertEqual([call[1] for call in backend.calls], ["submit", "query"])
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
+
+    def test_runtime_receipt_preserves_unknown_protection_observation(self) -> None:
+        runtime, backend = self.runtime(*self.full_operations())
+        backend.response = {
+            "protection_id": "protect-1",
+            "operation": "query",
+            "state": "unknown",
+            "accepted": False,
+            "covered_quantity": "0",
+            "order_ids": [],
+            "observation_digest": "sha256:" + "a" * 64,
+        }
+
+        receipt = runtime.invoke("protection_order", "query", {"protectionId": "protect-1"})
+
+        self.assertFalse(receipt.accepted)
+        self.assertEqual(receipt.protection_id, "protect-1")
+        self.assertEqual(receipt.state, "unknown")
+        self.assertEqual(receipt.covered_quantity, Decimal("0"))
+        self.assertEqual(receipt.observation_digest, "sha256:" + "a" * 64)
+
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+        with self.assertRaises(BrokerCapabilityError) as raised:
+            adapter.reconcile(self.group())
+
+        self.assertEqual(raised.exception.operation, "query")
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
+
+    def test_runtime_receipt_does_not_accept_canceled_protection_as_submit(self) -> None:
+        runtime, backend = self.runtime(*self.full_operations())
+        backend.response = {
+            "protection_id": "protect-1",
+            "operation": "submit",
+            "state": "canceled",
+            "accepted": True,
+            "covered_quantity": "0",
+            "order_ids": [],
+            "observation_digest": "sha256:" + "b" * 64,
+        }
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+
+        with self.assertRaises(BrokerCapabilityError) as raised:
+            adapter.submit(self.group())
+
+        self.assertEqual(raised.exception.operation, "submit")
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
+
+    def test_runtime_rejects_incomplete_protection_observation(self) -> None:
+        runtime, backend = self.runtime(*self.full_operations())
+        backend.response = {
+            "protection_id": "protect-1",
+            "operation": "query",
+            "state": "active",
+            "accepted": True,
+            "order_ids": ["protection-order-1"],
+        }
+
+        with self.assertRaisesRegex(NautilusRuntimeError, "covered quantity is required"):
+            runtime.invoke("protection_order", "query", {"protectionId": "protect-1"})
+
+    def test_runtime_rejects_observation_for_a_different_operation(self) -> None:
+        runtime, backend = self.runtime(*self.full_operations())
+        backend.response = {
+            "protection_id": "protect-1",
+            "operation": "query",
+            "state": "active",
+            "accepted": True,
+            "covered_quantity": "0.1",
+            "order_ids": ["protection-order-1"],
+        }
+
+        with self.assertRaisesRegex(NautilusRuntimeError, "operation does not match"):
+            runtime.invoke("protection_order", "submit", {"protectionId": "protect-1"})
+
+    def test_protection_adapter_freezes_receipt_missing_canonical_fields(self) -> None:
+        runtime, _ = self.runtime(*self.full_operations())
+        incomplete = replace(
+            runtime.invoke("protection_order", "submit", {"protectionId": "protect-1"}),
+            protection_id=None,
+            state=None,
+            covered_quantity=None,
+        )
+        runtime.invoke = lambda port, operation, request: incomplete
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+
+        with self.assertRaisesRegex(BrokerCapabilityError, "identity is required"):
+            adapter.submit(self.group())
+
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
 
 
 if __name__ == "__main__":
