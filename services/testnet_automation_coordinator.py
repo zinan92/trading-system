@@ -703,6 +703,175 @@ class TestnetAutomationCoordinator:
         )
         return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
 
+    def start_grid_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        confirmation: Mapping[str, Any],
+        market: Mapping[str, Any],
+        broker: object,
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Start the canonical Grid lifecycle for the selected slice."""
+
+        current = self._require_strategy_slice(plan, family="grid", expected_status="candidate_selected")
+        observed_at = self._timestamp(timestamp)
+        self._validate_testnet_confirmation(plan, current, confirmation)
+        self._validate_authoritative_market(market)
+        self._validate_lifecycle_preflight(broker, strategy_family="grid")
+        from services.grid_testnet_lifecycle import GridTestnetLifecycle
+
+        lifecycle = GridTestnetLifecycle(self.output_root, broker)
+        try:
+            state = lifecycle.start(dict(plan), timestamp=observed_at)
+        except Exception as exc:  # noqa: BLE001 - persist lifecycle blocker at the Coordinator seam.
+            state = {
+                "status": "blocked_reconciliation",
+                "blocker": f"grid_start_failed:{type(exc).__name__}:{exc}",
+                "next_action": "notify_park_and_wait",
+            }
+        return self._publish_grid_state(current, dict(plan), state, observed_at=observed_at)
+
+    def advance_grid_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        broker: object,
+        fill: Mapping[str, Any] | None = None,
+        price: float | None = None,
+        market: Mapping[str, Any] | None = None,
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Apply one canonical Grid fill or market event through the Coordinator."""
+
+        current = self._require_strategy_slice(plan, family="grid")
+        if current.get("status") not in {
+            "grid_running",
+            "grid_interrupted",
+            "grid_blocked",
+        }:
+            raise TestnetCoordinatorError("grid_session_not_active")
+        observed_at = self._timestamp(timestamp)
+        if market is not None:
+            self._validate_authoritative_market(market)
+        from services.grid_testnet_lifecycle import GridTestnetLifecycle
+
+        lifecycle = GridTestnetLifecycle(self.output_root, broker)
+        try:
+            if fill is not None:
+                state = lifecycle.on_fill(dict(plan), dict(fill), timestamp=observed_at)
+            elif price is not None:
+                state = lifecycle.on_market_event(
+                    dict(plan),
+                    price=float(price),
+                    timestamp=observed_at,
+                )
+            else:
+                raise TestnetCoordinatorError("grid_event_required")
+        except TestnetCoordinatorError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - retain lifecycle blocker.
+            try:
+                state = lifecycle.snapshot(dict(plan))
+            except Exception:
+                state = {
+                    "status": "blocked_reconciliation",
+                    "blocker": f"grid_event_failed:{type(exc).__name__}:{exc}",
+                    "next_action": "notify_park_and_wait",
+                }
+        return self._publish_grid_state(current, dict(plan), state, observed_at=observed_at)
+
+    def interrupt_grid_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        broker: object,
+        reason: str = "manual_interrupt",
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Cancel pending Grid entries while preserving known positions/protection."""
+
+        current = self._require_strategy_slice(plan, family="grid")
+        observed_at = self._timestamp(timestamp)
+        from services.grid_testnet_lifecycle import GridTestnetLifecycle
+
+        state = GridTestnetLifecycle(self.output_root, broker).interrupt(
+            dict(plan),
+            timestamp=observed_at,
+            reason=reason,
+        )
+        return self._publish_grid_state(current, dict(plan), state, observed_at=observed_at)
+
+    def resume_grid_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        broker: object,
+        confirmation: Mapping[str, Any],
+        market: Mapping[str, Any],
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Resume an interrupted Grid after fresh host validation."""
+
+        current = self._require_strategy_slice(plan, family="grid")
+        if current.get("status") != "grid_interrupted":
+            raise TestnetCoordinatorError("grid_session_not_interrupted")
+        observed_at = self._timestamp(timestamp)
+        self._validate_testnet_confirmation(plan, current, confirmation)
+        self._validate_authoritative_market(market)
+        self._validate_lifecycle_preflight(broker, strategy_family="grid")
+        from services.grid_testnet_lifecycle import GridTestnetLifecycle
+
+        state = GridTestnetLifecycle(self.output_root, broker).resume(
+            dict(plan),
+            timestamp=observed_at,
+        )
+        return self._publish_grid_state(current, dict(plan), state, observed_at=observed_at)
+
+    def _publish_grid_state(
+        self,
+        current: Mapping[str, Any],
+        plan: Mapping[str, Any],
+        lifecycle: Mapping[str, Any],
+        *,
+        observed_at: str,
+    ) -> dict[str, Any]:
+        lifecycle_state = str(lifecycle.get("status") or "blocked")
+        if lifecycle_state == "interrupted":
+            status = "grid_interrupted"
+            enabled = False
+        elif lifecycle_state in {"terminal", "stopped"} or lifecycle.get("sealed") is True:
+            status = "grid_terminal"
+            enabled = False
+        elif lifecycle_state.startswith("blocked"):
+            status = "grid_blocked"
+            enabled = False
+        else:
+            status = "grid_running"
+            enabled = True
+        next_action = str(lifecycle.get("next_action") or "await_fill_or_grid_event")
+        if lifecycle.get("park_notification_required") or lifecycle_state in {"terminal", "stopped"}:
+            next_action = "notify_park_and_wait"
+        state = {
+            **dict(current),
+            "event": "grid_lifecycle_observed",
+            "action": "grid_lifecycle",
+            "status": status,
+            "occurred_at": observed_at,
+            "grid_lifecycle_status": lifecycle_state,
+            "grid_lifecycle": json.loads(json.dumps(dict(lifecycle), sort_keys=True)),
+            "plan_digest": plan.get("plan_digest"),
+            "execution_enabled": enabled,
+            "execution_ready": enabled,
+            "execution_blocker": lifecycle.get("blocker"),
+            "next_action": next_action,
+            "execution_mutation": lifecycle_state not in {"blocked_protection", "blocked_reconciliation", "blocked_risk"},
+            "network_operation_invoked": False,
+            "blocker": lifecycle.get("blocker"),
+        }
+        state["lifecycle"] = state["grid_lifecycle"]
+        return self._record(state)
+
     def _require_strategy_slice(
         self,
         plan: Mapping[str, Any],
