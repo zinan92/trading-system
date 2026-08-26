@@ -104,6 +104,10 @@ execution contract is explicitly authorized; the unified review is complete.
   preserves protective exits; expansion requires soak and Cloud scheduler
   ownership; external canary defaults exclude fake sources and submit retry is
   query-first/fail-closed.
+- The second-review P0 repair is carried by PR #1046: DCA's effective notional
+  is now an aggregate cap across the entire entry ladder (with a rounding
+  reserve), and soak evidence is bound to the activation's strategy family and
+  Instrument so cross-family receipts cannot unlock expansion.
 - Focused implementation validation currently passes 126 cases across the
   Coordinator, candidate selection, transport canary, DCA/Grid lifecycles,
   scheduler, expansion, and readiness contracts. No credential was read, no
@@ -112,9 +116,10 @@ execution contract is explicitly authorized; the unified review is complete.
   declared protection capability gap; the system must remain blocked until a
   matching public capability is available.
 
-_下一步_: complete the second unified Claude Sonnet review of PR #1044. Only
-after that review passes may a separately attended Testnet activation be
-considered; the external protection capability gap remains a hard blocker.
+_下一步_: complete the third and final unified Claude Sonnet review of PR
+#1046. If it does not pass, stop and report the remaining findings; no
+separately attended Testnet activation is considered while the external
+protection capability gap remains a hard blocker.
 
 ## 现在在哪里(2026-08-23)
 - #888 / PR #889 merged as
