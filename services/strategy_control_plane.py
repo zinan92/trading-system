@@ -7091,7 +7091,10 @@ class StrategyControlPlane:
                 raise StrategyControlMachineError("testnet_market_not_authoritative", {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")})
             if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
                 raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
-            preflight = adapter.preflight()
+            try:
+                preflight = adapter.preflight(strategy_family="grid")
+            except TypeError:
+                preflight = adapter.preflight()
             if (
                 preflight.get("ready") is not True
                 or preflight.get("environment") != "testnet"

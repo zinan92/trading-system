@@ -93,6 +93,9 @@ execution contract is explicitly authorized; the unified review is complete.
   `main@62e535ea34a7f9a77989ce978c34bb1fd6384b7d`: the two-window Testnet
   readiness contract, mode-scoped CLI, and attended acceptance runbook are
   present; this section remains the canonical rollout handoff.
+- Post-merge hardening is carried by PR #1041: strategy-specific Grid/DCA
+  preflight now requests only the protection capabilities each lifecycle uses,
+  while an unavailable external protection builder remains a durable blocker.
 - Focused implementation validation currently passes 126 cases across the
   Coordinator, candidate selection, transport canary, DCA/Grid lifecycles,
   scheduler, expansion, and readiness contracts. No credential was read, no

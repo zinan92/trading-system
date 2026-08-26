@@ -16891,3 +16891,6 @@ auditable datafeed port; broker execution remains a separate port.
 - Testnet readiness is evidence-only. The two-window package does not expire
   a Plan, authorize a new Plan, or promote to Live. Any real Testnet run still
   needs a fresh attended activation and matching public capability profile.
+- Post-merge hardening in PR #1041 corrects the Grid/DCA strategy-specific
+  preflight requirement and keeps the missing standard-broker protection
+  builder as an explicit fail-closed dependency; no capability is fabricated.
