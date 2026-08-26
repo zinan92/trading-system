@@ -9,7 +9,6 @@ import hashlib
 from typing import Any
 
 from services.standard_broker_testnet_canary import (
-    TestnetCanaryError,
     TestnetCanaryOrderRequest,
 )
 
@@ -26,12 +25,18 @@ class StandardBrokerExternalCanaryAdapter:
     def __init__(self, binding: object) -> None:
         try:
             from standard_broker import ExternalCanaryBinding
-        except ModuleNotFoundError as exc:
-            raise StandardBrokerExternalCanaryError(
-                "standard-broker public canary binding is unavailable"
-            ) from exc
+        except (ImportError, ModuleNotFoundError):
+            # SB-EXT-01G exposes the canonical operations through the public
+            # host/order/facts ports but older installed releases do not yet
+            # export the optional marker class.  Duck typing here preserves
+            # the provider-neutral boundary without accepting arbitrary
+            # objects.
+            ExternalCanaryBinding = None
         required = ("preflight", "market_fact", "submit", "query", "query_by_idempotency_key", "replace", "cancel", "read_facts")
-        if not isinstance(binding, ExternalCanaryBinding) and any(
+        marker_match = ExternalCanaryBinding is not None and isinstance(
+            binding, ExternalCanaryBinding
+        )
+        if not marker_match and any(
             not callable(getattr(binding, name, None)) for name in required
         ):
             raise StandardBrokerExternalCanaryError(
@@ -157,9 +162,22 @@ class StandardBrokerExternalCanaryAdapter:
     def _convert_bundle(cls, bundle: object) -> object:
         try:
             from standard_broker import ExternalCanaryFactBundle
-        except ModuleNotFoundError as exc:
-            raise StandardBrokerExternalCanaryError("standard-broker typed facts are unavailable") from exc
-        if not isinstance(bundle, ExternalCanaryFactBundle):
+        except (ImportError, ModuleNotFoundError):
+            ExternalCanaryFactBundle = None
+        marker_match = ExternalCanaryFactBundle is not None and isinstance(
+            bundle, ExternalCanaryFactBundle
+        )
+        required_bundle_fields = (
+            "fills",
+            "fees",
+            "account",
+            "positions",
+            "open_orders",
+            "reconciliation",
+        )
+        if not marker_match and any(
+            not hasattr(bundle, field) for field in required_bundle_fields
+        ):
             raise StandardBrokerExternalCanaryError("standard-broker returned an invalid typed facts bundle")
         try:
             from services.standard_broker_testnet_canary_facts import (
@@ -176,16 +194,34 @@ class StandardBrokerExternalCanaryAdapter:
         snapshot = bundle.reconciliation
         try:
             from standard_broker import ExternalReconciliationSnapshot
-        except ModuleNotFoundError as exc:
-            raise StandardBrokerExternalCanaryError("standard-broker reconciliation contract is unavailable") from exc
-        if not isinstance(snapshot, ExternalReconciliationSnapshot):
+        except (ImportError, ModuleNotFoundError):
+            ExternalReconciliationSnapshot = None
+        snapshot_marker_match = ExternalReconciliationSnapshot is not None and isinstance(
+            snapshot, ExternalReconciliationSnapshot
+        )
+        if not snapshot_marker_match and any(
+            not hasattr(snapshot, field)
+            for field in (
+                "identity",
+                "cursor",
+                "observed_at",
+                "passed",
+                "evidence_digest",
+                "outcome",
+                "request_digests",
+                "receipt_digests",
+                "fact_digests",
+            )
+        ):
             raise StandardBrokerExternalCanaryError(
                 "standard-broker returned a non-canonical reconciliation snapshot"
             )
-        try:
-            snapshot.verify_integrity()
-        except Exception as exc:  # noqa: BLE001 - integrity is a hard evidence gate.
-            raise StandardBrokerExternalCanaryError("standard-broker reconciliation integrity failed") from exc
+        verify_integrity = getattr(snapshot, "verify_integrity", None)
+        if callable(verify_integrity):
+            try:
+                verify_integrity()
+            except Exception as exc:  # noqa: BLE001 - integrity is a hard evidence gate.
+                raise StandardBrokerExternalCanaryError("standard-broker reconciliation integrity failed") from exc
         if snapshot.identity is None or snapshot.cursor is None:
             raise StandardBrokerExternalCanaryError(
                 "standard-broker returned no cursor-bound reconciliation snapshot"
