@@ -16894,3 +16894,48 @@ auditable datafeed port; broker execution remains a separate port.
 - Post-merge hardening in PR #1041 corrects the Grid/DCA strategy-specific
   preflight requirement and keeps the missing standard-broker protection
   builder as an explicit fail-closed dependency; no capability is fabricated.
+
+# 2026-08-26 — Close independent Sonnet execution-boundary findings (#1043 / #1044)
+
+## Decision
+
+- Treat the persisted Portfolio Selection allocation and its generated
+  `ExecutionSlice` as the only Coordinator sizing authority. The canonical
+  Strategy Plan still owns direction and DCA/Grid semantics; the Coordinator
+  applies only a downward quantity/notional clamp from the subtractive Gate.
+- Require fresh public-Broker order and account-position reads before DCA
+  next-entry, Grid re-arm, resume, and restart. External Testnet identity or
+  order/position mismatch blocks the affected slice; local fixtures are marked
+  simulation-only because they do not project fills into account snapshots.
+- Bind every Coordinator market event to Hyperliquid Testnet source, cursor,
+  instrument, mapping/universe revision, connection epoch, fresh BBO/L2,
+  depth, slippage, and mark/mid/oracle coherence. Bind broker preflight to the
+  activation's account, runtime, release, capability, environment, and profile.
+- Manual Grid interrupt cancels pending entry legs only; protective TP and
+  hard-stop coverage remains intact. Progressive pair expansion is unavailable
+  until the two-window Testnet soak, completed canary evidence, and active
+  Cloud scheduler ownership are all present for the same activation.
+- The external canary default market-source allowlist contains only canonical
+  Hyperliquid public seams. A failed submit may be repeated only after an
+  identity-bound query proves the idempotency key is absent; unknown outcomes
+  remain fail-closed.
+
+## Verification
+
+- First independent Claude Sonnet 5 review completed with verified receipt
+  `20260826T091427Z_1e6c97b3-b6db-49ff-86b5-384ff1628331.json`, session
+  `7a6d3d4e-1415-4bbd-8daf-9de0eec14db2`; verdict was FAIL with two P0 and
+  four P1/P2 findings.
+- Review repairs were implemented under issue #1043 and merged in PR #1044 at
+  `main@3f74ea7a3713a18652a498dc7bb234d856827165`. Targeted Coordinator,
+  Portfolio, lifecycle, transport, and regression validation passed 92 tests;
+  compileall, diff-check, and targeted ruff passed.
+- No Testnet/Mainnet connection, credentials, network order, scheduler
+  deployment, or cloud mutation occurred. The external standard-broker
+  protection capability gap remains an explicit blocker.
+
+## Next
+
+- Run the second independent Claude Sonnet review against clean `origin/main`.
+  If it finds valid issues, apply one consolidated repair and perform the
+  requested third review only if the second review still does not pass.
