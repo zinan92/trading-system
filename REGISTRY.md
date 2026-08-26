@@ -96,6 +96,14 @@ execution contract is explicitly authorized; the unified review is complete.
 - Post-merge hardening is carried by PR #1041: strategy-specific Grid/DCA
   preflight now requests only the protection capabilities each lifecycle uses,
   while an unavailable external protection builder remains a durable blocker.
+- Sonnet review hardening is merged in PR #1044 at
+  `main@3f74ea7a3713a18652a498dc7bb234d856827165`: the stored Portfolio
+  Execution Slice is now authoritative and clamps strategy sizing; continuation,
+  re-arm, resume, and restart read Broker truth before adding exposure; market
+  and broker identity gates are bound to Hyperliquid Testnet; Grid interrupt
+  preserves protective exits; expansion requires soak and Cloud scheduler
+  ownership; external canary defaults exclude fake sources and submit retry is
+  query-first/fail-closed.
 - Focused implementation validation currently passes 126 cases across the
   Coordinator, candidate selection, transport canary, DCA/Grid lifecycles,
   scheduler, expansion, and readiness contracts. No credential was read, no
@@ -104,9 +112,9 @@ execution contract is explicitly authorized; the unified review is complete.
   declared protection capability gap; the system must remain blocked until a
   matching public capability is available.
 
-_下一步_: run the full clean-suite verification, then perform the single
-unified Claude Sonnet review requested by Park. Only after that review passes
-may a separately attended Testnet activation be considered.
+_下一步_: complete the second unified Claude Sonnet review of PR #1044. Only
+after that review passes may a separately attended Testnet activation be
+considered; the external protection capability gap remains a hard blocker.
 
 ## 现在在哪里(2026-08-23)
 - #888 / PR #889 merged as
