@@ -134,7 +134,7 @@ class TestnetTransportCanary:
         )
         self.approved_market_sources = frozenset(
             approved_market_sources
-            or {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet", "fake.external_testnet"}
+            or {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"}
         )
 
     def snapshot(self) -> dict[str, Any]:

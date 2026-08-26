@@ -82,6 +82,7 @@ def _broker(tmp_path: Path, *, protection: bool = True):
             self.last_cloid = ""
             self.cancel_failure = False
             self.account_positions: list[dict] = []
+            self.account_reads = 0
             self.metadata = NautilusAdapterMetadata(
                 package="nautilus-hyperliquid",
                 version="1.230.0",
@@ -111,10 +112,11 @@ def _broker(tmp_path: Path, *, protection: bool = True):
                 return {"orders": []}
             if port == "account" and operation == "read":
                 from standard_broker import Provenance
+                self.account_reads += 1
                 return {
                     "data": {
                         "accountAddress": "testnet-account",
-                        "snapshotId": "snapshot-1",
+                            "snapshotId": f"snapshot-{self.account_reads}",
                         "marginSummary": {"accountValue": "10000", "totalNtlPos": "0"},
                         "assetPositions": list(self.account_positions),
                     },

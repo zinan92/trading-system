@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
@@ -284,6 +285,7 @@ class StandardBrokerTestnetExecutionAdapter:
             "broker_id": self.broker_config["broker_id"],
             "mode": "testnet",
             "environment": "testnet",
+            "transport_profile": "hyperliquid-testnet-default",
             "ready": result is not None and not capability_gaps,
             "network_io": False,
             "external_network": True,
@@ -292,6 +294,9 @@ class StandardBrokerTestnetExecutionAdapter:
             "control_plane": "telegram",
             "transport_state": "local_fixture",
             "account_id": self.broker_config["account_id"],
+            "account_fingerprint": "sha256:" + hashlib.sha256(
+                str(self.broker_config["account_id"]).encode("utf-8")
+            ).hexdigest(),
             "runtime_id": self.broker_config["runtime_id"],
             "release_sha": self.broker_config["release_sha"],
             "environment_fingerprint": self.broker_config["environment_fingerprint"],
