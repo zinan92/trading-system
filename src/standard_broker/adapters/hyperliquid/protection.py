@@ -473,24 +473,39 @@ class HyperliquidRuntimeProtectionAdapter:
         require_coverage: bool = False,
     ) -> None:
         observed_protection_id = getattr(runtime_receipt, "protection_id", None)
-        if (
-            observed_protection_id is not None
-            and observed_protection_id != group.protection_id
-        ):
+        if not isinstance(observed_protection_id, str) or not observed_protection_id.strip():
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation identity is required",
+            )
+        if observed_protection_id != group.protection_id:
             raise BrokerCapabilityError(
                 "protection_order",
                 operation,
                 "protection observation identity does not match the requested group",
             )
         state = getattr(runtime_receipt, "state", None)
-        if state is not None and str(state).lower() not in expected_states:
+        if not isinstance(state, str) or not state.strip():
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation state is required",
+            )
+        if state.lower() not in expected_states:
             raise BrokerCapabilityError(
                 "protection_order",
                 operation,
                 f"protection observation state {state!r} is not one of {sorted(expected_states)}",
             )
         covered_quantity = getattr(runtime_receipt, "covered_quantity", None)
-        if require_coverage and covered_quantity is not None and covered_quantity < group.quantity:
+        if not isinstance(covered_quantity, Decimal):
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation covered quantity is required",
+            )
+        if require_coverage and covered_quantity < group.quantity:
             raise BrokerCapabilityError(
                 "protection_order",
                 operation,

@@ -370,6 +370,22 @@ class HyperliquidRuntimeProtectionTests(unittest.TestCase):
         with self.assertRaisesRegex(NautilusRuntimeError, "operation does not match"):
             runtime.invoke("protection_order", "submit", {"protectionId": "protect-1"})
 
+    def test_protection_adapter_freezes_receipt_missing_canonical_fields(self) -> None:
+        runtime, _ = self.runtime(*self.full_operations())
+        incomplete = replace(
+            runtime.invoke("protection_order", "submit", {"protectionId": "protect-1"}),
+            protection_id=None,
+            state=None,
+            covered_quantity=None,
+        )
+        runtime.invoke = lambda port, operation, request: incomplete
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+
+        with self.assertRaisesRegex(BrokerCapabilityError, "identity is required"):
+            adapter.submit(self.group())
+
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
+
 
 if __name__ == "__main__":
     unittest.main()

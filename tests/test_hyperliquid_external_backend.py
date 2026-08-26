@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -12,9 +13,11 @@ from standard_broker.adapters.hyperliquid.external import (
     HyperliquidTestnetBackendConfig,
     NautilusHyperliquidTestnetBackend,
     default_testnet_capabilities,
+    enabled_testnet_position_protection_capabilities,
 )
 from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import RuntimeBoundaryError
+from standard_broker.external_host import digest_canonical
 from standard_broker.models import AccountScope, BrokerEnvironment, SignerKind
 from standard_broker.runtime import (
     AccountReference,
@@ -311,6 +314,131 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
             "unknown",
         )
 
+    def test_submit_protection_rejects_non_active_leg_observations(self) -> None:
+        class ProtectionSubmitClient(FakeClient):
+            def __init__(self, status: str) -> None:
+                super().__init__()
+                self.status = status
+
+            async def submit_orders(self, orders: list[object]) -> list[object]:
+                self.calls.append(("submit_orders", tuple(orders), {}))
+                return [
+                    {
+                        "order_status": self.status,
+                        "venue_order_id": str(9001 + index),
+                        "client_order_id": f"cloid-{index}",
+                        "instrument_id": "HYPE-USD-PERP.HYPERLIQUID",
+                        "order_side": "SELL",
+                        "price": "50",
+                        "filled_qty": "0",
+                        "quantity": "0.2",
+                        "ts_last": 1_800_000_000_000_000_000,
+                    }
+                    for index, _ in enumerate(orders)
+                ]
+
+        class FixtureProtectionBackend(NautilusHyperliquidTestnetBackend):
+            @staticmethod
+            def _build_protection_orders(request: Mapping[str, object]) -> list[object]:
+                return [object(), object()]
+
+        request = {
+            "protectionId": "protect-1",
+            "instrumentId": "HYPE-USD-PERP",
+            "grouping": "positionTpsl",
+            "quantity": "0.2",
+            "quantityPolicy": "position_following",
+            "legs": [{"tpsl": "tp"}, {"tpsl": "sl"}],
+        }
+        for status in ("CANCELED", "FILLED", "PARTIALLY_FILLED"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                client = ProtectionSubmitClient(status)
+                capabilities = enabled_testnet_position_protection_capabilities()
+                session = self.session(capabilities)
+                backend = FixtureProtectionBackend(
+                    session=session,
+                    config=HyperliquidTestnetBackendConfig(
+                        account_address=session.account.address,
+                        capabilities=capabilities,
+                        capability_revision=capabilities.revision,
+                    ),
+                    secrets=self.provider(directory),
+                    client_factory=lambda private_key, account: client,
+                )
+                backend.activate(release_sha="a" * 40)
+
+                result = backend.invoke("protection_order", "submit", request)
+
+                self.assertEqual(result["state"], "unknown")
+                self.assertFalse(result["accepted"])
+                self.assertEqual(result["covered_quantity"], "0")
+
+    def test_cancel_protection_reseals_digest_and_rejects_failed_cancel(self) -> None:
+        class StatusClient(FakeClient):
+            def __init__(self, status: str) -> None:
+                super().__init__()
+                self.status = status
+
+            async def cancel_order(self, *args: object, **kwargs: object) -> object:
+                self.calls.append(("cancel_order", args, kwargs))
+                return {"status": "ok"}
+
+            async def request_order_status_report(self, **kwargs: object) -> object:
+                self.calls.append(("request_order_status_report", (), kwargs))
+                return {
+                    "order_status": self.status,
+                    "venue_order_id": "9001",
+                    "client_order_id": "cloid-1",
+                    "instrument_id": "HYPE-USD-PERP.HYPERLIQUID",
+                    "order_side": "SELL",
+                    "price": "50",
+                    "filled_qty": "0",
+                    "quantity": "0.2",
+                    "ts_last": 1_800_000_000_000_000_000,
+                }
+
+        request = {
+            "protectionId": "protect-1",
+            "instrumentId": "HYPE-USD-PERP",
+            "quantity": "0.2",
+        }
+        for status, expected_state, expected_accepted in (
+            ("CANCELED", "canceled", True),
+            ("RESTING", "unknown", False),
+        ):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                client = StatusClient(status)
+                session = self.session()
+                backend = NautilusHyperliquidTestnetBackend(
+                    session=session,
+                    config=HyperliquidTestnetBackendConfig(
+                        account_address=session.account.address,
+                        capabilities=session.capabilities,
+                    ),
+                    secrets=self.provider(directory),
+                    client_factory=lambda private_key, account: client,
+                )
+                backend._protection_orders["protect-1"] = {
+                    "request": request,
+                    "rows": ({"oid": "9001", "cloid": "cloid-1"},),
+                }
+                backend.activate(release_sha="a" * 40)
+
+                result = backend.invoke(
+                    "protection_order",
+                    "cancel",
+                    {"protectionId": "protect-1"},
+                )
+
+                self.assertEqual(result["state"], expected_state)
+                self.assertEqual(result["accepted"], expected_accepted)
+                self.assertEqual(result["covered_quantity"], "0")
+                digest_input = {
+                    key: value
+                    for key, value in result.items()
+                    if key != "observation_digest"
+                }
+                self.assertEqual(result["observation_digest"], digest_canonical(digest_input))
     def test_external_fill_query_filters_conflicting_client_identity_even_when_oid_matches(self) -> None:
         class ConflictingFillClient(FakeClient):
             async def request_fill_reports(self, instrument_id: str) -> list[object]:

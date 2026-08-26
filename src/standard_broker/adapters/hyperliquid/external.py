@@ -279,7 +279,15 @@ class NautilusHyperliquidTestnetBackend:
             # child CLOIDs are deterministic and can be queried individually
             # once the user-events stream assigns their venue order IDs.
             group_row = self._protection_report(reports[0])
-            if group_row["status"] in {"unknown", "rejected", "canceled", "cancelled"}:
+            if group_row["status"] in {
+                "unknown",
+                "rejected",
+                "canceled",
+                "cancelled",
+                "filled",
+                "partially_filled",
+                "partial",
+            }:
                 raise RuntimeBoundaryError(
                     "protection_group_submit_rejected",
                     "Nautilus returned a non-accepted positionTpsl group report",
@@ -309,7 +317,23 @@ class NautilusHyperliquidTestnetBackend:
         return self._protection_observation(
             protection_id=protection_id,
             operation="submit",
-            state="submitted" if all(row["status"] not in {"unknown", "rejected"} for row in rows) else "unknown",
+            state=(
+                "submitted"
+                if all(
+                    row["status"]
+                    not in {
+                        "unknown",
+                        "rejected",
+                        "canceled",
+                        "cancelled",
+                        "filled",
+                        "partially_filled",
+                        "partial",
+                    }
+                    for row in rows
+                )
+                else "unknown"
+            ),
             covered_quantity=Decimal("0"),
             rows=rows,
         )
@@ -398,11 +422,12 @@ class NautilusHyperliquidTestnetBackend:
                 venue_order_id=self._optional_venue_order_id(row),
             )
         observed = self._query_protection(protection_id)
-        return {
-            **dict(observed),
-            "operation": "cancel",
-            "state": "canceled" if observed.get("state") == "canceled" else "unknown",
-        }
+        state = "canceled" if observed.get("state") == "canceled" else "unknown"
+        return self._rewrite_protection_observation(
+            observed,
+            operation="cancel",
+            state=state,
+        )
 
     def _replace_protection(self, request: Mapping[str, object]) -> Mapping[str, object]:
         protection_id = str(request.get("protectionId") or "").strip()
@@ -420,10 +445,11 @@ class NautilusHyperliquidTestnetBackend:
                 rows=(),
             )
         submitted = self._submit_protection(request)
-        return {
-            **dict(submitted),
-            "operation": "replace",
-        }
+        return self._rewrite_protection_observation(
+            submitted,
+            operation="replace",
+            state=str(submitted.get("state") or "unknown"),
+        )
 
     def _build_protection_orders(self, request: Mapping[str, object]) -> list[object]:
         """Build Nautilus order objects for one positionTpsl group."""
@@ -574,7 +600,7 @@ class NautilusHyperliquidTestnetBackend:
             return "canceled"
         if statuses & {"filled", "partially_filled", "partial"}:
             return "unknown"
-        if statuses <= {"resting", "waiting_for_trigger", "waiting_for_fill", "filled", "partially_filled"}:
+        if statuses <= {"resting", "waiting_for_trigger", "waiting_for_fill"}:
             return "active"
         return "unknown"
 
@@ -603,6 +629,26 @@ class NautilusHyperliquidTestnetBackend:
             }
         )
         result["observation_digest"] = digest_canonical(result)
+        return result
+
+    @staticmethod
+    def _rewrite_protection_observation(
+        observation: Mapping[str, object],
+        *,
+        operation: str,
+        state: str,
+    ) -> Mapping[str, object]:
+        """Rewrite a canonical observation and re-seal its final contents."""
+
+        result = dict(observation)
+        result["operation"] = operation
+        result["state"] = state
+        result["accepted"] = state not in {"unknown", "rejected"}
+        if state == "unknown":
+            result["covered_quantity"] = "0"
+        result["observation_digest"] = digest_canonical(
+            {key: value for key, value in result.items() if key != "observation_digest"}
+        )
         return result
 
     def _submit(self, request: Mapping[str, object]) -> Mapping[str, object]:
