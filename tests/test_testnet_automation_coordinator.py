@@ -204,6 +204,19 @@ def test_dca_capability_exception_does_not_mask_another_gap() -> None:
         )
 
 
+def test_soak_evidence_cannot_be_replayed_for_another_strategy_family(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    coordinator.activate(_activation(), command_id="activate-1")
+
+    with pytest.raises(TestnetCoordinatorError, match="soak_strategy_family_mismatch"):
+        coordinator.finalize_soak(
+            strategy_family="grid",
+            instrument_id="BTC-USD-PERP",
+            now="2026-08-26T01:00:00+00:00",
+        )
+    assert coordinator.status()["status"] == "activated"
+
+
 def test_unknown_action_and_corrupt_state_fail_closed(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
 

@@ -104,6 +104,8 @@ def test_coordinator_runs_canonical_dca_to_terminal_notification(tmp_path: Path)
     allocation = started["execution_slice"]["allocation"]
     assert started["execution_slice"]["execution_slice_id"] == allocation["execution_slice_id"]
     assert float(started["lifecycle"]["orders"][0]["price"]) * float(started["lifecycle"]["orders"][0]["quantity"]) <= float(allocation["effective_notional"])
+    assert started["lifecycle"]["risk_budget"]["max_notional"] == float(allocation["effective_notional"])
+    assert float(started["lifecycle"]["orders"][0]["price"]) * float(started["lifecycle"]["orders"][0]["quantity"]) <= float(allocation["effective_notional"])
 
     opened = coordinator.advance_dca_session(
         plan,
@@ -180,6 +182,12 @@ def test_manual_interrupt_preserves_position_and_resume_requires_revalidation(tm
     assert resumed["lifecycle"]["status"] == "open"
     assert resumed["lifecycle"]["positions"] == opened["lifecycle"]["positions"]
     assert resumed["execution_enabled"] is True
+    effective_cap = float(resumed["execution_slice"]["allocation"]["effective_notional"])
+    assert sum(
+        float(row["price"]) * float(row["quantity"])
+        for row in resumed["lifecycle"]["orders"]
+        if row["event"] in {"entry", "entry_rearm"}
+    ) <= effective_cap + 1e-9
 
 
 def test_dca_start_rejects_confirmation_or_market_mismatch_before_broker_mutation(tmp_path: Path) -> None:

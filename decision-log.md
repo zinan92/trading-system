@@ -16936,6 +16936,9 @@ auditable datafeed port; broker execution remains a separate port.
 
 ## Next
 
-- Run the second independent Claude Sonnet review against clean `origin/main`.
-  If it finds valid issues, apply one consolidated repair and perform the
-  requested third review only if the second review still does not pass.
+- The second Sonnet review found two further P0s: DCA per-addition sizing did
+  not cap cumulative exposure, and soak/family arguments could cross-unlock a
+  different activation. PR #1046 applies the final permitted repair: aggregate
+  DCA cap plus rounding reserve, and activation-bound soak family/Instrument
+  checks. The third Sonnet review is the final acceptance gate; if it fails,
+  stop and report rather than make another repair.

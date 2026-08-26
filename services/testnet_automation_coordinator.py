@@ -724,6 +724,7 @@ class TestnetAutomationCoordinator:
         current = self._read_current_or_raise()
         if current is None or current.get("status") == "idle":
             raise TestnetCoordinatorError("activation_required")
+        self._validate_soak_identity(current, strategy_family=strategy_family, instrument_id=instrument_id)
         from services.testnet_automation_readiness import TestnetAutomationReadiness
 
         readiness = TestnetAutomationReadiness(
@@ -760,6 +761,7 @@ class TestnetAutomationCoordinator:
         current = self._read_current_or_raise()
         if current is None or current.get("status") == "idle":
             raise TestnetCoordinatorError("activation_required")
+        self._validate_soak_identity(current, strategy_family=strategy_family, instrument_id=instrument_id)
         from services.testnet_automation_readiness import TestnetAutomationReadiness
 
         readiness = TestnetAutomationReadiness(
@@ -783,6 +785,29 @@ class TestnetAutomationCoordinator:
             "blocker": None if ready else next(iter(receipt.get("blockers") or []), None),
         }
         return self._record(state)
+
+    @staticmethod
+    def _validate_soak_identity(
+        current: Mapping[str, Any],
+        *,
+        strategy_family: str,
+        instrument_id: str,
+    ) -> None:
+        expected_family = str(current.get("strategy_family") or "").strip().lower()
+        requested_family = str(strategy_family or "").strip().lower()
+        if requested_family != expected_family:
+            raise TestnetCoordinatorError(
+                "soak_strategy_family_mismatch",
+                {"expected": expected_family, "received": requested_family},
+            )
+        expected_instrument = str(
+            current.get("selected_instrument_id") or current.get("instrument_id") or ""
+        ).strip()
+        if expected_instrument and str(instrument_id or "").strip() != expected_instrument:
+            raise TestnetCoordinatorError(
+                "soak_instrument_mismatch",
+                {"expected": expected_instrument, "received": instrument_id},
+            )
 
     def start_dca_session(
         self,
@@ -1185,15 +1210,40 @@ class TestnetAutomationCoordinator:
         family = str(current.get("strategy_family") or "").lower()
         if family == "dca":
             dca = dict(result.get("dca") or {})
+            risk = dict(result.get("risk_budget") or {})
             requested_per_addition = self._decimal_optional(dca.get("notional_per_addition"))
             if effective_notional is not None and requested_per_addition is not None:
-                if requested_per_addition > effective_notional:
-                    dca["notional_per_addition"] = float(effective_notional)
+                entry_levels = dca.get("entry_levels")
+                entry_count = len(entry_levels) if isinstance(entry_levels, list) and entry_levels else 1
+                entry_prices = [
+                    self._decimal_optional(value)
+                    for value in (entry_levels if isinstance(entry_levels, list) else ())
+                ]
+                # DCA's canonical lifecycle rounds quantity to five decimal
+                # places.  Reserve one rounding unit at the highest entry
+                # price so the cumulative notional cannot exceed the Gate cap.
+                rounding_buffer = (
+                    max((value for value in entry_prices if value is not None), default=Decimal("0"))
+                    * Decimal("0.00001")
+                )
+                cumulative_cap_per_entry = max(
+                    Decimal("0"),
+                    effective_notional / Decimal(str(entry_count)) - rounding_buffer,
+                )
+                if requested_per_addition > cumulative_cap_per_entry:
+                    dca["notional_per_addition"] = float(cumulative_cap_per_entry)
+                existing_max_notional = self._decimal_optional(risk.get("max_notional"))
+                if existing_max_notional is None or existing_max_notional > effective_notional:
+                    risk["max_notional"] = float(effective_notional)
+                context["portfolio_cumulative_notional_cap"] = str(effective_notional)
             elif effective_quantity is not None and requested_per_addition is not None:
                 # If a candidate only declares quantity, use a conservative
                 # quantity cap via the lifecycle's price conversion.
                 context["effective_quantity_cap"] = str(effective_quantity)
+            elif requested_per_addition is not None:
+                raise TestnetCoordinatorError("execution_slice_notional_required")
             result["dca"] = dca
+            result["risk_budget"] = risk
         elif family == "grid":
             grid = dict(result.get("grid") or {})
             raw_rungs = grid.get("rungs")
