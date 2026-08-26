@@ -16813,3 +16813,81 @@ auditable datafeed port; broker execution remains a separate port.
 - The TP-limit protection gate intentionally stays fail-closed if an old
   standard-broker package is present; this exact pin is required before a new
   protection-bearing Testnet round.
+
+# 2026-08-26 — Hyperliquid Testnet automated Grid/DCA Coordinator (#1024–#1031)
+
+## Decision
+
+- Keep the old DCA and Grid Strategy Families unchanged and bind them through
+  one Testnet Automation Coordinator composition seam. Strategy remains the
+  owner of sizing, additions/reductions, exits, and protection intent; the
+  Portfolio Gate only preserves, scales down, or rejects exposure.
+- Choose Grid or DCA before asset selection. All Hyperliquid default-perp pairs
+  remain searchable candidates, but this delivery runs one selected asset and
+  one Execution Slice per activation. Concurrent multi-asset execution,
+  simultaneous Grid+DCA execution, MACD/SRSI, and automatic rebalance remain
+  out of scope.
+- Preserve explicit inventory, active-candidate, and execution-eligibility
+  states. Fresh two-sided BBO/L2, executable depth, precision/minimums,
+  Plan-bound slippage, and mark/mid/oracle coherence are hard gates; a pair
+  blocker stays pair-local and there is no hard-coded BTC exception.
+- Use the confirmed first-slice caps: gross notional is the lower of 10% of
+  freshly reconciled equity or 100 USDC; worst-case loss including fees,
+  slippage, and buffer is the lower of 5% of equity or 50 USDC; one open
+  position is allowed.
+- DCA Plans and Grid Revisions never expire. DCA aggregate TP/SL is terminal;
+  Grid rung TP may re-arm inside an active Plan, while Grid Hard Stop is
+  terminal. Manual interrupt cancels pending entries but preserves known
+  position/protection and requires explicit resume validation.
+- Any next-entry/re-arm requires actual-fill protection and fresh causal
+  order/position/fee/cursor reconciliation. Unknown submit/replace/cancel/
+  flatten receives one identity-bound query only; unresolved side effects stop
+  without blind retry. Account/universe/ownership/scheduler uncertainty enters
+  Portfolio Risk Hold without flattening unrelated assets.
+- Cloud is the only Testnet scheduler owner; local Mac execution is disabled.
+  Restart reconciles before resume, alerts never authorize actions, and a
+  plan-level TP/SL notifies Park and waits for the next human decision.
+- Rollout is sequential: BTC-DCA proof, BTC-Grid proof, two consecutive 12h
+  evidence windows per mode, then progressive pair-by-pair bounded canaries.
+  The existing 14×12h contract remains a future Live gate only.
+
+## Verification
+
+- TS-TESTNET-01 / #1024 merged in PR #1032 at
+  `main@094a46b76ae24a9675f40d780d66b100b130c73d`.
+- TS-TESTNET-02 / #1025 merged in PR #1033 at
+  `main@15d719535149f2730b6e4a694faf43630b94aa82`.
+- TS-TESTNET-03 / #1026 merged in PR #1034 at
+  `main@ee19d70a59de07015619abf1bad45a599b832ea6`.
+- TS-TESTNET-04 / #1027 merged in PR #1035 at
+  `main@24f355c2fbf17cf2eac12a703760b07b40d5c74b`.
+- TS-TESTNET-05 / #1028 merged in PR #1036 at
+  `main@02d6a5d900cc20dc9631db2b3fa0e4c2fc764734`.
+- TS-TESTNET-06 / #1029 merged in PR #1037 at
+  `main@6222ce20bdecf74016d998388591402110cfefe6`.
+- TS-TESTNET-07 / #1030 merged in PR #1038 at
+  `main@b5d2589a2fea07441b7cb0433cecce8d8b1e5092`.
+- TS-TESTNET-08 / #1031 is represented by the current release candidate PR
+  #1039, containing the mode-scoped two-window recorder, CLI, and attended
+  acceptance runbook.
+- Clean focused validation before the final PR is 126 tests for the preceding
+  Coordinator, candidate, transport, DCA, Grid, scheduler, expansion, and
+  readiness contracts; the readiness/legacy soak subset is 10 tests. Ruff,
+  compileall, diff-check, and gitleaks pass on the clean implementation
+  commits. No credential value, external Testnet order, Mainnet/Live action,
+  scheduler deployment, or cloud mutation was performed.
+
+## Gotchas
+
+- The installed standard-broker 916b0eb public package does not export the
+  optional canary marker classes anticipated by an older wrapper. The
+  trading-system adapter now validates the public callable/fact shape and
+  canonical reconciliation attributes instead of failing at import time; it
+  still rejects malformed or non-canonical facts.
+- The standard-broker default external profile continues to advertise an
+  explicit position-protection capability gap. The new transport canary and
+  strategy Coordinator preserve that blocker; passing fixture tests must not
+  be reported as external Testnet readiness.
+- Testnet readiness is evidence-only. The two-window package does not expire
+  a Plan, authorize a new Plan, or promote to Live. Any real Testnet run still
+  needs a fresh attended activation and matching public capability profile.
