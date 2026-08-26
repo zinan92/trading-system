@@ -12,6 +12,7 @@ from services.journal_store import load_json, write_json
 from services.standard_broker_testnet import (
     StandardBrokerTestnetExecutionAdapter,
 )
+from services.testnet_continuation_reconciliation import reconcile_before_continuation
 
 
 class DcaTestnetLifecycleError(RuntimeError):
@@ -63,6 +64,22 @@ class DcaTestnetLifecycle:
                 "protection_blocked_flattening",
                 "target_triggered",
             }:
+                return self.snapshot(plan)
+            reconciliation = reconcile_before_continuation(
+                self.broker,
+                existing,
+                timestamp=timestamp,
+                strategy_family="dca",
+                local_position_quantity=self._signed_position_quantity(existing),
+            )
+            existing["continuation_reconciliation"] = reconciliation
+            if reconciliation.get("status") != "ok":
+                self._block(
+                    existing,
+                    f"restart_reconciliation_blocked:{reconciliation.get('reason', 'unknown')}",
+                    timestamp=timestamp,
+                )
+                self._save(existing)
                 return self.snapshot(plan)
             return self.snapshot(plan)
         if self.broker.protection_adapter is None or self.broker.account_adapter is None:
@@ -179,6 +196,22 @@ class DcaTestnetLifecycle:
             return self.snapshot(plan)
         if state["positions"] and state.get("protection", {}).get("status") != "active":
             self._block(state, "protection_revalidation_required", timestamp=timestamp)
+            self._save(state)
+            return self.snapshot(plan)
+        reconciliation = reconcile_before_continuation(
+            self.broker,
+            state,
+            timestamp=timestamp,
+            strategy_family="dca",
+            local_position_quantity=self._signed_position_quantity(state),
+        )
+        state["continuation_reconciliation"] = reconciliation
+        if reconciliation.get("status") != "ok":
+            self._block(
+                state,
+                f"resume_reconciliation_blocked:{reconciliation.get('reason', 'unknown')}",
+                timestamp=timestamp,
+            )
             self._save(state)
             return self.snapshot(plan)
         try:
@@ -377,6 +410,23 @@ class DcaTestnetLifecycle:
             else:
                 self._confirm_or_update_protection(plan, state, timestamp=timestamp)
             if state["status"] not in {"blocked_protection", "blocked_risk", "blocked_risk_flattening"}:
+                reconciliation = reconcile_before_continuation(
+                    self.broker,
+                    state,
+                    timestamp=timestamp,
+                    strategy_family="dca",
+                    local_position_quantity=self._signed_position_quantity(state),
+                )
+                state["continuation_reconciliation"] = reconciliation
+                if reconciliation.get("status") != "ok":
+                    self._block(
+                        state,
+                        f"next_entry_reconciliation_blocked:{reconciliation.get('reason', 'unknown')}",
+                        timestamp=timestamp,
+                    )
+                    state["updated_at"] = timestamp
+                    self._save(state)
+                    return self.snapshot(plan)
                 self._submit_next_entry(plan, state, timestamp=timestamp)
                 if state["status"] not in {"budget_exhausted", "blocked_protection", "blocked_risk", "blocked_risk_flattening"}:
                     state["status"] = "open"
@@ -907,6 +957,15 @@ class DcaTestnetLifecycle:
     def _entry_quantity(plan: dict[str, Any], price: float) -> float:
         notional = float(plan["dca"].get("notional_per_addition") or 0.0)
         return round(notional / price, 5)
+
+    @staticmethod
+    def _signed_position_quantity(state: dict[str, Any]) -> float:
+        sign = 1.0 if str(state.get("direction") or "long").lower() == "long" else -1.0
+        return sign * sum(
+            float(row.get("quantity") or 0)
+            for row in state.get("positions") or ()
+            if isinstance(row, dict)
+        )
 
     def _projected_entry_within_budget(
         self,

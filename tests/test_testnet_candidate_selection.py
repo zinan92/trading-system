@@ -182,6 +182,7 @@ def test_selector_applies_portfolio_gate_downward_only_and_preserves_candidate_p
     assert allocation.requested_notional == Decimal("400")
     assert allocation.effective_notional == Decimal("300")
     assert allocation.effective_notional < allocation.requested_notional
+    assert allocation.execution_slice_id.startswith("execution-")
     assert allocation.status == "scaled"
     assert allocation.source_strategy_plan_digest.startswith("sha256:")
     assert result.read_model["status"] == "scaled"

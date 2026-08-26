@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+from services.testnet_automation_coordinator import (
+    TestnetAutomationCoordinator,
+    TestnetCoordinatorError,
+)
 from services.testnet_progressive_expansion import (
     EXPANSION_SCHEMA,
     TestnetProgressiveExpansion,
@@ -122,15 +125,11 @@ def test_coordinator_persists_progressive_expansion_result(tmp_path: Path) -> No
         command_id="activate-expand",
     )
 
-    result = coordinator.progressive_expand(
-        [_candidate("BTC", 1)],
-        preflight=lambda _candidate: {"status": "pass"},
-        canary=lambda candidate, _caps: {"status": "pass", "asset": candidate["asset"]},
-        equity="1000",
-        command_id="expand-1",
-    )
-
-    assert result["event"] == "progressive_expansion_admitted"
-    assert result["status"] == "candidate_admitted"
-    assert result["selected_asset"] == "BTC"
-    assert coordinator.status()["expansion"]["status"] == "admitted"
+    with pytest.raises(TestnetCoordinatorError, match="testnet_expansion_soak_gate_required"):
+        coordinator.progressive_expand(
+            [_candidate("BTC", 1)],
+            preflight=lambda _candidate: {"status": "pass"},
+            canary=lambda candidate, _caps: {"status": "pass", "asset": candidate["asset"]},
+            equity="1000",
+            command_id="expand-1",
+        )

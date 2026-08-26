@@ -58,7 +58,7 @@ class Receipt:
     class Provenance:
         transport_state = "external_testnet"
         mapping_revision = CAPABILITY
-        source = "fake.external_testnet"
+        source = "hyperliquid.external_testnet"
         execution_scope = "hypercore:default"
 
     provenance = Provenance()
@@ -98,7 +98,7 @@ class FilledBroker:
             "freshness": "fresh",
             "observed_at": now.isoformat(),
             "max_age_seconds": "120",
-            "source": "fake.external_testnet",
+            "source": "hyperliquid.external_testnet",
             "transport_state": "external_testnet",
             "mapping_revision": CAPABILITY,
         }
@@ -432,12 +432,13 @@ def test_transport_canary_blocks_protection_gap_before_submit(tmp_path: Path) ->
 def test_coordinator_canary_requires_selected_btc_slice_and_persists_result(tmp_path: Path) -> None:
     from tests.test_testnet_candidate_selection import _candidate, _policy, _snapshot
 
+    raw_plan = _plan(canary_id="coordinator-canary")
     coordinator = TestnetAutomationCoordinator(tmp_path / "outputs", clock=lambda: NOW)
     activation = {
         "strategy_family": "dca",
         "strategy_session_id": "session-btc-dca",
         "strategy_revision_id": "revision-btc-dca-1",
-        "plan_digest": "sha256:" + "d" * 64,
+        "plan_digest": raw_plan["plan_digest"],
         "account_fingerprint": ACCOUNT,
         "broker_id": "hyperliquid",
         "environment": "testnet",
@@ -453,7 +454,6 @@ def test_coordinator_canary_requires_selected_btc_slice_and_persists_result(tmp_
         {"candidates": [_candidate("BTC", rank=1)], "snapshot": _snapshot(), "policy": _policy()},
         command_id="select-1",
     )
-    raw_plan = _plan(canary_id="coordinator-canary")
     plan = __import__("services.standard_broker_testnet_canary", fromlist=["TestnetCanaryPlan"]).TestnetCanaryPlan.from_mapping(raw_plan)
     ledger = __import__("services.park_confirmation", fromlist=["ParkConfirmationLedger"]).ParkConfirmationLedger(tmp_path / "outputs", park_user_id="park")
     ledger.create_proposal(

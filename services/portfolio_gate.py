@@ -16,6 +16,7 @@ from typing import Any
 
 from schemas.portfolio import (
     AssetAllocationSlice,
+    ExecutionSlice,
     PortfolioPolicy,
     PortfolioRiskHold,
     PortfolioSelection,
@@ -314,9 +315,10 @@ class PortfolioRiskGate:
         outcome: str,
         candidate_set_id: str,
     ) -> PortfolioSelection:
+        allocation_id = _allocation_id(candidate, snapshot, policy)
         allocation = AssetAllocationSlice(
             portfolio_session_id=snapshot.portfolio_session_id,
-            allocation_id=_allocation_id(candidate, snapshot, policy),
+            allocation_id=allocation_id,
             candidate_id=candidate.candidate_id,
             asset=candidate.asset,
             direction=candidate.direction,
@@ -330,6 +332,7 @@ class PortfolioRiskGate:
             effective_notional=effective_notional,
             candidate_rank=candidate.candidate_rank,
             status=status,
+            execution_slice_id=_execution_slice_id(allocation_id),
             reasons=reasons,
             provenance={
                 "gate_schema": self.schema_version,
@@ -474,6 +477,26 @@ def _project_selection(snapshot: PortfolioSnapshot, allocation: AssetAllocationS
         allocation,
         provenance={**_thaw(allocation.provenance), "virtual_projection": True},
     )
+    execution_slices = tuple(snapshot.execution_slices)
+    if allocation.execution_slice_id and not any(
+        item.execution_slice_id == allocation.execution_slice_id
+        for item in execution_slices
+    ):
+        execution_slices = (
+            *execution_slices,
+            ExecutionSlice(
+                execution_slice_id=allocation.execution_slice_id,
+                portfolio_session_id=allocation.portfolio_session_id,
+                allocation_id=allocation.allocation_id,
+                asset=allocation.asset,
+                broker_binding={
+                    "instrument_id": allocation.position_management.get("instrument_id"),
+                    "source_strategy_plan_digest": allocation.source_strategy_plan_digest,
+                    "virtual_projection": True,
+                },
+                status="pending",
+            ),
+        )
     return replace(
         snapshot,
         total_exposure=total_exposure,
@@ -482,6 +505,7 @@ def _project_selection(snapshot: PortfolioSnapshot, allocation: AssetAllocationS
         available_cash=snapshot.available_cash - notional,
         cash_buffer_pct=None,
         allocation_slices=(*snapshot.allocation_slices, projected_allocation),
+        execution_slices=execution_slices,
     )
 
 
@@ -539,6 +563,12 @@ def _allocation_id(candidate: StrategyPositionPlan, snapshot: PortfolioSnapshot,
             "policy_revision": policy.policy_revision,
         },
     )
+
+
+def _execution_slice_id(allocation_id: str) -> str:
+    """Return the immutable execution identity derived from one allocation."""
+
+    return f"execution-{hashlib.sha256(allocation_id.encode('utf-8')).hexdigest()}"
 
 
 def _candidate_set_id(candidate: StrategyPositionPlan) -> str:

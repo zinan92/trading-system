@@ -11,11 +11,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from schemas.portfolio import ExecutionSlice
 from services.journal_store import load_json, write_json
 
 
@@ -30,6 +33,9 @@ _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
 _RELEASE_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 _ACTIONS = frozenset(
     {"activate", "status", "preflight", "pause", "interrupt", "resume", "select_candidate"}
+)
+_APPROVED_MARKET_SOURCES = frozenset(
+    {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"}
 )
 _ACTIVATION_FIELDS = (
     "strategy_family",
@@ -409,6 +415,14 @@ class TestnetAutomationCoordinator:
         current = self._read_current_or_raise()
         if current is None or current.get("status") == "idle":
             raise TestnetCoordinatorError("activation_required")
+        if current.get("status") not in {
+            "activated",
+            "candidate_blocked",
+            "portfolio_held",
+        }:
+            # Candidate replacement is a pre-side-effect operation only.  An
+            # active/canary/lifecycle state already owns its selected slice.
+            raise TestnetCoordinatorError("candidate_selection_locked")
         if not isinstance(payload, Mapping):
             raise TestnetCoordinatorError("candidate_selection_payload_invalid")
         activation_id = str(current.get("activation_id") or "")
@@ -462,6 +476,44 @@ class TestnetAutomationCoordinator:
             event = "candidate_blocked"
             blocker = result.blocker or "no_eligible_candidate"
             next_action = "await_candidate_revalidation"
+        execution_slice: dict[str, Any] | None = None
+        if result.status == "selected":
+            allocations = tuple(
+                getattr(result.portfolio_result, "selected_allocations", ())
+            )
+            if len(allocations) != 1:
+                raise TestnetCoordinatorError(
+                    "execution_slice_cardinality_invalid",
+                    {"selected_allocation_count": len(allocations)},
+                )
+            allocation = allocations[0]
+            if not allocation.execution_slice_id:
+                raise TestnetCoordinatorError("execution_slice_identity_missing")
+            execution_slice_contract = ExecutionSlice(
+                execution_slice_id=allocation.execution_slice_id,
+                portfolio_session_id=allocation.portfolio_session_id,
+                allocation_id=allocation.allocation_id,
+                asset=allocation.asset,
+                broker_binding={
+                    "activation_id": activation_id,
+                    "broker_id": current.get("broker_id"),
+                    "environment": current.get("environment"),
+                    "transport_profile": current.get("transport_profile"),
+                    "instrument_id": result.selected_instrument_id,
+                    "account_fingerprint": current.get("account_fingerprint"),
+                    "runtime_id": current.get("runtime_id"),
+                    "release_sha": current.get("release_sha"),
+                    "capability_revision": current.get("capability_revision"),
+                    "candidate_set_id": result.candidate_set.candidate_set_id,
+                    "selection_id": result.portfolio_result.selection_id,
+                },
+                status="pending",
+            )
+            execution_slice = {
+                **execution_slice_contract.to_dict(),
+                "allocation": allocation.to_dict(),
+                "selection_id": result.portfolio_result.selection_id,
+            }
         state = {
             **current,
             "event": event,
@@ -474,6 +526,12 @@ class TestnetAutomationCoordinator:
             "selected_asset": result.selected_asset,
             "selected_instrument_id": result.selected_instrument_id,
             "global_hold": result.global_hold,
+            "execution_slice": execution_slice,
+            "selected_execution_slice_id": (
+                execution_slice.get("execution_slice_id")
+                if execution_slice is not None
+                else None
+            ),
             "ready": result.status == "selected",
             "execution_enabled": False,
             "execution_ready": False,
@@ -521,6 +579,7 @@ class TestnetAutomationCoordinator:
                 "selected_instrument_mismatch",
                 {"selected_instrument_id": selected_instrument, "plan_instrument_id": plan_instrument},
             )
+        self._validate_canary_identity(plan, current)
         try:
             runner = TestnetTransportCanary(
                 self.output_root,
@@ -588,6 +647,24 @@ class TestnetAutomationCoordinator:
         current = self._read_current_or_raise()
         if current is None or current.get("status") == "idle":
             raise TestnetCoordinatorError("activation_required")
+        if current.get("status") != "soak_ready":
+            raise TestnetCoordinatorError(
+                "testnet_expansion_soak_gate_required",
+                {"current_status": current.get("status")},
+            )
+        scheduler_state = self._scheduler_state()
+        if (
+            scheduler_state.get("status") != "active"
+            or str(scheduler_state.get("activation_id") or "")
+            != str(current.get("activation_id") or "")
+            or scheduler_state.get("owner_epoch") in (None, "")
+        ):
+            raise TestnetCoordinatorError(
+                "testnet_expansion_scheduler_gate_required",
+                {"scheduler_status": scheduler_state.get("status")},
+            )
+        if current.get("canary_status") not in {"FLAT_RECONCILED", "flat_reconciled"}:
+            raise TestnetCoordinatorError("testnet_expansion_canary_gate_required")
         activation_id = str(current.get("activation_id") or "")
         normalized_command_id = self._command_id(command_id, "progressive_expand", activation_id)
         replay = self._replay(normalized_command_id)
@@ -719,19 +796,20 @@ class TestnetAutomationCoordinator:
         """Start the canonical DCA lifecycle for the selected slice."""
 
         current = self._require_strategy_slice(plan, family="dca", expected_status="candidate_selected")
+        execution_plan = self._execution_plan(plan, current)
         observed_at = self._timestamp(timestamp)
-        self._validate_testnet_confirmation(plan, current, confirmation)
-        self._validate_authoritative_market(market)
-        self._validate_lifecycle_preflight(broker, strategy_family="dca")
+        self._validate_testnet_confirmation(execution_plan, current, confirmation)
+        self._validate_authoritative_market(market, current=current, observed_at=observed_at)
+        self._validate_lifecycle_preflight(broker, strategy_family="dca", current=current)
         from services.dca_testnet_lifecycle import DcaTestnetLifecycle
 
         lifecycle = DcaTestnetLifecycle(self.output_root, broker)
         try:
-            state = lifecycle.start(dict(plan), timestamp=observed_at)
+            state = lifecycle.start(execution_plan, timestamp=observed_at)
         except Exception as exc:  # noqa: BLE001 - persist lifecycle blocker at the Coordinator seam.
             return self._publish_dca_state(
                 current,
-                dict(plan),
+                execution_plan,
                 {
                     "status": "blocked_reconciliation",
                     "blocker": f"dca_start_failed:{type(exc).__name__}:{exc}",
@@ -739,7 +817,7 @@ class TestnetAutomationCoordinator:
                 },
                 observed_at=observed_at,
             )
-        return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
+        return self._publish_dca_state(current, execution_plan, state, observed_at=observed_at)
 
     def advance_dca_session(
         self,
@@ -754,6 +832,7 @@ class TestnetAutomationCoordinator:
         """Apply one canonical DCA fill or market event through the Coordinator."""
 
         current = self._require_strategy_slice(plan, family="dca")
+        execution_plan = self._execution_plan(plan, current)
         if current.get("status") not in {
             "dca_running",
             "dca_interrupted",
@@ -761,17 +840,17 @@ class TestnetAutomationCoordinator:
         }:
             raise TestnetCoordinatorError("dca_session_not_active")
         observed_at = self._timestamp(timestamp)
-        if market is not None:
-            self._validate_authoritative_market(market)
+        self._validate_authoritative_market(market, current=current, observed_at=observed_at)
+        self._validate_lifecycle_preflight(broker, strategy_family="dca", current=current)
         from services.dca_testnet_lifecycle import DcaTestnetLifecycle
 
         lifecycle = DcaTestnetLifecycle(self.output_root, broker)
         try:
             if fill is not None:
-                state = lifecycle.on_fill(dict(plan), dict(fill), timestamp=observed_at)
+                state = lifecycle.on_fill(execution_plan, dict(fill), timestamp=observed_at)
             elif price is not None:
                 state = lifecycle.on_market_event(
-                    dict(plan),
+                    execution_plan,
                     price=float(price),
                     timestamp=observed_at,
                 )
@@ -781,14 +860,14 @@ class TestnetAutomationCoordinator:
             raise
         except Exception as exc:  # noqa: BLE001 - retain the lifecycle blocker.
             try:
-                state = lifecycle.snapshot(dict(plan))
+                state = lifecycle.snapshot(execution_plan)
             except Exception:
                 state = {
                     "status": "blocked_reconciliation",
                     "blocker": f"dca_event_failed:{type(exc).__name__}:{exc}",
                     "next_action": "notify_park_and_wait",
                 }
-        return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
+        return self._publish_dca_state(current, execution_plan, state, observed_at=observed_at)
 
     def interrupt_dca_session(
         self,
@@ -801,15 +880,16 @@ class TestnetAutomationCoordinator:
         """Cancel pending DCA entries while preserving the current position."""
 
         current = self._require_strategy_slice(plan, family="dca")
+        execution_plan = self._execution_plan(plan, current)
         observed_at = self._timestamp(timestamp)
         from services.dca_testnet_lifecycle import DcaTestnetLifecycle
 
         state = DcaTestnetLifecycle(self.output_root, broker).interrupt(
-            dict(plan),
+            execution_plan,
             timestamp=observed_at,
             reason=reason,
         )
-        return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
+        return self._publish_dca_state(current, execution_plan, state, observed_at=observed_at)
 
     def resume_dca_session(
         self,
@@ -823,19 +903,20 @@ class TestnetAutomationCoordinator:
         """Resume an interrupted DCA session after fresh host validation."""
 
         current = self._require_strategy_slice(plan, family="dca")
+        execution_plan = self._execution_plan(plan, current)
         if current.get("status") != "dca_interrupted":
             raise TestnetCoordinatorError("dca_session_not_interrupted")
         observed_at = self._timestamp(timestamp)
-        self._validate_testnet_confirmation(plan, current, confirmation)
-        self._validate_authoritative_market(market)
-        self._validate_lifecycle_preflight(broker, strategy_family="dca")
+        self._validate_testnet_confirmation(execution_plan, current, confirmation)
+        self._validate_authoritative_market(market, current=current, observed_at=observed_at)
+        self._validate_lifecycle_preflight(broker, strategy_family="dca", current=current)
         from services.dca_testnet_lifecycle import DcaTestnetLifecycle
 
         state = DcaTestnetLifecycle(self.output_root, broker).resume(
-            dict(plan),
+            execution_plan,
             timestamp=observed_at,
         )
-        return self._publish_dca_state(current, dict(plan), state, observed_at=observed_at)
+        return self._publish_dca_state(current, execution_plan, state, observed_at=observed_at)
 
     def start_grid_session(
         self,
@@ -849,22 +930,23 @@ class TestnetAutomationCoordinator:
         """Start the canonical Grid lifecycle for the selected slice."""
 
         current = self._require_strategy_slice(plan, family="grid", expected_status="candidate_selected")
+        execution_plan = self._execution_plan(plan, current)
         observed_at = self._timestamp(timestamp)
-        self._validate_testnet_confirmation(plan, current, confirmation)
-        self._validate_authoritative_market(market)
-        self._validate_lifecycle_preflight(broker, strategy_family="grid")
+        self._validate_testnet_confirmation(execution_plan, current, confirmation)
+        self._validate_authoritative_market(market, current=current, observed_at=observed_at)
+        self._validate_lifecycle_preflight(broker, strategy_family="grid", current=current)
         from services.grid_testnet_lifecycle import GridTestnetLifecycle
 
         lifecycle = GridTestnetLifecycle(self.output_root, broker)
         try:
-            state = lifecycle.start(dict(plan), timestamp=observed_at)
+            state = lifecycle.start(execution_plan, timestamp=observed_at)
         except Exception as exc:  # noqa: BLE001 - persist lifecycle blocker at the Coordinator seam.
             state = {
                 "status": "blocked_reconciliation",
                 "blocker": f"grid_start_failed:{type(exc).__name__}:{exc}",
                 "next_action": "notify_park_and_wait",
             }
-        return self._publish_grid_state(current, dict(plan), state, observed_at=observed_at)
+        return self._publish_grid_state(current, execution_plan, state, observed_at=observed_at)
 
     def advance_grid_session(
         self,
@@ -879,6 +961,7 @@ class TestnetAutomationCoordinator:
         """Apply one canonical Grid fill or market event through the Coordinator."""
 
         current = self._require_strategy_slice(plan, family="grid")
+        execution_plan = self._execution_plan(plan, current)
         if current.get("status") not in {
             "grid_running",
             "grid_interrupted",
@@ -886,17 +969,17 @@ class TestnetAutomationCoordinator:
         }:
             raise TestnetCoordinatorError("grid_session_not_active")
         observed_at = self._timestamp(timestamp)
-        if market is not None:
-            self._validate_authoritative_market(market)
+        self._validate_authoritative_market(market, current=current, observed_at=observed_at)
+        self._validate_lifecycle_preflight(broker, strategy_family="grid", current=current)
         from services.grid_testnet_lifecycle import GridTestnetLifecycle
 
         lifecycle = GridTestnetLifecycle(self.output_root, broker)
         try:
             if fill is not None:
-                state = lifecycle.on_fill(dict(plan), dict(fill), timestamp=observed_at)
+                state = lifecycle.on_fill(execution_plan, dict(fill), timestamp=observed_at)
             elif price is not None:
                 state = lifecycle.on_market_event(
-                    dict(plan),
+                    execution_plan,
                     price=float(price),
                     timestamp=observed_at,
                 )
@@ -906,14 +989,14 @@ class TestnetAutomationCoordinator:
             raise
         except Exception as exc:  # noqa: BLE001 - retain lifecycle blocker.
             try:
-                state = lifecycle.snapshot(dict(plan))
+                state = lifecycle.snapshot(execution_plan)
             except Exception:
                 state = {
                     "status": "blocked_reconciliation",
                     "blocker": f"grid_event_failed:{type(exc).__name__}:{exc}",
                     "next_action": "notify_park_and_wait",
                 }
-        return self._publish_grid_state(current, dict(plan), state, observed_at=observed_at)
+        return self._publish_grid_state(current, execution_plan, state, observed_at=observed_at)
 
     def interrupt_grid_session(
         self,
@@ -926,15 +1009,16 @@ class TestnetAutomationCoordinator:
         """Cancel pending Grid entries while preserving known positions/protection."""
 
         current = self._require_strategy_slice(plan, family="grid")
+        execution_plan = self._execution_plan(plan, current)
         observed_at = self._timestamp(timestamp)
         from services.grid_testnet_lifecycle import GridTestnetLifecycle
 
         state = GridTestnetLifecycle(self.output_root, broker).interrupt(
-            dict(plan),
+            execution_plan,
             timestamp=observed_at,
             reason=reason,
         )
-        return self._publish_grid_state(current, dict(plan), state, observed_at=observed_at)
+        return self._publish_grid_state(current, execution_plan, state, observed_at=observed_at)
 
     def resume_grid_session(
         self,
@@ -948,19 +1032,20 @@ class TestnetAutomationCoordinator:
         """Resume an interrupted Grid after fresh host validation."""
 
         current = self._require_strategy_slice(plan, family="grid")
+        execution_plan = self._execution_plan(plan, current)
         if current.get("status") != "grid_interrupted":
             raise TestnetCoordinatorError("grid_session_not_interrupted")
         observed_at = self._timestamp(timestamp)
-        self._validate_testnet_confirmation(plan, current, confirmation)
-        self._validate_authoritative_market(market)
-        self._validate_lifecycle_preflight(broker, strategy_family="grid")
+        self._validate_testnet_confirmation(execution_plan, current, confirmation)
+        self._validate_authoritative_market(market, current=current, observed_at=observed_at)
+        self._validate_lifecycle_preflight(broker, strategy_family="grid", current=current)
         from services.grid_testnet_lifecycle import GridTestnetLifecycle
 
         state = GridTestnetLifecycle(self.output_root, broker).resume(
-            dict(plan),
+            execution_plan,
             timestamp=observed_at,
         )
-        return self._publish_grid_state(current, dict(plan), state, observed_at=observed_at)
+        return self._publish_grid_state(current, execution_plan, state, observed_at=observed_at)
 
     def _publish_grid_state(
         self,
@@ -1038,7 +1123,128 @@ class TestnetAutomationCoordinator:
         for field in ("strategy_session_id", "strategy_revision_id", "plan_digest"):
             if str(plan.get(field) or "") != str(current.get(field) or ""):
                 raise TestnetCoordinatorError("strategy_plan_identity_mismatch", {"field": field})
+        execution_slice = current.get("execution_slice")
+        if not isinstance(execution_slice, Mapping):
+            raise TestnetCoordinatorError("execution_slice_required")
+        allocation = execution_slice.get("allocation")
+        if not isinstance(allocation, Mapping):
+            raise TestnetCoordinatorError("execution_slice_allocation_required")
+        if str(allocation.get("asset") or "") != str(current.get("selected_asset") or ""):
+            raise TestnetCoordinatorError("execution_slice_asset_mismatch")
+        if str(allocation.get("instrument_id") or "") not in {
+            "",
+            str(current.get("selected_instrument_id") or ""),
+        }:
+            raise TestnetCoordinatorError("execution_slice_instrument_mismatch")
+        supplied_context = plan.get("execution_context")
+        if isinstance(supplied_context, Mapping):
+            supplied_slice_id = str(supplied_context.get("execution_slice_id") or "")
+            if supplied_slice_id and supplied_slice_id != str(execution_slice.get("execution_slice_id") or ""):
+                raise TestnetCoordinatorError("execution_slice_identity_mismatch")
+        supplied_candidate_id = str(plan.get("candidate_id") or "")
+        if supplied_candidate_id and supplied_candidate_id != str(allocation.get("candidate_id") or ""):
+            raise TestnetCoordinatorError("execution_slice_candidate_mismatch")
         return current
+
+    def _execution_plan(
+        self,
+        plan: Mapping[str, Any],
+        current: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Bind the caller's strategy plan to the stored subtractive slice.
+
+        The strategy remains the source of direction and lifecycle semantics;
+        only quantities are clamped downward to the effective allocation that
+        was durably selected before any Broker side effect.
+        """
+
+        execution_slice = current.get("execution_slice")
+        allocation = execution_slice.get("allocation") if isinstance(execution_slice, Mapping) else None
+        if not isinstance(execution_slice, Mapping) or not isinstance(allocation, Mapping):
+            raise TestnetCoordinatorError("execution_slice_required")
+        result = deepcopy(dict(plan))
+        context = dict(result.get("execution_context") or {})
+        context.update(
+            {
+                "execution_slice_id": execution_slice.get("execution_slice_id"),
+                "portfolio_allocation_id": allocation.get("allocation_id"),
+                "portfolio_selection_id": execution_slice.get("selection_id"),
+                "candidate_id": allocation.get("candidate_id"),
+                "requested_quantity": allocation.get("requested_quantity"),
+                "effective_quantity": allocation.get("effective_quantity"),
+                "requested_notional": allocation.get("requested_notional"),
+                "effective_notional": allocation.get("effective_notional"),
+                "activation_id": current.get("activation_id"),
+            }
+        )
+        result["execution_context"] = context
+        result["execution_slice_id"] = execution_slice.get("execution_slice_id")
+        result["portfolio_allocation_id"] = allocation.get("allocation_id")
+        effective_quantity = self._decimal_value(allocation.get("effective_quantity"))
+        effective_notional = self._decimal_optional(allocation.get("effective_notional"))
+        family = str(current.get("strategy_family") or "").lower()
+        if family == "dca":
+            dca = dict(result.get("dca") or {})
+            requested_per_addition = self._decimal_optional(dca.get("notional_per_addition"))
+            if effective_notional is not None and requested_per_addition is not None:
+                if requested_per_addition > effective_notional:
+                    dca["notional_per_addition"] = float(effective_notional)
+            elif effective_quantity is not None and requested_per_addition is not None:
+                # If a candidate only declares quantity, use a conservative
+                # quantity cap via the lifecycle's price conversion.
+                context["effective_quantity_cap"] = str(effective_quantity)
+            result["dca"] = dca
+        elif family == "grid":
+            grid = dict(result.get("grid") or {})
+            raw_rungs = grid.get("rungs")
+            if isinstance(raw_rungs, list) and effective_quantity is not None:
+                quantities = [
+                    self._decimal_optional(row.get("quantity"))
+                    for row in raw_rungs
+                    if isinstance(row, Mapping)
+                ]
+                total = sum((value for value in quantities if value is not None), Decimal("0"))
+                total_notional = sum(
+                    (
+                        value * self._decimal_optional(row.get("price"))
+                        for row, value in zip(raw_rungs, quantities)
+                        if isinstance(row, Mapping)
+                        and value is not None
+                        and self._decimal_optional(row.get("price")) is not None
+                    ),
+                    Decimal("0"),
+                )
+                factors = [Decimal("1")]
+                if total > effective_quantity > 0:
+                    factors.append(effective_quantity / total)
+                if effective_notional is not None and total_notional > effective_notional > 0:
+                    factors.append(effective_notional / total_notional)
+                factor = min(factors)
+                if factor < 1:
+                    scaled: list[dict[str, Any]] = []
+                    for row in raw_rungs:
+                        item = dict(row)
+                        quantity = self._decimal_optional(item.get("quantity"))
+                        if quantity is not None:
+                            item["quantity"] = float(quantity * factor)
+                        scaled.append(item)
+                    grid["rungs"] = scaled
+            result["grid"] = grid
+        return result
+
+    @staticmethod
+    def _decimal_optional(value: Any) -> Decimal | None:
+        if value in (None, ""):
+            return None
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return number if number.is_finite() else None
+
+    @classmethod
+    def _decimal_value(cls, value: Any) -> Decimal | None:
+        return cls._decimal_optional(value)
 
     @staticmethod
     def _validate_testnet_confirmation(
@@ -1067,22 +1273,137 @@ class TestnetAutomationCoordinator:
         if not str(confirmation.get("confirmation_id") or "").strip():
             blocked("confirmation_id_required")
 
-    def _validate_authoritative_market(self, market: Mapping[str, Any]) -> None:
+    @staticmethod
+    def _validate_canary_identity(plan: object, current: Mapping[str, Any]) -> None:
+        """Require the attended canary plan to be the activated identity."""
+
+        def value(field: str) -> str:
+            if isinstance(plan, Mapping):
+                return str(plan.get(field) or "")
+            return str(getattr(plan, field, "") or "")
+
+        expected = {
+            "plan_digest": current.get("plan_digest"),
+            "account_fingerprint": current.get("account_fingerprint"),
+            "broker_id": current.get("broker_id"),
+            "environment": current.get("environment"),
+            "profile_id": current.get("transport_profile"),
+            "instrument_id": current.get("selected_instrument_id"),
+            "runtime_id": current.get("runtime_id"),
+            "release_sha": current.get("release_sha"),
+            "capability_revision": current.get("capability_revision"),
+        }
+        for field, expected_value in expected.items():
+            if str(expected_value or "") != value(field):
+                raise TestnetCoordinatorError(
+                    "canary_activation_identity_mismatch",
+                    {"field": field},
+                )
+
+    def _validate_authoritative_market(
+        self,
+        market: Mapping[str, Any],
+        *,
+        current: Mapping[str, Any],
+        observed_at: str,
+    ) -> None:
         from services.strategy_control_plane import StrategyControlMachineError
 
+        if not isinstance(market, Mapping):
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"reason": "market_facts_required"},
+            )
+        required_identity = (
+            "source",
+            "cursor",
+            "broker_id",
+            "environment",
+            "instrument_id",
+            "asset_index",
+            "mapping_revision",
+            "universe_revision",
+            "connection_epoch",
+            "observed_at",
+        )
+        missing = [field for field in required_identity if field not in market or market.get(field) in (None, "")]
+        if missing:
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"reason": "market_identity_missing", "fields": missing},
+            )
         if (
-            not isinstance(market, Mapping)
-            or market.get("execution_ready") is not True
+            market.get("execution_ready") is not True
             or market.get("fresh") is not True
             or market.get("is_synthetic") is True
             or market.get("fallback_policy") not in {"none", None}
+            or str(market.get("broker_id") or "").lower() != "hyperliquid"
+            or str(market.get("environment") or "").lower() != "testnet"
+            or str(market.get("instrument_id") or "")
+            != str(current.get("selected_instrument_id") or "")
+            or str(market.get("source") or "").lower() not in _APPROVED_MARKET_SOURCES
         ):
             raise StrategyControlMachineError(
                 "testnet_market_not_authoritative",
-                {
-                    "execution_ready": market.get("execution_ready") if isinstance(market, Mapping) else None,
-                    "fresh": market.get("fresh") if isinstance(market, Mapping) else None,
-                },
+                {"reason": "market_identity_mismatch"},
+            )
+        try:
+            market_time = datetime.fromisoformat(str(market["observed_at"]).replace("Z", "+00:00"))
+            execution_time = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"reason": "market_timestamp_invalid"},
+            ) from exc
+        if market_time.tzinfo is None or execution_time.tzinfo is None:
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"reason": "market_timestamp_timezone_missing"},
+            )
+        age = (execution_time.astimezone(timezone.utc) - market_time.astimezone(timezone.utc)).total_seconds()
+        if age < 0 or age > 120:
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"reason": "market_stale", "age_seconds": age},
+            )
+        try:
+            numeric = {
+                field: Decimal(str(market[field]))
+                for field in (
+                    "bid",
+                    "ask",
+                    "mid",
+                    "mark",
+                    "oracle",
+                    "impact",
+                    "depth_notional",
+                    "max_slippage",
+                    "max_oracle_deviation_bps",
+                )
+            }
+        except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"reason": "market_quality_facts_invalid"},
+            ) from exc
+        if (
+            any(not number.is_finite() or number < 0 for number in numeric.values())
+            or numeric["bid"] >= numeric["ask"]
+            or not numeric["bid"] <= numeric["mid"] <= numeric["ask"]
+            or numeric["depth_notional"] <= 0
+            or numeric["oracle"] <= 0
+            or numeric["mark"] <= 0
+            or numeric["max_slippage"] <= 0
+            or numeric["max_oracle_deviation_bps"] < 0
+            or abs(numeric["impact"] - numeric["mid"]) > numeric["max_slippage"]
+            or abs(numeric["mark"] - numeric["oracle"])
+            / numeric["oracle"]
+            * Decimal("10000")
+            > numeric["max_oracle_deviation_bps"]
+        ):
+            raise StrategyControlMachineError(
+                "testnet_market_not_authoritative",
+                {"reason": "market_quality_gate_failed"},
             )
 
     @staticmethod
@@ -1090,6 +1411,7 @@ class TestnetAutomationCoordinator:
         broker: object,
         *,
         strategy_family: str,
+        current: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         from services.strategy_control_plane import StrategyControlMachineError
 
@@ -1105,6 +1427,36 @@ class TestnetAutomationCoordinator:
             ) from exc
         if not isinstance(preflight, Mapping):
             raise StrategyControlMachineError("testnet_preflight_blocked", dict(preflight) if isinstance(preflight, Mapping) else {})
+        if current is not None:
+            broker_config = getattr(broker, "broker_config", {})
+            config = broker_config if isinstance(broker_config, Mapping) else {}
+            actual = {
+                "broker_id": preflight.get("broker_id") or config.get("broker_id"),
+                "environment": preflight.get("environment") or config.get("environment"),
+                "transport_profile": preflight.get("transport_profile") or config.get("transport_profile"),
+                "runtime_id": preflight.get("runtime_id") or config.get("runtime_id"),
+                "release_sha": preflight.get("release_sha") or config.get("release_sha"),
+                "capability_revision": preflight.get("capability_revision"),
+                "account_fingerprint": preflight.get("account_fingerprint") or config.get("account_fingerprint"),
+            }
+            if not actual["account_fingerprint"] and config.get("account_id"):
+                actual["account_fingerprint"] = "sha256:" + hashlib.sha256(
+                    str(config["account_id"]).encode("utf-8")
+                ).hexdigest()
+            for field in (
+                "broker_id",
+                "environment",
+                "transport_profile",
+                "runtime_id",
+                "release_sha",
+                "capability_revision",
+                "account_fingerprint",
+            ):
+                if str(actual.get(field) or "") != str(current.get(field) or ""):
+                    raise StrategyControlMachineError(
+                        "testnet_preflight_identity_mismatch",
+                        {"field": field},
+                    )
         gaps = {
             str(value)
             for value in preflight.get("capability_gaps") or ()
@@ -1117,7 +1469,7 @@ class TestnetAutomationCoordinator:
         dca_only_market_tp_gap = (
             strategy_family == "dca"
             and gaps
-            and gaps <= {"protection_order.take_profit_market"}
+            and gaps == {"protection_order.take_profit_market"}
             and getattr(broker, "protection_adapter", None) is not None
         )
         ready = preflight.get("ready") is True or dca_only_market_tp_gap
@@ -1218,6 +1570,16 @@ class TestnetAutomationCoordinator:
         if not isinstance(rows, list):
             raise TypeError("coordinator_events_must_be_list")
         return [dict(row) for row in rows if isinstance(row, Mapping)]
+
+    def _scheduler_state(self) -> dict[str, Any]:
+        """Read the Cloud scheduler receipt used by expansion admission."""
+
+        path = self.output_root / COORDINATOR_ROOT / "scheduler" / COORDINATOR_STATE_FILE
+        try:
+            rows = load_json(path)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return dict(rows[-1]) if rows and isinstance(rows[-1], Mapping) else {}
 
     @staticmethod
     def _command_id(command_id: str | None, action: str, activation_id: str) -> str:

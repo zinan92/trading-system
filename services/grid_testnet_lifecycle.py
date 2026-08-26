@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from services.broker_port import BrokerCancelRequest, BrokerOrderRequest
 from services.dualtrack_grid_core import GridLineLifecycle
 from services.journal_store import load_json, write_json
+from services.testnet_continuation_reconciliation import reconcile_before_continuation
 
 
 class GridTestnetLifecycleError(RuntimeError):
@@ -40,6 +41,29 @@ class GridTestnetLifecycle:
         if existing is not None:
             self._assert_state_identity(existing, identity)
             self._states[identity["plan_id"]] = existing
+            if existing.get("status") not in {
+                "terminal",
+                "sealed",
+                "blocked_reconciliation",
+                "blocked_protection",
+                "blocked_risk",
+                "hard_stop_triggered",
+            }:
+                reconciliation = reconcile_before_continuation(
+                    self.broker,
+                    existing,
+                    timestamp=timestamp,
+                    strategy_family="grid",
+                    local_position_quantity=self._net_quantity(existing),
+                )
+                existing["continuation_reconciliation"] = reconciliation
+                if reconciliation.get("status") != "ok":
+                    self._block(
+                        existing,
+                        f"restart_reconciliation_blocked:{reconciliation.get('reason', 'unknown')}",
+                        timestamp=timestamp,
+                    )
+                    self._save(existing)
             return self.snapshot(plan)
         if self.broker.protection_adapter is None or self.broker.account_adapter is None:
             status = "blocked_protection" if self.broker.protection_adapter is None else "blocked_reconciliation"
@@ -81,7 +105,14 @@ class GridTestnetLifecycle:
             "blocked_risk",
         }:
             return self.snapshot(plan)
-        self._cancel_all_open_orders(state, timestamp=timestamp, reason=reason)
+        # A manual interrupt is intentionally minimal-disruption: cancel only
+        # resting entry legs and keep every protective exit for known exposure.
+        self._cancel_all_open_orders(
+            state,
+            timestamp=timestamp,
+            reason=reason,
+            entries_only=True,
+        )
         if state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"}:
             self._save(state)
             return self.snapshot(plan)
@@ -110,6 +141,22 @@ class GridTestnetLifecycle:
             return self.snapshot(plan)
         if self._net_quantity(state) != 0 and state.get("hard_stop_protection", {}).get("status") != "active":
             self._block(state, "hard_stop_protection_revalidation_required", timestamp=timestamp)
+            self._save(state)
+            return self.snapshot(plan)
+        reconciliation = reconcile_before_continuation(
+            self.broker,
+            state,
+            timestamp=timestamp,
+            strategy_family="grid",
+            local_position_quantity=self._net_quantity(state),
+        )
+        state["continuation_reconciliation"] = reconciliation
+        if reconciliation.get("status") != "ok":
+            self._block(
+                state,
+                f"resume_reconciliation_blocked:{reconciliation.get('reason', 'unknown')}",
+                timestamp=timestamp,
+            )
             self._save(state)
             return self.snapshot(plan)
         try:
@@ -302,6 +349,23 @@ class GridTestnetLifecycle:
                 raise GridTestnetLifecycleError(state["blocker"]) from exc
             rung["line"] = line.snapshot()
             if order.get("event") == "tp" and line.state == "rearmed":
+                reconciliation = reconcile_before_continuation(
+                    self.broker,
+                    state,
+                    timestamp=timestamp,
+                    strategy_family="grid",
+                    local_position_quantity=self._net_quantity(state),
+                )
+                state["continuation_reconciliation"] = reconciliation
+                if reconciliation.get("status") != "ok":
+                    self._block(
+                        state,
+                        f"rearm_reconciliation_blocked:{reconciliation.get('reason', 'unknown')}",
+                        timestamp=timestamp,
+                    )
+                    state["updated_at"] = timestamp
+                    self._save(state)
+                    return self.snapshot(plan)
                 try:
                     self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
                 except Exception as exc:  # noqa: BLE001
@@ -465,6 +529,31 @@ class GridTestnetLifecycle:
             except Exception as exc:  # noqa: BLE001 - bounded retry evidence.
                 last = exc
                 state.setdefault("retry_events", []).append({"operation": "submit", "attempt": attempt, "ticket_id": command["ticket_id"], "status": "failed", "error": type(exc).__name__, "timestamp": timestamp})
+                # Never blindly repeat an ambiguous side effect.  A retry is
+                # allowed only after the public Broker seam proves that the
+                # idempotency key is absent; a known/unknown query outcome
+                # stops the lifecycle and lets the caller reconcile.
+                query = getattr(self.broker, "query_by_idempotency_key", None)
+                if not callable(query):
+                    raise GridTestnetLifecycleError(
+                        f"submit_unknown_query_unavailable:{type(exc).__name__}"
+                    ) from exc
+                try:
+                    observed = query(str(command.get("idempotency_key") or command.get("ticket_id") or ""))
+                except Exception as query_exc:  # noqa: BLE001 - query uncertainty is terminal.
+                    raise GridTestnetLifecycleError(
+                        f"submit_unknown_query_failed:{type(query_exc).__name__}"
+                    ) from query_exc
+                observed_state = str(
+                    getattr(getattr(observed, "state", None), "value", getattr(observed, "state", ""))
+                    or (observed.get("state") if isinstance(observed, Mapping) else "")
+                ).lower()
+                if observed_state and observed_state not in {"missing", "not_found", "notfound"}:
+                    raise GridTestnetLifecycleError(
+                        f"submit_unknown_already_present:{observed_state}"
+                    ) from exc
+                if attempt >= max(1, retries):
+                    break
         raise GridTestnetLifecycleError(f"submit_retries_exhausted:{type(last).__name__ if last else 'unknown'}")
 
     def _rollback_ladder(self, state: dict[str, Any], *, timestamp: str, reason: str) -> None:
@@ -566,9 +655,18 @@ class GridTestnetLifecycle:
         self._block(state, reason, timestamp=timestamp)
         self._hard_stop(plan, state, timestamp=timestamp, reason="grid_submission_failure")
 
-    def _cancel_all_open_orders(self, state: dict[str, Any], *, timestamp: str, reason: str) -> None:
+    def _cancel_all_open_orders(
+        self,
+        state: dict[str, Any],
+        *,
+        timestamp: str,
+        reason: str,
+        entries_only: bool = False,
+    ) -> None:
         for row in state["orders"]:
             if row.get("state") != "accepted":
+                continue
+            if entries_only and row.get("event") not in {"entry", "entry_rearm"}:
                 continue
             try:
                 receipt = self.broker.cancel_order(BrokerCancelRequest(run_date=state["cycle_id"], asset=row["instrument_id"], client_order_id=row.get("client_order_id") or "", broker_order_id=row.get("broker_order_id") or ""))

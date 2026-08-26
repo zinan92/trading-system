@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from services.strategy_control_plane import StrategyControlMachineError
 from services.testnet_automation_coordinator import (
     COORDINATOR_SCHEMA,
     TestnetAutomationCoordinator,
@@ -157,6 +158,50 @@ def test_pause_interrupt_and_resume_intent_are_durable_without_execution_side_ef
     assert resumed["execution_blocker"] == "revalidation_required"
     assert resumed["execution_mutation"] is False
     assert coordinator.status()["status"] == "resume_pending"
+
+
+def test_candidate_selection_locks_after_activation_owns_a_slice(tmp_path: Path) -> None:
+    from tests.test_testnet_candidate_selection import _candidate, _policy, _snapshot
+
+    coordinator = _coordinator(tmp_path)
+    coordinator.activate(_activation(), command_id="activate-1")
+    coordinator.command(
+        "select_candidate",
+        {"candidates": [_candidate("BTC", rank=1)], "snapshot": _snapshot(), "policy": _policy()},
+        command_id="select-1",
+    )
+
+    with pytest.raises(TestnetCoordinatorError, match="candidate_selection_locked"):
+        coordinator.command(
+            "select_candidate",
+            {"candidates": [_candidate("ETH", rank=1)], "snapshot": _snapshot(), "policy": _policy()},
+            command_id="select-2",
+        )
+
+
+def test_dca_capability_exception_does_not_mask_another_gap() -> None:
+    class Broker:
+        protection_adapter = object()
+
+        def preflight(self, *, strategy_family: str):
+            assert strategy_family == "dca"
+            return {
+                "ready": False,
+                "environment": "testnet",
+                "real_money_eligible": False,
+                "protection_ready": False,
+                "account_read_ready": True,
+                "capability_gaps": [
+                    "protection_order.take_profit_market",
+                    "protection_order.stop_loss_market",
+                ],
+            }
+
+    with pytest.raises(StrategyControlMachineError, match="testnet_preflight_blocked"):
+        TestnetAutomationCoordinator._validate_lifecycle_preflight(
+            Broker(),
+            strategy_family="dca",
+        )
 
 
 def test_unknown_action_and_corrupt_state_fail_closed(tmp_path: Path) -> None:
