@@ -70,11 +70,13 @@ position-management semantics.
 _Avoid_: second strategy, alpha generator, position-size augmenter
 
 **Path A Testnet Slice**:
-The first bounded external Testnet proof of the Canonical DCA Strategy on one
-Hyperliquid `PAXG-USD-PERP` Strategy Session, using the existing Dashboard
-read/control contract and requiring canonical reconciliation and
-position-following protection before a next entry. Strategy extraction into a
-separate repository is a future direction and is outside this slice.
+The first bounded Hyperliquid Testnet rollout of the existing Grid or Canonical
+DCA Strategy Family: scan the full default-perp candidate universe, select one
+eligible asset (BTC is the first proof), and run one Execution Slice through
+the Testnet Automation Coordinator. It uses the existing Dashboard read/control
+contract and requires canonical reconciliation and position-following
+protection before continuation. Strategy extraction into a separate repository
+and concurrent multi-asset execution are future directions outside this slice.
 _Avoid_: generic multi-Broker rollout, multi-asset portfolio, automatic Broker switching
 
 **Canonical DCA Strategy**:
@@ -123,6 +125,13 @@ The host that binds Strategy, Data Feed, Broker, risk, authorization, lifecycle,
 read-model, and control contracts; it coordinates modules but does not redefine
 their domain algorithms or venue wire semantics.
 _Avoid_: strategy engine, Broker implementation, Dashboard backend
+
+**Testnet Automation Coordinator**:
+The composition-root seam that binds one explicit Hyperliquid Testnet Strategy
+Session to candidate selection, Portfolio Gate, Broker execution, lifecycle,
+scheduler, and durable read-model evidence. It exposes control and observation
+contracts while preserving the ownership boundaries of those modules.
+_Avoid_: venue-native API, second strategy engine, automatic live promotion
 
 **Broker Transport Substitution**:
 A change of Broker and environment binding that preserves the established
