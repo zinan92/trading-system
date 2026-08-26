@@ -28,7 +28,9 @@ TESTNET_ENVIRONMENT = "testnet"
 TESTNET_TRANSPORT_PROFILE = "hyperliquid-testnet-default"
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
 _RELEASE_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
-_ACTIONS = frozenset({"activate", "status", "preflight", "pause", "interrupt", "resume"})
+_ACTIONS = frozenset(
+    {"activate", "status", "preflight", "pause", "interrupt", "resume", "select_candidate"}
+)
 _ACTIVATION_FIELDS = (
     "strategy_family",
     "strategy_session_id",
@@ -250,6 +252,12 @@ class TestnetAutomationCoordinator:
             return self.preflight()
         if normalized_action == "activate":
             return self._activate(payload, command_id=command_id, now=now)
+        if normalized_action == "select_candidate":
+            return self._select_candidate(
+                payload,
+                command_id=command_id,
+                now=now,
+            )
         return self._operator_intent(
             normalized_action,
             payload if isinstance(payload, Mapping) else {},
@@ -388,6 +396,98 @@ class TestnetAutomationCoordinator:
             "network_operation_invoked": False,
             "execution_mutation": False,
             "secret_material_present": False,
+        }
+        return self._record(state)
+
+    def _select_candidate(
+        self,
+        payload: Mapping[str, Any] | TestnetActivation | None,
+        *,
+        command_id: str | None,
+        now: str | datetime | None,
+    ) -> dict[str, Any]:
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        if not isinstance(payload, Mapping):
+            raise TestnetCoordinatorError("candidate_selection_payload_invalid")
+        activation_id = str(current.get("activation_id") or "")
+        normalized_command_id = self._command_id(
+            command_id,
+            "select_candidate",
+            activation_id,
+        )
+        replay = self._replay(normalized_command_id)
+        if replay is not None:
+            return replay
+        candidates = payload.get("candidates")
+        snapshot = payload.get("snapshot")
+        policy = payload.get("policy")
+        if not isinstance(candidates, (list, tuple)):
+            raise TestnetCoordinatorError("candidate_selection_candidates_required")
+        if snapshot is None or policy is None:
+            raise TestnetCoordinatorError("candidate_selection_facts_required")
+        from services.testnet_candidate_selection import TestnetCandidateSelector
+
+        observed_at = now or self._timestamp(None)
+        try:
+            result = TestnetCandidateSelector().select(
+                candidates,
+                strategy_family=str(current.get("strategy_family") or ""),
+                strategy_session_id=str(current.get("strategy_session_id") or ""),
+                strategy_revision_id=str(current.get("strategy_revision_id") or ""),
+                snapshot=snapshot,
+                policy=policy,
+                now=observed_at,
+            )
+        except Exception as exc:
+            if isinstance(exc, TestnetCoordinatorError):
+                raise
+            raise TestnetCoordinatorError(
+                "candidate_selection_blocked",
+                {"error": f"{type(exc).__name__}:{exc}"},
+            ) from exc
+        if result.status == "selected":
+            status = "candidate_selected"
+            event = "candidate_selected"
+            blocker = None
+            next_action = "await_execution_capability"
+        elif result.status == "held":
+            status = "portfolio_held"
+            event = "portfolio_held"
+            blocker = result.blocker or "portfolio_risk_hold"
+            next_action = "notify_park_and_wait"
+        else:
+            status = "candidate_blocked"
+            event = "candidate_blocked"
+            blocker = result.blocker or "no_eligible_candidate"
+            next_action = "await_candidate_revalidation"
+        state = {
+            **current,
+            "event": event,
+            "action": "select_candidate",
+            "status": status,
+            "command_id": normalized_command_id,
+            "occurred_at": self._timestamp(now),
+            "candidate_selection": result.to_dict(),
+            "candidate_set_id": result.candidate_set.candidate_set_id,
+            "selected_asset": result.selected_asset,
+            "selected_instrument_id": result.selected_instrument_id,
+            "global_hold": result.global_hold,
+            "ready": result.status == "selected",
+            "execution_enabled": False,
+            "execution_ready": False,
+            "execution_blocker": (
+                "capability_gap:execution"
+                if result.status == "selected"
+                else blocker
+            ),
+            "next_action": next_action,
+            "broker_operation_invoked": False,
+            "network_operation_invoked": False,
+            "execution_mutation": False,
+            "secret_material_present": False,
+            "blocker": blocker,
         }
         return self._record(state)
 
