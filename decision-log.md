@@ -16867,9 +16867,9 @@ auditable datafeed port; broker execution remains a separate port.
   `main@6222ce20bdecf74016d998388591402110cfefe6`.
 - TS-TESTNET-07 / #1030 merged in PR #1038 at
   `main@b5d2589a2fea07441b7cb0433cecce8d8b1e5092`.
-- TS-TESTNET-08 / #1031 is represented by the current release candidate PR
-  #1039, containing the mode-scoped two-window recorder, CLI, and attended
-  acceptance runbook.
+- TS-TESTNET-08 / #1031 merged in PR #1039 at
+  `main@62e535ea34a7f9a77989ce978c34bb1fd6384b7d`, containing the mode-scoped
+  two-window recorder, CLI, and attended acceptance runbook.
 - Clean focused validation before the final PR is 126 tests for the preceding
   Coordinator, candidate, transport, DCA, Grid, scheduler, expansion, and
   readiness contracts; the readiness/legacy soak subset is 10 tests. Ruff,

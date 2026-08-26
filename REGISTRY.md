@@ -89,10 +89,10 @@ execution contract is explicitly authorized; the unified review is complete.
   `main@b5d2589a2fea07441b7cb0433cecce8d8b1e5092`: progressive pair admission
   keeps the full universe searchable, applies bounded per-pair canaries, and
   separates pair-local blockers from Portfolio Risk Holds.
-- TS-TESTNET-08 / #1031 is the current release candidate in PR #1039: the
-  two-window Testnet readiness contract, mode-scoped CLI, and attended
-  acceptance runbook are present; after merge this section remains the
-  canonical rollout handoff.
+- TS-TESTNET-08 / #1031 merged as PR #1039 at
+  `main@62e535ea34a7f9a77989ce978c34bb1fd6384b7d`: the two-window Testnet
+  readiness contract, mode-scoped CLI, and attended acceptance runbook are
+  present; this section remains the canonical rollout handoff.
 - Focused implementation validation currently passes 126 cases across the
   Coordinator, candidate selection, transport canary, DCA/Grid lifecycles,
   scheduler, expansion, and readiness contracts. No credential was read, no
@@ -101,10 +101,9 @@ execution contract is explicitly authorized; the unified review is complete.
   declared protection capability gap; the system must remain blocked until a
   matching public capability is available.
 
-_下一步_: merge the final readiness PR, run the full clean-suite verification,
-then perform the single unified Claude Sonnet review requested by Park. Only
-after that review passes may a separately attended Testnet activation be
-considered.
+_下一步_: run the full clean-suite verification, then perform the single
+unified Claude Sonnet review requested by Park. Only after that review passes
+may a separately attended Testnet activation be considered.
 
 ## 现在在哪里(2026-08-23)
 - #888 / PR #889 merged as
