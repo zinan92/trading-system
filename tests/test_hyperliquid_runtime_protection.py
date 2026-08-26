@@ -215,7 +215,8 @@ class HyperliquidRuntimeProtectionTests(unittest.TestCase):
             replace(group, quantity=Decimal("0.04")),
             owned_quantity=Decimal("0.04"),
         )
-        self.assertEqual(confirmed.state, ProtectionLifecycleState.SUBMITTED)
+        self.assertEqual(confirmed.operation, "query")
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.ACTIVE)
 
     def test_position_coverage_reconciliation_tracks_owned_quantity(self) -> None:
         runtime, backend = self.runtime(*self.full_operations())
@@ -296,6 +297,55 @@ class HyperliquidRuntimeProtectionTests(unittest.TestCase):
             adapter.cancel(self.group())
 
         self.assertEqual(backend.calls, [])
+
+    def test_retry_after_reconcile_rate_limit_rechecks_coverage(self) -> None:
+        runtime, backend = self.runtime(*self.full_operations())
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+        group = self.group()
+        backend.fail_with = RateLimitError(retry_after_seconds=0.1, side_effect_free=True)
+
+        with self.assertRaises(RateLimitError):
+            adapter.reconcile(group)
+
+        backend.fail_with = None
+        backend.response = {
+            "protection_id": "protect-1",
+            "operation": "query",
+            "state": "active",
+            "accepted": True,
+            "covered_quantity": "0",
+            "order_ids": ["protection-order-1"],
+        }
+
+        self.assertEqual(adapter.retry_plan(group, attempt=1).operation, "query")
+        with self.assertRaisesRegex(BrokerCapabilityError, "coverage"):
+            adapter.retry(group, attempt=1, delay_elapsed=True)
+
+        self.assertEqual([call[1] for call in backend.calls], ["query", "query"])
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
+
+    def test_equal_position_coverage_requires_fresh_broker_observation(self) -> None:
+        runtime, backend = self.runtime(*self.full_operations())
+        adapter = HyperliquidRuntimeProtectionAdapter(runtime=runtime)
+        group = self.group()
+        adapter.submit(group)
+        backend.response = {
+            "protection_id": "protect-1",
+            "operation": "query",
+            "state": "active",
+            "accepted": True,
+            "covered_quantity": "0",
+            "order_ids": ["protection-order-1"],
+        }
+
+        with self.assertRaisesRegex(BrokerCapabilityError, "coverage"):
+            adapter.reconcile_position_coverage(
+                group,
+                owned_quantity=group.quantity,
+            )
+
+        self.assertEqual([call[1] for call in backend.calls], ["submit", "query"])
+        self.assertEqual(adapter.status("protect-1").state, ProtectionLifecycleState.FROZEN)
 
     def test_runtime_receipt_preserves_unknown_protection_observation(self) -> None:
         runtime, backend = self.runtime(*self.full_operations())

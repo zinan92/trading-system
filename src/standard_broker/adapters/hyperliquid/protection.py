@@ -217,6 +217,7 @@ class HyperliquidRuntimeProtectionAdapter:
                 reason=None,
                 attempts=0,
             )
+            self._last_errors.pop(group.protection_id, None)
             return ProtectionReceipt(
                 protection_id=group.protection_id,
                 parent_order_id=group.parent_order_id,
@@ -292,7 +293,7 @@ class HyperliquidRuntimeProtectionAdapter:
                         operation="replace",
                         success_state=ProtectionLifecycleState.SUBMITTED,
                     )
-                return self._coverage_status_or_freeze(group.protection_id)
+                return self.reconcile(group)
             if owned_quantity != group.quantity:
                 error = BrokerCapabilityError(
                     "protection_order",
@@ -301,7 +302,7 @@ class HyperliquidRuntimeProtectionAdapter:
                 )
                 self._freeze(group.protection_id, error)
                 raise error
-            return self._coverage_status_or_freeze(group.protection_id)
+            return self.reconcile(group)
 
     def retry(
         self,
@@ -326,6 +327,8 @@ class HyperliquidRuntimeProtectionAdapter:
                 )
             retry_group = self._last_groups[group.protection_id]
             operation = plan.operation
+            if operation == "query":
+                return self.reconcile(retry_group)
             success_state = (
                 ProtectionLifecycleState.CANCELED
                 if operation == "cancel"

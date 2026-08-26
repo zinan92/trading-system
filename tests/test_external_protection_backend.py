@@ -165,7 +165,12 @@ def test_external_protection_submit_and_query_are_redacted_and_cursorable(tmp_pa
                 {"order_status": "OPEN", "venue_order_id": "1002", "client_order_id": "sl"},
             ]
         if method == "request_order_status_report":
-            return {"order_status": "OPEN", "venue_order_id": "1001", "client_order_id": "tp"}
+            return {
+                "order_status": "OPEN",
+                "venue_order_id": "1001",
+                "client_order_id": "tp",
+                "quantity": "0.001",
+            }
         raise AssertionError(method)
 
     backend._call = call
@@ -195,7 +200,12 @@ def test_external_protection_accepts_group_level_submit_report_and_queries_child
         if method == "submit_orders":
             return [{"order_status": "OPEN", "venue_order_id": "group-1"}]
         if method == "request_order_status_report":
-            return {"order_status": "OPEN", "venue_order_id": "child-1", "client_order_id": "child"}
+            return {
+                "order_status": "OPEN",
+                "venue_order_id": "child-1",
+                "client_order_id": "child",
+                "quantity": "0.001",
+            }
         raise AssertionError(method)
 
     backend._call = call

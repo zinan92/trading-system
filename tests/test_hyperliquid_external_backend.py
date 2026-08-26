@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from decimal import Decimal
 import hashlib
 import json
 import importlib.util
@@ -307,6 +308,22 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
             ),
             "unknown",
         )
+
+    def test_protection_coverage_uses_the_lowest_observed_leg_quantity(self) -> None:
+        self.assertEqual(
+            NautilusHyperliquidTestnetBackend._protection_covered_quantity(
+                [
+                    {"quantity": "0.20"},
+                    {"quantity": Decimal("0.05")},
+                ]
+            ),
+            Decimal("0.05"),
+        )
+        self.assertIsNone(
+            NautilusHyperliquidTestnetBackend._protection_covered_quantity(
+                [{"quantity": "0.20"}, {}]
+            )
+        )
         self.assertEqual(
             NautilusHyperliquidTestnetBackend._protection_state(
                 [{"status": "partially_filled"}, {"status": "resting"}]
@@ -439,6 +456,89 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
                     if key != "observation_digest"
                 }
                 self.assertEqual(result["observation_digest"], digest_canonical(digest_input))
+
+    def test_replace_protection_reseals_final_digest(self) -> None:
+        class ReplaceClient(FakeClient):
+            async def cancel_order(self, *args: object, **kwargs: object) -> object:
+                self.calls.append(("cancel_order", args, kwargs))
+                return {"status": "ok"}
+
+            async def request_order_status_report(self, **kwargs: object) -> object:
+                self.calls.append(("request_order_status_report", (), kwargs))
+                return {
+                    "order_status": "CANCELED",
+                    "venue_order_id": "9001",
+                    "client_order_id": "cloid-1",
+                    "instrument_id": "HYPE-USD-PERP.HYPERLIQUID",
+                    "order_side": "SELL",
+                    "price": "50",
+                    "filled_qty": "0",
+                    "quantity": "0.2",
+                    "ts_last": 1_800_000_000_000_000_000,
+                }
+
+            async def submit_orders(self, orders: list[object]) -> list[object]:
+                self.calls.append(("submit_orders", tuple(orders), {}))
+                return [
+                    {
+                        "order_status": "RESTING",
+                        "venue_order_id": str(9100 + index),
+                        "client_order_id": f"replacement-cloid-{index}",
+                        "instrument_id": "HYPE-USD-PERP.HYPERLIQUID",
+                        "order_side": "SELL",
+                        "price": "50",
+                        "filled_qty": "0",
+                        "quantity": "0.2",
+                        "ts_last": 1_800_000_000_000_000_000,
+                    }
+                    for index, _ in enumerate(orders)
+                ]
+
+        class FixtureProtectionBackend(NautilusHyperliquidTestnetBackend):
+            @staticmethod
+            def _build_protection_orders(request: Mapping[str, object]) -> list[object]:
+                return [object(), object()]
+
+        request = {
+            "protectionId": "protect-1",
+            "instrumentId": "HYPE-USD-PERP",
+            "grouping": "positionTpsl",
+            "quantity": "0.2",
+            "quantityPolicy": "position_following",
+            "legs": [{"tpsl": "tp"}, {"tpsl": "sl"}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            client = ReplaceClient()
+            capabilities = enabled_testnet_position_protection_capabilities()
+            session = self.session(capabilities)
+            backend = FixtureProtectionBackend(
+                session=session,
+                config=HyperliquidTestnetBackendConfig(
+                    account_address=session.account.address,
+                    capabilities=capabilities,
+                    capability_revision=capabilities.revision,
+                ),
+                secrets=self.provider(directory),
+                client_factory=lambda private_key, account: client,
+            )
+            backend._protection_orders["protect-1"] = {
+                "request": request,
+                "rows": ({"oid": "9001", "cloid": "cloid-1"},),
+            }
+            backend.activate(release_sha="a" * 40)
+
+            result = backend.invoke("protection_order", "replace", request)
+
+            self.assertEqual(result["operation"], "replace")
+            self.assertEqual(result["state"], "submitted")
+            self.assertTrue(result["accepted"])
+            digest_input = {
+                key: value
+                for key, value in result.items()
+                if key != "observation_digest"
+            }
+            self.assertEqual(result["observation_digest"], digest_canonical(digest_input))
+
     def test_external_fill_query_filters_conflicting_client_identity_even_when_oid_matches(self) -> None:
         class ConflictingFillClient(FakeClient):
             async def request_fill_reports(self, instrument_id: str) -> list[object]:

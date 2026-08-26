@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import inspect
 import hashlib
 from importlib.metadata import PackageNotFoundError, version as package_version
@@ -379,8 +379,10 @@ class NautilusHyperliquidTestnetBackend:
                     }
                 )
         state = self._protection_state(rows)
-        quantity = Decimal(str(request.get("quantity") or "0"))
-        covered = quantity if state == "active" else Decimal("0")
+        covered = self._protection_covered_quantity(rows) if state == "active" else Decimal("0")
+        if state == "active" and (covered is None or covered <= 0):
+            state = "unknown"
+            covered = Decimal("0")
         del instrument
         self._protection_orders[protection_id] = {"request": dict(request), "rows": tuple(rows)}
         return self._protection_observation(
@@ -581,6 +583,8 @@ class NautilusHyperliquidTestnetBackend:
 
     def _protection_report(self, report: object) -> dict[str, object]:
         event = self._order_event(report)
+        mapping = self._to_mapping(report)
+        quantity = self._string_value(report, mapping, "quantity", "sz", "size") or event.get("sz")
         return {
             "status": str(event.get("status") or "unknown").lower(),
             "oid": event.get("oid"),
@@ -588,6 +592,7 @@ class NautilusHyperliquidTestnetBackend:
             "side": event.get("side"),
             "px": event.get("px"),
             "sz": event.get("sz"),
+            "quantity": quantity,
             "time": event.get("time"),
         }
 
@@ -603,6 +608,26 @@ class NautilusHyperliquidTestnetBackend:
         if statuses <= {"resting", "waiting_for_trigger", "waiting_for_fill"}:
             return "active"
         return "unknown"
+
+    @staticmethod
+    def _protection_covered_quantity(
+        rows: list[dict[str, object]],
+    ) -> Decimal | None:
+        """Return the shared coverage of all active protection legs."""
+
+        quantities: list[Decimal] = []
+        for row in rows:
+            raw_quantity = row.get("quantity")
+            if raw_quantity is None:
+                return None
+            try:
+                quantity = Decimal(str(raw_quantity))
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+            if not quantity.is_finite() or quantity < 0:
+                return None
+            quantities.append(quantity)
+        return min(quantities) if quantities else None
 
     def _protection_observation(
         self,
