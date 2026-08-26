@@ -263,9 +263,9 @@ class StandardBrokerTestnetExecutionAdapter:
                 "stop_loss_market",
             },
         }
-        if family in {"", "grid"}:
+        if family == "":
             required_operations["protection_order"].add("take_profit_market")
-        else:
+        elif family == "dca":
             required_operations["protection_order"].add("take_profit_limit")
         capability_gaps = [
             f"{port}.{operation}"

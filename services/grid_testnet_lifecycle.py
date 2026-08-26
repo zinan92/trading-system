@@ -63,6 +63,80 @@ class GridTestnetLifecycle:
         self._save(state)
         return self.snapshot(plan)
 
+    def interrupt(
+        self,
+        plan: dict[str, Any],
+        *,
+        timestamp: str,
+        reason: str = "manual_interrupt",
+    ) -> dict[str, Any]:
+        """Pause a Grid without flattening its known open rung quantities."""
+
+        state = self._state(plan)
+        if state["status"] in {
+            "terminal",
+            "sealed",
+            "blocked_reconciliation",
+            "blocked_protection",
+            "blocked_risk",
+        }:
+            return self.snapshot(plan)
+        self._cancel_all_open_orders(state, timestamp=timestamp, reason=reason)
+        if state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"}:
+            self._save(state)
+            return self.snapshot(plan)
+        state["status"] = "interrupted"
+        state["manual_interrupt"] = True
+        state["next_action"] = "await_resume"
+        self._record_event(
+            state,
+            "manual_interrupt",
+            timestamp=timestamp,
+            reason=str(reason or "manual_interrupt"),
+        )
+        state["updated_at"] = timestamp
+        self._save(state)
+        return self.snapshot(plan)
+
+    def resume(self, plan: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
+        """Resume an interrupted Grid after host-side revalidation."""
+
+        state = self._state(plan)
+        if state["status"] != "interrupted":
+            return self.snapshot(plan)
+        if self.broker.protection_adapter is None or self.broker.account_adapter is None:
+            self._block(state, "capability_gap:resume_revalidation", timestamp=timestamp)
+            self._save(state)
+            return self.snapshot(plan)
+        if self._net_quantity(state) != 0 and state.get("hard_stop_protection", {}).get("status") != "active":
+            self._block(state, "hard_stop_protection_revalidation_required", timestamp=timestamp)
+            self._save(state)
+            return self.snapshot(plan)
+        try:
+            for rung in state["rungs"]:
+                line = GridLineLifecycle.from_snapshot(rung["line"])
+                if not line.can_enter:
+                    continue
+                if any(
+                    row.get("state") == "accepted"
+                    and row.get("order_id") == rung.get("entry_order_id")
+                    for row in state["orders"]
+                ):
+                    continue
+                self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
+        except Exception as exc:  # noqa: BLE001 - keep the blocker durable.
+            self._block(state, f"resume_submit_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+            self._save(state)
+            return self.snapshot(plan)
+        if state["status"] not in {"blocked_reconciliation", "blocked_protection", "blocked_risk"}:
+            state["status"] = "active"
+            state["manual_interrupt"] = False
+            state["next_action"] = "await_fill_or_grid_event"
+            self._record_event(state, "manual_resume", timestamp=timestamp)
+        state["updated_at"] = timestamp
+        self._save(state)
+        return self.snapshot(plan)
+
     def snapshot(self, plan: dict[str, Any]) -> dict[str, Any]:
         identity = self._identity(plan)
         state = self._states.get(identity["plan_id"]) or self._load(identity["plan_id"])
@@ -72,7 +146,6 @@ class GridTestnetLifecycle:
         return json.loads(json.dumps(state, sort_keys=True))
 
     def on_fill(self, plan: dict[str, Any], raw_fill: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
-        identity = self._identity(plan)
         state = self._state(plan)
         order_id = str(raw_fill.get("order_id") or "").strip()
         if not order_id:
@@ -262,7 +335,6 @@ class GridTestnetLifecycle:
         return self.snapshot(plan)
 
     def on_market_event(self, plan: dict[str, Any], *, price: float, timestamp: str) -> dict[str, Any]:
-        identity = self._identity(plan)
         state = self._state(plan)
         if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"}:
             return self.snapshot(plan)
@@ -750,7 +822,6 @@ class GridTestnetLifecycle:
             if not str(plan.get(key) or "").strip():
                 raise ValueError(f"Grid StrategyPlan identity is incomplete: {key}")
         normalized = plan.get("normalized_input") if isinstance(plan.get("normalized_input"), Mapping) else {}
-        risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), Mapping) else {}
         upper = float(plan.get("upper_price_boundary") or normalized.get("upper_price_boundary") or (plan.get("grid") or {}).get("upper_boundary") or (plan.get("range") or {}).get("high") or 0)
         lower = float(plan.get("lower_price_boundary") or normalized.get("lower_price_boundary") or (plan.get("grid") or {}).get("lower_boundary") or (plan.get("range") or {}).get("low") or 0)
         if lower <= 0 or upper <= lower:
