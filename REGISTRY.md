@@ -38,6 +38,12 @@
   handling, remote query/coverage confirmation, digest-bound observations, and
   fail-closed unknown/cancel-replace behavior. The default
   `hyperliquid-testnet-default` profile remains protection-disabled.
+- SB-EXT-28 / Issue #120 is merged in PR #121 at `f48d2a2`: external
+  ProtectionOrder runtime receipts preserve canonical identity, operation,
+  state, acceptance, observed coverage, order identities, and digest; invalid,
+  stale, mismatched, canceled, filled, or partial observations remain
+  fail-closed. The shipped position-protection capability descriptor is wired
+  to the supported semantic operations.
 - RT-10 / Issue #94 is merged in PR #95 at `25a04be`: public mapping of the
   Nautilus Testnet `AccountState` into the canonical account snapshot, with
   deterministic sole-USDC fallback and account-wide no-fill reads.
@@ -66,10 +72,11 @@
 
 - TESTNET-01 (#30) is merged in PR #48 at `f5dbf87`: human-gated Hyperliquid Testnet proof for one default validator-operated perpetual, including submit/query/cancel-replace/fill/fee/position/reconciliation evidence. The final account was flat with no open orders; evidence is stored outside the repository.
 - SB-EXT-01A–01G and SB-EXT-02/03/04/05/06 are complete in standard-broker.
-  The next dependency is trading-system's opt-in DCA strategy adapter and
-  admission against the position-protection profile. No strategy, soak, or
-  Mainnet/Live authority is implied by this broker merge; external proof still
-  requires an attended plan and approval.
+  SB-EXT-28 is also complete. The next dependency is trading-system's
+  opt-in DCA/Grid attended Testnet proof against the position-protection
+  profile. No strategy, soak, scheduler, or Mainnet/Live authority is implied
+  by this broker merge; external proof still requires an attended plan and
+  approval.
 - The current trading-system Path A cleanup remains externally blocked: the
   account is flat with no open orders, but the ambiguous close has no causal
   public fill/fee identity. This broker registry does not promote that state
