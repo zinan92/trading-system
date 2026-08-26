@@ -168,6 +168,8 @@ def _timestamp(value: object, field: str) -> datetime:
 
 @dataclass(frozen=True)
 class TestnetCanaryOrderRequest:
+    __test__ = False
+
     order_id: str
     instrument_id: str
     side: str
@@ -449,6 +451,7 @@ class TestnetCanary:
         clock: Callable[[], datetime] | None = None,
         max_clock_skew: timedelta = timedelta(minutes=5),
         approved_market_sources: set[str] | frozenset[str] | None = None,
+        require_position_protection: bool = False,
     ) -> None:
         if not isinstance(broker, TestnetCanaryOrderPort):
             raise TypeError("canary broker must implement the public canary order port")
@@ -470,6 +473,9 @@ class TestnetCanary:
         )
         if not self.approved_market_sources:
             raise ValueError("approved_market_sources cannot be empty")
+        if not isinstance(require_position_protection, bool):
+            raise TypeError("require_position_protection must be bool")
+        self.require_position_protection = require_position_protection
 
     def snapshot(self, plan: TestnetCanaryPlan | None = None) -> dict[str, Any]:
         rows = load_json(self.current_path)
@@ -909,7 +915,16 @@ class TestnetCanary:
             raise TestnetCanaryError("canary preflight performed network I/O")
         if result.get("host_ready") is not True:
             raise TestnetCanaryError("canary host is not ready")
-        if result.get("protection_ready") is not False or not str(result.get("protection_gap") or "").strip():
+        protection_ready = result.get("protection_ready")
+        protection_gap = str(result.get("protection_gap") or "").strip()
+        if self.require_position_protection:
+            if protection_ready is not True or protection_gap:
+                raise TestnetCanaryError("canary position protection is not ready")
+            if result.get("account_read_ready") is not True:
+                raise TestnetCanaryError("canary account read capability is not ready")
+            if result.get("order_execution_ready") is not True:
+                raise TestnetCanaryError("canary order execution capability is not ready")
+        elif protection_ready is not False or not protection_gap:
             raise TestnetCanaryError("canary protection gap is not explicit")
         if plan.order_type == "ioc_limit":
             raise TestnetCanaryError("external Testnet canary does not support ioc_limit")

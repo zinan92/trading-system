@@ -491,6 +491,88 @@ class TestnetAutomationCoordinator:
         }
         return self._record(state)
 
+    def run_transport_canary(
+        self,
+        plan: object,
+        *,
+        confirmation: Mapping[str, Any],
+        broker: object,
+        facts: object,
+        protection: object,
+        confirmation_ledger: object | None = None,
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Run one explicit BTC transport canary for the selected slice."""
+
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") != "candidate_selected":
+            raise TestnetCoordinatorError("candidate_selection_required")
+        selected_instrument = str(current.get("selected_instrument_id") or "")
+        from services.testnet_transport_canary import TestnetTransportCanary
+
+        if not selected_instrument:
+            raise TestnetCoordinatorError("selected_instrument_required")
+        try:
+            plan_instrument = str(getattr(plan, "instrument_id", "") or plan.get("instrument_id", ""))
+        except AttributeError as exc:
+            raise TestnetCoordinatorError("canary_plan_invalid") from exc
+        if plan_instrument != selected_instrument:
+            raise TestnetCoordinatorError(
+                "selected_instrument_mismatch",
+                {"selected_instrument_id": selected_instrument, "plan_instrument_id": plan_instrument},
+            )
+        try:
+            runner = TestnetTransportCanary(
+                self.output_root,
+                broker,
+                facts,
+                protection,
+                confirmation_ledger=confirmation_ledger,
+            )
+            result = runner.run(
+                plan,
+                confirmation=confirmation,
+                timestamp=timestamp or self._timestamp(None),
+            )
+        except Exception as exc:  # noqa: BLE001 - normalize at the Coordinator boundary.
+            blocker = str(getattr(exc, "code", "") or str(exc) or type(exc).__name__)
+            state = {
+                **current,
+                "event": "transport_canary_blocked",
+                "action": "run_transport_canary",
+                "status": "canary_blocked",
+                "occurred_at": self._timestamp(timestamp),
+                "canary_blocker": blocker,
+                "execution_enabled": False,
+                "execution_ready": False,
+                "execution_blocker": blocker,
+                "next_action": "notify_park_and_wait",
+                "execution_mutation": False,
+                "network_operation_invoked": False,
+                "blocker": blocker,
+            }
+            self._record(state)
+            if isinstance(exc, TestnetCoordinatorError):
+                raise
+            raise TestnetCoordinatorError("transport_canary_blocked", {"blocker": blocker}) from exc
+        state = {
+            **current,
+            "event": "transport_canary_completed",
+            "action": "run_transport_canary",
+            "status": "canary_completed",
+            "occurred_at": self._timestamp(timestamp),
+            "canary": result,
+            "canary_status": result.get("status"),
+            "execution_enabled": False,
+            "execution_ready": False,
+            "execution_blocker": "capability_gap:execution",
+            "next_action": "record_canary_evidence",
+            "execution_mutation": True,
+            "network_operation_invoked": True,
+            "blocker": None,
+        }
+        return self._record(state)
+
     def _record(self, state: Mapping[str, Any]) -> dict[str, Any]:
         row = dict(state)
         events = self._read_events()

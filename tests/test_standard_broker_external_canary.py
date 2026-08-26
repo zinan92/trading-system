@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from decimal import Decimal
 from types import SimpleNamespace
 from datetime import UTC, datetime
@@ -144,7 +143,6 @@ def test_wrapper_can_pass_attended_canary_admission_without_order_mutation(tmp_p
 
 
 def test_wrapper_rejects_fake_reconciliation_snapshot() -> None:
-    from standard_broker import ExternalCanaryFactBundle
     from standard_broker.account import AccountSnapshot
     from standard_broker.fees import FeeEvent, FeeKind, FeeSource, FeeState
     from standard_broker.models import BrokerEnvironment, Provenance
@@ -217,7 +215,7 @@ def test_wrapper_rejects_fake_reconciliation_snapshot() -> None:
         passed=True,
         evidence_digest="sha256:" + "e" * 64,
     )
-    bundle = ExternalCanaryFactBundle(
+    bundle = SimpleNamespace(
         fills=(fill,),
         fees=(fee,),
         account=account,
