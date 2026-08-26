@@ -108,6 +108,13 @@ execution contract is explicitly authorized; the unified review is complete.
   is now an aggregate cap across the entire entry ladder (with a rounding
   reserve), and soak evidence is bound to the activation's strategy family and
   Instrument so cross-family receipts cannot unlock expansion.
+- The third and final Claude Sonnet 5 review passed with no P0/P1 findings:
+  verified receipt
+  `20260826T100308Z_339e9358-694b-4c25-95ea-d2f3eb692b43.json`, session
+  `ff9f9acf-ea02-41db-8b02-e81fa87fd16b`. It left one non-blocking P2 note
+  that the quantity-only DCA allocation branch is currently unreachable because
+  the Portfolio Gate rejects notional-less exposure increases; the next safe
+  improvement is an invariant test, not a live workaround.
 - Focused implementation validation currently passes 126 cases across the
   Coordinator, candidate selection, transport canary, DCA/Grid lifecycles,
   scheduler, expansion, and readiness contracts. No credential was read, no
@@ -116,10 +123,10 @@ execution contract is explicitly authorized; the unified review is complete.
   declared protection capability gap; the system must remain blocked until a
   matching public capability is available.
 
-_下一步_: complete the third and final unified Claude Sonnet review of PR
-#1046. If it does not pass, stop and report the remaining findings; no
-separately attended Testnet activation is considered while the external
-protection capability gap remains a hard blocker.
+_下一步_: implementation and the requested three-pass review are complete.
+Keep external Testnet execution blocked until the public standard-broker
+position-protection capability is available and a separately attended
+activation is authorized; fixture evidence is not external readiness.
 
 ## 现在在哪里(2026-08-23)
 - #888 / PR #889 merged as

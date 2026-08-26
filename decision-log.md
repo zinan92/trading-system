@@ -16934,11 +16934,28 @@ auditable datafeed port; broker execution remains a separate port.
   deployment, or cloud mutation occurred. The external standard-broker
   protection capability gap remains an explicit blocker.
 
-## Next
+## Final verification
 
 - The second Sonnet review found two further P0s: DCA per-addition sizing did
   not cap cumulative exposure, and soak/family arguments could cross-unlock a
-  different activation. PR #1046 applies the final permitted repair: aggregate
-  DCA cap plus rounding reserve, and activation-bound soak family/Instrument
-  checks. The third Sonnet review is the final acceptance gate; if it fails,
-  stop and report rather than make another repair.
+  different activation. PR #1046 (`main@2556cfc91530ab1a3a332e9f8ec0fd421f661bc8`)
+  applied the final permitted repair: aggregate DCA cap plus rounding reserve,
+  and activation-bound soak family/Instrument checks.
+- The third and final independent Claude Sonnet 5 review completed with a
+  verified receipt
+  `20260826T100308Z_339e9358-694b-4c25-95ea-d2f3eb692b43.json`, session
+  `ff9f9acf-ea02-41db-8b02-e81fa87fd16b`, verdict
+  `PASS WITH NON-BLOCKING NOTES`. It found no P0/P1; the only note is a
+  future invariant test for the unreachable quantity-only DCA allocation path.
+- Final clean-main regression: `3529 passed, 1 skipped, 3 warnings`; the only
+  failure remains the pre-existing unmodified Dashboard drag browser test.
+  Compileall, diff-check, targeted ruff, and gitleaks passed. No Testnet,
+  Mainnet, credential, network order, scheduler deployment, or cloud mutation
+  occurred.
+
+## Next
+
+- Implementation and the requested three-pass review are complete. Do not
+  enable external Testnet execution until the public standard-broker
+  position-protection capability is available and a new attended activation is
+  explicitly authorized.
