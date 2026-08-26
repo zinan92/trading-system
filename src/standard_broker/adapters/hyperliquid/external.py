@@ -572,6 +572,8 @@ class NautilusHyperliquidTestnetBackend:
             return "unknown"
         if statuses and statuses <= {"canceled", "cancelled"}:
             return "canceled"
+        if statuses & {"filled", "partially_filled", "partial"}:
+            return "unknown"
         if statuses <= {"resting", "waiting_for_trigger", "waiting_for_fill", "filled", "partially_filled"}:
             return "active"
         return "unknown"

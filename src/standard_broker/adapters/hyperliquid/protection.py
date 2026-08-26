@@ -201,6 +201,13 @@ class HyperliquidRuntimeProtectionAdapter:
                         "query",
                         "protection_query_not_accepted",
                     )
+                self._validate_runtime_state(
+                    runtime_receipt,
+                    operation="query",
+                    expected_states={"active"},
+                    group=group,
+                    require_coverage=True,
+                )
             except Exception as error:
                 self._freeze(group.protection_id, error)
                 raise
@@ -423,6 +430,16 @@ class HyperliquidRuntimeProtectionAdapter:
                     operation,
                     "protection_receipt_not_accepted",
                 )
+            self._validate_runtime_state(
+                runtime_receipt,
+                operation=operation,
+                expected_states=(
+                    {"canceled"}
+                    if operation == "cancel"
+                    else {"submitted", "active"}
+                ),
+                group=group,
+            )
         except Exception as error:
             self._freeze(group.protection_id, error)
             raise
@@ -445,6 +462,40 @@ class HyperliquidRuntimeProtectionAdapter:
             lifecycle_id=runtime_receipt.lifecycle_id,
             release_sha=runtime_receipt.release_sha,
         )
+
+    @staticmethod
+    def _validate_runtime_state(
+        runtime_receipt: object,
+        *,
+        operation: str,
+        expected_states: set[str],
+        group: ProtectionGroup,
+        require_coverage: bool = False,
+    ) -> None:
+        observed_protection_id = getattr(runtime_receipt, "protection_id", None)
+        if (
+            observed_protection_id is not None
+            and observed_protection_id != group.protection_id
+        ):
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation identity does not match the requested group",
+            )
+        state = getattr(runtime_receipt, "state", None)
+        if state is not None and str(state).lower() not in expected_states:
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                f"protection observation state {state!r} is not one of {sorted(expected_states)}",
+            )
+        covered_quantity = getattr(runtime_receipt, "covered_quantity", None)
+        if require_coverage and covered_quantity is not None and covered_quantity < group.quantity:
+            raise BrokerCapabilityError(
+                "protection_order",
+                operation,
+                "protection observation coverage is below the requested group quantity",
+            )
 
     def _require_group_capabilities(self, group: ProtectionGroup, operation: str) -> None:
         self._require(operation)

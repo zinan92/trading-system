@@ -53,18 +53,16 @@ def _approved_testnet_runtime(capabilities, calls, *, accepted: bool):
 
         def invoke(self, port: str, operation: str, request: object):
             calls.append((port, operation, request))
-            return SimpleNamespace(
-                accepted=accepted,
-                broker_id="hyperliquid",
-                environment=BrokerEnvironment.TESTNET,
-                provenance=Provenance(
-                    source="testnet.fixture",
-                    execution_scope="hypercore:default",
-                    transport_state="local_fixture",
-                    mapping_revision="testnet-protection-v1",
-                    received_at=datetime.now(UTC),
-                ),
-            )
+            state = {"query": "active", "cancel": "canceled"}.get(operation, "submitted")
+            return {
+                "protection_id": "protect-1",
+                "operation": operation,
+                "state": state,
+                "accepted": accepted,
+                "covered_quantity": "0.1" if operation == "query" else "0",
+                "order_ids": ["protection-order-1", "protection-order-2"],
+                "observation_digest": "sha256:" + "d" * 64,
+            }
 
     approval = ExternalEnvironmentApproval(
         environment=BrokerEnvironment.TESTNET,

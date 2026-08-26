@@ -297,6 +297,20 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
                 ),
             )
 
+    def test_filled_protection_leg_is_not_reported_as_active_coverage(self) -> None:
+        self.assertEqual(
+            NautilusHyperliquidTestnetBackend._protection_state(
+                [{"status": "filled"}, {"status": "resting"}]
+            ),
+            "unknown",
+        )
+        self.assertEqual(
+            NautilusHyperliquidTestnetBackend._protection_state(
+                [{"status": "partially_filled"}, {"status": "resting"}]
+            ),
+            "unknown",
+        )
+
     def test_external_fill_query_filters_conflicting_client_identity_even_when_oid_matches(self) -> None:
         class ConflictingFillClient(FakeClient):
             async def request_fill_reports(self, instrument_id: str) -> list[object]:
