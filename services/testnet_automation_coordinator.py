@@ -29,6 +29,10 @@ COORDINATOR_EVENTS_FILE = "events.json"
 TESTNET_BROKER_ID = "hyperliquid"
 TESTNET_ENVIRONMENT = "testnet"
 TESTNET_TRANSPORT_PROFILE = "hyperliquid-testnet-default"
+TESTNET_PROTECTED_TRANSPORT_PROFILE = "hyperliquid-testnet-position-protection"
+_TESTNET_TRANSPORT_PROFILES = frozenset(
+    {TESTNET_TRANSPORT_PROFILE, TESTNET_PROTECTED_TRANSPORT_PROFILE}
+)
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
 _RELEASE_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 _ACTIONS = frozenset(
@@ -176,7 +180,7 @@ class TestnetActivation:
         transport_profile = _required_text(
             value.get("transport_profile"), "transport_profile"
         )
-        if transport_profile != TESTNET_TRANSPORT_PROFILE:
+        if transport_profile not in _TESTNET_TRANSPORT_PROFILES:
             raise TestnetCoordinatorError("testnet_profile_required")
         release_sha = _required_text(value.get("release_sha"), "release_sha").lower()
         if _RELEASE_RE.fullmatch(release_sha) is None:
@@ -1695,6 +1699,7 @@ __all__ = [
     "COORDINATOR_SCHEMA",
     "TESTNET_BROKER_ID",
     "TESTNET_ENVIRONMENT",
+    "TESTNET_PROTECTED_TRANSPORT_PROFILE",
     "TESTNET_TRANSPORT_PROFILE",
     "TestnetActivation",
     "TestnetAutomationCoordinator",

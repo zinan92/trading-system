@@ -69,6 +69,18 @@ def test_activation_persists_exact_testnet_identity_and_stays_execution_blocked(
     assert current == result
 
 
+def test_activation_accepts_reviewed_protected_testnet_profile(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+
+    result = coordinator.activate(
+        _activation(transport_profile="hyperliquid-testnet-position-protection"),
+        command_id="activate-protected-1",
+    )
+
+    assert result["status"] == "activated"
+    assert result["transport_profile"] == "hyperliquid-testnet-position-protection"
+
+
 def test_status_and_preflight_are_authoritative_and_do_not_invoke_a_broker(
     tmp_path: Path,
 ) -> None:
