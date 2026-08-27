@@ -255,6 +255,80 @@ def test_provider_outage_preserves_chinese_number_dca_entry_ladder(tmp_path: Pat
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
+def test_provider_outage_finalize_reuses_complete_durable_strategy_patch(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "deepseek", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "unavailable"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+    router.market_reader = lambda: {
+        "price": 79000.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "hyperliquid.external_testnet",
+        "provider": "hyperliquid",
+        "observed_at": "2026-08-19T00:00:00+00:00",
+    }
+    message = (
+        "你帮我做一个比特币做空的 Testnet DCA 策略，具体参数如下："
+        "1. 杠杆：最高 10 倍；"
+        "2. 价格区间：78000 ~ 80000；"
+        "3. 止损 (Stop Loss)：81000；"
+        "4. 止盈 (Take Profit)：73000；"
+        "七万八、七万九、八万，一共三笔"
+    )
+
+    first = router.handle_update(_update(27, message))
+    second = router.handle_update(
+        _update(28, "finalize 执行这个 Testnet BTC 做空 DCA 策略")
+    )
+
+    assert first["status"] == "conversation_replied"
+    assert second["status"] == "proposal_created"
+    normalized = second["plan"]["normalized_input"]
+    assert normalized["direction"] == "short"
+    assert normalized["entry_prices"] == [78000.0, 79000.0, 80000.0]
+    assert normalized["stop_price"] == 81000.0
+    assert normalized["take_profit_price"] == 73000.0
+    assert second["proposal"]["execution_environment"] == "testnet"
+    assert second["proposal"]["execution_authorized"] is False
+    assert not (tmp_path / "outputs" / "dualtrack").exists()
+
+
+def test_provider_outage_finalize_surfaces_market_mismatch_after_reusing_draft(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "deepseek", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "unavailable"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+    message = (
+        "你帮我做一个比特币做空的 Testnet DCA 策略，具体参数如下："
+        "最高 10 倍，价格区间 78000 ~ 80000，止损 81000，止盈 73000；"
+        "七万八、七万九、八万，一共三笔"
+    )
+
+    first = router.handle_update(_update(29, message))
+    second = router.handle_update(_update(30, "finalize 执行这个 Testnet BTC 做空 DCA 策略"))
+
+    assert first["status"] == "conversation_replied"
+    assert second["status"] == "blocked"
+    assert second["code"] == "current_price_outside_range"
+    assert second["code"] not in {
+        "missing_direction",
+        "missing_price_boundary",
+        "dca_exit_levels_missing",
+        "addition_count_or_size",
+    }
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+    assert not (tmp_path / "outputs" / "dualtrack").exists()
+
+
 def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_path: Path) -> None:
     provider = ConversationProvider(
         {

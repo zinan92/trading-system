@@ -59,7 +59,6 @@ from services.park_telegram_continuation import (
 )
 from services.park_telegram_conversation import (
     ParkTelegramConversationAgent,
-    ParkTelegramConversationError,
     ParkTelegramConversationLedger,
 )
 from services.telegram_bot_transport import (
@@ -1090,10 +1089,14 @@ class ParkTelegramRouter:
                 "provider": {"provider": "deterministic_scope_guard", "status": "fallback"},
                 "execution_authorized": False,
             }
+        prior_patch = self.conversation_ledger.latest_strategy_patch()
+        explicit_patch = extract_explicit_strategy_patch(text)
+        candidate = {**prior_patch, **explicit_patch}
         return self._handle_strategy(
             text,
             active=active,
             update_id=update_id,
+            candidate=candidate or None,
             skip_provider=True,
             provider={"provider": "deterministic_strategy_fallback", "status": "provider_unavailable"},
         )
