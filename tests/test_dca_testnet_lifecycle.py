@@ -83,6 +83,7 @@ def _broker(tmp_path: Path, *, protection: bool = True):
             self.cancel_failure = False
             self.account_positions: list[dict] = []
             self.account_reads = 0
+            self.protections: dict[str, dict[str, object]] = {}
             self.metadata = NautilusAdapterMetadata(
                 package="nautilus-hyperliquid",
                 version="1.230.0",
@@ -128,7 +129,24 @@ def _broker(tmp_path: Path, *, protection: bool = True):
                     ),
                 }
             if port == "protection_order":
-                return {"accepted": True}
+                protection_id = str(request.get("protectionId") or "")
+                if operation in {"submit", "replace"}:
+                    quantity = str(request.get("quantity") or "0")
+                    self.protections[protection_id] = {
+                        "quantity": quantity,
+                        "state": "submitted",
+                    }
+                elif operation == "cancel":
+                    self.protections.setdefault(protection_id, {"quantity": "0"})["state"] = "canceled"
+                record = self.protections.get(protection_id, {"quantity": "0", "state": "unknown"})
+                return {
+                    "protection_id": protection_id,
+                    "operation": operation,
+                    "accepted": True,
+                    "state": "active" if operation == "query" and record.get("state") != "canceled" else str(record.get("state") or "unknown"),
+                    "covered_quantity": record.get("quantity", "0") if operation == "query" else "0",
+                    "order_ids": [f"{protection_id}:tp", f"{protection_id}:sl"],
+                }
             return {"status": "unknown"}
 
     backend = Backend()

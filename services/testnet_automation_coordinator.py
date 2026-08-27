@@ -1,9 +1,9 @@
-"""Read-only Testnet Automation Coordinator boundary.
+"""Testnet Automation Coordinator composition-root boundary.
 
-The coordinator is the composition-root contract for the later Testnet
-execution slices.  This first slice only binds an immutable activation
-identity and records operator intent.  It deliberately has no Broker
-dependency and cannot submit, cancel, protect, or flatten an order.
+The coordinator binds immutable activation identity, candidate selection,
+subtractive Portfolio sizing, and the canonical DCA/Grid lifecycles.  It never
+constructs venue-native requests; an explicit Broker adapter and attended
+Testnet confirmation remain required before any exposure-changing call.
 """
 
 from __future__ import annotations
@@ -211,7 +211,7 @@ class TestnetActivation:
 
 
 class TestnetAutomationCoordinator:
-    """One durable, execution-disabled Testnet activation boundary."""
+    """One durable, identity-bound Testnet automation boundary."""
 
     __test__ = False
 

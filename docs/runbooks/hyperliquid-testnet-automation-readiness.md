@@ -13,6 +13,52 @@ identity and capability gates pass.
 - Keep the existing 14-window contract reserved for a future Live decision.
 - Treat a window as evidence only; it never expires or mutates the Plan.
 
+## Protected Broker preflight and attended start
+
+The default `hyperliquid-testnet-default` profile remains preflight-only. Use
+the explicit position-protection profile for a strategy proof. The following
+preflight does not read the signer file or invoke an order/fact backend; the
+path is accepted as an opaque reference only:
+
+```sh
+PYTHONPATH=/path/to/standard-broker/src python3 -m pipelines.testnet_automation_proof \
+  --action preflight \
+  --account-address <testnet-account-address> \
+  --runtime-id <runtime-id> \
+  --release-sha <trading-system-release-sha> \
+  --approval-id <testnet-approval-id> \
+  --approved-by park \
+  --secret-file <local-testnet-signer-file>
+```
+
+After a fresh Park confirmation, a full StrategyPlan and a complete
+source-bound market-fact document are available, `start` is the only command
+that may submit the first Testnet entry. It requires both
+`--execute-testnet` and the exact acknowledgement below; it creates one
+candidate/Execution Slice and stops at the lifecycle's next attended action:
+
+```sh
+PYTHONPATH=/path/to/standard-broker/src python3 -m pipelines.testnet_automation_proof \
+  --action start \
+  --strategy-plan <strategy-plan-v1.json> \
+  --market <hyperliquid-market-facts.json> \
+  --confirmation <park-confirmation.json> \
+  --account-address <testnet-account-address> \
+  --runtime-id <runtime-id> \
+  --release-sha <trading-system-release-sha> \
+  --approval-id <testnet-approval-id> \
+  --approved-by park \
+  --secret-file <local-testnet-signer-file> \
+  --execute-testnet \
+  --acknowledge I_UNDERSTAND_ONE_ATTENDED_TESTNET_STRATEGY_ACTION
+```
+
+Use `--strategy-family grid` only when the loaded plan is Grid. The market
+document must contain the full BBO/L2/depth/slippage/oracle and Broker/source
+identity fields; a price-only or synthetic document is blocked. This command
+does not enable Mainnet/Live or the scheduler and never creates a new Plan
+after TP/SL.
+
 ## Read-only collection
 
 The observation document must contain the exact strategy session/revision,

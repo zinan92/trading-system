@@ -24,6 +24,13 @@ from services.broker_port import (
 BrokerExecutionFactory = Callable[["BrokerBuildContext"], BrokerExecutionPort]
 BrokerReconciliationFactory = Callable[["BrokerBuildContext"], BrokerReconciliationPort]
 
+_STANDARD_BROKER_EXTERNAL_TESTNET_PROFILES = frozenset(
+    {
+        "hyperliquid-testnet-default",
+        "hyperliquid-testnet-position-protection",
+    }
+)
+
 
 @dataclass(frozen=True)
 class BrokerBuildContext:
@@ -62,7 +69,7 @@ class BrokerBuildContext:
         external_host_markers = (
             "external_host" in self.broker_config
             or "standard_broker_release_sha" in self.broker_config
-            or transport_profile == "hyperliquid-testnet-default"
+            or transport_profile in _STANDARD_BROKER_EXTERNAL_TESTNET_PROFILES
         )
         if external_host_markers and provider != "standard_broker":
             raise ValueError(
@@ -70,7 +77,7 @@ class BrokerBuildContext:
             )
         if external_host_markers and (
             (self.selection_environment or configured_environment) != "testnet"
-            or transport_profile != "hyperliquid-testnet-default"
+            or transport_profile not in _STANDARD_BROKER_EXTERNAL_TESTNET_PROFILES
         ):
             raise ValueError(
                 "external host markers require the exact Testnet external profile"
@@ -496,6 +503,16 @@ def _standard_broker_external_testnet_execution(
         ) from exc
 
 
+def _standard_broker_external_protected_testnet_execution(
+    context: BrokerBuildContext,
+) -> BrokerExecutionPort:
+    from services.standard_broker_external_execution import (
+        StandardBrokerExternalExecutionAdapter,
+    )
+
+    return StandardBrokerExternalExecutionAdapter.from_build_context(context)
+
+
 def _reject_standard_broker_selection(context: BrokerBuildContext) -> BrokerExecutionPort:
     from services.standard_broker_host import StandardBrokerHostError
 
@@ -627,6 +644,10 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
     from services.standard_broker_external_testnet import (
         STANDARD_BROKER_EXTERNAL_TESTNET_CAPABILITIES,
     )
+    from services.standard_broker_external_execution import (
+        PROTECTED_EXTERNAL_PROFILE,
+        PROTECTED_EXTERNAL_EXECUTION_CAPABILITIES,
+    )
 
     registry.register(
         BrokerPlugin(
@@ -670,6 +691,19 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
             ),
             execution_factory=_standard_broker_external_testnet_execution,
             capabilities=STANDARD_BROKER_EXTERNAL_TESTNET_CAPABILITIES,
+        )
+    )
+    registry.register(
+        BrokerPlugin(
+            BrokerPluginKey(
+                "live",
+                "standard_broker",
+                "testnet",
+                broker_id="hyperliquid",
+                transport_profile=PROTECTED_EXTERNAL_PROFILE,
+            ),
+            execution_factory=_standard_broker_external_protected_testnet_execution,
+            capabilities=PROTECTED_EXTERNAL_EXECUTION_CAPABILITIES,
         )
     )
     for environment in ("mainnet", "live"):

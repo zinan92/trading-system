@@ -29,7 +29,7 @@ from services.broker_port import BrokerOrderRequest, UnsupportedBrokerCapability
 
 ACCOUNT = "0x" + "12" * 20
 RELEASE_SHA = "a" * 40
-STANDARD_BROKER_SHA = "7a23054d3f8bcf4e3a17537dc3b8d3ebd361a70b"
+STANDARD_BROKER_SHA = "2d3a5cc26538b24fb31ab81201facd5ee46476ba"
 
 
 class _SignerProvider:

@@ -344,7 +344,7 @@ def test_standard_broker_testnet_requires_explicit_transport_profile(tmp_path: P
     "external_marker",
     [
         {"external_host": object()},
-        {"standard_broker_release_sha": "7a23054d3f8bcf4e3a17537dc3b8d3ebd361a70b"},
+        {"standard_broker_release_sha": "2d3a5cc26538b24fb31ab81201facd5ee46476ba"},
         {"transport_profile": "hyperliquid-testnet-default"},
     ],
 )
