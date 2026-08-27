@@ -1,5 +1,44 @@
 # Decision Log
 
+## Make Jessie conversation-first with deterministic risk previews (#1067)
+
+Date: 2026-08-27
+
+### Decision
+
+- A complete, calculable semantic candidate is sufficient for a conversation
+  preview. Do not wait on or obey a provider's invented missing field when the
+  canonical planner already has a deterministic sizing rule.
+- Keep a provider round-trip for genuinely ambiguous, research, or complex
+  discussion, but make the local deterministic preview the fast path for clear
+  strategy facts. Internal JSON is a transport between seams, never the user
+  interface or an execution authority.
+- Derive DCA exposure and gross stop-loss/take-profit percentages from explicit
+  per-entry AUM sizing or the existing equal-split maximum-leverage rule. Derive
+  basic Grid full-depth Hard Stop loss only from explicit geometry plus trusted
+  current price. Mark fees, slippage, account equity, and authorization as
+  unavailable unless authoritative facts exist.
+- Keep clean-slate, account, market, confirmation, and Paper-only gates behind
+  explicit finalize/confirm routing. A normal discussion cannot be blocked by
+  an execution-state fact, even if the account fixture contains a position.
+
+### Verification
+
+- Issue #1067 implementation is covered by the conversation/provider/strategy
+  regression suite (`93 passed`), plus ruff, compileall, and diff-check.
+- The current BTC worked example derives `10x AUM` total exposure and
+  `18.67283951% AUM` gross stop loss. No credentials, Telegram token, order,
+  position, scheduler, cloud, Mainnet, or Live mutation occurred.
+- Evidence and formula are recorded in
+  [`docs/evidence/issue-1067-conversation-first-risk-preview.md`](docs/evidence/issue-1067-conversation-first-risk-preview.md).
+
+### Gotcha
+
+- The apparent complexity was caused by placing fail-closed execution checks
+  before conversation convergence, then waiting 30 seconds for a provider that
+  often timed out. Moving deterministic preview ahead of that boundary removes
+  the user-facing form loop without weakening the downstream execution gate.
+
 ## Preserve explicit revised DCA geometry across Jessie fallback turns (#1065)
 
 Date: 2026-08-27

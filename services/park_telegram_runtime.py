@@ -47,6 +47,7 @@ from services.park_strategy_plan import (
     build_deterministic_risk_plan,
     normalize_park_input,
 )
+from services.park_strategy_preview import build_deterministic_risk_preview
 from services.park_strategy_session import (
     ParkStrategyIdentityError,
     ParkStrategyIdentityJournal,
@@ -1040,6 +1041,7 @@ class ParkTelegramRouter:
             }
         if not has_explicit_execution_intent(text):
             patch = extract_explicit_strategy_patch(text)
+            prior_patch = self.conversation_ledger.latest_strategy_patch()
             research_like = bool(
                 re.search(
                     r"研究|调研|比较|对比|优缺点|假设|证据|反例|research|compare|pros|cons|hypothesis|evidence",
@@ -1054,9 +1056,24 @@ class ParkTelegramRouter:
                     re.IGNORECASE,
                 )
             )
-            mode = "research" if research_like and not formation_like else "strategy_forming" if patch else "discuss"
+            strategy_like = bool(patch) or bool(
+                prior_patch
+                and re.search(
+                    r"策略|参数|理解|确认|DCA|Grid|dca|grid|strategy|trade|交易",
+                    str(text or ""),
+                    re.IGNORECASE,
+                )
+            )
+            mode = "research" if research_like and not formation_like else "strategy_forming" if strategy_like else "discuss"
+            candidate = {**prior_patch, **patch} if strategy_like else patch
+            market = context.get("market") if isinstance(context, Mapping) else None
+            preview = build_deterministic_risk_preview(candidate, market=market) if mode == "strategy_forming" else None
             if mode == "strategy_forming":
-                message = "我先把这条保留为可修改的策略草稿；你还可以继续补充或讨论，未收到明确 finalize/执行指令前不会创建 Paper 计划。"
+                message = (
+                    preview["assistant_reply"]
+                    if preview is not None
+                    else "我先把这条保留为可修改的策略草稿；你还可以继续补充或讨论，未收到明确 finalize/执行指令前不会创建 Paper 计划。"
+                )
             elif mode == "research":
                 message = "我先按研究/讨论处理，不把这个策略想法收敛成执行计划；可以继续比较证据、假设和风险。"
             else:
@@ -1064,7 +1081,7 @@ class ParkTelegramRouter:
             conversation = {
                 "mode": mode,
                 "assistant_reply": message,
-                "strategy_patch": patch,
+                "strategy_patch": candidate,
                 "missing_fields": [],
                 "evidence_used": [],
                 "assumptions": ["provider unavailable; deterministic conversation fallback"],
@@ -1073,6 +1090,8 @@ class ParkTelegramRouter:
                 "explicit_execution_intent": False,
                 "confidence": "low",
             }
+            if preview is not None:
+                conversation.update(preview)
             return {
                 "status": "conversation_replied",
                 "mode": mode,
@@ -1113,6 +1132,38 @@ class ParkTelegramRouter:
         if self.conversation_agent is None:
             return self._handle_strategy(text, active=active, update_id=update_id)
         context = self._conversation_context(active)
+        quick_candidate = {
+            **self.conversation_ledger.latest_strategy_patch(),
+            **extract_explicit_strategy_patch(text),
+        }
+        quick_market = context.get("market") if isinstance(context, Mapping) else None
+        if build_deterministic_risk_preview(quick_candidate, market=quick_market) is not None:
+            # A complete, calculable candidate does not need a 30-second
+            # provider round-trip. Record the user turn once, then use the
+            # same deterministic conversation seam as provider fallback.
+            self.conversation_ledger.record_user(update_id=update_id, text=text)
+            fallback = self._deterministic_conversation_fallback(
+                text,
+                context=context,
+                active=active,
+                update_id=update_id,
+            )
+            if fallback.get("status") == "conversation_replied":
+                fallback_conversation = fallback.get("conversation")
+                if isinstance(fallback_conversation, Mapping):
+                    self.conversation_ledger.record_assistant(
+                        update_id=update_id,
+                        conversation=fallback_conversation,
+                        provider=fallback.get("provider"),
+                    )
+                outbound = self.telegram.queue_outbound(
+                    idempotency_key=f"park-conversation:{update_id}",
+                    message_type="conversation_reply",
+                    text=str(fallback.get("message") or ""),
+                    binding=active,
+                )
+                return {**fallback, "outbound": outbound}
+            return fallback
         conversation_result = self.conversation_agent.evaluate(
             text,
             update_id=update_id,

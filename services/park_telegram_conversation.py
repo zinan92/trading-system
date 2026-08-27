@@ -7,7 +7,7 @@ import json
 import os
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ from services.park_conversation_contract import (
     extract_explicit_strategy_patch,
     normalize_conversation_result,
 )
+from services.park_strategy_preview import build_deterministic_risk_preview
 
 
 class ParkTelegramConversationError(ValueError):
@@ -106,6 +107,8 @@ class ParkTelegramConversationLedger:
                     item["mode"] = str(row.get("mode") or "")
                     item["strategy_patch"] = dict(row.get("strategy_patch") or {})
                     item["missing_fields"] = list(row.get("missing_fields") or [])
+                    item["derived_fields"] = dict(row.get("derived_fields") or {})
+                    item["risk_preview"] = dict(row.get("risk_preview") or {})
                     for field in ("evidence_used", "assumptions", "conflicts"):
                         item[field] = list(row.get(field) or [])
                 result.append(item)
@@ -169,6 +172,8 @@ class ParkTelegramConversationLedger:
             "assumptions": list(conversation.get("assumptions") or []),
             "conflicts": list(conversation.get("conflicts") or []),
             "needs_confirmation": bool(conversation.get("needs_confirmation")),
+            "derived_fields": dict(conversation.get("derived_fields") or {}),
+            "risk_preview": dict(conversation.get("risk_preview") or {}),
             "execution_authorized": False,
             "provider": dict(provider or {}),
             "recorded_at": float(recorded_at if recorded_at is not None else time.time()),
@@ -197,10 +202,7 @@ class ParkTelegramConversationAgent:
         history = self.ledger.history()
         prior_patch = self.ledger.latest_strategy_patch()
         self.ledger.record_user(update_id=update_id, text=text)
-        user_text = "\n".join(
-            [str(item.get("content") or "") for item in history if item.get("role") == "user"] + [str(text or "")]
-        )
-        explicit_patch = extract_explicit_strategy_patch(user_text)
+        explicit_patch = extract_explicit_strategy_patch(text)
         try:
             result = dict(converse(text, context=context, history=history) or {})
         except Exception as exc:  # noqa: BLE001 - conversation failure is fail-closed.
@@ -230,5 +232,9 @@ class ParkTelegramConversationAgent:
                 **dict(conversation.get("strategy_patch") or {}),
                 **explicit_patch,
             }
+        market = context.get("market") if isinstance(context, Mapping) else None
+        preview = build_deterministic_risk_preview(conversation["strategy_patch"], market=market)
+        if preview is not None:
+            conversation.update(preview)
         self.ledger.record_assistant(update_id=update_id, conversation=conversation, provider=metadata)
         return {"status": "ok", "conversation": conversation, "metadata": metadata}

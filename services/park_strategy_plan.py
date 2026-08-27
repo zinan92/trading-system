@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from services.natural_language_numbers import (
     extract_explicit_entry_count,
+    extract_explicit_entry_notional_aum_multiple,
     extract_explicit_entry_ladder,
     extract_explicit_exit_prices,
     extract_explicit_two_level_entry_ladder,
@@ -161,15 +162,34 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     if upper_value <= lower_value:
         raise ParkStrategyPlanError("invalid_price_boundary", "upper boundary must exceed lower boundary")
 
+    entry_notional_aum_multiple = body.get("entry_notional_aum_multiple")
+    if entry_notional_aum_multiple is None:
+        entry_notional_aum_multiple = extract_explicit_entry_notional_aum_multiple(text)
+    if entry_notional_aum_multiple is not None:
+        entry_notional_aum_multiple = _number(entry_notional_aum_multiple, "entry_notional_aum_multiple")
     max_leverage = body.get("maximum_leverage") or body.get("max_leverage")
     if max_leverage is None:
-        max_leverage = _find_one(text, (_NUMBER + r"\s*[倍xX]\s*(?:杠杆|leverage)?",), "maximum_leverage")
+        if entry_notional_aum_multiple is not None:
+            # A phrase such as ``每次5x AUM`` describes per-entry notional,
+            # not the total leverage authority.  A separate explicit maximum
+            # takes precedence; otherwise the total is derived after count.
+            explicit_max = re.search(
+                r"(?:最高|最大|上限|max(?:imum)?)\s*"
+                + _NUMBER
+                + r"\s*[倍xX]\s*(?:杠杆|leverage)?",
+                text,
+                re.IGNORECASE,
+            )
+            max_leverage = explicit_max.group(1) if explicit_max is not None else None
+        else:
+            max_leverage = _find_one(
+                text,
+                (_NUMBER + r"\s*[倍xX]\s*(?:杠杆|leverage)?",),
+                "maximum_leverage",
+            )
     max_loss = body.get("maximum_acceptable_loss") or body.get("max_loss")
     if max_loss is None:
         max_loss = _find_one(text, (_NUMBER + r"\s*(?:最大可接受亏损|最大亏损|max(?:imum)?\s*loss)",), "maximum_acceptable_loss")
-    if max_leverage is None and max_loss is None:
-        raise ParkStrategyPlanError("missing_risk_authority", "Park must provide maximum leverage or maximum acceptable loss")
-
     explicit_exits = extract_explicit_exit_prices(text)
     stop_price = body.get("stop_price")
     if stop_price is None:
@@ -252,6 +272,10 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
                 "grid order_count conflicts with the explicitly provided spacing and boundaries",
             )
         raw_order_count = derived_count
+    if max_leverage is None and entry_notional_aum_multiple is not None:
+        max_leverage = round(entry_notional_aum_multiple * int(raw_order_count), 12)
+    if max_leverage is None and max_loss is None:
+        raise ParkStrategyPlanError("missing_risk_authority", "Park must provide maximum leverage or maximum acceptable loss")
     if isinstance(stop_price, Mapping):
         normalized_stop_price: Any = {
             str(key): _number(value, f"stop_price.{key}")
@@ -267,6 +291,7 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "lower_price_boundary": lower_value,
         "maximum_leverage": _number(max_leverage, "maximum_leverage") if max_leverage is not None else None,
         "maximum_acceptable_loss": _number(max_loss, "maximum_acceptable_loss") if max_loss is not None else None,
+        "entry_notional_aum_multiple": entry_notional_aum_multiple,
         "stop_price": normalized_stop_price,
         "take_profit_price": _number(take_profit_price, "take_profit_price") if take_profit_price is not None else None,
         "grid_spacing": _number(grid_spacing, "grid_spacing") if grid_spacing is not None else None,

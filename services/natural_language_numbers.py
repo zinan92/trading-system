@@ -116,6 +116,22 @@ def extract_explicit_two_level_entry_ladder(text: str) -> tuple[list[float], int
     return [float(first), float(second)], 2
 
 
+def extract_explicit_entry_notional_aum_multiple(text: str) -> float | None:
+    """Read an explicit per-entry ``N x AUM`` sizing statement."""
+
+    match = re.search(
+        rf"每(?:一次|一笔|个价位|一档|次|笔)\s*"
+        rf"(?P<number>{ARABIC_NUMBER_TOKEN})\s*[x×]\s*"
+        r"(?:aum|账户权益|本金)",
+        str(text or ""),
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    value = parse_chinese_number(match.group("number"))
+    return float(value) if value is not None and value > 0 else None
+
+
 def extract_explicit_exit_prices(text: str) -> dict[str, float]:
     """Extract TP/SL labels, including compact number-before-label forms."""
 
@@ -179,6 +195,7 @@ __all__ = [
     "EXPLICIT_NUMBER_TOKEN",
     "extract_explicit_entry_count",
     "extract_explicit_entry_ladder",
+    "extract_explicit_entry_notional_aum_multiple",
     "extract_explicit_exit_prices",
     "extract_explicit_two_level_entry_ladder",
     "parse_chinese_number",

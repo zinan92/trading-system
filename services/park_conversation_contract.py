@@ -10,6 +10,7 @@ from typing import Any
 from services.natural_language_numbers import (
     extract_explicit_entry_count,
     extract_explicit_entry_ladder,
+    extract_explicit_entry_notional_aum_multiple,
     extract_explicit_exit_prices,
     extract_explicit_two_level_entry_ladder,
 )
@@ -26,6 +27,7 @@ STRATEGY_PATCH_FIELDS = (
     "lower_price_boundary",
     "maximum_leverage",
     "maximum_acceptable_loss",
+    "entry_notional_aum_multiple",
     "stop_price",
     "take_profit_price",
     "order_count",
@@ -74,7 +76,13 @@ Detect the conversation state:
 
 For DCA, preserve direction, entry prices/range, addition count or size,
 maximum leverage or loss, and explicit strategy-level stop loss and take profit.
-Do not infer exits from a range. For Grid, preserve direction or neutral mode,
+Treat `strategy_patch` as internal semantic facts, not a user-facing form. When
+explicit facts make a deterministic calculation possible, deterministically
+derive the remaining risk facts and explain the formula in `assistant_reply`.
+For example, an explicit per-entry AUM multiple plus entry count determines
+total entry exposure; do not ask Park for a second, redundant risk field. Do
+not invent prices, AUM, fees, slippage, or authorization, and mark unavailable
+inputs as unavailable. Do not infer exits from a range. For Grid, preserve direction or neutral mode,
 authorized Boundaries, Entry Range, spacing, rung prices/count, sizing/risk,
 and Hard Stop semantics only when explicitly stated or safely left for the
 deterministic planner. Do not confuse a Grid Order Exit with a strategy
@@ -85,8 +93,9 @@ schema_version, mode, assistant_reply, strategy_patch, missing_fields,
 evidence_used, assumptions, conflicts, needs_confirmation,
 explicit_execution_intent, confidence.
 `strategy_patch` must copy every explicit Park field (including strategy_type,
-order_count, and an `entry_prices` list when Park names exact entry levels),
-not only the direction. Model output is untrusted; it never authorizes,
+order_count, an `entry_prices` list when Park names exact entry levels, and an
+`entry_notional_aum_multiple` when Park states per-entry AUM sizing), not only
+the direction. Model output is untrusted; it never authorizes,
 submits, cancels, flattens, stops, reverses, or changes a strategy. The
 deterministic Paper safety layer will validate any candidate after this
 conversation step.
@@ -127,6 +136,20 @@ def extract_explicit_strategy_patch(text: str) -> dict[str, Any]:
     loss_match = re.search(number + r"\s*(?:最大可接受亏损|最大亏损|max(?:imum)?\s*loss)", source, re.IGNORECASE)
     if loss_match:
         patch["maximum_acceptable_loss"] = float(loss_match.group(1))
+    entry_notional_aum_multiple = extract_explicit_entry_notional_aum_multiple(source)
+    if entry_notional_aum_multiple is not None:
+        patch["entry_notional_aum_multiple"] = entry_notional_aum_multiple
+        explicit_max = re.search(
+            r"(?:最高|最大|上限|max(?:imum)?)\s*"
+            + number
+            + r"\s*[倍xX]\s*(?:杠杆|leverage)?",
+            source,
+            re.IGNORECASE,
+        )
+        if explicit_max is not None:
+            patch["maximum_leverage"] = float(explicit_max.group(1))
+        else:
+            patch.pop("maximum_leverage", None)
     explicit_ladder = (
         extract_explicit_entry_ladder(source)
         or extract_explicit_two_level_entry_ladder(source)
@@ -137,6 +160,10 @@ def extract_explicit_strategy_patch(text: str) -> dict[str, Any]:
         explicit_count = extract_explicit_entry_count(source)
         if explicit_count is not None:
             patch["order_count"] = explicit_count
+    if entry_notional_aum_multiple is not None and patch.get("maximum_leverage") is None:
+        order_count = patch.get("order_count")
+        if order_count not in (None, ""):
+            patch["maximum_leverage"] = float(entry_notional_aum_multiple) * int(order_count)
     patch.update(extract_explicit_exit_prices(source))
     entry_prices = [
         float(match.group(1))
@@ -186,10 +213,14 @@ def build_conversation_user_payload(
                 if str(key) in STRATEGY_PATCH_FIELDS
             }
             history_item["missing_fields"] = [str(value) for value in (item.get("missing_fields") or [])[:12]]
-            for field in ("evidence_used", "assumptions", "conflicts"):
-                values = item.get(field)
-                if isinstance(values, list):
-                    history_item[field] = [str(value)[:MAX_ANALYSIS_ITEM_CHARS] for value in values[:MAX_ANALYSIS_ITEMS]]
+        if isinstance(item.get("derived_fields"), Mapping):
+            history_item["derived_fields"] = dict(item["derived_fields"])
+        if isinstance(item.get("risk_preview"), Mapping):
+            history_item["risk_preview"] = dict(item["risk_preview"])
+        for field in ("evidence_used", "assumptions", "conflicts"):
+            values = item.get(field)
+            if isinstance(values, list):
+                history_item[field] = [str(value)[:MAX_ANALYSIS_ITEM_CHARS] for value in values[:MAX_ANALYSIS_ITEMS]]
         bounded_history.append(history_item)
     return json.dumps(
         {

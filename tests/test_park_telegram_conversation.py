@@ -399,6 +399,167 @@ def test_provider_outage_replays_revised_dca_geometry_without_raw_market_excepti
     assert not (tmp_path / "outputs" / "dualtrack").exists()
 
 
+def test_provider_timeout_returns_semantic_dca_risk_preview_instead_of_form_prompt(
+    tmp_path: Path,
+) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+    result = router.handle_update(
+        _update(
+            45,
+            "80000 到 81000这两个价位做空 DCA，每一次5x AUM，止损82000，止盈73000；你看看你理解么，还缺什么参数吗",
+        )
+    )
+
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "strategy_forming"
+    conversation = result["conversation"]
+    assert conversation["strategy_patch"]["entry_notional_aum_multiple"] == 5.0
+    assert conversation["risk_preview"]["status"] == "derived"
+    assert conversation["derived_fields"]["total_entry_exposure_aum"] == 10.0
+    assert round(conversation["derived_fields"]["gross_stop_loss_pct_aum"], 2) == 18.67
+    assert "18.67% AUM" in conversation["assistant_reply"]
+    assert "还缺" not in conversation["assistant_reply"]
+    assert router.conversation_ledger.history()[-1]["derived_fields"]["total_entry_exposure_aum"] == 10.0
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+    assert not (tmp_path / "outputs" / "dualtrack").exists()
+
+
+def test_provider_success_uses_same_local_risk_preview_as_timeout_fallback(tmp_path: Path) -> None:
+    provider = ConversationProvider(
+        {
+            "mode": "strategy_forming",
+            "assistant_reply": "我还需要每笔仓位或总风险上限。",
+            "strategy_patch": {
+                "direction": "short",
+                "strategy_type": "dca",
+                "lower_price_boundary": 80000,
+                "upper_price_boundary": 81000,
+                "entry_prices": [80000, 81000],
+                "order_count": 2,
+                "entry_notional_aum_multiple": 5,
+                "stop_price": 82000,
+                "take_profit_price": 73000,
+            },
+            "missing_fields": ["position_size_or_total_risk_limit"],
+            "needs_confirmation": False,
+            "explicit_execution_intent": False,
+        }
+    )
+    router = _router(tmp_path, provider)
+
+    result = router.handle_update(
+        _update(46, "80000 到 81000这两个价位做空 DCA，每一次5x AUM，止损82000，止盈73000；你理解吗")
+    )
+
+    assert result["status"] == "conversation_replied"
+    assert result["conversation"]["risk_preview"]["status"] == "derived"
+    assert "18.67% AUM" in result["conversation"]["assistant_reply"]
+    assert "每笔仓位" not in result["conversation"]["assistant_reply"]
+    assert provider.calls == []
+    assert router.conversation_ledger.history()[-1]["risk_preview"]["status"] == "derived"
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
+def test_strategy_discussion_with_open_position_does_not_enter_clean_slate_gate(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+    router.account_reader = lambda _root, _cycle: {
+        "equity": 1000.0,
+        "reconciliation_healthy": True,
+        "open_positions": 1,
+        "open_or_accepted_orders": 0,
+        "unresolved_runtime": False,
+        "pending_terminal_actions": False,
+        "snapshot": {"orders": [], "positions": [{"status": "open"}]},
+    }
+
+    result = router.handle_update(
+        _update(47, "80000 到 81000这两个价位做空 DCA，每一次5x AUM，止损82000，止盈73000；你看看你理解么")
+    )
+
+    assert result["status"] == "conversation_replied"
+    assert result.get("code") is None
+    assert result["conversation"]["risk_preview"]["status"] == "derived"
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
+def test_explicit_finalize_uses_preview_candidate_and_keeps_confirmation_gate(tmp_path: Path) -> None:
+    provider = ConversationProvider(
+        {
+            "mode": "strategy_forming",
+            "assistant_reply": "参数已记录，但还需要仓位大小。",
+            "strategy_patch": {
+                "direction": "short",
+                "strategy_type": "dca",
+                "lower_price_boundary": 80000,
+                "upper_price_boundary": 81000,
+                "entry_prices": [80000, 81000],
+                "order_count": 2,
+                "entry_notional_aum_multiple": 5,
+                "stop_price": 82000,
+                "take_profit_price": 73000,
+            },
+            "missing_fields": ["position_size_or_total_risk_limit"],
+            "needs_confirmation": False,
+            "explicit_execution_intent": False,
+        }
+    )
+    router = _router(tmp_path, provider)
+    router.market_reader = lambda: {
+        "price": 80500.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "hyperliquid.external_testnet",
+        "provider": "hyperliquid",
+        "observed_at": "2026-08-19T00:00:00+00:00",
+    }
+
+    result = router.handle_update(_update(48, "finalize 执行这个 Testnet BTC 做空 DCA 策略"))
+
+    assert result["status"] == "proposal_created"
+    assert result["plan"]["normalized_input"]["maximum_leverage"] == 10.0
+    assert result["proposal"]["execution_environment"] == "testnet"
+    assert result["proposal"]["execution_authorized"] is False
+    assert not (tmp_path / "outputs" / "dualtrack").exists()
+
+
+def test_provider_timeout_returns_deterministic_grid_loss_preview(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+    result = router.handle_update(
+        _update(49, "中性 Grid，区间4100~4500，最大20x杠杆，一共10笔；你看看最大亏损")
+    )
+
+    assert result["status"] == "conversation_replied"
+    conversation = result["conversation"]
+    assert conversation["strategy_patch"]["strategy_type"] == "grid"
+    assert conversation["risk_preview"]["status"] == "derived"
+    assert conversation["derived_fields"]["total_entry_exposure_aum"] == 20.0
+    assert conversation["derived_fields"]["gross_hard_stop_loss_pct_aum"] > 0
+    assert "Grid" in conversation["assistant_reply"]
+    assert "最大亏损" in conversation["assistant_reply"]
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
 def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_path: Path) -> None:
     provider = ConversationProvider(
         {
@@ -524,7 +685,6 @@ def test_explicit_finalize_uses_deterministic_completeness_when_provider_contrad
     assert second["plan"]["risk"]["selected_constraint"] == "maximum_leverage"
     assert second["proposal"]["execution_environment"] == "testnet"
     assert second["proposal"]["execution_authorized"] is False
-    assert second["provider_mode_overridden"] == "strategy_forming"
     assert "conversation_outbound" not in second
     assert router.telegram.pending_outbound()[-1]["message_type"] == "strategy_proposal"
     assert not (tmp_path / "outputs" / "dualtrack").exists()
