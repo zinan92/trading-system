@@ -37,6 +37,11 @@ that may submit the first Testnet entry. It requires both
 `--execute-testnet` and the exact acknowledgement below; it creates one
 candidate/Execution Slice and stops at the lifecycle's next attended action:
 
+The confirmation document must be the latest durable Park decision (or its
+projection) with `event=confirmed`, `execution_authorized=true`,
+`execution_environment=testnet`, the exact `plan_digest` and
+`activation_id`, a non-empty `confirmation_id`, and `confirmed_at`.
+
 ```sh
 PYTHONPATH=/path/to/standard-broker/src python3 -m pipelines.testnet_automation_proof \
   --action start \

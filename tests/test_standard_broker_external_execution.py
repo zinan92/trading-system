@@ -187,7 +187,7 @@ def test_external_execution_adapter_maps_canonical_ticket_and_reads_public_facts
     assert adapter.request("order_execution", "open_orders", "BTC-USD-PERP") == ()
     account = adapter.request("account", "read", ACCOUNT)
     assert account.account_address == ACCOUNT
-    assert adapter.canonical_order_adapter.apply_fill({"oid": "order-1"}).order_id == "order-1"
+    assert adapter.canonical_order_adapter.apply_fill({"order_id": "order-1"}).order_id == "order-1"
 
 
 def test_external_execution_adapter_closes_owned_runtime() -> None:

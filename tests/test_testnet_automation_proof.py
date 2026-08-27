@@ -89,3 +89,22 @@ def test_start_requires_exact_testnet_ack_before_building_broker(
 
     result = json.loads(capsys.readouterr().out)
     assert result["reason_code"] == "exact_acknowledgement_required"
+
+
+def test_preflight_rejects_unreviewed_protection_revision_before_building_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli.StandardBrokerExternalExecutionAdapter,
+        "preflight_build_context",
+        lambda _context: pytest.fail("unreviewed capability must be rejected first"),
+    )
+
+    argv = _args(tmp_path) + ["--capability-revision", "unreviewed"]
+
+    assert cli.main(argv) == 2
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["reason_code"] == "protected_capability_revision_required"

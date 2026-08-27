@@ -242,10 +242,12 @@ def _confirmation(path: Path, *, plan: Mapping[str, Any]) -> dict[str, Any]:
     else:
         value = {}
     if (
-        value.get("execution_authorized") is not True
+        value.get("event") != "confirmed"
+        or value.get("execution_authorized") is not True
         or str(value.get("execution_environment") or "").lower() != "testnet"
         or str(value.get("plan_digest") or "") != str(plan.get("plan_digest") or "")
         or not str(value.get("confirmation_id") or "").strip()
+        or value.get("confirmed_at") in (None, "")
     ):
         raise TestnetAutomationProofError("confirmation_identity_invalid")
     return value
@@ -406,6 +408,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise TestnetAutomationProofError("activation_identity_required")
     if args.standard_broker_release_sha != STANDARD_BROKER_RELEASE_SHA:
         raise TestnetAutomationProofError("standard_broker_dependency_sha_mismatch")
+    if args.capability_revision != PROTECTED_CAPABILITY_REVISION:
+        raise TestnetAutomationProofError("protected_capability_revision_required")
     if args.action == "preflight":
         if not args.approval_id or not args.approved_by or args.secret_file is None:
             raise TestnetAutomationProofError("preflight_identity_required")

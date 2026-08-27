@@ -12,6 +12,36 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-27, protected Hyperliquid Testnet proof bridge)
+
+- Issue #1053 is implemented on branch
+  `codex/issue-1053-external-execution`: the app pins the reviewed
+  standard-broker `2d3a5cc26538b24fb31ab81201facd5ee46476ba` and registers the
+  opt-in `hyperliquid-testnet-position-protection` profile with capability
+  revision `hyperliquid-testnet-position-protection-runtime-v1`. The existing
+  `hyperliquid-testnet-default` profile remains preflight-only and fail-closed.
+- The provider-neutral `StandardBrokerExternalExecutionAdapter` consumes only
+  standard-broker's public order, typed-facts, account, fee, reconciliation,
+  and `ProtectionOrder` seams. The Coordinator accepts the protected profile
+  as a valid Testnet identity and drives the unchanged canonical DCA/Grid
+  lifecycles through one selected Portfolio Execution Slice.
+- `pipelines.testnet_automation_proof --action preflight` completes without
+  resolving the signer or invoking an order/facts backend and reports exact
+  account/runtime/release/profile/capability identity. The attended `start`
+  command is separately gated by a fresh Park confirmation, explicit
+  `--execute-testnet`, and the exact acknowledgement; it does not enable
+  Mainnet/Live, scheduler, automatic next Plan, or multi-asset expansion.
+- Focused external bridge/Coordinator/lifecycle validation passes 200 tests;
+  the profile-admission regression adds 67 passing cases across the protected
+  composition. Compileall, diff-check, targeted ruff, and gitleaks pass. A
+  full local run reached 3537 passed and 1 skipped; the only failure is the
+  pre-existing Dashboard GridMind Playwright drag baseline. No credential was
+  read, no Testnet order was submitted, and no cloud, scheduler, Mainnet, or
+  Live mutation occurred.
+
+_下一步_: after merge, run the credential-free preflight from the runbook; a
+real Testnet DCA/Grid start still requires Park's fresh attended activation.
+
 ## 现在在哪里(2026-08-25, multi-asset Portfolio seam)
 - PORT-01/#997 merged as PR #1004 at `main@70b12581b7a34a2ce4a1852a8052a519c47c69ac`:
   immutable Portfolio Session, Strategy Position Plan/Candidate Set, Policy,

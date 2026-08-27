@@ -492,7 +492,6 @@ class StandardBrokerExternalExecutionAdapter:
                 payload.get("order_id")
                 or payload.get("broker_order_id")
                 or payload.get("client_order_id")
-                or payload.get("oid")
                 or ""
             ).strip()
         return str(payload or "").strip()
