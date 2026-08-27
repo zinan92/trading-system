@@ -536,6 +536,107 @@ def test_explicit_finalize_uses_preview_candidate_and_keeps_confirmation_gate(tm
     assert not (tmp_path / "outputs" / "dualtrack").exists()
 
 
+def test_testnet_conversation_uses_public_testnet_market_without_paper_fallback(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+    calls: list[str] = []
+
+    def paper_market() -> dict:
+        calls.append("paper")
+        raise AssertionError("Testnet conversation must not read Paper market")
+
+    def testnet_market() -> dict:
+        calls.append("testnet")
+        return {
+            "price": 79665.5,
+            "mid": 79665.5,
+            "bid": 79660.0,
+            "ask": 79670.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "hyperliquid.external_testnet",
+            "provider": "hyperliquid",
+            "environment": "testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "observed_at": "2026-08-19T00:00:00+00:00",
+        }
+
+    router = ParkTelegramRouter(
+        tmp_path / "outputs",
+        park_user_id="park-user",
+        chat_id="park-chat",
+        intent_parser=UnavailableConversationProvider(),
+        market_reader=paper_market,
+        testnet_market_reader=testnet_market,
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+            "snapshot": {"orders": [], "positions": []},
+        },
+        now=lambda: "2026-08-19T00:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-19_DAY",
+    )
+
+    result = router.handle_update(
+        _update(50, "Testnet BTC 做空 DCA，80000 到 81000 两个价位，每次5x AUM，止损82000，止盈73000；你理解吗")
+    )
+
+    assert result["status"] == "conversation_replied"
+    assert calls == ["testnet"]
+    assert result["conversation"]["risk_preview"]["status"] == "derived"
+
+
+def test_testnet_finalize_requires_testnet_account_instead_of_mixing_paper_facts(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            raise AssertionError("complete Testnet finalize should use the deterministic path")
+
+        def parse(self, text: str, **kwargs) -> dict:
+            raise AssertionError("complete Testnet finalize should use the deterministic path")
+
+    router = ParkTelegramRouter(
+        tmp_path / "outputs",
+        park_user_id="park-user",
+        chat_id="park-chat",
+        intent_parser=UnavailableConversationProvider(),
+        market_reader=lambda: (_ for _ in ()).throw(AssertionError("Paper market fallback is forbidden")),
+        testnet_market_reader=lambda: {
+            "price": 79665.5,
+            "mid": 79665.5,
+            "bid": 79660.0,
+            "ask": 79670.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "hyperliquid.external_testnet",
+            "provider": "hyperliquid",
+            "environment": "testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "observed_at": "2026-08-19T00:00:00+00:00",
+        },
+        account_reader=lambda *_args: (_ for _ in ()).throw(AssertionError("Paper account fallback is forbidden")),
+        now=lambda: "2026-08-19T00:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-19_DAY",
+    )
+
+    result = router.handle_update(
+        _update(51, "finalize 执行这个 Testnet BTC 做空 DCA：80000 到 81000 两个价位，每次5x AUM，止损82000，止盈73000")
+    )
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "testnet_account_unavailable"
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+    assert not (tmp_path / "outputs" / "dualtrack").exists()
+
+
 def test_provider_timeout_returns_deterministic_grid_loss_preview(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
