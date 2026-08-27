@@ -22,17 +22,19 @@
   `hyperliquid-testnet-default` profile remains preflight-only and fail-closed.
 - The provider-neutral `StandardBrokerExternalExecutionAdapter` consumes only
   standard-broker's public order, typed-facts, account, fee, reconciliation,
-  and `ProtectionOrder` seams. The Coordinator accepts the protected profile
-  as a valid Testnet identity and drives the unchanged canonical DCA/Grid
-  lifecycles through one selected Portfolio Execution Slice.
+  and `ProtectionOrder` seams, including bounded idempotency lookup and
+  persisted order/client-identity recovery. The Coordinator accepts the
+  protected profile as a valid Testnet identity and drives the unchanged
+  canonical DCA/Grid lifecycles through one selected Portfolio Execution
+  Slice.
 - `pipelines.testnet_automation_proof --action preflight` completes without
   resolving the signer or invoking an order/facts backend and reports exact
   account/runtime/release/profile/capability identity. The attended `start`
   command is separately gated by a fresh Park confirmation, explicit
   `--execute-testnet`, and the exact acknowledgement; it does not enable
   Mainnet/Live, scheduler, automatic next Plan, or multi-asset expansion.
-- Focused external bridge/Coordinator/lifecycle validation passes 206 tests;
-  the protected composition/coordinator subset passes 37 tests. Compileall,
+- Focused external bridge/Coordinator/lifecycle validation passes 208 tests;
+  the protected composition/coordinator subset passes 39 tests. Compileall,
   diff-check, targeted ruff, and gitleaks pass. A full local run reached 3543
   passed and 1 skipped; the only failure is the
   pre-existing Dashboard GridMind Playwright drag baseline. No credential was

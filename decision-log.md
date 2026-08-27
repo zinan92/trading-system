@@ -29,9 +29,11 @@ Date: 2026-08-27
 ### Verification
 
 - Issue #1053 implementation commits are `86de945`, `d04ae56`, `f9e07c8`,
-  `65234e5`, `0a4009b`, and `3c6c703`.
-- Focused bridge/Coordinator/lifecycle tests pass (`206`); the protected
-  composition/coordinator subset passes `37`. Ruff, compileall, diff-check,
+  `65234e5`, `0a4009b`, `3c6c703`, `020eeeb`, and `ab465e5`.
+- The final lifecycle-lint cleanup is `f10af93`; it changes no runtime
+  behavior.
+- Focused bridge/Coordinator/lifecycle tests pass (`208`); the protected
+  composition/coordinator subset passes `39`. Ruff, compileall, diff-check,
   and gitleaks pass.
 - Credential-free preflight returned `PREFLIGHT_READY` with exact protected
   profile/matrix/revision identity, `capability_gaps=[]`,
