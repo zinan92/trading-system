@@ -1,5 +1,40 @@
 # Decision Log
 
+## Reuse Jessie's durable semantic draft on provider-outage finalize (#1061)
+
+Date: 2026-08-27
+
+### Decision
+
+- Treat the append-only Conversation Ledger as the non-authorizing source of
+  prior semantic strategy fields when the provider is unavailable. A later
+  explicit finalize turn merges `latest_strategy_patch()` with fields
+  explicitly restated in that turn; current explicit fields win.
+- Pass the merged candidate through the existing deterministic normalizer,
+  authoritative market/account checks, immutable proposal builder, and exact
+  confirmation gate. The ledger itself never authorizes execution.
+- Preserve fail-closed market behavior. A valid BTC draft paired with an
+  authoritative non-BTC price must report `current_price_outside_range`; it
+  must not guess a market, fall back to Paper facts as BTC, or discard the
+  draft and ask for already supplied fields.
+
+### Verification
+
+- Issue #1061 implementation commit: `198b844`.
+- Matching-market and mismatched-market two-turn regressions pass; the focused
+  conversation/parser/runtime suite passes `79`. Ruff, compileall, diff-check,
+  and gitleaks pass.
+- No credential, Testnet/Mainnet order, scheduler, cloud, or Live mutation
+  occurred; proposal creation remains non-authorizing.
+
+### Gotcha
+
+- The prior fixes correctly extracted direction, exits, and the Chinese entry
+  ladder. The remaining failure was later in the lifecycle: the deterministic
+  finalize branch ignored that complete durable patch and parsed only the word
+  `finalize`. This change fixes state transfer rather than broadening strategy
+  inference.
+
 ## Preserve semantic-first Jessie input in the deterministic fallback (#1055)
 
 Date: 2026-08-27

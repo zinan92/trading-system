@@ -12,6 +12,28 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-27, Jessie durable-draft finalize)
+
+- Issue #1061 fixes the provider-outage multi-turn finalize path. An explicit
+  `finalize/执行` turn now starts from Jessie's durable semantic strategy patch
+  and then applies only fields explicitly restated in the current turn. It no
+  longer reparses the finalize phrase in isolation and falsely reports missing
+  direction, range, DCA exits, or entry count.
+- Exact two-turn regressions cover the screenshot-style BTC short-DCA draft
+  followed by `finalize 执行这个 Testnet BTC 做空 DCA 策略`. With matching
+  trusted market facts it creates a non-authorizing Testnet proposal with all
+  three entries; with mismatched authoritative market facts it preserves the
+  draft and returns `current_price_outside_range` instead of a missing-field
+  error.
+- Focused conversation/parser/runtime validation passes 79 tests; ruff,
+  compileall, diff-check, and gitleaks pass. Confirmation remains mandatory,
+  and no credential, order, scheduler, cloud, Mainnet, or Live state was
+  touched.
+
+_下一步_: merge #1061, sync and restart the Paper-only Jessie launchd checkout,
+then replay the exact two-turn flow. Hyperliquid Testnet market/account and
+start-handler wiring remain a separate attended execution boundary.
+
 ## 现在在哪里(2026-08-27, protected Hyperliquid Testnet proof bridge)
 
 - Issue #1053 is implemented on branch
