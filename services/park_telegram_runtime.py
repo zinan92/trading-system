@@ -1145,7 +1145,21 @@ class ParkTelegramRouter:
             return fallback
         conversation = dict(conversation_result.get("conversation") or {})
         mode = str(conversation.get("mode") or "discuss")
-        if mode != "ready_for_confirmation":
+        candidate = dict(conversation.get("strategy_patch") or {})
+        deterministic_finalize = False
+        if mode != "ready_for_confirmation" and has_explicit_execution_intent(text) and candidate:
+            try:
+                normalized_candidate = normalize_park_input(candidate)
+            except ParkStrategyPlanError:
+                normalized_candidate = None
+            deterministic_finalize = normalized_candidate is not None and not (
+                normalized_candidate.get("strategy_type") == "dca"
+                and (
+                    normalized_candidate.get("stop_price") in (None, "")
+                    or normalized_candidate.get("take_profit_price") in (None, "")
+                )
+            )
+        if mode != "ready_for_confirmation" and not deterministic_finalize:
             outbound = self.telegram.queue_outbound(
                 idempotency_key=f"park-conversation:{update_id}",
                 message_type="conversation_reply",
@@ -1160,7 +1174,6 @@ class ParkTelegramRouter:
                 "outbound": outbound,
                 "execution_authorized": False,
             }
-        candidate = dict(conversation.get("strategy_patch") or {})
         result = self._handle_strategy(
             text,
             active=active,
@@ -1169,14 +1182,17 @@ class ParkTelegramRouter:
             provider=metadata,
         )
         if result.get("status") == "proposal_created":
-            outbound = self.telegram.queue_outbound(
-                idempotency_key=f"park-conversation:{update_id}:summary",
-                message_type="conversation_summary",
-                text=str(conversation.get("assistant_reply") or ""),
-                binding=result.get("session"),
-            )
             result["conversation"] = conversation
-            result["conversation_outbound"] = outbound
+            if mode == "ready_for_confirmation":
+                outbound = self.telegram.queue_outbound(
+                    idempotency_key=f"park-conversation:{update_id}:summary",
+                    message_type="conversation_summary",
+                    text=str(conversation.get("assistant_reply") or ""),
+                    binding=result.get("session"),
+                )
+                result["conversation_outbound"] = outbound
+            else:
+                result["provider_mode_overridden"] = mode
         return result
 
     def _handle_strategy(
