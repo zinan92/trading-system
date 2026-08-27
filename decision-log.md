@@ -28,19 +28,19 @@ Date: 2026-08-27
 
 ### Verification
 
-- Issue #1053 implementation commits are `86de945` and `d04ae56`; the
-  protected-profile admission correction is `f9e07c8`.
-- Focused bridge/Coordinator/lifecycle tests pass (`200` before the profile
-  admission regression and `67` in the protected composition/coordinator
-  subset). Ruff, compileall, diff-check, and gitleaks pass.
+- Issue #1053 implementation commits are `86de945`, `d04ae56`, `f9e07c8`,
+  `65234e5`, `0a4009b`, and `3c6c703`.
+- Focused bridge/Coordinator/lifecycle tests pass (`206`); the protected
+  composition/coordinator subset passes `37`. Ruff, compileall, diff-check,
+  and gitleaks pass.
 - Credential-free preflight returned `PREFLIGHT_READY` with exact protected
   profile/matrix/revision identity, `capability_gaps=[]`,
   `invocation_performed=false`, `secret_resolved=false`, and
   `real_money_eligible=false` using a nonexistent signer path. No credential
   value, network order, scheduler, cloud, Mainnet, or Live action was used.
-- Full local pytest reached `3537 passed, 1 skipped`; the one failure is the
+- Full local pytest reached `3543 passed, 1 skipped`; the one failure is the
   unchanged Dashboard GridMind Playwright drag baseline
-  (`test_dashboard_gridmind_range_drag_browser.py`).
+  (`tests/test_dashboard_gridmind_range_drag_browser.py`).
 
 ### Gotchas
 

@@ -417,6 +417,53 @@ class StandardBrokerExternalExecutionAdapter:
             raise StandardBrokerExternalExecutionError("cancel_order_identity_required")
         return self._binding.cancel(reference)
 
+    def query_by_idempotency_key(self, idempotency_key: str) -> object:
+        query = getattr(self._binding, "query_by_idempotency_key", None)
+        if not callable(query):
+            raise StandardBrokerExternalExecutionError(
+                "external_idempotency_query_unavailable"
+            )
+        key = str(idempotency_key or "").strip()
+        if not key:
+            raise StandardBrokerExternalExecutionError("external_idempotency_key_required")
+        return query(key)
+
+    def recover(
+        self,
+        request: BrokerOrderRequest,
+        *,
+        broker_order_id: str,
+        state: str,
+    ) -> None:
+        recover = getattr(self._binding, "recover", None)
+        if not callable(recover):
+            raise StandardBrokerExternalExecutionError(
+                "external_order_recovery_unavailable"
+            )
+        recover(
+            self._intent(request),
+            broker_order_id=str(broker_order_id or "").strip(),
+            state=str(state or "").strip(),
+        )
+
+    def recover_client_order(
+        self,
+        request: BrokerOrderRequest,
+        *,
+        client_order_id: str,
+        state: str,
+    ) -> object:
+        recover = getattr(self._binding, "recover_client_order", None)
+        if not callable(recover):
+            raise StandardBrokerExternalExecutionError(
+                "external_client_order_recovery_unavailable"
+            )
+        return recover(
+            self._intent(request),
+            client_order_id=str(client_order_id or "").strip(),
+            state=str(state or "").strip(),
+        )
+
     def request(self, port: str, operation: str, payload: object | None = None) -> object:
         normalized_port = str(port or "").strip()
         normalized_operation = str(operation or "").strip()
@@ -444,7 +491,12 @@ class StandardBrokerExternalExecutionAdapter:
                 if isinstance(payload, Mapping):
                     return self._read_bundle(
                         self._instrument_scope(payload),
-                        order_id=str(payload.get("order_id") or ""),
+                        order_id=str(
+                            payload.get("order_id")
+                            or payload.get("broker_order_id")
+                            or ""
+                        ),
+                        client_order_id=str(payload.get("client_order_id") or "") or None,
                     ).fills
                 return self._read_bundle(self._instrument_scope(payload)).fills
             if normalized_operation == "reconcile":
@@ -461,6 +513,16 @@ class StandardBrokerExternalExecutionAdapter:
             if normalized_operation == "positions":
                 return bundle.positions
         if normalized_port == "fee" and normalized_operation in {"read", "fill", "schedule"}:
+            if isinstance(payload, Mapping):
+                return self._read_bundle(
+                    self._instrument_scope(payload),
+                    order_id=str(
+                        payload.get("order_id")
+                        or payload.get("broker_order_id")
+                        or ""
+                    ),
+                    client_order_id=str(payload.get("client_order_id") or "") or None,
+                ).fees
             return self._read_bundle(self._instrument_scope(payload)).fees
         raise StandardBrokerExternalExecutionError(
             f"external_operation_unsupported:{normalized_port}.{normalized_operation}"
@@ -496,11 +558,18 @@ class StandardBrokerExternalExecutionAdapter:
         if callable(close):
             close()
 
-    def _read_bundle(self, scope: str, *, order_id: str = "") -> object:
+    def _read_bundle(
+        self,
+        scope: str,
+        *,
+        order_id: str = "",
+        client_order_id: str | None = None,
+    ) -> object:
         return self.read_facts(
             order_id=order_id,
             instrument_id=scope or self._instrument_id(),
             now=self._clock(),
+            client_order_id=client_order_id,
         )
 
     def _instrument_scope(self, payload: object) -> str:

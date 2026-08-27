@@ -187,6 +187,14 @@ class TestnetActivation:
         release_sha = _required_text(value.get("release_sha"), "release_sha").lower()
         if _RELEASE_RE.fullmatch(release_sha) is None:
             raise TestnetCoordinatorError("release_sha_invalid")
+        capability_revision = _required_text(
+            value.get("capability_revision"), "capability_revision"
+        )
+        if (
+            transport_profile == TESTNET_PROTECTED_TRANSPORT_PROFILE
+            and capability_revision != "hyperliquid-testnet-position-protection-runtime-v1"
+        ):
+            raise TestnetCoordinatorError("protected_capability_revision_required")
         return cls(
             strategy_family=strategy_family,
             strategy_session_id=_required_text(
@@ -203,9 +211,7 @@ class TestnetActivation:
             instrument_id=_required_text(value.get("instrument_id"), "instrument_id"),
             runtime_id=_required_text(value.get("runtime_id"), "runtime_id"),
             release_sha=release_sha,
-            capability_revision=_required_text(
-                value.get("capability_revision"), "capability_revision"
-            ),
+            capability_revision=capability_revision,
         )
 
     def to_mapping(self) -> dict[str, str]:
@@ -356,6 +362,20 @@ class TestnetAutomationCoordinator:
             "execution_ready": True,
             "execution_blocker": None,
             "broker_preflight": broker_preflight,
+            "instrument_id": current.get("selected_instrument_id")
+            or current.get("instrument_id"),
+            "market_identity": (
+                {
+                    "source": market.get("source"),
+                    "cursor": market.get("cursor"),
+                    "instrument_id": market.get("instrument_id"),
+                    "mapping_revision": market.get("mapping_revision"),
+                    "universe_revision": market.get("universe_revision"),
+                    "connection_epoch": market.get("connection_epoch"),
+                }
+                if market is not None
+                else None
+            ),
             "next_action": "await_candidate_selection",
         }
 

@@ -73,7 +73,10 @@ def test_activation_accepts_reviewed_protected_testnet_profile(tmp_path: Path) -
     coordinator = _coordinator(tmp_path)
 
     result = coordinator.activate(
-        _activation(transport_profile="hyperliquid-testnet-position-protection"),
+        _activation(
+            transport_profile="hyperliquid-testnet-position-protection",
+            capability_revision="hyperliquid-testnet-position-protection-runtime-v1",
+        ),
         command_id="activate-protected-1",
     )
 
@@ -81,10 +84,26 @@ def test_activation_accepts_reviewed_protected_testnet_profile(tmp_path: Path) -
     assert result["transport_profile"] == "hyperliquid-testnet-position-protection"
 
 
+def test_activation_rejects_protected_profile_with_unreviewed_capability_revision(
+    tmp_path: Path,
+) -> None:
+    coordinator = _coordinator(tmp_path)
+
+    with pytest.raises(TestnetCoordinatorError, match="protected_capability_revision_required"):
+        coordinator.activate(
+            _activation(
+                transport_profile="hyperliquid-testnet-position-protection",
+                capability_revision="unreviewed",
+            ),
+            command_id="activate-protected-invalid-revision",
+        )
+
+
 def test_protected_confirmation_requires_durable_park_decision(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
     activation = _activation(
         transport_profile="hyperliquid-testnet-position-protection",
+        capability_revision="hyperliquid-testnet-position-protection-runtime-v1",
     )
     coordinator.activate(activation, command_id="activate-protected-confirmation")
 

@@ -31,10 +31,10 @@
   command is separately gated by a fresh Park confirmation, explicit
   `--execute-testnet`, and the exact acknowledgement; it does not enable
   Mainnet/Live, scheduler, automatic next Plan, or multi-asset expansion.
-- Focused external bridge/Coordinator/lifecycle validation passes 200 tests;
-  the profile-admission regression adds 67 passing cases across the protected
-  composition. Compileall, diff-check, targeted ruff, and gitleaks pass. A
-  full local run reached 3537 passed and 1 skipped; the only failure is the
+- Focused external bridge/Coordinator/lifecycle validation passes 206 tests;
+  the protected composition/coordinator subset passes 37 tests. Compileall,
+  diff-check, targeted ruff, and gitleaks pass. A full local run reached 3543
+  passed and 1 skipped; the only failure is the
   pre-existing Dashboard GridMind Playwright drag baseline. No credential was
   read, no Testnet order was submitted, and no cloud, scheduler, Mainnet, or
   Live mutation occurred.

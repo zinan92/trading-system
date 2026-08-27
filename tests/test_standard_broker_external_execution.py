@@ -162,6 +162,17 @@ class _Binding:
         self.calls.append(("query", order_id))
         return self.receipt
 
+    def query_by_idempotency_key(self, idempotency_key):
+        self.calls.append(("query_by_idempotency_key", idempotency_key))
+        return self.receipt
+
+    def recover(self, intent, *, broker_order_id, state):
+        self.calls.append(("recover", (intent, broker_order_id, state)))
+
+    def recover_client_order(self, intent, *, client_order_id, state):
+        self.calls.append(("recover_client_order", (intent, client_order_id, state)))
+        return self.receipt
+
     def cancel(self, order_id):
         self.calls.append(("cancel", order_id))
         return self.receipt
@@ -251,6 +262,18 @@ def test_external_execution_adapter_maps_canonical_ticket_and_reads_public_facts
     assert adapter.request("order_execution", "open_orders", "BTC-USD-PERP") == ()
     account = adapter.request("account", "read", ACCOUNT)
     assert account.account_address == ACCOUNT
+    adapter.request(
+        "fee",
+        "fill",
+        {
+            "instrument_id": "BTC-USD-PERP",
+            "order_id": "order-1",
+            "client_order_id": "client-1",
+        },
+    )
+    assert binding.calls[-1][0] == "facts"
+    assert binding.calls[-1][1][0:2] == ("order-1", "BTC-USD-PERP")
+    assert binding.calls[-1][1][3] == "client-1"
     assert adapter.canonical_order_adapter.apply_fill({"order_id": "order-1"}).order_id == "order-1"
 
 
@@ -268,6 +291,40 @@ def test_external_execution_adapter_maps_lifecycle_query_to_public_reconcile() -
     adapter.request("protection_order", "query", object())
 
     assert binding.protection.calls[-1][0] == "query"
+
+
+def test_external_execution_adapter_exposes_public_unknown_and_restart_recovery() -> None:
+    adapter, binding, _closed = _adapter()
+    request = BrokerOrderRequest(
+        run_date="cycle-1",
+        ticket={
+            "ticket_id": "entry-recovery",
+            "instrument_id": "BTC-USD-PERP",
+            "side": "buy",
+            "quantity": "0.001",
+            "order_type": "limit",
+            "limit_price": "60000",
+            "time_in_force": "gtc",
+            "idempotency_key": "entry-recovery-key",
+        },
+        latest_price=60000,
+        actual_size=0.001,
+    )
+
+    adapter.query_by_idempotency_key("entry-recovery-key")
+    adapter.recover(request, broker_order_id="broker-1", state="resting")
+    adapter.recover_client_order(
+        request,
+        client_order_id="client-recovered",
+        state="resting",
+    )
+
+    names = [name for name, _ in binding.calls]
+    assert names[-3:] == [
+        "query_by_idempotency_key",
+        "recover",
+        "recover_client_order",
+    ]
 
 
 def test_registry_resolves_opt_in_protected_testnet_profile() -> None:
