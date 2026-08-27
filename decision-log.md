@@ -1,5 +1,38 @@
 # Decision Log
 
+## Bind explicit Jessie Testnet context to the Hyperliquid public market seam (#1069)
+
+Date: 2026-08-27
+
+### Decision
+
+- Keep Binance Paper as the default market source. Only explicit `Testnet` or
+  `测试网` text selects the Hyperliquid public Testnet reader; source,
+  environment, provider, and `BTC-USD-PERP` identity are validated before the
+  facts reach conversation or finalize preflight.
+- Use only public `allMids` and `l2Book` reads with a bounded timeout. The
+  reader has no credentials or mutation operations and returns a cursor digest
+  plus trusted/fresh BBO/mid facts.
+- Treat Testnet account/equity as a separate required seam. If it is absent,
+  finalize returns `testnet_account_unavailable` before account admission and
+  never mixes Paper positions, NAV, or reconciliation into a Testnet plan.
+
+### Verification
+
+- Issue #1069 implementation commit: `31ca6ee`.
+- Live public read returned coherent BTC Testnet facts (`mid=79685.5`,
+  `bid=79694`, `ask=79715`, trusted/fresh). Fake-opener and Jessie routing
+  regressions pass; the focused suite passes `139`.
+- Ruff, compileall, diff-check, and gitleaks pass. No credential, Telegram
+  token, order, position, scheduler, cloud, Mainnet, or Live mutation occurred.
+
+### Gotcha
+
+- The old `default_market_reader` was not broken; it was correctly reading
+  Binance Paper. The blocker was an absent environment-aware binding, so
+  changing conversation wording or clearing drafts could never make a BTC
+  Testnet range authoritative.
+
 ## Make Jessie conversation-first with deterministic risk previews (#1067)
 
 Date: 2026-08-27
