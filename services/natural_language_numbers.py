@@ -22,7 +22,9 @@ _DIGITS = {
 _SMALL_UNITS = {"十": 10, "百": 100, "千": 1_000}
 _LARGE_UNITS = {"万": 10_000, "亿": 100_000_000}
 CHINESE_NUMBER_TOKEN = r"[零〇一二两三四五六七八九十百千万亿]+"
-_NUMBER_TOKEN = rf"(?:[0-9]+(?:\.[0-9]+)?|{CHINESE_NUMBER_TOKEN})"
+ARABIC_NUMBER_TOKEN = r"[0-9]+(?:\.[0-9]+)?(?:\s*[kK])?"
+EXPLICIT_NUMBER_TOKEN = rf"(?:{ARABIC_NUMBER_TOKEN}|{CHINESE_NUMBER_TOKEN})"
+_NUMBER_TOKEN = EXPLICIT_NUMBER_TOKEN
 _COUNT_RE = re.compile(
     rf"(?:一共|共|总共)\s*(?P<count>{_NUMBER_TOKEN})\s*(?:笔|单|档|次)",
     re.IGNORECASE,
@@ -35,6 +37,9 @@ def parse_chinese_number(value: str) -> float | None:
     token = str(value or "").strip().replace(",", "").replace("，", "")
     if not token:
         return None
+    compact_match = re.fullmatch(r"(?P<number>[0-9]+(?:\.[0-9]+)?)\s*[kK]", token)
+    if compact_match is not None:
+        return float(compact_match.group("number")) * 1_000
     if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", token):
         return float(token)
     if any(char not in _DIGITS and char not in _SMALL_UNITS and char not in _LARGE_UNITS for char in token):
@@ -91,6 +96,69 @@ def extract_explicit_entry_ladder(text: str) -> tuple[list[float], int] | None:
     return [float(item) for item in levels if item is not None], count
 
 
+def extract_explicit_two_level_entry_ladder(text: str) -> tuple[list[float], int] | None:
+    """Read two stated price levels only when Park calls them two levels."""
+
+    source = str(text or "")
+    match = re.search(
+        rf"(?P<first>{_NUMBER_TOKEN})\s*(?:~|～|-|到|至|、|,|，|和|及)\s*"
+        rf"(?P<second>{_NUMBER_TOKEN})\s*(?:这|就|共|总共)?\s*(?:两|二|2)\s*个?\s*"
+        r"(?:价位|价格|入场位|入场点|档|笔)",
+        source,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    first = parse_chinese_number(match.group("first"))
+    second = parse_chinese_number(match.group("second"))
+    if first is None or second is None or first <= 0 or second <= 0 or first == second:
+        return None
+    return [float(first), float(second)], 2
+
+
+def extract_explicit_exit_prices(text: str) -> dict[str, float]:
+    """Extract TP/SL labels, including compact number-before-label forms."""
+
+    source = str(text or "")
+    parenthetical = r"(?:\s*[\(（][^\)）]*[\)）])?"
+
+    def matches(label: str) -> tuple[re.Match[str] | None, re.Match[str] | None]:
+        # Keep number-before-label syntax bounded to compact ``82k`` notation.
+        prefix = re.search(
+            rf"(?P<number>[0-9]+(?:\.[0-9]+)?\s*[kK])\s*(?:{label})",
+            source,
+            re.IGNORECASE,
+        )
+        suffix = re.search(
+            rf"(?:{label}){parenthetical}\s*(?:位|价|price)?\s*[:：=]?\s*"
+            rf"(?P<number>{_NUMBER_TOKEN})",
+            source,
+            re.IGNORECASE,
+        )
+        return prefix, suffix
+
+    stop_prefix, stop_suffix = matches(r"止损|stop(?:[_\s]+(?:loss|price))?")
+    take_prefix, take_suffix = matches(r"止盈|take(?:[_\s]+profit)?(?:[_\s]+price)?|tp")
+    if stop_prefix is not None and take_prefix is not None:
+        stop_match, take_match = stop_prefix, take_prefix
+    elif stop_suffix is not None and take_suffix is not None:
+        stop_match, take_match = stop_suffix, take_suffix
+    else:
+        stop_match, take_match = stop_prefix or stop_suffix, take_prefix or take_suffix
+
+    def value(match: re.Match[str] | None) -> float | None:
+        return parse_chinese_number(match.group("number")) if match is not None else None
+
+    result: dict[str, float] = {}
+    stop = value(stop_match)
+    take_profit = value(take_match)
+    if stop is not None:
+        result["stop_price"] = float(stop)
+    if take_profit is not None:
+        result["take_profit_price"] = float(take_profit)
+    return result
+
+
 def _parse_section(token: str) -> int:
     total = 0
     pending = 0
@@ -106,8 +174,12 @@ def _parse_section(token: str) -> int:
 
 
 __all__ = [
+    "ARABIC_NUMBER_TOKEN",
     "CHINESE_NUMBER_TOKEN",
+    "EXPLICIT_NUMBER_TOKEN",
     "extract_explicit_entry_count",
     "extract_explicit_entry_ladder",
+    "extract_explicit_exit_prices",
+    "extract_explicit_two_level_entry_ladder",
     "parse_chinese_number",
 ]

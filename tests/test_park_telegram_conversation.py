@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from services.park_telegram_runtime import ParkTelegramRouter
+from services.park_telegram_runtime import ParkTelegramRouter, ParkTelegramRuntimeError
 
 
 def _update(update_id: int, text: str) -> dict:
@@ -325,6 +325,76 @@ def test_provider_outage_finalize_surfaces_market_mismatch_after_reusing_draft(t
         "dca_exit_levels_missing",
         "addition_count_or_size",
     }
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+    assert not (tmp_path / "outputs" / "dualtrack").exists()
+
+
+def test_provider_outage_replays_revised_dca_geometry_without_raw_market_exception(
+    tmp_path: Path,
+) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "timeout"}}
+
+    def unavailable_market() -> dict:
+        raise ParkTelegramRuntimeError("market_unavailable", "TypeError")
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+    router.market_reader = unavailable_market
+    messages = [
+        (
+            "你帮我做一个比特币做空的 DCA 策略，具体参数如下："
+            "最高10倍，价格区间78000~80000，止损81000，止盈73000；"
+            "七万八、七万九、八万，一共三笔。"
+        ),
+        "现在价格出现变动了 计划有变 80000 到 81000这两个价位做空 "
+        "每一次5x aum 然后止损82000 止盈73000",
+        "finalize 执行这个 Testnet BTC 做空 DCA 策略",
+        "80000 到 81000 就两个价位 做空 dca 82k止损 73k止盈",
+        "最大10x杠杆",
+    ]
+
+    results = [router.handle_update(_update(40 + index, text)) for index, text in enumerate(messages)]
+    final_patch = router.conversation_ledger.latest_strategy_patch()
+
+    assert {
+        "finalize_status": results[2]["status"],
+        "finalize_code": results[2]["code"],
+        "raw_exception_visible": "TypeError" in results[2]["outbound"]["text"],
+        "market_guidance_visible": "行情" in results[2]["outbound"]["text"],
+        "direction": final_patch.get("direction"),
+        "strategy_type": final_patch.get("strategy_type"),
+        "lower_price_boundary": final_patch.get("lower_price_boundary"),
+        "upper_price_boundary": final_patch.get("upper_price_boundary"),
+        "entry_prices": final_patch.get("entry_prices"),
+        "order_count": final_patch.get("order_count"),
+        "maximum_leverage": final_patch.get("maximum_leverage"),
+        "stop_price": final_patch.get("stop_price"),
+        "take_profit_price": final_patch.get("take_profit_price"),
+    } == {
+        "finalize_status": "blocked",
+        "finalize_code": "market_unavailable",
+        "raw_exception_visible": False,
+        "market_guidance_visible": True,
+        "direction": "short",
+        "strategy_type": "dca",
+        "lower_price_boundary": 80000.0,
+        "upper_price_boundary": 81000.0,
+        "entry_prices": [80000.0, 81000.0],
+        "order_count": 2,
+        "maximum_leverage": 10.0,
+        "stop_price": 82000.0,
+        "take_profit_price": 73000.0,
+    }
+    recent_replies = "\n".join(
+        str(row.get("text") or "")
+        for row in router.telegram.pending_outbound()
+        if row.get("idempotency_key") in {"park-conversation:43", "park-conversation:44"}
+    )
+    assert not any(term in recent_replies for term in ("缺方向", "缺价格区间", "缺风险上限", "缺止损", "缺止盈"))
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
     assert not (tmp_path / "outputs" / "dualtrack").exists()
 

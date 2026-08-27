@@ -68,6 +68,26 @@ def test_normalizes_chinese_number_dca_entry_ladder_and_count() -> None:
     assert normalized["order_count"] == 3
 
 
+def test_normalizes_two_level_dca_with_compact_number_before_exit_labels() -> None:
+    normalized = normalize_park_input(
+        "80000 到 81000 就两个价位做空 DCA，最大10x杠杆，82k止损，73k止盈"
+    )
+
+    assert normalized["direction"] == "short"
+    assert normalized["strategy_type"] == "dca"
+    assert normalized["entry_prices"] == [80000.0, 81000.0]
+    assert normalized["order_count"] == 2
+    assert normalized["maximum_leverage"] == 10.0
+    assert normalized["stop_price"] == 82000.0
+    assert normalized["take_profit_price"] == 73000.0
+
+    label_first = normalize_park_input(
+        "80000 到 81000 就两个价位做空 DCA，最大10x杠杆，止损82k，止盈73k"
+    )
+    assert label_first["stop_price"] == 82000.0
+    assert label_first["take_profit_price"] == 73000.0
+
+
 def test_explicit_dca_wins_over_market_regime_wording() -> None:
     normalized = normalize_park_input(
         "现在行情是震荡向上 做4200 4400的做多dca吧，然后最大10倍杠杆"
