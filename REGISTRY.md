@@ -58,8 +58,26 @@ real Testnet DCA/Grid start still requires Park's fresh attended activation.
   compileall, diff-check, and gitleaks pass. No credentials, Broker transport,
   Testnet/Mainnet order, scheduler, or cloud state was touched.
 
-_下一步_: merge #1055, then resend the original natural-language strategy in
-Jessie; it should produce a proposal instead of `dca_exit_levels_missing`.
+_下一步_: merge #1057, then resend the original natural-language strategy in
+Jessie; it should preserve all explicit fields through the conversation
+fallback instead of dropping exits before finalize.
+
+## 现在在哪里(2026-08-27, Jessie conversation fallback field preservation)
+
+- Issue #1057 closes the second half of the same incident: the active Jessie
+  Conversation Agent now preserves explicit stop-loss/take-profit fields when
+  its NLU provider is unavailable. The later finalize turn can therefore use
+  the accumulated semantic patch instead of losing the exit fields.
+- Provider-outage regression covers the exact BTC short-DCA message with
+  parenthetical labels; the patch records direction, DCA, range, leverage,
+  stop, and take-profit without creating a plan or order. Provider-success and
+  multi-turn merge behavior remain unchanged.
+- Focused conversation/parser/runtime validation passes 75 tests; ruff,
+  compileall, diff-check, and gitleaks pass. No credentials, Broker transport,
+  Testnet/Mainnet order, scheduler, Dashboard, or cloud state was touched.
+
+_下一步_: after merge, resend the original message in Jessie; if a complete
+strategy is intended, explicitly finalize it after the bot reflects all fields.
 
 ## 现在在哪里(2026-08-25, multi-asset Portfolio seam)
 - PORT-01/#997 merged as PR #1004 at `main@70b12581b7a34a2ce4a1852a8052a519c47c69ac`:

@@ -33,6 +33,35 @@ Date: 2026-08-27
   labels. Jessie’s response was a parser compatibility failure, not a missing
   strategy direction or missing risk prices.
 
+## Preserve explicit fields across Jessie conversation fallback turns (#1057)
+
+Date: 2026-08-27
+
+### Decision
+
+- Keep the Conversation Agent as the semantic-first layer. When its provider is
+  unavailable, `extract_explicit_strategy_patch` must retain every explicit
+  field needed for a later finalize turn, including DCA exits.
+- Reuse the same natural-language label variants as the strategy normalizer,
+  including Chinese/English parentheticals and full-width punctuation. The
+  fallback remains extraction-only: it does not infer fields, create a plan,
+  or authorize execution.
+
+### Verification
+
+- Issue #1057 implementation commit: `c65402e`.
+- Provider-outage, parser, and existing provider-success conversation tests
+  pass (`75`); ruff, compileall, diff-check, and gitleaks pass.
+- No credentials, Testnet/Mainnet order, scheduler, Dashboard, or cloud
+  mutation occurred.
+
+### Gotcha
+
+- The first #1055 fix corrected the direct strategy normalizer. The active
+  Conversation Agent used a separate patch extractor, so it could still drop
+  exits before finalize. This follow-up keeps both semantic entry points
+  aligned.
+
 ## Bind the reviewed standard-broker protection profile at the Coordinator seam (#1053)
 
 Date: 2026-08-27

@@ -120,10 +120,25 @@ def extract_explicit_strategy_patch(text: str) -> dict[str, Any]:
     loss_match = re.search(number + r"\s*(?:最大可接受亏损|最大亏损|max(?:imum)?\s*loss)", source, re.IGNORECASE)
     if loss_match:
         patch["maximum_acceptable_loss"] = float(loss_match.group(1))
-    stop_match = re.search(r"(?:止损|stop(?:_price)?)\s*(?:位|价|price)?\s*[:：=]?\s*" + number, source, re.IGNORECASE)
+    parenthetical = r"(?:\s*[\(（][^\)）]*[\)）])?"
+    stop_match = re.search(
+        r"(?:止损|stop(?:[_\s]+(?:loss|price))?)"
+        + parenthetical
+        + r"\s*(?:位|价|price)?\s*[:：=]?\s*"
+        + number,
+        source,
+        re.IGNORECASE,
+    )
     if stop_match:
         patch["stop_price"] = float(stop_match.group(1))
-    take_match = re.search(r"(?:止盈|take(?:_profit)?(?:_price)?|tp)\s*(?:位|价|price)?\s*[:：=]?\s*" + number, source, re.IGNORECASE)
+    take_match = re.search(
+        r"(?:止盈|take(?:[_\s]+profit)?(?:[_\s]+price)?|tp)"
+        + parenthetical
+        + r"\s*(?:位|价|price)?\s*[:：=]?\s*"
+        + number,
+        source,
+        re.IGNORECASE,
+    )
     if take_match:
         patch["take_profit_price"] = float(take_match.group(1))
     entry_prices = [
