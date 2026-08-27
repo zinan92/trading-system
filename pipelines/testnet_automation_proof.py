@@ -16,11 +16,13 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
+import time
 from typing import Any, Mapping, Sequence
 
 from schemas.portfolio import PortfolioPolicy, PortfolioSnapshot
 from services.broker_composition import BrokerBuildContext, build_broker_execution_port
 from services.journal_store import load_json
+from services.park_confirmation import ParkConfirmationLedger
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.standard_broker_external_execution import (
     PROTECTED_CAPABILITY_REVISION,
@@ -32,6 +34,10 @@ from services.standard_broker_external_execution import (
 
 ACKNOWLEDGEMENT = "I_UNDERSTAND_ONE_ATTENDED_TESTNET_STRATEGY_ACTION"
 DEFAULT_OUTPUT_ROOT = Path("outputs")
+MAX_CONFIRMATION_AGE_SECONDS = 900
+_APPROVED_MARKET_SOURCES = frozenset(
+    {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"}
+)
 _MARKET_REQUIRED = (
     "execution_ready",
     "fresh",
@@ -186,27 +192,289 @@ def _candidate(plan: Mapping[str, Any], market: Mapping[str, Any], family: str) 
     }
 
 
-def _snapshot(plan: Mapping[str, Any], *, account_address: str, equity: Decimal, market: Mapping[str, Any]) -> PortfolioSnapshot:
+def _epoch(value: Any, field: str) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        rendered = float(value)
+    else:
+        text = str(value or "").strip()
+        try:
+            rendered = float(text)
+        except (TypeError, ValueError):
+            try:
+                rendered = datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+            except ValueError as exc:
+                raise TestnetAutomationProofError(f"{field}_invalid") from exc
+    if not rendered == rendered or rendered in {float("inf"), float("-inf")}:
+        raise TestnetAutomationProofError(f"{field}_invalid")
+    return rendered
+
+
+def _aware_datetime(value: Any, field: str) -> datetime:
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise TestnetAutomationProofError(f"{field}_invalid") from exc
+    if parsed.tzinfo is None:
+        raise TestnetAutomationProofError(f"{field}_timezone_missing")
+    return parsed.astimezone(timezone.utc)
+
+
+def _verify_durable_confirmation(
+    output_root: Path,
+    *,
+    plan: Mapping[str, Any],
+    confirmation: Mapping[str, Any],
+) -> None:
+    """Require the supplied projection to match the current Park ledger."""
+
+    ledger = ParkConfirmationLedger(output_root, park_user_id="park")
+    rows = ledger.rows()
+    proposal_id = str(
+        confirmation.get("proposal_id")
+        or confirmation.get("confirmation_id")
+        or ""
+    ).strip()
+    proposal = next(
+        (
+            row
+            for row in rows
+            if row.get("event") == "proposal"
+            and str(row.get("proposal_id") or "") == proposal_id
+        ),
+        None,
+    )
+    decision = next(
+        (
+            row
+            for row in reversed(rows)
+            if row.get("event") == "confirmed"
+            and str(row.get("proposal_id") or "") == proposal_id
+        ),
+        None,
+    )
+    if proposal is None or decision is None:
+        raise TestnetAutomationProofError("durable_confirmation_missing")
+    try:
+        if _epoch(proposal.get("expires_at"), "confirmation_expiry") <= time.time():
+            raise TestnetAutomationProofError("confirmation_expired")
+        confirmed_at = _epoch(decision.get("confirmed_at"), "confirmed_at")
+    except TestnetAutomationProofError:
+        raise
+    age = time.time() - confirmed_at
+    if age < 0 or age > MAX_CONFIRMATION_AGE_SECONDS:
+        raise TestnetAutomationProofError("confirmation_not_fresh")
+    if (
+        proposal.get("execution_environment") != "testnet"
+        or decision.get("execution_environment") != "testnet"
+        or proposal.get("plan_digest") != plan.get("plan_digest")
+        or decision.get("plan_digest") != plan.get("plan_digest")
+        or decision.get("execution_authorized") is not True
+        or str(decision.get("receipt_digest") or "")
+        != str(confirmation.get("receipt_digest") or "")
+        or decision.get("park_user_id") != "park"
+        or str(confirmation.get("operator_id") or confirmation.get("park_user_id") or "") != "park"
+        or abs(confirmed_at - _epoch(confirmation.get("confirmed_at"), "confirmed_at")) > 0.001
+    ):
+        raise TestnetAutomationProofError("durable_confirmation_mismatch")
+
+
+def _fact_data(reconciliation: object, name: str) -> tuple[object, ...]:
+    observation = getattr(reconciliation, name, None)
+    fact = getattr(observation, "fact", None)
+    data = getattr(fact, "data", ())
+    if isinstance(data, tuple):
+        return data
+    if isinstance(data, (list, set)):
+        return tuple(data)
+    return ()
+
+
+def _position_row(position: object, *, account_address: str, portfolio_session_id: str) -> dict[str, Any]:
+    instrument_id = str(getattr(position, "instrument_id", "") or "").strip()
+    signed_quantity = _decimal(getattr(position, "signed_quantity", None), "account_position_quantity")
+    value = getattr(position, "position_value", None)
+    notional = _decimal(value, "account_position_value") if value is not None else Decimal("0")
+    return {
+        "portfolio_session_id": portfolio_session_id,
+        "account_id": account_address,
+        "asset": instrument_id.split("-", 1)[0],
+        "instrument_id": instrument_id,
+        "signed_quantity": str(signed_quantity),
+        "quantity": str(abs(signed_quantity)),
+        "notional": str(abs(notional)),
+    }
+
+
+def _open_order_row(order: object, *, account_address: str, portfolio_session_id: str) -> dict[str, Any]:
+    instrument_id = str(getattr(order, "instrument_id", "") or "").strip()
+    return {
+        "portfolio_session_id": portfolio_session_id,
+        "account_id": account_address,
+        "asset": instrument_id.split("-", 1)[0],
+        "instrument_id": instrument_id,
+        "order_id": str(getattr(order, "order_id", "") or "").strip(),
+        "state": str(getattr(getattr(order, "state", None), "value", getattr(order, "state", "")) or "").lower(),
+    }
+
+
+def _authoritative_account_snapshot(
+    broker: object,
+    *,
+    plan: Mapping[str, Any],
+    account_address: str,
+) -> tuple[object, object]:
+    instrument_id = str(plan.get("instrument_id") or "").strip()
+    try:
+        reconciliation = broker.request("order_execution", "reconcile", instrument_id)
+        if callable(getattr(reconciliation, "require_coherent", None)):
+            reconciliation.require_coherent()
+        elif getattr(reconciliation, "passed", False) is not True:
+            raise TestnetAutomationProofError("account_reconciliation_not_coherent")
+        account = broker.request("account", "read", account_address)
+    except TestnetAutomationProofError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - redact upstream details at the proof boundary.
+        raise TestnetAutomationProofError("account_facts_unavailable") from exc
+    observed = getattr(reconciliation, "observed_at", None)
+    if not isinstance(observed, datetime) or observed.tzinfo is None:
+        raise TestnetAutomationProofError("account_observation_invalid")
+    age = (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds()
+    if age < 0 or age > 120:
+        raise TestnetAutomationProofError("account_snapshot_stale")
+    actual_address = str(getattr(account, "account_address", "") or "").strip()
+    environment = str(
+        getattr(getattr(account, "environment", None), "value", getattr(account, "environment", ""))
+        or ""
+    ).lower()
+    broker_id = str(getattr(account, "broker_id", "") or "").strip().lower()
+    provenance = getattr(account, "provenance", None)
+    source = str(getattr(provenance, "source", "") or "").strip().lower()
+    transport_state = str(getattr(provenance, "transport_state", "") or "").strip().lower()
+    if (
+        actual_address != account_address
+        or broker_id != "hyperliquid"
+        or environment != "testnet"
+        or source not in _APPROVED_MARKET_SOURCES
+        or transport_state != "external_testnet"
+    ):
+        raise TestnetAutomationProofError("account_identity_mismatch")
+    equity = getattr(account, "equity", None)
+    if equity is None:
+        raise TestnetAutomationProofError("account_equity_unavailable")
+    positions = _fact_data(reconciliation, "positions")
+    open_orders = _fact_data(reconciliation, "open_orders")
+    if positions or open_orders:
+        raise TestnetAutomationProofError("account_not_clean_for_proof")
+    return account, reconciliation
+
+
+def _authoritative_market(
+    broker: object,
+    *,
+    market: Mapping[str, Any],
+    instrument_id: str,
+) -> dict[str, Any]:
+    try:
+        observed_at = datetime.now(timezone.utc)
+        raw = broker.market_fact(instrument_id=instrument_id, now=observed_at)
+    except Exception as exc:  # noqa: BLE001 - redact upstream details at the proof boundary.
+        raise TestnetAutomationProofError("market_fact_unavailable") from exc
+    if not isinstance(raw, Mapping):
+        raise TestnetAutomationProofError("market_fact_invalid")
+    source = str(raw.get("source") or "").strip().lower()
+    transport_state = str(raw.get("transport_state") or "").strip().lower()
+    if (
+        source not in _APPROVED_MARKET_SOURCES
+        or transport_state != "external_testnet"
+        or str(raw.get("instrument_id") or "") != instrument_id
+        or str(raw.get("freshness") or "").lower() != "fresh"
+    ):
+        raise TestnetAutomationProofError("market_fact_identity_invalid")
+    broker_price = _decimal(raw.get("price"), "broker_market_price", positive=True)
+    supplied_mid = _decimal(market.get("mid"), "market_mid", positive=True)
+    if broker_price != supplied_mid:
+        raise TestnetAutomationProofError("market_price_mismatch")
+    broker_observed = _aware_datetime(raw.get("observed_at"), "broker_market_observed_at")
+    supplied_observed = _aware_datetime(market.get("observed_at"), "market_observed_at")
+    if abs((broker_observed - supplied_observed).total_seconds()) > 5:
+        raise TestnetAutomationProofError("market_observation_mismatch")
+    return {
+        **dict(market),
+        "broker_market_fact": {
+            "instrument_id": instrument_id,
+            "price": str(broker_price),
+            "freshness": "fresh",
+            "observed_at": broker_observed.isoformat(),
+            "source": source,
+            "transport_state": transport_state,
+            "mapping_revision": str(raw.get("mapping_revision") or ""),
+        },
+    }
+
+
+def _snapshot(
+    plan: Mapping[str, Any],
+    *,
+    account_address: str,
+    account: object,
+    reconciliation: object,
+    market: Mapping[str, Any],
+) -> PortfolioSnapshot:
     session_id = str(plan.get("strategy_session_id") or "").strip()
     if not session_id:
         raise TestnetAutomationProofError("strategy_session_id_required")
+    equity = _decimal(getattr(account, "equity", None), "account_equity", positive=True)
+    exposure = _decimal(getattr(account, "exposure", None) or 0, "account_exposure")
+    margin_used = _decimal(getattr(account, "margin_used", None) or 0, "account_margin_used")
+    observed_at = getattr(reconciliation, "observed_at", None)
+    if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
+        raise TestnetAutomationProofError("account_observation_invalid")
+    observation_age = (
+        datetime.now(timezone.utc) - observed_at.astimezone(timezone.utc)
+    ).total_seconds()
+    coherent = getattr(reconciliation, "passed", False) is True
+    fresh = 0 <= observation_age <= 120
+    if not coherent or not fresh:
+        raise TestnetAutomationProofError("account_snapshot_not_ready")
+    provenance = getattr(account, "provenance", None)
+    source = str(getattr(provenance, "source", "") or "").strip().lower()
+    cursor = getattr(getattr(reconciliation, "cursor", None), "value", "")
     return PortfolioSnapshot(
-        snapshot_id=f"snapshot-{session_id}",
+        snapshot_id=f"snapshot-{str(getattr(reconciliation, 'evidence_digest', '') or session_id)[-32:]}",
         portfolio_session_id=f"portfolio-{session_id}",
         account_id=account_address,
-        observed_at=str(market["observed_at"]),
+        observed_at=observed_at.isoformat(),
         equity=equity,
-        available_cash=equity,
-        coherent=True,
-        fresh=True,
+        available_cash=_decimal(
+            getattr(account, "withdrawable", None)
+            or getattr(account, "balance", None)
+            or equity,
+            "account_available_cash",
+        ),
+        total_exposure=exposure,
+        margin_used=margin_used,
+        leverage=(exposure / equity if equity > 0 else Decimal("0")),
+        positions=tuple(
+            _position_row(item, account_address=account_address, portfolio_session_id=f"portfolio-{session_id}")
+            for item in _fact_data(reconciliation, "positions")
+        ),
+        open_orders=tuple(
+            _open_order_row(item, account_address=account_address, portfolio_session_id=f"portfolio-{session_id}")
+            for item in _fact_data(reconciliation, "open_orders")
+        ),
+        coherent=coherent,
+        fresh=fresh,
         provenance={
             "broker_id": "hyperliquid",
             "environment": "testnet",
             "account_fingerprint": _fingerprint(account_address),
-            "cursor": str(market["cursor"]),
+            "cursor": str(cursor or market["cursor"]),
             "mapping_revision": str(market["mapping_revision"]),
             "universe_revision": str(market["universe_revision"]),
             "connection_epoch": str(market["connection_epoch"]),
+            "source": source,
+            "evidence_digest": str(getattr(reconciliation, "evidence_digest", "") or ""),
         },
     )
 
@@ -231,7 +499,10 @@ def _confirmation(path: Path, *, plan: Mapping[str, Any]) -> dict[str, Any]:
             (
                 dict(row)
                 for row in reversed(document)
-                if isinstance(row, Mapping) and row.get("event") == "confirmed"
+                if isinstance(row, Mapping)
+                and row.get("event") == "confirmed"
+                and str(row.get("plan_digest") or "")
+                == str(plan.get("plan_digest") or "")
             ),
             {},
         )
@@ -248,6 +519,8 @@ def _confirmation(path: Path, *, plan: Mapping[str, Any]) -> dict[str, Any]:
         or str(value.get("plan_digest") or "") != str(plan.get("plan_digest") or "")
         or not str(value.get("confirmation_id") or "").strip()
         or value.get("confirmed_at") in (None, "")
+        or not str(value.get("proposal_id") or "").strip()
+        or not str(value.get("receipt_digest") or "").strip()
     ):
         raise TestnetAutomationProofError("confirmation_identity_invalid")
     return value
@@ -299,6 +572,11 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
         raise TestnetAutomationProofError("instrument_id_required")
     market = _market(Path(args.market), plan=plan)
     confirmation = _confirmation(Path(args.confirmation), plan=plan)
+    _verify_durable_confirmation(
+        Path(args.output_root),
+        plan=plan,
+        confirmation=confirmation,
+    )
     coordinator = TestnetAutomationCoordinator(Path(args.output_root))
     account_fingerprint = _fingerprint(args.account_address)
     activation = {
@@ -318,9 +596,47 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
     current = coordinator.status()
     if current.get("status") == "idle":
         current = coordinator.activate(activation, command_id=f"activate:{plan['plan_digest']}")
-    if current.get("status") == "activated":
-        equity = _decimal(args.equity, "equity", positive=True)
-        snapshot = _snapshot(plan, account_address=args.account_address, equity=equity, market=market)
+    if current.get("status") != "activated":
+        raise TestnetAutomationProofError(
+            "activation_state_blocked",
+            result={"status": current.get("status"), "blocker": current.get("blocker")},
+        )
+    if str(confirmation.get("activation_id") or "") != str(current.get("activation_id") or ""):
+        raise TestnetAutomationProofError("confirmation_activation_mismatch")
+    broker = build_broker_execution_port(_context(args, family=family))
+    try:
+        market = _authoritative_market(
+            broker,
+            market=market,
+            instrument_id=args.instrument_id,
+        )
+        preflight = coordinator.preflight(
+            broker=broker,
+            strategy_family=family,
+            market=market,
+        )
+        if preflight.get("ready") is not True:
+            raise TestnetAutomationProofError(
+                "broker_preflight_blocked",
+                result={
+                    "blocker": preflight.get("execution_blocker")
+                    or preflight.get("capability_gaps")
+                    or preflight.get("blocker"),
+                    "preflight_status": preflight.get("broker_preflight"),
+                },
+            )
+        account, reconciliation = _authoritative_account_snapshot(
+            broker,
+            plan=plan,
+            account_address=args.account_address,
+        )
+        snapshot = _snapshot(
+            plan,
+            account_address=args.account_address,
+            account=account,
+            reconciliation=reconciliation,
+            market=market,
+        )
         selected = coordinator.command(
             "select_candidate",
             {
@@ -331,20 +647,10 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
             command_id=f"select:{plan['plan_digest']}",
         )
         current = selected
-    if current.get("status") != "candidate_selected":
-        raise TestnetAutomationProofError(
-            "candidate_selection_blocked",
-            result={"status": current.get("status"), "blocker": current.get("blocker")},
-        )
-    if str(confirmation.get("activation_id") or "") != str(current.get("activation_id") or ""):
-        raise TestnetAutomationProofError("confirmation_activation_mismatch")
-    broker = build_broker_execution_port(_context(args, family=family))
-    try:
-        preflight = broker.preflight(strategy_family=family)
-        if preflight.get("ready") is not True:
+        if current.get("status") != "candidate_selected":
             raise TestnetAutomationProofError(
-                "broker_preflight_blocked",
-                result={"blocker": preflight.get("capability_gaps") or preflight.get("blocker")},
+                "candidate_selection_blocked",
+                result={"status": current.get("status"), "blocker": current.get("blocker")},
             )
         if family == "dca":
             result = coordinator.start_dca_session(
@@ -360,13 +666,22 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
                 market=market,
                 broker=broker,
             )
+        lifecycle_status = str(result.get("lifecycle", {}).get("status") or "")
+        if str(result.get("status") or "") in {"dca_blocked", "grid_blocked"} or lifecycle_status.startswith("blocked"):
+            raise TestnetAutomationProofError(
+                "lifecycle_blocked",
+                result={
+                    "blocker": result.get("blocker") or result.get("lifecycle", {}).get("blocker"),
+                    "lifecycle_status": lifecycle_status,
+                },
+            )
         return {
             "action": "start",
             "strategy_family": family,
             "status": result.get("status"),
             "next_action": result.get("next_action"),
             "execution_slice_id": result.get("selected_execution_slice_id"),
-            "lifecycle_status": result.get("lifecycle", {}).get("status"),
+            "lifecycle_status": lifecycle_status,
             "execution_mutation": result.get("execution_mutation"),
             "network_operation_invoked": result.get("network_operation_invoked"),
         }
@@ -395,7 +710,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--approved-by", default="")
     parser.add_argument("--secret-file", type=Path)
     parser.add_argument("--credential-reference", default="file-secret://hyperliquid-testnet")
-    parser.add_argument("--equity", default="1000")
     parser.add_argument("--execute-testnet", action="store_true")
     parser.add_argument("--acknowledge", default="")
     return parser

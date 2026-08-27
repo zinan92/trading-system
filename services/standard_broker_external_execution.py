@@ -64,6 +64,7 @@ _REQUIRED_PROTECTION = frozenset(
         "cancel_replace",
     }
 )
+_PROTECTION_OPERATIONS = frozenset({"submit", "cancel", "replace", "reconcile"})
 
 
 class StandardBrokerExternalExecutionError(RuntimeError):
@@ -168,8 +169,15 @@ class StandardBrokerExternalExecutionAdapter:
         config = getattr(context, "broker_config", None)
         if not isinstance(config, Mapping):
             raise StandardBrokerExternalExecutionError("external_context_invalid")
+        if (
+            str(getattr(context, "execution_mode", "") or "").lower() != "live"
+            or getattr(context, "live_trading_enabled", False) is True
+        ):
+            raise StandardBrokerExternalExecutionError("external_testnet_execution_mode_invalid")
         injected_binding = config.get("external_binding")
         if injected_binding is not None:
+            if config.get("external_binding_test_only") is not True:
+                raise StandardBrokerExternalExecutionError("injected_external_binding_forbidden")
             configured_sha = str(config.get("standard_broker_release_sha") or STANDARD_BROKER_RELEASE_SHA)
             if configured_sha != STANDARD_BROKER_RELEASE_SHA:
                 raise StandardBrokerExternalExecutionError("standard_broker_dependency_sha_mismatch")
@@ -413,6 +421,10 @@ class StandardBrokerExternalExecutionAdapter:
         normalized_port = str(port or "").strip()
         normalized_operation = str(operation or "").strip()
         if normalized_port == "protection_order":
+            if normalized_operation not in _PROTECTION_OPERATIONS:
+                raise StandardBrokerExternalExecutionError(
+                    f"protection_operation_unsupported:{normalized_operation}"
+                )
             method = getattr(self.protection_adapter, normalized_operation, None)
             if not callable(method):
                 raise StandardBrokerExternalExecutionError(

@@ -284,7 +284,13 @@ class TestnetAutomationCoordinator:
             return self._idle_state()
         return dict(current)
 
-    def preflight(self) -> dict[str, Any]:
+    def preflight(
+        self,
+        *,
+        broker: object | None = None,
+        strategy_family: str | None = None,
+        market: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         current = self.status()
         if current.get("status") == "idle":
             return {
@@ -297,7 +303,7 @@ class TestnetAutomationCoordinator:
                 "execution_blocker": "activation_required",
                 "next_action": "await_activation",
             }
-        return {
+        base = {
             **current,
             "event": "preflight",
             "ready": current.get("blocker") is None,
@@ -305,6 +311,50 @@ class TestnetAutomationCoordinator:
             "broker_operation_invoked": False,
             "network_operation_invoked": False,
             "next_action": "await_execution_capability",
+        }
+        if broker is None:
+            return base
+        family = str(strategy_family or current.get("strategy_family") or "").strip().lower()
+        if family not in {"dca", "grid"}:
+            return {
+                **base,
+                "ready": False,
+                "execution_ready": False,
+                "execution_blocker": "strategy_family_required",
+                "next_action": "notify_park_and_wait",
+            }
+        try:
+            broker_preflight = self._validate_lifecycle_preflight(
+                broker,
+                strategy_family=family,
+                current=current,
+            )
+            if market is not None:
+                self._validate_authoritative_market(
+                    market,
+                    current=current,
+                    observed_at=self._timestamp(None),
+                )
+        except Exception as exc:  # noqa: BLE001 - preflight is a reporting gate.
+            blocker = str(getattr(exc, "code", "") or "testnet_preflight_blocked")
+            return {
+                **base,
+                "ready": False,
+                "execution_ready": False,
+                "execution_blocker": blocker,
+                "broker_preflight": {
+                    "status": "BLOCKED",
+                    "reason": blocker,
+                },
+                "next_action": "notify_park_and_wait",
+            }
+        return {
+            **base,
+            "ready": True,
+            "execution_ready": True,
+            "execution_blocker": None,
+            "broker_preflight": broker_preflight,
+            "next_action": "await_candidate_selection",
         }
 
     def _activate(
@@ -1394,7 +1444,11 @@ class TestnetAutomationCoordinator:
             or str(market.get("broker_id") or "").lower() != "hyperliquid"
             or str(market.get("environment") or "").lower() != "testnet"
             or str(market.get("instrument_id") or "")
-            != str(current.get("selected_instrument_id") or "")
+            != str(
+                current.get("selected_instrument_id")
+                or current.get("instrument_id")
+                or ""
+            )
             or str(market.get("source") or "").lower() not in _APPROVED_MARKET_SOURCES
         ):
             raise StrategyControlMachineError(

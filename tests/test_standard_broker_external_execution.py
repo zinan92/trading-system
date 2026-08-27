@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -51,6 +52,25 @@ class _Protection:
         return SimpleNamespace(accepted=True, provenance=SimpleNamespace())
 
 
+class _Observation:
+    def __init__(self, data: tuple[object, ...]) -> None:
+        self.fact = SimpleNamespace(data=data)
+
+
+class _Reconciliation:
+    passed = True
+
+    def __init__(self, observed_at: datetime) -> None:
+        self.observed_at = observed_at
+        self.cursor = SimpleNamespace(value="cursor-1")
+        self.evidence_digest = "sha256:" + "e" * 64
+        self.positions = _Observation(())
+        self.open_orders = _Observation(())
+
+    def require_coherent(self):
+        return self
+
+
 class _Binding:
     profile_id = PROTECTED_EXTERNAL_PROFILE
     transport_state = "external_testnet"
@@ -66,11 +86,27 @@ class _Binding:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
+        observed_at = datetime.now(timezone.utc).replace(microsecond=0)
+        provenance = SimpleNamespace(
+            source="nautilus-hyperliquid.testnet",
+            transport_state="external_testnet",
+            mapping_revision=PROTECTED_CAPABILITY_REVISION,
+            execution_scope="hypercore:default",
+            received_at=observed_at,
+        )
         self.account = SimpleNamespace(
             account_address=ACCOUNT,
+            broker_id="hyperliquid",
+            environment="testnet",
+            equity=Decimal("1000"),
+            balance=Decimal("1000"),
+            withdrawable=Decimal("1000"),
+            exposure=Decimal("0"),
+            margin_used=Decimal("0"),
             positions=(),
-            provenance=SimpleNamespace(transport_state="external_testnet"),
+            provenance=provenance,
         )
+        self.reconciliation = _Reconciliation(observed_at)
         self.receipt = SimpleNamespace(
             order_id="order-1",
             client_order_id="client-1",
@@ -78,7 +114,7 @@ class _Binding:
             state="resting",
             account_address=ACCOUNT,
             release_sha=RELEASE,
-            provenance=SimpleNamespace(transport_state="external_testnet"),
+            provenance=provenance,
         )
 
     def preflight(self):
@@ -100,6 +136,17 @@ class _Binding:
 
     def submit(self, intent):
         self.calls.append(("submit", intent))
+        submit_count = sum(1 for name, _ in self.calls if name == "submit")
+        if submit_count > 1:
+            self.receipt = SimpleNamespace(
+                order_id=f"order-{submit_count}",
+                client_order_id=f"client-{submit_count}",
+                broker_order_id=f"broker-{submit_count}",
+                state="resting",
+                account_address=ACCOUNT,
+                release_sha=RELEASE,
+                provenance=self.receipt.provenance,
+            )
         return self.receipt
 
     def query(self, order_id):
@@ -122,7 +169,7 @@ class _Binding:
             open_orders=(),
             fills=(),
             fees=(),
-            reconciliation=SimpleNamespace(),
+            reconciliation=self.reconciliation,
         )
 
     def market_fact(self, *, instrument_id, now):
@@ -229,6 +276,7 @@ def test_registry_builds_opt_in_execution_from_an_injected_public_binding(tmp_pa
             "environment": "testnet",
             "transport_profile": PROTECTED_EXTERNAL_PROFILE,
             "external_binding": binding,
+            "external_binding_test_only": True,
             "release_sha": RELEASE,
             "standard_broker_release_sha": STANDARD_BROKER_RELEASE_SHA,
         },

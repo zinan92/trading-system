@@ -42,6 +42,14 @@ projection) with `event=confirmed`, `execution_authorized=true`,
 `execution_environment=testnet`, the exact `plan_digest` and
 `activation_id`, a non-empty `confirmation_id`, and `confirmed_at`.
 
+After the acknowledgement, the protected binding reads the public Broker
+market fact and the cursor-bound account/reconciliation snapshot before
+candidate selection. The supplied market document is admitted only when its
+instrument, source, freshness, and midpoint agree with that Broker fact; the
+equity used by the Portfolio Gate always comes from the account snapshot. Any
+non-flat/unknown account state, stale snapshot, or identity drift blocks before
+the first entry.
+
 ```sh
 PYTHONPATH=/path/to/standard-broker/src python3 -m pipelines.testnet_automation_proof \
   --action start \
@@ -58,11 +66,19 @@ PYTHONPATH=/path/to/standard-broker/src python3 -m pipelines.testnet_automation_
   --acknowledge I_UNDERSTAND_ONE_ATTENDED_TESTNET_STRATEGY_ACTION
 ```
 
-Use `--strategy-family grid` only when the loaded plan is Grid. The market
-document must contain the full BBO/L2/depth/slippage/oracle and Broker/source
-identity fields; a price-only or synthetic document is blocked. This command
-does not enable Mainnet/Live or the scheduler and never creates a new Plan
-after TP/SL.
+Use the proof in this order, with a fresh plan/confirmation and a separate
+output root for each attended run:
+
+1. Run BTC-DCA with `--strategy-family dca`; wait for its terminal Park
+   notification/decision before ending that run.
+2. Run BTC-Grid with `--strategy-family grid` only after the DCA run has
+   reached its recorded terminal/interrupt state and Park has approved the
+   new Grid activation.
+
+The market document must contain the full BBO/L2/depth/slippage/oracle and
+Broker/source identity fields; a price-only or synthetic document is blocked.
+The command does not enable Mainnet/Live or the scheduler and never creates a
+new Plan after TP/SL.
 
 ## Read-only collection
 
