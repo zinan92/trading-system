@@ -12,6 +12,30 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-27, Jessie revised-DCA state replay)
+
+- Issue #1065 reproduces the actual screenshot sequence through the complete
+  `ParkTelegramRouter` state machine rather than a single parser call. The
+  deterministic 0.3-second loop initially failed on raw `TypeError` exposure,
+  stale three-entry geometry/count, and `82k止损` being misread as `73`.
+- Compact `k` prices now support number-before-label and label-before-number
+  TP/SL forms. An explicit `80000 到 81000 ... 两个价位` revision emits a new
+  two-entry ladder/count, so the append-only conversation merge replaces the
+  superseded three-entry geometry while retaining short/DCA and later 10x risk
+  authority.
+- A typed `market_unavailable` failure remains fail-closed but returns stable
+  Chinese operator guidance instead of a raw exception class. The original
+  full replay now preserves `short / DCA / 80000,81000 / 2 / 10x / SL82000 /
+  TP73000` with zero plans or orders. Root-cause evidence is recorded in
+  [`docs/evidence/issue-1065-jessie-multiturn-root-cause.md`](docs/evidence/issue-1065-jessie-multiturn-root-cause.md).
+- Focused conversation/parser/runtime validation passes 83 tests; ruff,
+  compileall, diff-check, and gitleaks pass. No credential, Telegram token,
+  order, position, scheduler, cloud, Mainnet, or Live state was touched.
+
+_下一步_: merge #1065, sync the Paper-only Jessie checkout, restart its launchd
+worker, and verify a clean post-restart receipt before asking Park for any
+further interaction.
+
 ## 现在在哪里(2026-08-27, Jessie deterministic finalize authority)
 
 - Issue #1063 closes the remaining provider-success contradiction exposed by
