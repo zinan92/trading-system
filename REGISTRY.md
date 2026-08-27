@@ -12,6 +12,31 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-27, Jessie conversation-first risk preview)
+
+- Issue #1067 moves clear strategy conversations out of the provider-owned
+  form gate. A complete calculable candidate now receives a natural-language
+  summary and deterministic risk preview even when Codex/DeepSeek is slow or
+  unavailable; the internal patch remains non-authorizing JSON.
+- Jessie understands explicit per-entry sizing such as `每一次5x AUM`, derives
+  the two-entry total exposure (`10x AUM`) and gross stop-loss risk (`18.67%
+  AUM` for the current BTC example), and labels fees/slippage as excluded.
+  Basic Grid geometry likewise previews full-depth Hard Stop loss from explicit
+  boundaries/count/leverage/trusted price.
+- Ordinary discussion with an open-position fixture remains conversation-only;
+  clean-slate/account execution blockers are reachable only from explicit
+  finalize/confirm routing. Provider-success and timeout paths share the same
+  local calculation seam, and no second Telegram outbound path was added.
+- Focused conversation/parser/runtime/provider validation passes 93 tests;
+  ruff, compileall, diff-check, and gitleaks pass. No credential, Telegram
+  token, order, position, scheduler, cloud, Mainnet, or Live state was touched.
+  Design and formula evidence is in
+  [`docs/evidence/issue-1067-conversation-first-risk-preview.md`](docs/evidence/issue-1067-conversation-first-risk-preview.md).
+
+_下一步_: merge #1067, sync the Paper-only Jessie checkout, restart its launchd
+worker, then append/re-verify the current draft recovery before the next
+Telegram interaction.
+
 ## 现在在哪里(2026-08-27, Jessie revised-DCA state replay)
 
 - Issue #1065 reproduces the actual screenshot sequence through the complete
