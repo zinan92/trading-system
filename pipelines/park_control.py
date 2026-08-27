@@ -26,6 +26,7 @@ from services.park_paper_runtime import (
     prepare_park_paper_config,
 )
 from services.park_safety_evidence import build_park_safety_evidence
+from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.park_telegram_runtime import (
     ParkTelegramRouter,
     ParkTelegramRuntimeError,
@@ -79,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             park_user_id=args.park_user_id,
             chat_id=args.chat_id,
             intent_parser=intent_parser,
+            testnet_market_reader=HyperliquidTestnetMarketReader().read,
             config=config,
         )
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)

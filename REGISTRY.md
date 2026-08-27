@@ -12,6 +12,27 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-27, Jessie Hyperliquid Testnet market binding)
+
+- Issue #1069 adds a credential-free Hyperliquid Testnet public market reader
+  for explicit Testnet Jessie messages. It reads BTC `allMids` and `l2Book`
+  facts and validates `hyperliquid.external_testnet` / `BTC-USD-PERP` identity,
+  positive non-crossed BBO, mid coherence, and trusted/fresh status.
+- Paper remains the default for non-Testnet messages. A Testnet message never
+  falls back to Binance/Gold or a synthetic price. Testnet account/equity facts
+  are intentionally not borrowed from Paper; finalize blocks with a clear
+  `testnet_account_unavailable` until that separate public account seam is
+  configured.
+- Focused Testnet/Jessie/standard-broker validation passes 139 tests; ruff,
+  compileall, diff-check, and gitleaks pass. No credential, Telegram token,
+  order, position, scheduler, cloud, Mainnet, or Live state was touched.
+  Evidence is in
+  [`docs/evidence/issue-1069-testnet-market-reader.md`](docs/evidence/issue-1069-testnet-market-reader.md).
+
+_下一步_: merge #1069, sync the Paper-only Jessie checkout, restart the worker,
+and verify Testnet finalize reaches the explicit account-seam blocker without
+mixing Paper facts.
+
 ## 现在在哪里(2026-08-27, Jessie conversation-first risk preview)
 
 - Issue #1067 moves clear strategy conversations out of the provider-owned

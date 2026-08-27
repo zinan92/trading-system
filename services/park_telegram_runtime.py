@@ -489,7 +489,9 @@ class ParkTelegramRouter:
         park_user_id: str,
         chat_id: str,
         market_reader: Callable[[], Mapping[str, Any]] | None = None,
+        testnet_market_reader: Callable[[], Mapping[str, Any]] | None = None,
         account_reader: Callable[[Path, str], Mapping[str, Any]] | None = None,
+        testnet_account_reader: Callable[[Path, str], Mapping[str, Any]] | None = None,
         now: Callable[[], str] | None = None,
         cycle_id_provider: Callable[[str], str] | None = None,
         confirmation_ttl_seconds: int = 900,
@@ -525,13 +527,16 @@ class ParkTelegramRouter:
             chat_id=chat_id,
             ttl_seconds=max(self.confirmation_ttl_seconds, 12 * 60 * 60),
         )
+        self._uses_default_market_reader = market_reader is None
         self.market_reader = market_reader or default_market_reader
+        self.testnet_market_reader = testnet_market_reader
         self.config = dict(config or {})
         self.testnet_start_handler = testnet_start_handler
         self._uses_default_account_reader = account_reader is None
         self.account_reader = account_reader or (
             lambda root, cycle: default_account_reader(root, cycle, config=self.config)
         )
+        self.testnet_account_reader = testnet_account_reader
         self.now = now or _utc_now
         self.cycle_id_provider = cycle_id_provider or _default_cycle_id
         # Offline/tests may omit this seam.  The production pipeline supplies
@@ -549,6 +554,13 @@ class ParkTelegramRouter:
         *,
         market: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
+        if isinstance(market, Mapping) and market.get("environment") == "testnet":
+            if self.testnet_account_reader is None:
+                raise ParkTelegramRuntimeError(
+                    "testnet_account_unavailable",
+                    "Hyperliquid Testnet account facts are not configured",
+                )
+            return self.testnet_account_reader(self.output_root, cycle_id)
         if self._uses_default_account_reader:
             return default_account_reader(
                 self.output_root,
@@ -557,6 +569,45 @@ class ParkTelegramRouter:
                 market=market,
             )
         return self.account_reader(self.output_root, cycle_id)
+
+    @staticmethod
+    def _is_testnet_text(text: str | None) -> bool:
+        return bool(re.search(r"\btestnet\b|测试网", str(text or ""), re.IGNORECASE))
+
+    def _read_market(self, text: str | None = None) -> Mapping[str, Any]:
+        if self._is_testnet_text(text):
+            if self.testnet_market_reader is None:
+                if not self._uses_default_market_reader:
+                    # Preserve explicitly injected test/integration seams;
+                    # production always supplies the source-bound reader.
+                    return self.market_reader()
+                raise ParkTelegramRuntimeError(
+                    "testnet_market_unavailable",
+                    "Hyperliquid Testnet market reader is not configured",
+                )
+            try:
+                market = dict(self.testnet_market_reader())
+            except ParkTelegramRuntimeError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - public read failures are typed.
+                raise ParkTelegramRuntimeError("testnet_market_unavailable", type(exc).__name__) from exc
+            if (
+                market.get("environment") != "testnet"
+                or market.get("source") != "hyperliquid.external_testnet"
+                or market.get("provider") != "hyperliquid"
+                or market.get("instrument_id") != "BTC-USD-PERP"
+            ):
+                raise ParkTelegramRuntimeError(
+                    "testnet_market_identity_mismatch",
+                    "Hyperliquid Testnet market identity does not match BTC-USD-PERP",
+                )
+            if market.get("trusted") is not True or market.get("fresh") is not True:
+                raise ParkTelegramRuntimeError(
+                    "testnet_market_not_authoritative",
+                    "Hyperliquid Testnet market facts are not trusted and fresh",
+                )
+            return market
+        return self.market_reader()
 
     def handle_update(self, update: Mapping[str, Any]) -> dict[str, Any]:
         update_id = update.get("update_id")
@@ -948,11 +999,25 @@ class ParkTelegramRouter:
         )
         return topic and question
 
-    def _conversation_context(self, active: Mapping[str, Any] | None) -> dict[str, Any]:
+    def _conversation_context(
+        self,
+        active: Mapping[str, Any] | None,
+        *,
+        text: str | None = None,
+    ) -> dict[str, Any]:
         try:
-            market = dict(self.market_reader())
+            market = dict(self._read_market(text))
         except Exception as exc:  # noqa: BLE001 - read-only context may be unavailable.
             market = {"status": "unavailable", "error_type": type(exc).__name__}
+            if self._is_testnet_text(text):
+                market.update(
+                    {
+                        "environment": "testnet",
+                        "provider": "hyperliquid",
+                        "source": "hyperliquid.external_testnet",
+                        "instrument_id": "BTC-USD-PERP",
+                    }
+                )
         try:
             account = dict(
                 self._read_account(
@@ -1131,7 +1196,7 @@ class ParkTelegramRouter:
             return self._handle_strategy(text, active=active, update_id=update_id)
         if self.conversation_agent is None:
             return self._handle_strategy(text, active=active, update_id=update_id)
-        context = self._conversation_context(active)
+        context = self._conversation_context(active, text=text)
         quick_candidate = {
             **self.conversation_ledger.latest_strategy_patch(),
             **extract_explicit_strategy_patch(text),
@@ -1361,7 +1426,7 @@ class ParkTelegramRouter:
                 )
             observed_at = self.now()
             cycle_id = self.cycle_id_provider(observed_at)
-            market = dict(self.market_reader())
+            market = dict(self._read_market(text))
             facts = dict(self._read_account(cycle_id, market=market))
             admission = admit_clean_slate(facts)
             if not admission.get("admitted"):
@@ -1716,6 +1781,14 @@ class ParkTelegramRouter:
             return "我还缺风险上限。请补充最大杠杆或最大可接受亏损，例如：最大10倍杠杆。"
         if code == "market_unavailable":
             return "当前可信行情暂时不可用；策略草稿已经保留，系统不会猜价或下单。行情恢复后再次发送 finalize/执行即可。"
+        if code == "testnet_market_unavailable":
+            return "Hyperliquid Testnet BTC 行情暂时不可用；策略草稿已经保留，系统不会猜价或切回 Paper 行情。行情恢复后再次发送 finalize/执行即可。"
+        if code == "testnet_market_identity_mismatch":
+            return "Hyperliquid Testnet 行情与 BTC-USD-PERP 身份不匹配；策略草稿已保留，系统不会混用其他市场。"
+        if code == "testnet_market_not_authoritative":
+            return "Hyperliquid Testnet 行情目前不满足可信/新鲜条件；策略草稿已保留，系统不会猜价或下单。"
+        if code == "testnet_account_unavailable":
+            return "已读取 Hyperliquid Testnet 行情，但 Testnet 账户快照尚未接入；系统不会拿 Paper 账户代替，也不会下单。"
         if code == "confirmation_incomplete":
             return "可以直接回复‘确认当前计划’或‘拒绝当前计划’；也可以回复 confirm <plan_digest>。"
         if code == "confirmation_expired":
