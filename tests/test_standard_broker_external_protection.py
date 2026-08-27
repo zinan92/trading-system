@@ -7,7 +7,6 @@ import pytest
 from services.standard_broker_external_protection import (
     ExternalProtectionBuildConfig,
     PROTECTION_CAPABILITY_REVISION,
-    StandardBrokerExternalProtectionError,
     build_external_position_protection_binding,
 )
 
@@ -17,20 +16,21 @@ RELEASE = "a" * 40
 
 
 def test_opt_in_protection_builder_starts_without_backend_invocation(tmp_path: Path) -> None:
-    with pytest.raises(
-        StandardBrokerExternalProtectionError,
-        match="standard_broker_protection_dependency_unavailable",
-    ):
-        build_external_position_protection_binding(
-            ExternalProtectionBuildConfig(
-                account_address=ACCOUNT,
-                runtime_id="dca-protection-runtime-1",
-                release_sha=RELEASE,
-                approval_id="approval-protection-1",
-                approved_by="park",
-                secret_file=tmp_path / "not-read-secret",
-            )
+    runtime, binding = build_external_position_protection_binding(
+        ExternalProtectionBuildConfig(
+            account_address=ACCOUNT,
+            runtime_id="dca-protection-runtime-1",
+            release_sha=RELEASE,
+            approval_id="approval-protection-1",
+            approved_by="park",
+            secret_file=tmp_path / "not-read-secret",
         )
+    )
+
+    assert binding.protection_capabilities.profile_id == "hyperliquid-testnet-position-protection-v1"
+    assert runtime.health.invocation_performed is False
+    assert runtime.health.external_network is True
+    runtime.close()
 
 
 def test_protection_builder_rejects_unreviewed_revision_before_runtime() -> None:

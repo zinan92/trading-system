@@ -1,5 +1,59 @@
 # Decision Log
 
+## Bind the reviewed standard-broker protection profile at the Coordinator seam (#1053)
+
+Date: 2026-08-27
+
+### Decision
+
+- Keep `standard-broker` `2d3a5cc26538b24fb31ab81201facd5ee46476ba` as the
+  immutable application dependency. The existing
+  `hyperliquid-testnet-default` external profile remains closed; the new
+  `hyperliquid-testnet-position-protection` profile is an explicit opt-in
+  selection with capability revision
+  `hyperliquid-testnet-position-protection-runtime-v1`.
+- Add one provider-neutral execution facade in `trading-system`. It translates
+  the canonical Broker order request to public `OrderIntent` and delegates
+  typed account/fill/fee/reconciliation and ProtectionOrder operations. No
+  Hyperliquid-native payload, signer value, or private standard-broker method
+  crosses the host boundary.
+- Admit the protected profile in the existing Coordinator identity contract;
+  preserve old DCA/Grid semantics and let the subtractive Portfolio Gate
+  clamp only the effective quantity/notional. The proof CLI creates one
+  selected Execution Slice and never schedules a next Plan.
+- Keep external mutation attended: preflight is credential-free and
+  non-invoking; `start` requires a fresh Park confirmation, explicit Testnet
+  flag, and exact acknowledgement. Unknown outcomes remain fail-closed and
+  do not trigger blind retries.
+
+### Verification
+
+- Issue #1053 implementation commits are `86de945`, `d04ae56`, `f9e07c8`,
+  `65234e5`, `0a4009b`, `3c6c703`, `020eeeb`, and `ab465e5`.
+- The final lifecycle-lint cleanup is `f10af93`; it changes no runtime
+  behavior.
+- Focused bridge/Coordinator/lifecycle tests pass (`208`); the protected
+  composition/coordinator subset passes `39`. Ruff, compileall, diff-check,
+  and gitleaks pass.
+- Credential-free preflight returned `PREFLIGHT_READY` with exact protected
+  profile/matrix/revision identity, `capability_gaps=[]`,
+  `invocation_performed=false`, `secret_resolved=false`, and
+  `real_money_eligible=false` using a nonexistent signer path. No credential
+  value, network order, scheduler, cloud, Mainnet, or Live action was used.
+- Full local pytest reached `3543 passed, 1 skipped`; the one failure is the
+  unchanged Dashboard GridMind Playwright drag baseline
+  (`tests/test_dashboard_gridmind_range_drag_browser.py`).
+
+### Gotchas
+
+- The Coordinator originally admitted only the default profile, so the first
+  protected start path would have failed before broker construction. The
+  explicit protected profile is now accepted while the default remains the
+  legacy fixture/preflight identity.
+- A passing local fake binding or credential-free preflight is not external
+  Testnet execution evidence. A real start remains a separately attended Park
+  decision and is not performed by this implementation turn.
+
 ## Build one Portfolio composition seam before multi-asset execution (Issues #996–#1003)
 
 Date: 2026-08-25

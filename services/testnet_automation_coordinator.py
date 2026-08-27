@@ -1,9 +1,9 @@
-"""Read-only Testnet Automation Coordinator boundary.
+"""Testnet Automation Coordinator composition-root boundary.
 
-The coordinator is the composition-root contract for the later Testnet
-execution slices.  This first slice only binds an immutable activation
-identity and records operator intent.  It deliberately has no Broker
-dependency and cannot submit, cancel, protect, or flatten an order.
+The coordinator binds immutable activation identity, candidate selection,
+subtractive Portfolio sizing, and the canonical DCA/Grid lifecycles.  It never
+constructs venue-native requests; an explicit Broker adapter and attended
+Testnet confirmation remain required before any exposure-changing call.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,6 +30,11 @@ COORDINATOR_EVENTS_FILE = "events.json"
 TESTNET_BROKER_ID = "hyperliquid"
 TESTNET_ENVIRONMENT = "testnet"
 TESTNET_TRANSPORT_PROFILE = "hyperliquid-testnet-default"
+TESTNET_PROTECTED_TRANSPORT_PROFILE = "hyperliquid-testnet-position-protection"
+MAX_TESTNET_CONFIRMATION_AGE_SECONDS = 900
+_TESTNET_TRANSPORT_PROFILES = frozenset(
+    {TESTNET_TRANSPORT_PROFILE, TESTNET_PROTECTED_TRANSPORT_PROFILE}
+)
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
 _RELEASE_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 _ACTIONS = frozenset(
@@ -176,11 +182,19 @@ class TestnetActivation:
         transport_profile = _required_text(
             value.get("transport_profile"), "transport_profile"
         )
-        if transport_profile != TESTNET_TRANSPORT_PROFILE:
+        if transport_profile not in _TESTNET_TRANSPORT_PROFILES:
             raise TestnetCoordinatorError("testnet_profile_required")
         release_sha = _required_text(value.get("release_sha"), "release_sha").lower()
         if _RELEASE_RE.fullmatch(release_sha) is None:
             raise TestnetCoordinatorError("release_sha_invalid")
+        capability_revision = _required_text(
+            value.get("capability_revision"), "capability_revision"
+        )
+        if (
+            transport_profile == TESTNET_PROTECTED_TRANSPORT_PROFILE
+            and capability_revision != "hyperliquid-testnet-position-protection-runtime-v1"
+        ):
+            raise TestnetCoordinatorError("protected_capability_revision_required")
         return cls(
             strategy_family=strategy_family,
             strategy_session_id=_required_text(
@@ -197,9 +211,7 @@ class TestnetActivation:
             instrument_id=_required_text(value.get("instrument_id"), "instrument_id"),
             runtime_id=_required_text(value.get("runtime_id"), "runtime_id"),
             release_sha=release_sha,
-            capability_revision=_required_text(
-                value.get("capability_revision"), "capability_revision"
-            ),
+            capability_revision=capability_revision,
         )
 
     def to_mapping(self) -> dict[str, str]:
@@ -211,7 +223,7 @@ class TestnetActivation:
 
 
 class TestnetAutomationCoordinator:
-    """One durable, execution-disabled Testnet activation boundary."""
+    """One durable, identity-bound Testnet automation boundary."""
 
     __test__ = False
 
@@ -280,7 +292,13 @@ class TestnetAutomationCoordinator:
             return self._idle_state()
         return dict(current)
 
-    def preflight(self) -> dict[str, Any]:
+    def preflight(
+        self,
+        *,
+        broker: object | None = None,
+        strategy_family: str | None = None,
+        market: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         current = self.status()
         if current.get("status") == "idle":
             return {
@@ -293,7 +311,7 @@ class TestnetAutomationCoordinator:
                 "execution_blocker": "activation_required",
                 "next_action": "await_activation",
             }
-        return {
+        base = {
             **current,
             "event": "preflight",
             "ready": current.get("blocker") is None,
@@ -301,6 +319,64 @@ class TestnetAutomationCoordinator:
             "broker_operation_invoked": False,
             "network_operation_invoked": False,
             "next_action": "await_execution_capability",
+        }
+        if broker is None:
+            return base
+        family = str(strategy_family or current.get("strategy_family") or "").strip().lower()
+        if family not in {"dca", "grid"}:
+            return {
+                **base,
+                "ready": False,
+                "execution_ready": False,
+                "execution_blocker": "strategy_family_required",
+                "next_action": "notify_park_and_wait",
+            }
+        try:
+            broker_preflight = self._validate_lifecycle_preflight(
+                broker,
+                strategy_family=family,
+                current=current,
+            )
+            if market is not None:
+                self._validate_authoritative_market(
+                    market,
+                    current=current,
+                    observed_at=self._timestamp(None),
+                )
+        except Exception as exc:  # noqa: BLE001 - preflight is a reporting gate.
+            blocker = str(getattr(exc, "code", "") or "testnet_preflight_blocked")
+            return {
+                **base,
+                "ready": False,
+                "execution_ready": False,
+                "execution_blocker": blocker,
+                "broker_preflight": {
+                    "status": "BLOCKED",
+                    "reason": blocker,
+                },
+                "next_action": "notify_park_and_wait",
+            }
+        return {
+            **base,
+            "ready": True,
+            "execution_ready": True,
+            "execution_blocker": None,
+            "broker_preflight": broker_preflight,
+            "instrument_id": current.get("selected_instrument_id")
+            or current.get("instrument_id"),
+            "market_identity": (
+                {
+                    "source": market.get("source"),
+                    "cursor": market.get("cursor"),
+                    "instrument_id": market.get("instrument_id"),
+                    "mapping_revision": market.get("mapping_revision"),
+                    "universe_revision": market.get("universe_revision"),
+                    "connection_epoch": market.get("connection_epoch"),
+                }
+                if market is not None
+                else None
+            ),
+            "next_action": "await_candidate_selection",
         }
 
     def _activate(
@@ -1296,8 +1372,108 @@ class TestnetAutomationCoordinator:
     def _decimal_value(cls, value: Any) -> Decimal | None:
         return cls._decimal_optional(value)
 
-    @staticmethod
+    def verify_confirmation(
+        self,
+        plan: Mapping[str, Any],
+        confirmation: Mapping[str, Any],
+    ) -> None:
+        """Verify one fresh, durable Park Testnet confirmation.
+
+        This gate is intentionally owned by the Coordinator rather than only
+        by a CLI. Direct lifecycle callers therefore cannot reach a capable
+        Broker with a forged, stale, or already-rejected projection.
+        """
+
+        if not isinstance(plan, Mapping) or not isinstance(confirmation, Mapping):
+            raise TestnetCoordinatorError("testnet_confirmation_invalid")
+        if (
+            confirmation.get("event") != "confirmed"
+            or confirmation.get("execution_authorized") is not True
+            or str(confirmation.get("execution_environment") or "").lower() != "testnet"
+            or str(confirmation.get("plan_digest") or "")
+            != str(plan.get("plan_digest") or "")
+            or not str(confirmation.get("confirmation_id") or "").strip()
+            or confirmation.get("confirmed_at") in (None, "")
+            or not str(confirmation.get("proposal_id") or "").strip()
+            or not str(confirmation.get("receipt_digest") or "").strip()
+        ):
+            raise TestnetCoordinatorError("testnet_confirmation_identity_invalid")
+
+        def epoch(value: Any, field: str) -> float:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                rendered = float(value)
+            else:
+                text = str(value or "").strip()
+                try:
+                    rendered = float(text)
+                except (TypeError, ValueError):
+                    try:
+                        rendered = datetime.fromisoformat(
+                            text.replace("Z", "+00:00")
+                        ).timestamp()
+                    except ValueError as exc:
+                        raise TestnetCoordinatorError(f"{field}_invalid") from exc
+            if not rendered == rendered or rendered in {float("inf"), float("-inf")}:
+                raise TestnetCoordinatorError(f"{field}_invalid")
+            return rendered
+
+        from services.park_confirmation import ParkConfirmationLedger
+
+        rows = ParkConfirmationLedger(self.output_root, park_user_id="park").rows()
+        proposal_id = str(confirmation.get("proposal_id") or "").strip()
+        proposal = next(
+            (
+                row
+                for row in rows
+                if row.get("event") == "proposal"
+                and str(row.get("proposal_id") or "") == proposal_id
+            ),
+            None,
+        )
+        decision = next(
+            (
+                row
+                for row in reversed(rows)
+                if row.get("event") in {"confirmed", "rejected"}
+                and str(row.get("proposal_id") or "") == proposal_id
+            ),
+            None,
+        )
+        if proposal is None or decision is None:
+            raise TestnetCoordinatorError("testnet_confirmation_durable_missing")
+        if decision.get("event") != "confirmed":
+            raise TestnetCoordinatorError("testnet_confirmation_not_confirmed")
+        try:
+            if epoch(proposal.get("expires_at"), "confirmation_expiry") <= time.time():
+                raise TestnetCoordinatorError("testnet_confirmation_expired")
+            confirmed_at = epoch(decision.get("confirmed_at"), "confirmed_at")
+            projected_at = epoch(confirmation.get("confirmed_at"), "confirmed_at")
+        except TestnetCoordinatorError:
+            raise
+        age = time.time() - confirmed_at
+        if age < 0 or age > MAX_TESTNET_CONFIRMATION_AGE_SECONDS:
+            raise TestnetCoordinatorError("testnet_confirmation_not_fresh")
+        if (
+            proposal.get("execution_environment") != "testnet"
+            or decision.get("execution_environment") != "testnet"
+            or proposal.get("plan_digest") != plan.get("plan_digest")
+            or decision.get("plan_digest") != plan.get("plan_digest")
+            or decision.get("execution_authorized") is not True
+            or str(decision.get("receipt_digest") or "")
+            != str(confirmation.get("receipt_digest") or "")
+            or decision.get("park_user_id") != "park"
+            or str(
+                confirmation.get("operator_id")
+                or confirmation.get("park_user_id")
+                or ""
+            )
+            != "park"
+            or abs(confirmed_at - projected_at) > 0.001
+        ):
+            raise TestnetCoordinatorError("testnet_confirmation_durable_mismatch")
+
     def _validate_testnet_confirmation(
+        self,
         plan: Mapping[str, Any],
         current: Mapping[str, Any],
         confirmation: Mapping[str, Any],
@@ -1310,18 +1486,22 @@ class TestnetAutomationCoordinator:
                 {"reason": reason, "plan_digest": plan.get("plan_digest")},
             )
 
-        if not isinstance(confirmation, Mapping):
-            blocked("confirmation_required")
-        if confirmation.get("execution_authorized") is not True:
-            blocked("execution_authorized_required")
-        if str(confirmation.get("execution_environment") or "").lower() != "testnet":
-            blocked("testnet_confirmation_required")
-        if str(confirmation.get("plan_digest") or "") != str(plan.get("plan_digest") or ""):
-            blocked("plan_digest_mismatch")
+        if current.get("transport_profile") == TESTNET_PROTECTED_TRANSPORT_PROFILE:
+            try:
+                self.verify_confirmation(plan, confirmation)
+            except TestnetCoordinatorError as exc:
+                blocked(exc.code)
+        else:
+            if not isinstance(confirmation, Mapping):
+                blocked("confirmation_required")
+            if confirmation.get("execution_authorized") is not True:
+                blocked("execution_authorized_required")
+            if str(confirmation.get("execution_environment") or "").lower() != "testnet":
+                blocked("testnet_confirmation_required")
+            if str(confirmation.get("plan_digest") or "") != str(plan.get("plan_digest") or ""):
+                blocked("plan_digest_mismatch")
         if str(confirmation.get("activation_id") or "") != str(current.get("activation_id") or ""):
             blocked("activation_identity_mismatch")
-        if not str(confirmation.get("confirmation_id") or "").strip():
-            blocked("confirmation_id_required")
 
     @staticmethod
     def _validate_canary_identity(plan: object, current: Mapping[str, Any]) -> None:
@@ -1390,7 +1570,11 @@ class TestnetAutomationCoordinator:
             or str(market.get("broker_id") or "").lower() != "hyperliquid"
             or str(market.get("environment") or "").lower() != "testnet"
             or str(market.get("instrument_id") or "")
-            != str(current.get("selected_instrument_id") or "")
+            != str(
+                current.get("selected_instrument_id")
+                or current.get("instrument_id")
+                or ""
+            )
             or str(market.get("source") or "").lower() not in _APPROVED_MARKET_SOURCES
         ):
             raise StrategyControlMachineError(
@@ -1695,6 +1879,7 @@ __all__ = [
     "COORDINATOR_SCHEMA",
     "TESTNET_BROKER_ID",
     "TESTNET_ENVIRONMENT",
+    "TESTNET_PROTECTED_TRANSPORT_PROFILE",
     "TESTNET_TRANSPORT_PROFILE",
     "TestnetActivation",
     "TestnetAutomationCoordinator",

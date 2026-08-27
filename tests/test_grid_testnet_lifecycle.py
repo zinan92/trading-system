@@ -116,7 +116,7 @@ def test_grid_partial_entry_deadline_sets_tp_to_authoritative_fill_quantity(tmp_
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
     entry = started["orders"][0]
-    partial = lifecycle.on_fill(plan, _fill(entry, price=65000.0, tid=3, quantity=0.04), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_fill(plan, _fill(entry, price=65000.0, tid=3, quantity=0.04), timestamp="2026-08-22T01:01:00+00:00")
     deadline = lifecycle.on_market_event(plan, price=64900.0, timestamp="2026-08-22T01:06:00+00:00")
 
     tp = next(row for row in deadline["orders"] if row["event"] == "tp")
@@ -131,8 +131,8 @@ def test_grid_late_entry_fill_after_deadline_is_reconciled_into_tp(tmp_path: Pat
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
     entry = started["orders"][0]
-    partial = lifecycle.on_fill(plan, _fill(entry, price=65000.0, tid=8, quantity=0.04), timestamp="2026-08-22T01:01:00+00:00")
-    deadline = lifecycle.on_market_event(plan, price=64900.0, timestamp="2026-08-22T01:06:00+00:00")
+    lifecycle.on_fill(plan, _fill(entry, price=65000.0, tid=8, quantity=0.04), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_market_event(plan, price=64900.0, timestamp="2026-08-22T01:06:00+00:00")
     late = lifecycle.on_fill(plan, _fill(entry, price=65000.0, tid=9, quantity=0.02), timestamp="2026-08-22T01:06:01+00:00")
 
     tp = [row for row in late["orders"] if row["event"] == "tp"][-1]
@@ -144,7 +144,7 @@ def test_grid_crossed_unfilled_rung_is_cancelled_and_skipped(tmp_path: Path) -> 
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
-    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
 
     skipped = lifecycle.on_market_event(plan, price=63900.0, timestamp="2026-08-22T01:01:00+00:00")
 
@@ -159,7 +159,7 @@ def test_grid_hard_stop_cancels_tp_and_flattens_before_sealing(tmp_path: Path) -
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=4), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=4), timestamp="2026-08-22T01:01:00+00:00")
     triggered = lifecycle.on_market_event(plan, price=63000.0, timestamp="2026-08-22T01:02:00+00:00")
 
     assert triggered["status"] == "hard_stop_triggered"
@@ -189,7 +189,7 @@ def test_grid_hard_stop_recovery_fill_is_consumable_after_primary_submit_failure
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=74), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=74), timestamp="2026-08-22T01:01:00+00:00")
     triggered = lifecycle.on_market_event(plan, price=63000.0, timestamp="2026-08-22T01:02:00+00:00")
     recovery = next(row for row in triggered["orders"] if row["event"] == "hard_stop_recovery")
     terminal = lifecycle.on_fill(plan, _fill(recovery, price=63000.0, tid=75), timestamp="2026-08-22T01:03:00+00:00")

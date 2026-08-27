@@ -13,6 +13,73 @@ identity and capability gates pass.
 - Keep the existing 14-window contract reserved for a future Live decision.
 - Treat a window as evidence only; it never expires or mutates the Plan.
 
+## Protected Broker preflight and attended start
+
+The default `hyperliquid-testnet-default` profile remains preflight-only. Use
+the explicit position-protection profile for a strategy proof. The following
+preflight does not read the signer file or invoke an order/fact backend; the
+path is accepted as an opaque reference only:
+
+```sh
+PYTHONPATH=/path/to/standard-broker/src python3 -m pipelines.testnet_automation_proof \
+  --action preflight \
+  --account-address <testnet-account-address> \
+  --runtime-id <runtime-id> \
+  --release-sha <trading-system-release-sha> \
+  --approval-id <testnet-approval-id> \
+  --approved-by park \
+  --secret-file <local-testnet-signer-file>
+```
+
+After a fresh Park confirmation, a full StrategyPlan and a complete
+source-bound market-fact document are available, `start` is the only command
+that may submit the first Testnet entry. It requires both
+`--execute-testnet` and the exact acknowledgement below; it creates one
+candidate/Execution Slice and stops at the lifecycle's next attended action:
+
+The confirmation document must be the latest durable Park decision (or its
+projection) with `event=confirmed`, `execution_authorized=true`,
+`execution_environment=testnet`, the exact `plan_digest` and
+`activation_id`, a non-empty `confirmation_id`, and `confirmed_at`.
+
+After the acknowledgement, the protected binding reads the public Broker
+market fact and the cursor-bound account/reconciliation snapshot before
+candidate selection. The supplied market document is admitted only when its
+instrument, source, freshness, and midpoint agree with that Broker fact; the
+equity used by the Portfolio Gate always comes from the account snapshot. Any
+non-flat/unknown account state, stale snapshot, or identity drift blocks before
+the first entry.
+
+```sh
+PYTHONPATH=/path/to/standard-broker/src python3 -m pipelines.testnet_automation_proof \
+  --action start \
+  --strategy-plan <strategy-plan-v1.json> \
+  --market <hyperliquid-market-facts.json> \
+  --confirmation <park-confirmation.json> \
+  --account-address <testnet-account-address> \
+  --runtime-id <runtime-id> \
+  --release-sha <trading-system-release-sha> \
+  --approval-id <testnet-approval-id> \
+  --approved-by park \
+  --secret-file <local-testnet-signer-file> \
+  --execute-testnet \
+  --acknowledge I_UNDERSTAND_ONE_ATTENDED_TESTNET_STRATEGY_ACTION
+```
+
+Use the proof in this order, with a fresh plan/confirmation and a separate
+output root for each attended run:
+
+1. Run BTC-DCA with `--strategy-family dca`; wait for its terminal Park
+   notification/decision before ending that run.
+2. Run BTC-Grid with `--strategy-family grid` only after the DCA run has
+   reached its recorded terminal/interrupt state and Park has approved the
+   new Grid activation.
+
+The market document must contain the full BBO/L2/depth/slippage/oracle and
+Broker/source identity fields; a price-only or synthetic document is blocked.
+The command does not enable Mainnet/Live or the scheduler and never creates a
+new Plan after TP/SL.
+
 ## Read-only collection
 
 The observation document must contain the exact strategy session/revision,
