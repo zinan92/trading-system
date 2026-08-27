@@ -88,6 +88,16 @@ def test_normalizes_two_level_dca_with_compact_number_before_exit_labels() -> No
     assert label_first["take_profit_price"] == 73000.0
 
 
+def test_normalizes_per_entry_aum_size_into_total_leverage_authority() -> None:
+    normalized = normalize_park_input(
+        "80000 到 81000 这两个价位做空 DCA，每一次5x AUM，止损82000，止盈73000"
+    )
+
+    assert normalized["entry_notional_aum_multiple"] == 5.0
+    assert normalized["maximum_leverage"] == 10.0
+    assert normalized["order_count"] == 2
+
+
 def test_explicit_dca_wins_over_market_regime_wording() -> None:
     normalized = normalize_park_input(
         "现在行情是震荡向上 做4200 4400的做多dca吧，然后最大10倍杠杆"

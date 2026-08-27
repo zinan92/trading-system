@@ -55,6 +55,7 @@ def test_deepseek_conversation_prompt_contains_history_and_bounded_context() -> 
     assert "Trading Expert" in body["messages"][0]["content"]
     assert "research" in body["messages"][0]["content"]
     assert "do not force convergence" in body["messages"][0]["content"].lower()
+    assert "deterministic calculation" in body["messages"][0]["content"].lower()
     user_payload = json.loads(body["messages"][1]["content"])
     assert "SECRET" not in user_payload["history"][0]["content"]
     assert user_payload["history"][1]["strategy_patch"]["direction"] == "long"
