@@ -71,6 +71,13 @@ class StandardBrokerExternalExecutionError(RuntimeError):
     """Redacted blocker for an unavailable or mismatched public binding."""
 
 
+_RECOVERY_STATE_ALIASES = {
+    "accepted": "resting",
+    "partial": "partially_filled",
+    "cancelled": "canceled",
+}
+
+
 class StandardBrokerExternalExecutionAdapter:
     """Adapt the public protected standard-broker binding to BrokerExecutionPort."""
 
@@ -90,7 +97,15 @@ class StandardBrokerExternalExecutionAdapter:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         if not callable(getattr(binding, "preflight", None)):
             raise StandardBrokerExternalExecutionError("public_binding_preflight_missing")
-        for method in ("submit", "query", "cancel", "replace", "read_facts", "market_fact"):
+        for method in (
+            "submit",
+            "query",
+            "query_by_idempotency_key",
+            "cancel",
+            "replace",
+            "read_facts",
+            "market_fact",
+        ):
             if not callable(getattr(binding, method, None)):
                 raise StandardBrokerExternalExecutionError(f"public_binding_{method}_missing")
         protection = getattr(binding, "protection", None)
@@ -440,10 +455,18 @@ class StandardBrokerExternalExecutionAdapter:
             raise StandardBrokerExternalExecutionError(
                 "external_order_recovery_unavailable"
             )
+        canonical_state = _RECOVERY_STATE_ALIASES.get(
+            str(state or "").strip().lower(),
+            str(state or "").strip().lower(),
+        )
+        if not canonical_state:
+            raise StandardBrokerExternalExecutionError("external_recovery_state_required")
+        if not str(broker_order_id or "").strip():
+            raise StandardBrokerExternalExecutionError("external_broker_order_id_required")
         recover(
             self._intent(request),
             broker_order_id=str(broker_order_id or "").strip(),
-            state=str(state or "").strip(),
+            state=canonical_state,
         )
 
     def recover_client_order(
@@ -458,10 +481,18 @@ class StandardBrokerExternalExecutionAdapter:
             raise StandardBrokerExternalExecutionError(
                 "external_client_order_recovery_unavailable"
             )
+        canonical_state = _RECOVERY_STATE_ALIASES.get(
+            str(state or "").strip().lower(),
+            str(state or "").strip().lower(),
+        )
+        if not canonical_state:
+            raise StandardBrokerExternalExecutionError("external_recovery_state_required")
+        if not str(client_order_id or "").strip():
+            raise StandardBrokerExternalExecutionError("external_client_order_id_required")
         return recover(
             self._intent(request),
             client_order_id=str(client_order_id or "").strip(),
-            state=str(state or "").strip(),
+            state=canonical_state,
         )
 
     def request(self, port: str, operation: str, payload: object | None = None) -> object:

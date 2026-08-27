@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from services.broker_port import BrokerCancelRequest, BrokerOrderRequest
 from services.journal_store import load_json, write_json
@@ -280,7 +280,7 @@ class DcaTestnetLifecycle:
             self._save(state)
             raise DcaTestnetLifecycleError(state["blocker"])
         try:
-            receipt = self.broker.canonical_order_adapter.apply_fill(raw_fill)
+            receipt = self._apply_fill_receipt(state, order, raw_fill)
         except Exception as exc:  # noqa: BLE001 - freeze at the lifecycle seam.
             self._block(state, f"fill_rejected:{type(exc).__name__}:{exc}", timestamp=timestamp)
             self._save(state)
@@ -1142,6 +1142,34 @@ class DcaTestnetLifecycle:
                 else receipt_state
             ),
         }
+
+    def _apply_fill_receipt(
+        self,
+        state: dict[str, Any],
+        order: Mapping[str, Any],
+        raw_fill: Mapping[str, Any],
+    ) -> Any:
+        """Recover a persisted public intent once, then query its fill receipt."""
+
+        try:
+            return self.broker.canonical_order_adapter.apply_fill(raw_fill)
+        except Exception as first_error:
+            recover = getattr(self.broker, "recover", None)
+            broker_order_id = str(order.get("broker_order_id") or "").strip()
+            if not callable(recover) or not broker_order_id:
+                raise first_error
+            request = BrokerOrderRequest(
+                run_date=state["cycle_id"],
+                ticket=dict(order),
+                latest_price=float(order.get("price") or order.get("limit_price") or 0),
+                actual_size=float(order.get("quantity") or 0),
+            )
+            recover(
+                request,
+                broker_order_id=broker_order_id,
+                state=str(order.get("state") or "resting"),
+            )
+            return self.broker.canonical_order_adapter.apply_fill(raw_fill)
 
     def _state(self, plan: dict[str, Any]) -> dict[str, Any]:
         identity = self._identity(plan)

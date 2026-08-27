@@ -229,7 +229,7 @@ class GridTestnetLifecycle:
             self._record_event(state, "post_terminal_late_fill", timestamp=timestamp, order_id=order_id)
 
         try:
-            receipt = self.broker.canonical_order_adapter.apply_fill(raw_fill)
+            receipt = self._apply_fill_receipt(state, order, raw_fill)
         except Exception as exc:  # noqa: BLE001 - canonical seam is fail-closed.
             self._block(state, f"fill_rejected:{type(exc).__name__}:{exc}", timestamp=timestamp)
             self._save(state)
@@ -1029,6 +1029,34 @@ class GridTestnetLifecycle:
             return value.isoformat()
         except ValueError as exc:
             raise GridTestnetLifecycleError("timestamp_invalid") from exc
+
+    def _apply_fill_receipt(
+        self,
+        state: dict[str, Any],
+        order: Mapping[str, Any],
+        raw_fill: Mapping[str, Any],
+    ) -> Any:
+        """Recover a persisted public intent once, then query its fill receipt."""
+
+        try:
+            return self.broker.canonical_order_adapter.apply_fill(raw_fill)
+        except Exception as first_error:
+            recover = getattr(self.broker, "recover", None)
+            broker_order_id = str(order.get("broker_order_id") or "").strip()
+            if not callable(recover) or not broker_order_id:
+                raise first_error
+            request = BrokerOrderRequest(
+                run_date=state["cycle_id"],
+                ticket=dict(order),
+                latest_price=float(order.get("price") or order.get("limit_price") or 0),
+                actual_size=float(order.get("quantity") or 0),
+            )
+            recover(
+                request,
+                broker_order_id=broker_order_id,
+                state=str(order.get("state") or "resting"),
+            )
+            return self.broker.canonical_order_adapter.apply_fill(raw_fill)
 
     def _identity_metadata(self) -> dict[str, Any]:
         return {"broker_id": self.broker.broker_config["broker_id"], "environment": self.broker.broker_config["environment"], "account_id": self.broker.broker_config["account_id"], "release_sha": self.broker.broker_config["release_sha"], "ledger_namespace": self.broker.broker_config["ledger_namespace"], "source": "standard-broker.testnet", "mapping_revision": self.broker.broker_config["release_sha"]}
