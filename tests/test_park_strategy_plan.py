@@ -58,6 +58,16 @@ def test_normalizes_exit_label_punctuation_and_english_whitespace_variants(text:
     assert normalized["take_profit_price"] == 73000.0
 
 
+def test_normalizes_chinese_number_dca_entry_ladder_and_count() -> None:
+    normalized = normalize_park_input(
+        "做空 DCA，区间 78000~80000，最大 10 倍杠杆，止损 81000，止盈 73000；"
+        "七万八、七万九、八万，一共三笔"
+    )
+
+    assert normalized["entry_prices"] == [78000.0, 79000.0, 80000.0]
+    assert normalized["order_count"] == 3
+
+
 def test_explicit_dca_wins_over_market_regime_wording() -> None:
     normalized = normalize_park_input(
         "现在行情是震荡向上 做4200 4400的做多dca吧，然后最大10倍杠杆"
