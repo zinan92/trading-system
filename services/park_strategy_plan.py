@@ -53,13 +53,20 @@ def _find_one(text: str, patterns: tuple[str, ...], field: str) -> float | None:
 
 
 def _find_labeled_number(text: str, labels: tuple[str, ...], field: str) -> float | None:
-    """Read an explicitly labelled price in either ``label 1`` or ``1 label`` form."""
+    """Read an explicitly labelled price with natural-language label variants.
 
+    The parenthetical English label is part of the same semantic field, not a
+    second value.  Accepting it keeps the deterministic fallback compatible
+    with the natural-language-first Jessie contract when the NLU provider is
+    unavailable.
+    """
+
+    parenthetical = r"(?:\s*[\(（][^\)）]*[\)）])?"
     patterns = tuple(
         pattern
         for label in labels
         for pattern in (
-            label + r"\s*(?:位|price)?\s*[:：=]?\s*" + _NUMBER,
+            label + r"\s*" + parenthetical + r"\s*(?:位|price)?\s*[:：=]?\s*" + _NUMBER,
         )
     )
     return _find_one(text, patterns, field)
@@ -158,12 +165,16 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
 
     stop_price = body.get("stop_price")
     if stop_price is None:
-        stop_price = _find_labeled_number(text, ("止损", "stop(?:_price)?"), "stop_price")
+        stop_price = _find_labeled_number(
+            text,
+            ("止损", r"stop(?:[_\s]+(?:loss|price))?"),
+            "stop_price",
+        )
     take_profit_price = body.get("take_profit_price")
     if take_profit_price is None:
         take_profit_price = _find_labeled_number(
             text,
-            ("止盈", "take(?:_profit)?(?:_price)?", "tp"),
+            ("止盈", r"take(?:[_\s]+profit)?(?:[_\s]+price)?", "tp"),
             "take_profit_price",
         )
     grid_spacing = body.get("grid_spacing") or body.get("spacing")

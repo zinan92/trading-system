@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from services.park_strategy_plan import ParkStrategyPlanError, build_deterministic_risk_plan, normalize_park_input
@@ -24,6 +22,40 @@ def test_normalizes_parks_chinese_short_dca_input() -> None:
     assert normalized["lower_price_boundary"] == 4200.0
     assert normalized["maximum_leverage"] == 10.0
     assert normalized["maximum_acceptable_loss"] is None
+
+
+def test_normalizes_natural_language_short_dca_with_parenthetical_exit_labels() -> None:
+    normalized = normalize_park_input(
+        "你帮我做一个比特币做空的 DCA 策略，具体参数如下："
+        "1. 杠杆：最高 10 倍；"
+        "2. 价格区间：78000 ~ 80000；"
+        "3. 止损 (Stop Loss)：81000；"
+        "4. 止盈 (Take Profit)：73000"
+    )
+
+    assert normalized["direction"] == "short"
+    assert normalized["strategy_type"] == "dca"
+    assert normalized["upper_price_boundary"] == 80000.0
+    assert normalized["lower_price_boundary"] == 78000.0
+    assert normalized["maximum_leverage"] == 10.0
+    assert normalized["stop_price"] == 81000.0
+    assert normalized["take_profit_price"] == 73000.0
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "做空 DCA，区间 78000～80000，最大 10 倍杠杆，止损（Stop Loss）：81000，止盈（Take Profit）：73000",
+        "short DCA, range 78000 - 80000, max leverage 10x, stop price 81000, take profit 73000",
+    ],
+)
+def test_normalizes_exit_label_punctuation_and_english_whitespace_variants(text: str) -> None:
+    normalized = normalize_park_input(text)
+
+    assert normalized["direction"] == "short"
+    assert normalized["strategy_type"] == "dca"
+    assert normalized["stop_price"] == 81000.0
+    assert normalized["take_profit_price"] == 73000.0
 
 
 def test_explicit_dca_wins_over_market_regime_wording() -> None:
