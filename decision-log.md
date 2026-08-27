@@ -1,5 +1,39 @@
 # Decision Log
 
+## Let deterministic completeness override a contradictory Jessie provider (#1063)
+
+Date: 2026-08-27
+
+### Decision
+
+- Keep the conversation model responsible for semantic discussion and field
+  extraction, but not for final completeness authority. On Park's explicit
+  `finalize/执行` turn, an accumulated candidate that passes the deterministic
+  normalizer and DCA exit requirements proceeds to the existing proposal
+  builder even if the provider incorrectly leaves it in `strategy_forming`.
+- Preserve the existing risk contract: `maximum_leverage` and
+  `maximum_acceptable_loss` are alternatives. A provider may not demand an
+  additional position-size/risk-limit field after maximum leverage is present.
+- Do not echo a contradictory provider follow-up after the deterministic layer
+  has created a proposal. Genuinely incomplete candidates remain in
+  conversation, while all market/account and exact-confirmation gates remain
+  unchanged.
+
+### Verification
+
+- Issue #1063 implementation commit: `dcfde72`.
+- Contradictory-provider and genuinely-incomplete regressions pass; the focused
+  conversation/parser/runtime suite passes `81`. Ruff, compileall, diff-check,
+  and gitleaks pass.
+- No credential, Testnet/Mainnet order, scheduler, cloud, or Live mutation
+  occurred; proposal creation remains non-authorizing.
+
+### Gotcha
+
+- The running provider correctly echoed all eight strategy fields but still
+  invented `position_size_or_total_risk_limit` as missing. Prompt wording alone
+  was insufficient; completeness now has a deterministic authority boundary.
+
 ## Reuse Jessie's durable semantic draft on provider-outage finalize (#1061)
 
 Date: 2026-08-27

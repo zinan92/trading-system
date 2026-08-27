@@ -12,6 +12,27 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-27, Jessie deterministic finalize authority)
+
+- Issue #1063 closes the remaining provider-success contradiction exposed by
+  the running Jessie worker. When Park explicitly says `finalize/执行`, a
+  complete accumulated semantic candidate is now judged by the deterministic
+  strategy normalizer rather than a provider's stale `strategy_forming` mode
+  or invented `position_size_or_total_risk_limit` follow-up.
+- `maximum_leverage` remains a complete risk authority alternative to
+  `maximum_acceptable_loss`. The exact BTC short-DCA candidate with three
+  entries and explicit TP/SL creates only a non-authorizing Testnet proposal
+  under matching trusted facts. A genuinely incomplete DCA candidate stays in
+  conversation, and a contradictory provider reply is not emitted after the
+  proposal.
+- Focused conversation/parser/runtime validation passes 81 tests; ruff,
+  compileall, diff-check, and gitleaks pass. Exact confirmation remains
+  mandatory, and no credential, order, scheduler, cloud, Mainnet, or Live state
+  was touched.
+
+_下一步_: merge #1063, sync the Paper-only Jessie checkout, restart its launchd
+worker, and replay the explicit finalize turn against the already stored draft.
+
 ## 现在在哪里(2026-08-27, Jessie durable-draft finalize)
 
 - Issue #1061 fixes the provider-outage multi-turn finalize path. An explicit

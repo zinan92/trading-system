@@ -401,6 +401,95 @@ def test_candidate_patch_is_merged_across_natural_language_turns(tmp_path: Path)
     assert second["plan"]["normalized_input"]["stop_price"] == 4190.0
 
 
+def test_explicit_finalize_uses_deterministic_completeness_when_provider_contradicts_candidate(
+    tmp_path: Path,
+) -> None:
+    class ContradictoryProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {
+                "status": "ok",
+                "conversation": {
+                    "mode": "strategy_forming",
+                    "assistant_reply": (
+                        "参数已记录；但每笔下单数量或总风险上限尚未提供，"
+                        "因此还不能形成可执行的 Paper 计划。"
+                    ),
+                    "strategy_patch": {
+                        "direction": "short",
+                        "strategy_type": "dca",
+                        "lower_price_boundary": 78000,
+                        "upper_price_boundary": 80000,
+                        "maximum_leverage": 10,
+                        "entry_prices": [78000, 79000, 80000],
+                        "order_count": 3,
+                        "stop_price": 81000,
+                        "take_profit_price": 73000,
+                    },
+                    "missing_fields": ["position_size_or_total_risk_limit"],
+                    "needs_confirmation": False,
+                    "explicit_execution_intent": False,
+                },
+                "metadata": {"provider": "codex_cli", "status": "returned"},
+            }
+
+    router = _router(tmp_path, ContradictoryProvider())
+    router.market_reader = lambda: {
+        "price": 79000.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "hyperliquid.external_testnet",
+        "provider": "hyperliquid",
+        "observed_at": "2026-08-19T00:00:00+00:00",
+    }
+    draft = (
+        "比特币做空 Testnet DCA，最高10倍杠杆，区间78000~80000，"
+        "止损81000，止盈73000；七万八、七万九、八万，一共三笔"
+    )
+
+    first = router.handle_update(_update(31, draft))
+    second = router.handle_update(_update(32, "finalize 执行这个 Testnet BTC 做空 DCA 策略"))
+
+    assert first["status"] == "conversation_replied"
+    assert second["status"] == "proposal_created"
+    assert second["plan"]["risk"]["selected_constraint"] == "maximum_leverage"
+    assert second["proposal"]["execution_environment"] == "testnet"
+    assert second["proposal"]["execution_authorized"] is False
+    assert second["provider_mode_overridden"] == "strategy_forming"
+    assert "conversation_outbound" not in second
+    assert router.telegram.pending_outbound()[-1]["message_type"] == "strategy_proposal"
+    assert not (tmp_path / "outputs" / "dualtrack").exists()
+
+
+def test_explicit_finalize_keeps_genuinely_incomplete_provider_candidate_in_conversation(
+    tmp_path: Path,
+) -> None:
+    provider = ConversationProvider(
+        {
+            "mode": "strategy_forming",
+            "assistant_reply": "还需要明确策略级止损和止盈。",
+            "strategy_patch": {
+                "direction": "short",
+                "strategy_type": "dca",
+                "lower_price_boundary": 78000,
+                "upper_price_boundary": 80000,
+                "maximum_leverage": 10,
+                "entry_prices": [78000, 79000, 80000],
+                "order_count": 3,
+            },
+            "missing_fields": ["stop_price", "take_profit_price"],
+            "needs_confirmation": False,
+            "explicit_execution_intent": False,
+        }
+    )
+    router = _router(tmp_path, provider)
+
+    result = router.handle_update(_update(33, "finalize 执行这个 Testnet BTC 做空 DCA 策略"))
+
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "strategy_forming"
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
 def test_explicit_dca_fields_are_recovered_when_model_patch_is_incomplete(tmp_path: Path) -> None:
     class IncompletePatchProvider:
         def __init__(self) -> None:
