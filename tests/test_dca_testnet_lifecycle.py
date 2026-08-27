@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -280,7 +279,7 @@ def test_dca_testnet_cancel_failure_stops_before_exit_submission(tmp_path: Path)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
 
-    opened = lifecycle.on_fill(
+    lifecycle.on_fill(
         plan,
         _fill(started["orders"][0], price=65000, tid=30),
         timestamp="2026-08-22T01:01:00+00:00",
@@ -301,7 +300,7 @@ def test_dca_testnet_partial_exit_reduces_position_and_refreshes_protection(tmp_
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=69), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=69), timestamp="2026-08-22T01:01:00+00:00")
     stopping = lifecycle.stop(plan, timestamp="2026-08-22T01:02:00+00:00", reason="strategy_stop", price=64000)
     stop_order = next(row for row in stopping["orders"] if row["event"] == "stop")
     partial = lifecycle.on_fill(
@@ -320,7 +319,7 @@ def test_dca_testnet_exit_slippage_blocks_terminal_seal(tmp_path: Path) -> None:
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=72), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=72), timestamp="2026-08-22T01:01:00+00:00")
     stopping = lifecycle.stop(plan, timestamp="2026-08-22T01:02:00+00:00", reason="strategy_stop", price=64000)
     stop_order = next(row for row in stopping["orders"] if row["event"] == "stop")
     breached = lifecycle.on_fill(plan, _fill(stop_order, price=65000, tid=73), timestamp="2026-08-22T01:03:00+00:00")
@@ -336,7 +335,7 @@ def test_dca_testnet_restart_does_not_reopen_terminal_revision(tmp_path: Path) -
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(
+    lifecycle.on_fill(
         plan,
         _fill(started["orders"][0], price=65000, tid=40),
         timestamp="2026-08-22T01:01:00+00:00",
@@ -369,7 +368,7 @@ def test_dca_testnet_terminal_does_not_seal_when_broker_position_remains(tmp_pat
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(
+    lifecycle.on_fill(
         plan,
         _fill(started["orders"][0], price=65000, tid=60),
         timestamp="2026-08-22T01:01:00+00:00",
@@ -435,7 +434,7 @@ def test_dca_testnet_terminal_stop_is_immutable(tmp_path: Path) -> None:
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=63), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=63), timestamp="2026-08-22T01:01:00+00:00")
     stopping = lifecycle.stop(plan, timestamp="2026-08-22T01:02:00+00:00", reason="strategy_stop", price=64000)
     terminal = lifecycle.on_fill(plan, _fill(next(row for row in stopping["orders"] if row["event"] == "stop"), price=64000, tid=64), timestamp="2026-08-22T01:03:00+00:00")
     replay = lifecycle.stop(plan, timestamp="2026-08-22T01:04:00+00:00", reason="replay", price=63900)
@@ -460,7 +459,7 @@ def test_dca_testnet_crossed_entry_uses_bounded_market_catch_up(tmp_path: Path) 
     plan = _plan()
     plan["dca"] = {**plan["dca"], "stop_price": 63000.0}
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=66), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=66), timestamp="2026-08-22T01:01:00+00:00")
 
     caught_up = lifecycle.on_market_event(plan, price=63980.0, timestamp="2026-08-22T01:02:00+00:00")
 
@@ -477,7 +476,7 @@ def test_dca_testnet_stop_before_first_fill_reconciles_before_sealing(tmp_path: 
     broker, _ = _broker(tmp_path, protection=True)
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
-    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
 
     stopped = lifecycle.on_market_event(plan, price=64000.0, timestamp="2026-08-22T01:01:00+00:00")
 
