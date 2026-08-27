@@ -79,6 +79,23 @@ fallback instead of dropping exits before finalize.
 _下一步_: after merge, resend the original message in Jessie; if a complete
 strategy is intended, explicitly finalize it after the bot reflects all fields.
 
+## 现在在哪里(2026-08-27, Jessie Chinese DCA ladder fallback)
+
+- Issue #1059 extends both natural-language fallback entry points to understand
+  explicit Chinese-number DCA ladders such as `七万八、七万九、八万，一共三笔`.
+  They now preserve `entry_prices=[78000,79000,80000]` and `order_count=3`
+  without inventing a scale or bypassing confirmation.
+- Provider-outage tests prove the conversation patch retains the ladder, while
+  the direct normalizer retains the same range/direction/leverage/exit fields.
+  Missing or mismatched counts remain unaccepted rather than guessed.
+- Focused parser/Jessie validation passes 77 tests; ruff, compileall,
+  diff-check, and gitleaks pass. No credentials, Broker transport,
+  Testnet/Mainnet order, scheduler, or cloud state was touched.
+
+_下一步_: after merge, resend the full natural-language BTC short-DCA message
+in Jessie; the fallback should now retain both exit levels and the three-entry
+ladder before asking for finalize/confirmation.
+
 ## 现在在哪里(2026-08-25, multi-asset Portfolio seam)
 - PORT-01/#997 merged as PR #1004 at `main@70b12581b7a34a2ce4a1852a8052a519c47c69ac`:
   immutable Portfolio Session, Strategy Position Plan/Candidate Set, Policy,

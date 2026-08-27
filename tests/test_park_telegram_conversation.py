@@ -230,6 +230,31 @@ def test_provider_outage_preserves_parenthetical_dca_exit_fields(tmp_path: Path)
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
+def test_provider_outage_preserves_chinese_number_dca_entry_ladder(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "deepseek", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "unavailable"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+
+    result = router.handle_update(
+        _update(
+            26,
+            "做空 DCA，区间 78000~80000，最大 10 倍杠杆，止损 81000，止盈 73000；"
+            "七万八、七万九、八万，一共三笔",
+        )
+    )
+
+    assert result["status"] == "conversation_replied"
+    patch = result["conversation"]["strategy_patch"]
+    assert patch["entry_prices"] == [78000.0, 79000.0, 80000.0]
+    assert patch["order_count"] == 3
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
 def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_path: Path) -> None:
     provider = ConversationProvider(
         {

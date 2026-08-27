@@ -8,6 +8,11 @@ import re
 from datetime import datetime
 from typing import Any, Mapping
 
+from services.natural_language_numbers import (
+    extract_explicit_entry_count,
+    extract_explicit_entry_ladder,
+)
+
 
 PARK_PLAN_SCHEMA = "park-strategy-plan-v1"
 DEFAULT_NEUTRAL_GRID_ORDER_COUNT = 30
@@ -197,6 +202,13 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "explicit_stop_price" if stop_was_explicit else "authorized_price_boundary"
     ) if strategy_type == "grid" else None
     raw_entry_prices = body.get("entry_prices")
+    explicit_ladder = (
+        extract_explicit_entry_ladder(text)
+        if raw_entry_prices in (None, "")
+        else None
+    )
+    if explicit_ladder is not None:
+        raw_entry_prices = explicit_ladder[0]
     entry_prices: list[float] | None = None
     if raw_entry_prices not in (None, ""):
         if not isinstance(raw_entry_prices, (list, tuple)) or not raw_entry_prices:
@@ -204,8 +216,15 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         entry_prices = [_number(value, "entry_price") for value in raw_entry_prices]
     raw_order_count = body.get("order_count")
     if raw_order_count in (None, ""):
-        raw_order_count = len(entry_prices) if entry_prices is not None else (
-            DEFAULT_NEUTRAL_GRID_ORDER_COUNT if direction == "neutral" and strategy_type == "grid" else 1
+        raw_order_count = (
+            len(entry_prices)
+            if entry_prices is not None
+            else extract_explicit_entry_count(text)
+            or (
+                DEFAULT_NEUTRAL_GRID_ORDER_COUNT
+                if direction == "neutral" and strategy_type == "grid"
+                else 1
+            )
         )
     if entry_prices is not None and int(raw_order_count) != len(entry_prices):
         raise ParkStrategyPlanError("entry_count_mismatch", "entry_prices must match order_count")

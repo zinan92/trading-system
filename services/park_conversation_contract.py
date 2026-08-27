@@ -7,6 +7,11 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from services.natural_language_numbers import (
+    extract_explicit_entry_count,
+    extract_explicit_entry_ladder,
+)
+
 
 PARK_CONVERSATION_SCHEMA = "park-trading-conversation-v1"
 CONVERSATION_MODES = frozenset(
@@ -120,6 +125,13 @@ def extract_explicit_strategy_patch(text: str) -> dict[str, Any]:
     loss_match = re.search(number + r"\s*(?:最大可接受亏损|最大亏损|max(?:imum)?\s*loss)", source, re.IGNORECASE)
     if loss_match:
         patch["maximum_acceptable_loss"] = float(loss_match.group(1))
+    explicit_ladder = extract_explicit_entry_ladder(source)
+    if explicit_ladder is not None:
+        patch["entry_prices"], patch["order_count"] = explicit_ladder
+    else:
+        explicit_count = extract_explicit_entry_count(source)
+        if explicit_count is not None:
+            patch["order_count"] = explicit_count
     parenthetical = r"(?:\s*[\(（][^\)）]*[\)）])?"
     stop_match = re.search(
         r"(?:止损|stop(?:[_\s]+(?:loss|price))?)"
