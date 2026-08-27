@@ -25,15 +25,17 @@ successful.
 
 ## Tight feedback loop
 
+The Phase 1 temporary replay was converted into the durable regression seam:
+
 ```bash
-PYTHONPATH=/Users/wendy/work/trading-system-park-paper-main \
-  python3 /tmp/jessie_multiturn_repro.py
+PYTHONPATH=/Users/wendy/work/trading-system-testnet python3 -m pytest -q \
+  tests/test_park_telegram_conversation.py::test_provider_outage_replays_revised_dca_geometry_without_raw_market_exception
 ```
 
-Before the fix this deterministic 0.3-second replay failed on four exact
+Before the fix this deterministic sub-second replay failed on four exact
 symptoms: raw `TypeError`, stale three-entry ladder, stale count `3`, and
 `stop_price=73`. It replays the full sequence through `ParkTelegramRouter` in
-an isolated temporary output root; no Telegram transport, credential, order,
+an isolated pytest output root; no Telegram transport, credential, order,
 position, scheduler, or external mutation is available to the harness.
 
 After the fix the same command exits zero with:
