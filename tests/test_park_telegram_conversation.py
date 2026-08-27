@@ -197,6 +197,39 @@ def test_provider_outage_keeps_explicit_strategy_as_unconfirmed_draft(tmp_path: 
     assert result["status"] == "conversation_replied"
     assert result["mode"] == "strategy_forming"
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
+def test_provider_outage_preserves_parenthetical_dca_exit_fields(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "deepseek", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "unavailable"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+
+    result = router.handle_update(
+        _update(
+            25,
+            "你帮我做一个比特币做空的 Testnet DCA 策略，具体参数如下："
+            "1. 杠杆：最高 10 倍；"
+            "2. 价格区间：78000 ~ 80000；"
+            "3. 止损 (Stop Loss)：81000；"
+            "4. 止盈 (Take Profit)：73000",
+        )
+    )
+
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "strategy_forming"
+    patch = result["conversation"]["strategy_patch"]
+    assert patch["direction"] == "short"
+    assert patch["strategy_type"] == "dca"
+    assert patch["stop_price"] == 81000.0
+    assert patch["take_profit_price"] == 73000.0
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
 def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_path: Path) -> None:
     provider = ConversationProvider(
         {
