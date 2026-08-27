@@ -1,5 +1,38 @@
 # Decision Log
 
+## Preserve semantic-first Jessie input in the deterministic fallback (#1055)
+
+Date: 2026-08-27
+
+### Decision
+
+- Keep Jessie’s intended natural-language-first architecture: the NLU provider
+  emits an untrusted semantic candidate, then the existing normalizer validates
+  and maps it into fixed DCA/Grid placeholders. The placeholder schema remains
+  internal and is never a user-facing formatting requirement.
+- When the provider is unavailable or returns no candidate, the deterministic
+  fallback must still accept semantic label variants. Chinese exit labels may
+  include English parentheticals and full-width punctuation; common English
+  `stop price`/`take profit` forms are accepted as aliases.
+- Preserve fail-closed behavior for missing or ambiguous authority. This change
+  only broadens equivalent label parsing; it does not infer direction, prices,
+  strategy type, or execution authorization.
+
+### Verification
+
+- Issue #1055 implementation commit: `6cee888`.
+- Exact screenshot-style short-DCA normalization and Jessie proposal creation
+  regressions pass; the focused parser/Jessie/provider-chain suite passes `74`.
+- Ruff, compileall, diff-check, and gitleaks pass. No credentials, network,
+  Testnet/Mainnet order, scheduler, Dashboard, or cloud mutation occurred.
+
+### Gotcha
+
+- The original message already contained `做空`; the incident was caused by a
+  regex fallback that stopped at the parenthetical `(Stop Loss)`/`(Take Profit)`
+  labels. Jessie’s response was a parser compatibility failure, not a missing
+  strategy direction or missing risk prices.
+
 ## Bind the reviewed standard-broker protection profile at the Coordinator seam (#1053)
 
 Date: 2026-08-27
