@@ -62,6 +62,35 @@ Date: 2026-08-27
   exits before finalize. This follow-up keeps both semantic entry points
   aligned.
 
+## Preserve explicit Chinese-number DCA ladders in fallback parsing (#1059)
+
+Date: 2026-08-27
+
+### Decision
+
+- Keep natural-language understanding ahead of the fixed strategy schema. The
+  deterministic fallback may extract an explicitly stated Chinese-number DCA
+  ladder and count, but it must not infer levels, sizing, direction, or
+  authorization.
+- Share a small number parser across the direct strategy normalizer and the
+  Conversation Agent patch extractor. Support colloquial prices such as
+  `七万八` = `78000`, joined by Chinese punctuation/conjunctions, and only
+  accept a ladder when its explicit total count matches.
+
+### Verification
+
+- Issue #1059 implementation commit: `83ca73b`.
+- Direct normalization and provider-outage conversation regressions pass; the
+  focused parser/Jessie suite passes `77`. Ruff, compileall, diff-check, and
+  gitleaks pass. No plan/order/confirmation was created by fallback extraction
+  alone.
+
+### Gotcha
+
+- The previous fix preserved parenthetical stop/take-profit labels but still
+  lost `七万八、七万九、八万，一共三笔`; Jessie then asked for an addition
+  count. This is now retained as explicit `entry_prices` plus `order_count`.
+
 ## Bind the reviewed standard-broker protection profile at the Coordinator seam (#1053)
 
 Date: 2026-08-27
