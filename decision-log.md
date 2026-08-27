@@ -1,5 +1,40 @@
 # Decision Log
 
+## Preserve explicit revised DCA geometry across Jessie fallback turns (#1065)
+
+Date: 2026-08-27
+
+### Decision
+
+- Treat `计划有变 ... 80000 到 81000这两个价位` as an explicit replacement
+  of entry geometry, not merely a new range. The new two-level ladder and count
+  overwrite superseded ladder fields in the existing append-only merge; no
+  journal row is rewritten.
+- Accept bounded compact price notation for explicit exits in both orientations:
+  `82k止损 / 73k止盈` and `止损82k / 止盈73k`. Do not generalize
+  number-before-label matching to arbitrary unlabeled digits because that can
+  bleed one exit value into the next label.
+- Keep market uncertainty fail-closed under `market_unavailable`, but separate
+  the internal exception classification from Park-facing guidance. A transient
+  market reader failure preserves the strategy draft and never exposes
+  `TypeError` as an actionable explanation.
+
+### Verification
+
+- Issue #1065 implementation commit: `7601714`.
+- The exact five-turn screenshot replay goes red on the prior release and green
+  after the fix. The focused conversation/parser/runtime suite passes `83`;
+  ruff, compileall, diff-check, and gitleaks pass.
+- No credentials, Telegram token, Testnet/Mainnet order, position, scheduler,
+  cloud, or Live mutation occurred.
+
+### Gotcha
+
+- The historical market exception's originating line is unrecoverable because
+  the old boundary persisted only its class name. A later direct market read
+  was healthy, so this change does not pretend the historical read succeeded;
+  it fixes operator messaging and preserves fail-closed behavior.
+
 ## Let deterministic completeness override a contradictory Jessie provider (#1063)
 
 Date: 2026-08-27

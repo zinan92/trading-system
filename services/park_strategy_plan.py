@@ -11,6 +11,8 @@ from typing import Any, Mapping
 from services.natural_language_numbers import (
     extract_explicit_entry_count,
     extract_explicit_entry_ladder,
+    extract_explicit_exit_prices,
+    extract_explicit_two_level_entry_ladder,
 )
 
 
@@ -168,7 +170,10 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     if max_leverage is None and max_loss is None:
         raise ParkStrategyPlanError("missing_risk_authority", "Park must provide maximum leverage or maximum acceptable loss")
 
+    explicit_exits = extract_explicit_exit_prices(text)
     stop_price = body.get("stop_price")
+    if stop_price is None:
+        stop_price = explicit_exits.get("stop_price")
     if stop_price is None:
         stop_price = _find_labeled_number(
             text,
@@ -176,6 +181,8 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
             "stop_price",
         )
     take_profit_price = body.get("take_profit_price")
+    if take_profit_price is None:
+        take_profit_price = explicit_exits.get("take_profit_price")
     if take_profit_price is None:
         take_profit_price = _find_labeled_number(
             text,
@@ -202,11 +209,12 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "explicit_stop_price" if stop_was_explicit else "authorized_price_boundary"
     ) if strategy_type == "grid" else None
     raw_entry_prices = body.get("entry_prices")
-    explicit_ladder = (
-        extract_explicit_entry_ladder(text)
-        if raw_entry_prices in (None, "")
-        else None
-    )
+    explicit_ladder = None
+    if raw_entry_prices in (None, ""):
+        explicit_ladder = (
+            extract_explicit_entry_ladder(text)
+            or extract_explicit_two_level_entry_ladder(text)
+        )
     if explicit_ladder is not None:
         raw_entry_prices = explicit_ladder[0]
     entry_prices: list[float] | None = None

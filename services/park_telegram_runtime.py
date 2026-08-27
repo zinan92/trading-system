@@ -1663,6 +1663,8 @@ class ParkTelegramRouter:
             return "我还缺价格区间。请像这样说：做空 DCA，区间 4444~4200，最大10倍杠杆。"
         if code == "missing_risk_authority":
             return "我还缺风险上限。请补充最大杠杆或最大可接受亏损，例如：最大10倍杠杆。"
+        if code == "market_unavailable":
+            return "当前可信行情暂时不可用；策略草稿已经保留，系统不会猜价或下单。行情恢复后再次发送 finalize/执行即可。"
         if code == "confirmation_incomplete":
             return "可以直接回复‘确认当前计划’或‘拒绝当前计划’；也可以回复 confirm <plan_digest>。"
         if code == "confirmation_expired":

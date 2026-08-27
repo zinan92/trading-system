@@ -10,6 +10,8 @@ from typing import Any
 from services.natural_language_numbers import (
     extract_explicit_entry_count,
     extract_explicit_entry_ladder,
+    extract_explicit_exit_prices,
+    extract_explicit_two_level_entry_ladder,
 )
 
 
@@ -125,34 +127,17 @@ def extract_explicit_strategy_patch(text: str) -> dict[str, Any]:
     loss_match = re.search(number + r"\s*(?:最大可接受亏损|最大亏损|max(?:imum)?\s*loss)", source, re.IGNORECASE)
     if loss_match:
         patch["maximum_acceptable_loss"] = float(loss_match.group(1))
-    explicit_ladder = extract_explicit_entry_ladder(source)
+    explicit_ladder = (
+        extract_explicit_entry_ladder(source)
+        or extract_explicit_two_level_entry_ladder(source)
+    )
     if explicit_ladder is not None:
         patch["entry_prices"], patch["order_count"] = explicit_ladder
     else:
         explicit_count = extract_explicit_entry_count(source)
         if explicit_count is not None:
             patch["order_count"] = explicit_count
-    parenthetical = r"(?:\s*[\(（][^\)）]*[\)）])?"
-    stop_match = re.search(
-        r"(?:止损|stop(?:[_\s]+(?:loss|price))?)"
-        + parenthetical
-        + r"\s*(?:位|价|price)?\s*[:：=]?\s*"
-        + number,
-        source,
-        re.IGNORECASE,
-    )
-    if stop_match:
-        patch["stop_price"] = float(stop_match.group(1))
-    take_match = re.search(
-        r"(?:止盈|take(?:[_\s]+profit)?(?:[_\s]+price)?|tp)"
-        + parenthetical
-        + r"\s*(?:位|价|price)?\s*[:：=]?\s*"
-        + number,
-        source,
-        re.IGNORECASE,
-    )
-    if take_match:
-        patch["take_profit_price"] = float(take_match.group(1))
+    patch.update(extract_explicit_exit_prices(source))
     entry_prices = [
         float(match.group(1))
         for match in re.finditer(
