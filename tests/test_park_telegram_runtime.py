@@ -568,6 +568,52 @@ def test_router_creates_deterministic_proposal_without_execution_mutation(tmp_pa
     assert router.telegram.pending_outbound()
 
 
+def test_router_understands_screenshot_style_short_dca_without_json_rephrasing(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    market = {
+        "price": 79000.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "observed_at": "2026-08-14T10:00:00+00:00",
+    }
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: market,
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: "2026-08-14T10:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-14_DAY",
+    )
+
+    result = router.handle_update(
+        _update(
+            2,
+            "你帮我做一个比特币做空的 Testnet DCA 策略，具体参数如下："
+            "1. 杠杆：最高 10 倍；"
+            "2. 价格区间：78000 ~ 80000；"
+            "3. 止损 (Stop Loss)：81000；"
+            "4. 止盈 (Take Profit)：73000",
+        )
+    )
+
+    assert result["status"] == "proposal_created"
+    normalized = result["plan"]["normalized_input"]
+    assert normalized["direction"] == "short"
+    assert normalized["strategy_type"] == "dca"
+    assert normalized["stop_price"] == 81000.0
+    assert normalized["take_profit_price"] == 73000.0
+    assert result["proposal"]["execution_environment"] == "testnet"
+
+
 def test_router_blocks_dca_without_explicit_strategy_tp_and_sl(tmp_path: Path) -> None:
     router = ParkTelegramRouter(
         tmp_path / "outputs",

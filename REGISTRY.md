@@ -44,6 +44,23 @@
 _下一步_: after merge, run the credential-free preflight from the runbook; a
 real Testnet DCA/Grid start still requires Park's fresh attended activation.
 
+## 现在在哪里(2026-08-27, Jessie semantic fallback compatibility)
+
+- Issue #1055 fixes the deterministic fallback used when Jessie’s NLU provider
+  is unavailable or returns no candidate. It now treats parenthetical English
+  labels such as `止损 (Stop Loss)` and `止盈 (Take Profit)` as the same
+  semantic fields, while preserving the existing DCA/Grid placeholder schema.
+- The exact screenshot-style BTC short-DCA message now normalizes to
+  `short`/`dca`, range `78000..80000`, leverage `10`, stop `81000`, and take
+  profit `73000`. A Jessie runtime regression proves it creates a Testnet
+  proposal without JSON rephrasing or execution mutation.
+- Focused parser/Jessie/provider-chain validation passes 74 tests; ruff,
+  compileall, diff-check, and gitleaks pass. No credentials, Broker transport,
+  Testnet/Mainnet order, scheduler, or cloud state was touched.
+
+_下一步_: merge #1055, then resend the original natural-language strategy in
+Jessie; it should produce a proposal instead of `dca_exit_levels_missing`.
+
 ## 现在在哪里(2026-08-25, multi-asset Portfolio seam)
 - PORT-01/#997 merged as PR #1004 at `main@70b12581b7a34a2ce4a1852a8052a519c47c69ac`:
   immutable Portfolio Session, Strategy Position Plan/Candidate Set, Policy,
