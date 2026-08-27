@@ -107,6 +107,15 @@ class _Binding:
             provenance=provenance,
         )
         self.reconciliation = _Reconciliation(observed_at)
+        self.reconciliation.account = _Observation(self.account)
+        self.reconciliation.identity = SimpleNamespace(
+            broker_id="hyperliquid",
+            environment="testnet",
+            account_address=ACCOUNT,
+            lifecycle_id="runtime-1",
+            release_sha=RELEASE,
+            capability_revision=PROTECTED_CAPABILITY_REVISION,
+        )
         self.receipt = SimpleNamespace(
             order_id="order-1",
             client_order_id="client-1",
@@ -189,7 +198,15 @@ def _adapter() -> tuple[StandardBrokerExternalExecutionAdapter, _Binding, list[s
     binding = _Binding()
     closed: list[str] = []
     runtime = SimpleNamespace(close=lambda: closed.append("closed"))
-    return StandardBrokerExternalExecutionAdapter(binding, runtime=runtime), binding, closed
+    return (
+        StandardBrokerExternalExecutionAdapter(
+            binding,
+            runtime=runtime,
+            broker_config={"instrument_binding": {"instrument_id": "BTC-USD-PERP"}},
+        ),
+        binding,
+        closed,
+    )
 
 
 def test_external_execution_adapter_proves_opt_in_preflight_without_secret_or_native_payload() -> None:
@@ -243,6 +260,14 @@ def test_external_execution_adapter_closes_owned_runtime() -> None:
     adapter.close()
 
     assert closed == ["closed"]
+
+
+def test_external_execution_adapter_maps_lifecycle_query_to_public_reconcile() -> None:
+    adapter, binding, _closed = _adapter()
+
+    adapter.request("protection_order", "query", object())
+
+    assert binding.protection.calls[-1][0] == "query"
 
 
 def test_registry_resolves_opt_in_protected_testnet_profile() -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ TESTNET_BROKER_ID = "hyperliquid"
 TESTNET_ENVIRONMENT = "testnet"
 TESTNET_TRANSPORT_PROFILE = "hyperliquid-testnet-default"
 TESTNET_PROTECTED_TRANSPORT_PROFILE = "hyperliquid-testnet-position-protection"
+MAX_TESTNET_CONFIRMATION_AGE_SECONDS = 900
 _TESTNET_TRANSPORT_PROFILES = frozenset(
     {TESTNET_TRANSPORT_PROFILE, TESTNET_PROTECTED_TRANSPORT_PROFILE}
 )
@@ -1350,8 +1352,108 @@ class TestnetAutomationCoordinator:
     def _decimal_value(cls, value: Any) -> Decimal | None:
         return cls._decimal_optional(value)
 
-    @staticmethod
+    def verify_confirmation(
+        self,
+        plan: Mapping[str, Any],
+        confirmation: Mapping[str, Any],
+    ) -> None:
+        """Verify one fresh, durable Park Testnet confirmation.
+
+        This gate is intentionally owned by the Coordinator rather than only
+        by a CLI. Direct lifecycle callers therefore cannot reach a capable
+        Broker with a forged, stale, or already-rejected projection.
+        """
+
+        if not isinstance(plan, Mapping) or not isinstance(confirmation, Mapping):
+            raise TestnetCoordinatorError("testnet_confirmation_invalid")
+        if (
+            confirmation.get("event") != "confirmed"
+            or confirmation.get("execution_authorized") is not True
+            or str(confirmation.get("execution_environment") or "").lower() != "testnet"
+            or str(confirmation.get("plan_digest") or "")
+            != str(plan.get("plan_digest") or "")
+            or not str(confirmation.get("confirmation_id") or "").strip()
+            or confirmation.get("confirmed_at") in (None, "")
+            or not str(confirmation.get("proposal_id") or "").strip()
+            or not str(confirmation.get("receipt_digest") or "").strip()
+        ):
+            raise TestnetCoordinatorError("testnet_confirmation_identity_invalid")
+
+        def epoch(value: Any, field: str) -> float:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                rendered = float(value)
+            else:
+                text = str(value or "").strip()
+                try:
+                    rendered = float(text)
+                except (TypeError, ValueError):
+                    try:
+                        rendered = datetime.fromisoformat(
+                            text.replace("Z", "+00:00")
+                        ).timestamp()
+                    except ValueError as exc:
+                        raise TestnetCoordinatorError(f"{field}_invalid") from exc
+            if not rendered == rendered or rendered in {float("inf"), float("-inf")}:
+                raise TestnetCoordinatorError(f"{field}_invalid")
+            return rendered
+
+        from services.park_confirmation import ParkConfirmationLedger
+
+        rows = ParkConfirmationLedger(self.output_root, park_user_id="park").rows()
+        proposal_id = str(confirmation.get("proposal_id") or "").strip()
+        proposal = next(
+            (
+                row
+                for row in rows
+                if row.get("event") == "proposal"
+                and str(row.get("proposal_id") or "") == proposal_id
+            ),
+            None,
+        )
+        decision = next(
+            (
+                row
+                for row in reversed(rows)
+                if row.get("event") in {"confirmed", "rejected"}
+                and str(row.get("proposal_id") or "") == proposal_id
+            ),
+            None,
+        )
+        if proposal is None or decision is None:
+            raise TestnetCoordinatorError("testnet_confirmation_durable_missing")
+        if decision.get("event") != "confirmed":
+            raise TestnetCoordinatorError("testnet_confirmation_not_confirmed")
+        try:
+            if epoch(proposal.get("expires_at"), "confirmation_expiry") <= time.time():
+                raise TestnetCoordinatorError("testnet_confirmation_expired")
+            confirmed_at = epoch(decision.get("confirmed_at"), "confirmed_at")
+            projected_at = epoch(confirmation.get("confirmed_at"), "confirmed_at")
+        except TestnetCoordinatorError:
+            raise
+        age = time.time() - confirmed_at
+        if age < 0 or age > MAX_TESTNET_CONFIRMATION_AGE_SECONDS:
+            raise TestnetCoordinatorError("testnet_confirmation_not_fresh")
+        if (
+            proposal.get("execution_environment") != "testnet"
+            or decision.get("execution_environment") != "testnet"
+            or proposal.get("plan_digest") != plan.get("plan_digest")
+            or decision.get("plan_digest") != plan.get("plan_digest")
+            or decision.get("execution_authorized") is not True
+            or str(decision.get("receipt_digest") or "")
+            != str(confirmation.get("receipt_digest") or "")
+            or decision.get("park_user_id") != "park"
+            or str(
+                confirmation.get("operator_id")
+                or confirmation.get("park_user_id")
+                or ""
+            )
+            != "park"
+            or abs(confirmed_at - projected_at) > 0.001
+        ):
+            raise TestnetCoordinatorError("testnet_confirmation_durable_mismatch")
+
     def _validate_testnet_confirmation(
+        self,
         plan: Mapping[str, Any],
         current: Mapping[str, Any],
         confirmation: Mapping[str, Any],
@@ -1364,18 +1466,22 @@ class TestnetAutomationCoordinator:
                 {"reason": reason, "plan_digest": plan.get("plan_digest")},
             )
 
-        if not isinstance(confirmation, Mapping):
-            blocked("confirmation_required")
-        if confirmation.get("execution_authorized") is not True:
-            blocked("execution_authorized_required")
-        if str(confirmation.get("execution_environment") or "").lower() != "testnet":
-            blocked("testnet_confirmation_required")
-        if str(confirmation.get("plan_digest") or "") != str(plan.get("plan_digest") or ""):
-            blocked("plan_digest_mismatch")
+        if current.get("transport_profile") == TESTNET_PROTECTED_TRANSPORT_PROFILE:
+            try:
+                self.verify_confirmation(plan, confirmation)
+            except TestnetCoordinatorError as exc:
+                blocked(exc.code)
+        else:
+            if not isinstance(confirmation, Mapping):
+                blocked("confirmation_required")
+            if confirmation.get("execution_authorized") is not True:
+                blocked("execution_authorized_required")
+            if str(confirmation.get("execution_environment") or "").lower() != "testnet":
+                blocked("testnet_confirmation_required")
+            if str(confirmation.get("plan_digest") or "") != str(plan.get("plan_digest") or ""):
+                blocked("plan_digest_mismatch")
         if str(confirmation.get("activation_id") or "") != str(current.get("activation_id") or ""):
             blocked("activation_identity_mismatch")
-        if not str(confirmation.get("confirmation_id") or "").strip():
-            blocked("confirmation_id_required")
 
     @staticmethod
     def _validate_canary_identity(plan: object, current: Mapping[str, Any]) -> None:

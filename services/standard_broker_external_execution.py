@@ -64,7 +64,7 @@ _REQUIRED_PROTECTION = frozenset(
         "cancel_replace",
     }
 )
-_PROTECTION_OPERATIONS = frozenset({"submit", "cancel", "replace", "reconcile"})
+_PROTECTION_OPERATIONS = frozenset({"submit", "cancel", "replace", "query", "reconcile"})
 
 
 class StandardBrokerExternalExecutionError(RuntimeError):
@@ -425,6 +425,8 @@ class StandardBrokerExternalExecutionAdapter:
                 raise StandardBrokerExternalExecutionError(
                     f"protection_operation_unsupported:{normalized_operation}"
                 )
+            if normalized_operation == "query":
+                normalized_operation = "reconcile"
             method = getattr(self.protection_adapter, normalized_operation, None)
             if not callable(method):
                 raise StandardBrokerExternalExecutionError(
@@ -467,16 +469,35 @@ class StandardBrokerExternalExecutionAdapter:
     def market_fact(self, *, instrument_id: str, now: datetime) -> Mapping[str, Any]:
         return self._binding.market_fact(instrument_id=instrument_id, now=now)
 
+    def read_facts(
+        self,
+        *,
+        instrument_id: str,
+        now: datetime | None = None,
+        order_id: str = "",
+        client_order_id: str | None = None,
+    ) -> object:
+        """Read one public, cursor-bound fact bundle for the selected instrument."""
+
+        if not str(instrument_id or "").strip():
+            raise StandardBrokerExternalExecutionError("external_facts_instrument_required")
+        reader = getattr(self._binding, "read_facts", None)
+        if not callable(reader):
+            raise StandardBrokerExternalExecutionError("external_facts_reader_missing")
+        return reader(
+            order_id=str(order_id or ""),
+            instrument_id=str(instrument_id),
+            now=now or self._clock(),
+            client_order_id=client_order_id,
+        )
+
     def close(self) -> None:
         close = getattr(self._runtime, "close", None)
         if callable(close):
             close()
 
     def _read_bundle(self, scope: str, *, order_id: str = "") -> object:
-        reader = getattr(self._binding, "read_facts", None)
-        if not callable(reader):
-            raise StandardBrokerExternalExecutionError("external_facts_reader_missing")
-        return reader(
+        return self.read_facts(
             order_id=order_id,
             instrument_id=scope or self._instrument_id(),
             now=self._clock(),

@@ -81,6 +81,33 @@ def test_activation_accepts_reviewed_protected_testnet_profile(tmp_path: Path) -
     assert result["transport_profile"] == "hyperliquid-testnet-position-protection"
 
 
+def test_protected_confirmation_requires_durable_park_decision(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    activation = _activation(
+        transport_profile="hyperliquid-testnet-position-protection",
+    )
+    coordinator.activate(activation, command_id="activate-protected-confirmation")
+
+    with pytest.raises(TestnetCoordinatorError, match="testnet_confirmation_durable_missing"):
+        coordinator.verify_confirmation(
+            {
+                "strategy_session_id": activation["strategy_session_id"],
+                "strategy_revision_id": activation["strategy_revision_id"],
+                "plan_digest": activation["plan_digest"],
+            },
+            {
+                "event": "confirmed",
+                "execution_authorized": True,
+                "execution_environment": "testnet",
+                "plan_digest": activation["plan_digest"],
+                "confirmation_id": "forged",
+                "proposal_id": "missing",
+                "receipt_digest": "sha256:" + "c" * 64,
+                "confirmed_at": "2026-08-26T01:00:00+00:00",
+            },
+        )
+
+
 def test_status_and_preflight_are_authoritative_and_do_not_invoke_a_broker(
     tmp_path: Path,
 ) -> None:

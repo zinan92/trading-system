@@ -175,7 +175,7 @@ def test_start_drives_canonical_lifecycle_through_protected_adapter(
         "environment": "testnet",
         "instrument_id": "BTC-USD-PERP",
         "asset_index": 0,
-        "mapping_revision": "market-proof-v1",
+        "mapping_revision": cli.PROTECTED_CAPABILITY_REVISION,
         "universe_revision": "hyperliquid-default-perp-v1",
         "connection_epoch": "epoch-proof",
     }

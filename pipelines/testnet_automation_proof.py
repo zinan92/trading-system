@@ -16,13 +16,11 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
-import time
 from typing import Any, Mapping, Sequence
 
 from schemas.portfolio import PortfolioPolicy, PortfolioSnapshot
 from services.broker_composition import BrokerBuildContext, build_broker_execution_port
 from services.journal_store import load_json
-from services.park_confirmation import ParkConfirmationLedger
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.standard_broker_external_execution import (
     PROTECTED_CAPABILITY_REVISION,
@@ -34,7 +32,6 @@ from services.standard_broker_external_execution import (
 
 ACKNOWLEDGEMENT = "I_UNDERSTAND_ONE_ATTENDED_TESTNET_STRATEGY_ACTION"
 DEFAULT_OUTPUT_ROOT = Path("outputs")
-MAX_CONFIRMATION_AGE_SECONDS = 900
 _APPROVED_MARKET_SOURCES = frozenset(
     {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"}
 )
@@ -192,23 +189,6 @@ def _candidate(plan: Mapping[str, Any], market: Mapping[str, Any], family: str) 
     }
 
 
-def _epoch(value: Any, field: str) -> float:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        rendered = float(value)
-    else:
-        text = str(value or "").strip()
-        try:
-            rendered = float(text)
-        except (TypeError, ValueError):
-            try:
-                rendered = datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
-            except ValueError as exc:
-                raise TestnetAutomationProofError(f"{field}_invalid") from exc
-    if not rendered == rendered or rendered in {float("inf"), float("-inf")}:
-        raise TestnetAutomationProofError(f"{field}_invalid")
-    return rendered
-
-
 def _aware_datetime(value: Any, field: str) -> datetime:
     text = str(value or "").strip()
     try:
@@ -228,55 +208,16 @@ def _verify_durable_confirmation(
 ) -> None:
     """Require the supplied projection to match the current Park ledger."""
 
-    ledger = ParkConfirmationLedger(output_root, park_user_id="park")
-    rows = ledger.rows()
-    proposal_id = str(
-        confirmation.get("proposal_id")
-        or confirmation.get("confirmation_id")
-        or ""
-    ).strip()
-    proposal = next(
-        (
-            row
-            for row in rows
-            if row.get("event") == "proposal"
-            and str(row.get("proposal_id") or "") == proposal_id
-        ),
-        None,
-    )
-    decision = next(
-        (
-            row
-            for row in reversed(rows)
-            if row.get("event") == "confirmed"
-            and str(row.get("proposal_id") or "") == proposal_id
-        ),
-        None,
-    )
-    if proposal is None or decision is None:
-        raise TestnetAutomationProofError("durable_confirmation_missing")
     try:
-        if _epoch(proposal.get("expires_at"), "confirmation_expiry") <= time.time():
-            raise TestnetAutomationProofError("confirmation_expired")
-        confirmed_at = _epoch(decision.get("confirmed_at"), "confirmed_at")
-    except TestnetAutomationProofError:
-        raise
-    age = time.time() - confirmed_at
-    if age < 0 or age > MAX_CONFIRMATION_AGE_SECONDS:
-        raise TestnetAutomationProofError("confirmation_not_fresh")
-    if (
-        proposal.get("execution_environment") != "testnet"
-        or decision.get("execution_environment") != "testnet"
-        or proposal.get("plan_digest") != plan.get("plan_digest")
-        or decision.get("plan_digest") != plan.get("plan_digest")
-        or decision.get("execution_authorized") is not True
-        or str(decision.get("receipt_digest") or "")
-        != str(confirmation.get("receipt_digest") or "")
-        or decision.get("park_user_id") != "park"
-        or str(confirmation.get("operator_id") or confirmation.get("park_user_id") or "") != "park"
-        or abs(confirmed_at - _epoch(confirmation.get("confirmed_at"), "confirmed_at")) > 0.001
-    ):
-        raise TestnetAutomationProofError("durable_confirmation_mismatch")
+        TestnetAutomationCoordinator(output_root).verify_confirmation(
+            plan,
+            confirmation,
+        )
+    except Exception as exc:  # noqa: BLE001 - normalize to the CLI boundary.
+        if isinstance(exc, TestnetAutomationProofError):
+            raise
+        reason = str(getattr(exc, "code", "") or "durable_confirmation_invalid")
+        raise TestnetAutomationProofError(reason) from exc
 
 
 def _fact_data(reconciliation: object, name: str) -> tuple[object, ...]:
@@ -326,12 +267,21 @@ def _authoritative_account_snapshot(
 ) -> tuple[object, object]:
     instrument_id = str(plan.get("instrument_id") or "").strip()
     try:
-        reconciliation = broker.request("order_execution", "reconcile", instrument_id)
+        reader = getattr(broker, "read_facts", None)
+        if not callable(reader):
+            raise TestnetAutomationProofError("account_facts_bundle_unavailable")
+        bundle = reader(
+            instrument_id=instrument_id,
+            now=datetime.now(timezone.utc),
+        )
+        account = getattr(bundle, "account", None)
+        reconciliation = getattr(bundle, "reconciliation", None)
+        if account is None or reconciliation is None:
+            raise TestnetAutomationProofError("account_facts_bundle_incomplete")
         if callable(getattr(reconciliation, "require_coherent", None)):
             reconciliation.require_coherent()
         elif getattr(reconciliation, "passed", False) is not True:
             raise TestnetAutomationProofError("account_reconciliation_not_coherent")
-        account = broker.request("account", "read", account_address)
     except TestnetAutomationProofError:
         raise
     except Exception as exc:  # noqa: BLE001 - redact upstream details at the proof boundary.
@@ -359,6 +309,40 @@ def _authoritative_account_snapshot(
         or transport_state != "external_testnet"
     ):
         raise TestnetAutomationProofError("account_identity_mismatch")
+    account_observation = getattr(reconciliation, "account", None)
+    account_fact = getattr(getattr(account_observation, "fact", None), "data", None)
+    if account_fact != account:
+        raise TestnetAutomationProofError("account_snapshot_cursor_mismatch")
+    identity = getattr(reconciliation, "identity", None)
+    if identity is None:
+        raise TestnetAutomationProofError("account_snapshot_identity_missing")
+    runtime_session = getattr(broker, "runtime_session", None)
+    expected_runtime = str(getattr(runtime_session, "lifecycle_id", "") or "")
+    expected_release = str(
+        getattr(broker, "broker_config", {}).get("release_sha", "")
+        if isinstance(getattr(broker, "broker_config", {}), Mapping)
+        else ""
+    )
+    expected_capability = str(
+        getattr(broker, "broker_config", {}).get("capability_revision", "")
+        if isinstance(getattr(broker, "broker_config", {}), Mapping)
+        else ""
+    )
+    identity_environment = str(
+        getattr(getattr(identity, "environment", None), "value", getattr(identity, "environment", ""))
+        or ""
+    ).lower()
+    if (
+        str(getattr(identity, "broker_id", "") or "").lower() != "hyperliquid"
+        or identity_environment != "testnet"
+        or str(getattr(identity, "account_address", "") or "") != account_address
+        or str(getattr(identity, "lifecycle_id", "") or "") != expected_runtime
+        or expected_release
+        and str(getattr(identity, "release_sha", "") or "") != expected_release
+        or expected_capability
+        and str(getattr(identity, "capability_revision", "") or "") != expected_capability
+    ):
+        raise TestnetAutomationProofError("account_snapshot_identity_mismatch")
     equity = getattr(account, "equity", None)
     if equity is None:
         raise TestnetAutomationProofError("account_equity_unavailable")
@@ -393,6 +377,15 @@ def _authoritative_market(
         raise TestnetAutomationProofError("market_fact_identity_invalid")
     broker_price = _decimal(raw.get("price"), "broker_market_price", positive=True)
     supplied_mid = _decimal(market.get("mid"), "market_mid", positive=True)
+    supplied_source = str(market.get("source") or "").strip().lower()
+    broker_mapping_revision = str(raw.get("mapping_revision") or "").strip()
+    supplied_mapping_revision = str(market.get("mapping_revision") or "").strip()
+    if (
+        source != supplied_source
+        or not broker_mapping_revision
+        or broker_mapping_revision != supplied_mapping_revision
+    ):
+        raise TestnetAutomationProofError("market_fact_identity_invalid")
     if broker_price != supplied_mid:
         raise TestnetAutomationProofError("market_price_mismatch")
     broker_observed = _aware_datetime(raw.get("observed_at"), "broker_market_observed_at")
@@ -408,7 +401,7 @@ def _authoritative_market(
             "observed_at": broker_observed.isoformat(),
             "source": source,
             "transport_state": transport_state,
-            "mapping_revision": str(raw.get("mapping_revision") or ""),
+            "mapping_revision": broker_mapping_revision,
         },
     }
 
@@ -440,18 +433,18 @@ def _snapshot(
     provenance = getattr(account, "provenance", None)
     source = str(getattr(provenance, "source", "") or "").strip().lower()
     cursor = getattr(getattr(reconciliation, "cursor", None), "value", "")
+    available_cash = getattr(account, "withdrawable", None)
+    if available_cash is None:
+        available_cash = getattr(account, "balance", None)
+    if available_cash is None:
+        available_cash = equity
     return PortfolioSnapshot(
         snapshot_id=f"snapshot-{str(getattr(reconciliation, 'evidence_digest', '') or session_id)[-32:]}",
         portfolio_session_id=f"portfolio-{session_id}",
         account_id=account_address,
         observed_at=observed_at.isoformat(),
         equity=equity,
-        available_cash=_decimal(
-            getattr(account, "withdrawable", None)
-            or getattr(account, "balance", None)
-            or equity,
-            "account_available_cash",
-        ),
+        available_cash=_decimal(available_cash, "account_available_cash"),
         total_exposure=exposure,
         margin_used=margin_used,
         leverage=(exposure / equity if equity > 0 else Decimal("0")),
@@ -495,14 +488,22 @@ def _policy(path: Path | None) -> PortfolioPolicy:
 def _confirmation(path: Path, *, plan: Mapping[str, Any]) -> dict[str, Any]:
     document = _load_json(path)
     if isinstance(document, list):
+        latest_decision = next(
+            (
+                row
+                for row in reversed(document)
+                if isinstance(row, Mapping)
+                and row.get("event") in {"confirmed", "rejected"}
+                and str(row.get("plan_digest") or "")
+                == str(plan.get("plan_digest") or "")
+            ),
+            {},
+        )
         value = next(
             (
                 dict(row)
-                for row in reversed(document)
-                if isinstance(row, Mapping)
-                and row.get("event") == "confirmed"
-                and str(row.get("plan_digest") or "")
-                == str(plan.get("plan_digest") or "")
+                for row in (latest_decision,)
+                if row.get("event") == "confirmed"
             ),
             {},
         )
