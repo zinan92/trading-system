@@ -16,14 +16,18 @@
 
 - Spec #1071 is accepted and the approved domain vocabulary/ADR are recorded
   locally. T1–T7 are merged as PRs #1079–#1085. Issue #1100 / PR #1101 keeps
-  the local read model observable while execution authority remains fail-closed;
-  the running implementation is `80b4639`.
+  the local read model observable while execution authority remains fail-closed.
+  Issues #1103, #1105, and #1107 bind the selected Testnet market, visible
+  broker/pair labels, and restored strategy family through PRs #1104, #1106,
+  and #1108. The running implementation is `7f74fdc`.
 - The actual launchd Dashboard, Gateway, and Park control checkout is synced to
   that implementation. Local HTTP checks return 200 for Dashboard V5, Venue and
   Instrument catalog, selection, runtime status, strategy read model, AI chat,
   and K-line bars. Browser acceptance verified Hyperliquid Testnet → BTC → DCA,
   current-strategy status, the AI strategy assistant, account facts, and the
-  visible K-line chart. No credential value or order action was used.
+  visible Hyperliquid BTC K-line chart with 240 trusted 30m bars. The selected
+  DCA family is restored in both strategy controls after refresh. No credential
+  value or order action was used.
 - Dashboard V5 now exposes an explicit `Venue Profile → Instrument Catalog →
   Strategy Family → Preview → Confirm & Run` track. `Hyperliquid Testnet` and
   `Binance Paper` are distinct; Mainnet/Live is not selectable and Testnet
@@ -74,7 +78,7 @@
   `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`; its P2 was
   fixed in #1092/#1093. An independent Standards/Spec review then found and
   closed the Gateway/facts/digest/effective-sizing gaps in #1094/#1095.
-- The final implementation code is `ae62c5d`; subsequent main tips are
+- The original seven-slice implementation code is `ae62c5d`; subsequent main tips are
   documentation-only. Full pytest is `3612 passed, 1 skipped, 3 warnings`;
   compileall, diff-check, and gitleaks pass. No credential,
   Testnet order, position mutation, scheduler activation, cloud, Mainnet, or
