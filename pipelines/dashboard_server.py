@@ -416,6 +416,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/dashboard-control/selection":
             self._handle_dashboard_control_selection_get()
             return
+        if parsed.path == "/api/dashboard-control/runtime-status":
+            self._handle_dashboard_control_runtime_status_get()
+            return
         if parsed.path == "/api/connectors/config/status":
             self._handle_connector_config_status_get()
             return
@@ -547,6 +550,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 self._handle_dashboard_control_confirm_post()
             except ValueError as exc:
                 self._write_error(400, "invalid_dashboard_confirmation", str(exc))
+            return
+        if parsed.path == "/api/dashboard-control/control":
+            if not _dualtrack_mutation_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+            ):
+                self._write_error(
+                    403,
+                    "dashboard_control_origin_blocked",
+                    "dashboard runtime controls require the same local origin",
+                )
+                return
+            try:
+                self._handle_dashboard_control_runtime_control_post()
+            except ValueError as exc:
+                self._write_error(400, "invalid_dashboard_runtime_control", str(exc))
             return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
@@ -853,6 +872,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_dashboard_control_confirm_post(self) -> None:
         payload = self._read_json_body(max_bytes=64_000)
         self._write_json(200, build_dashboard_control_confirmation_response(payload))
+
+    def _handle_dashboard_control_runtime_status_get(self) -> None:
+        self._write_json(200, build_dashboard_control_runtime_status_response())
+
+    def _handle_dashboard_control_runtime_control_post(self) -> None:
+        payload = self._read_json_body(max_bytes=32_000)
+        self._write_json(200, build_dashboard_control_runtime_control_response(payload))
 
     def _handle_connector_config_status_get(self) -> None:
         self._write_json(200, build_connector_config_status_response())
@@ -3698,6 +3724,53 @@ def build_dashboard_control_confirmation_response(
             "orders_submitted": result.get("execution_mutation") is True,
             "credentials_exposed": False,
             "environment": result.get("environment") or "testnet",
+        },
+    }
+
+
+def build_dashboard_control_runtime_status_response(
+    *,
+    output_root: Path | None = None,
+    coordinator: object | None = None,
+) -> dict[str, Any]:
+    """Return the durable Coordinator status and latest notification."""
+
+    output = _dualtrack_output_root(output_root)
+    runtime_coordinator = coordinator or TestnetAutomationCoordinator(output)
+    result = DashboardControlPlane(output, catalog_loader=public_catalog_loader).runtime_status(
+        coordinator=runtime_coordinator,
+    )
+    return {
+        "schema_version": "dashboard-runtime-status-response-v1",
+        **result,
+    }
+
+
+def build_dashboard_control_runtime_control_response(
+    payload: Mapping[str, Any],
+    *,
+    output_root: Path | None = None,
+    coordinator: object | None = None,
+) -> dict[str, Any]:
+    """Issue one explicit Dashboard runtime control intent."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("dashboard_runtime_control_payload_invalid")
+    output = _dualtrack_output_root(output_root)
+    runtime_coordinator = coordinator or TestnetAutomationCoordinator(output)
+    result = DashboardControlPlane(output, catalog_loader=public_catalog_loader).control(
+        str(payload.get("action") or ""),
+        coordinator=runtime_coordinator,
+        reason=str(payload.get("reason") or ""),
+        now=str(payload.get("now") or "") or None,
+    )
+    return {
+        "schema_version": "dashboard-runtime-control-response-v1",
+        "control": result,
+        "safety": {
+            "orders_submitted": result.get("execution_mutation") is True,
+            "credentials_exposed": False,
+            "browser_is_scheduler": False,
         },
     }
 

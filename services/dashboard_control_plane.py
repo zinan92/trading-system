@@ -24,6 +24,7 @@ DASHBOARD_CONTROL_SCHEMA = "dashboard-control-plane-v1"
 SELECTION_SCHEMA = "dashboard-selection-v1"
 SELECTION_PATH = "dashboard_control_plane/selection.json"
 CONFIRMATION_PATH = "dashboard_control_plane/confirmations.json"
+NOTIFICATION_PATH = "dashboard_control_plane/notifications.json"
 
 
 _VENUE_PROFILES: tuple[dict[str, Any], ...] = (
@@ -689,6 +690,172 @@ class DashboardControlPlane:
             "coordinator_result": None,
             "blockers": sorted(set(blockers)),
             "next_action": "notify_park_and_wait",
+        }
+
+    def control(
+        self,
+        action: str,
+        *,
+        coordinator: object | None,
+        reason: str = "",
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Issue one explicit operator intent through the Coordinator."""
+
+        normalized = str(action or "").strip().lower()
+        if normalized not in {"pause", "stop", "flatten", "interrupt", "resume"}:
+            return {
+                "schema_version": "dashboard-runtime-control-v1",
+                "status": "blocked",
+                "action": normalized,
+                "blockers": ["control_action_invalid"],
+                "execution_mutation": False,
+                "next_action": "notify_park_and_wait",
+            }
+        command = getattr(coordinator, "command", None)
+        if not callable(command):
+            return {
+                "schema_version": "dashboard-runtime-control-v1",
+                "status": "blocked",
+                "action": normalized,
+                "blockers": ["coordinator_control_unavailable"],
+                "execution_mutation": False,
+                "next_action": "notify_park_and_wait",
+            }
+        command_id = f"dashboard-control:{normalized}:{_digest({'reason': reason, 'now': now or self.clock()})[7:19]}"
+        try:
+            response = command(
+                normalized,
+                {"reason": str(reason or "")},
+                command_id=command_id,
+                now=now or self.clock(),
+            )
+        except Exception as exc:  # noqa: BLE001 - control outcomes fail closed.
+            return {
+                "schema_version": "dashboard-runtime-control-v1",
+                "status": "blocked",
+                "action": normalized,
+                "blockers": [str(getattr(exc, "code", "")).strip() or "coordinator_control_blocked"],
+                "execution_mutation": False,
+                "next_action": "reconcile_identity_bound",
+            }
+        result = {
+            "schema_version": "dashboard-runtime-control-v1",
+            "status": str(response.get("status") or f"{normalized}_requested") if isinstance(response, Mapping) else f"{normalized}_requested",
+            "action": normalized,
+            "reason": str(reason or "") or None,
+            "coordinator_result": _public(response),
+            "execution_mutation": False,
+            "next_action": (
+                str(response.get("next_action") or "await_reconcile")
+                if isinstance(response, Mapping)
+                else "await_reconcile"
+            ),
+            "blockers": [],
+        }
+        if normalized in {"stop", "flatten"}:
+            result["next_action"] = "await_cancel_and_flat_reconcile"
+        return result
+
+    def record_notification(
+        self,
+        *,
+        event: str,
+        strategy_family: str,
+        instrument_id: str,
+        plan_digest: str,
+        message: str,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist one terminal/operator notification without creating a plan."""
+
+        normalized_event = str(event or "").strip().lower()
+        if normalized_event not in {"take_profit", "stop_loss", "interrupt", "unknown", "broker_outage"}:
+            raise ValueError("notification_event_invalid")
+        digest = str(plan_digest or "").strip().lower()
+        if not digest:
+            raise ValueError("notification_plan_digest_required")
+        suffix = _digest({"event": normalized_event, "plan_digest": digest})[7:19]
+        status = "AWAITING_OPERATOR" if normalized_event in {"take_profit", "stop_loss"} else "PAUSED"
+        if normalized_event == "unknown":
+            status = "BLOCKED"
+        row = {
+            "schema_version": "dashboard-notification-v1",
+            "notification_id": f"dashboard-notification:{suffix}",
+            "event": normalized_event,
+            "strategy_family": str(strategy_family or "").strip().lower(),
+            "instrument_id": str(instrument_id or "").strip(),
+            "plan_digest": digest,
+            "message": str(message or "").strip(),
+            "status": status,
+            "automatic_next_plan": False,
+            "retry_authorized": False,
+            "created_at": str(now or self.clock()),
+            "next_action": "await_operator_next_plan" if status == "AWAITING_OPERATOR" else "notify_park_and_wait",
+        }
+        rows = load_json(self.output_root / NOTIFICATION_PATH)
+        if rows and isinstance(rows[-1], Mapping) and rows[-1].get("notification_id") == row["notification_id"]:
+            return dict(rows[-1])
+        write_json(self.output_root / NOTIFICATION_PATH, [*rows, row])
+        return row
+
+    def handle_unknown(
+        self,
+        *,
+        operation: str,
+        plan_digest: str,
+        instrument_id: str,
+        coordinator: object | None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Record unknown side effects and require identity-bound reconcile."""
+
+        del coordinator
+        notification = self.record_notification(
+            event="unknown",
+            strategy_family="",
+            instrument_id=instrument_id,
+            plan_digest=plan_digest,
+            message=f"Unknown outcome for {str(operation or 'operation').strip() or 'operation'}; reconcile before any retry.",
+            now=now,
+        )
+        return {
+            "schema_version": "dashboard-unknown-outcome-v1",
+            "status": "blocked",
+            "operation": str(operation or "").strip(),
+            "plan_digest": str(plan_digest or "").strip().lower(),
+            "instrument_id": str(instrument_id or "").strip(),
+            "reconcile_required": True,
+            "retry_authorized": False,
+            "automatic_retry": False,
+            "notification_id": notification["notification_id"],
+            "next_action": "reconcile_identity_bound",
+            "execution_mutation": False,
+            "blockers": ["unknown_side_effect"],
+        }
+
+    def runtime_status(self, *, coordinator: object | None) -> dict[str, Any]:
+        """Project Coordinator state and the latest durable notification."""
+
+        status_method = getattr(coordinator, "status", None)
+        runtime = status_method() if callable(status_method) else {
+            "status": "blocked",
+            "next_action": "notify_park_and_wait",
+        }
+        runtime_payload = dict(runtime) if isinstance(runtime, Mapping) else {"status": "blocked"}
+        runtime = {**runtime_payload, "execution_mutation": False}
+        rows = load_json(self.output_root / NOTIFICATION_PATH)
+        latest = dict(rows[-1]) if rows and isinstance(rows[-1], Mapping) else None
+        return {
+            "schema_version": "dashboard-runtime-status-v1",
+            "runtime": _public(runtime),
+            "notification": latest,
+            "execution_mutation": False,
+            "safety": {
+                "credentials_exposed": False,
+                "orders_submitted": False,
+                "browser_is_scheduler": False,
+            },
         }
 
     def _market_quality_blockers(

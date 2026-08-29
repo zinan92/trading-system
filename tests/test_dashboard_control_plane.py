@@ -150,12 +150,14 @@ def test_dashboard_v5_contains_the_venue_asset_strategy_track() -> None:
         "dashboardAccountSummary",
         "dashboardPreviewButton",
         "dashboardConfirmButton",
+        "dashboardRuntimeStatus",
     ):
         assert f'id="{element_id}"' in html
     assert "/api/dashboard-control/catalog" in html
     assert "/api/dashboard-control/selection" in html
     assert "/api/dashboard-control/preview" in html
     assert "/api/dashboard-control/confirm" in html
+    assert "/api/dashboard-control/runtime-status" in html
     assert "Hyperliquid Testnet" not in html or "Venue Profile" in html
 
 
@@ -589,4 +591,92 @@ def test_dashboard_confirmation_builder_keeps_coordinator_activation_non_mutatin
 
     assert result["confirmation"]["status"] == "confirmed"
     assert result["confirmation"]["coordinator_invoked"] is True
+    assert result["safety"]["orders_submitted"] is False
+
+
+def test_runtime_control_preserves_pause_stop_and_flatten_semantics(tmp_path: Path) -> None:
+    class Coordinator:
+        def __init__(self):
+            self.calls = []
+
+        def command(self, action, payload=None, *, command_id=None, now=None):
+            self.calls.append((action, dict(payload or {}), command_id, now))
+            return {
+                "status": "paused" if action == "pause" else f"{action}_requested",
+                "execution_mutation": False,
+                "next_action": "await_reconcile",
+            }
+
+    coordinator = Coordinator()
+    plane = DashboardControlPlane(tmp_path)
+    paused = plane.control("pause", coordinator=coordinator, reason="operator_pause", now="2026-08-29T03:00:00+00:00")
+    stopped = plane.control("stop", coordinator=coordinator, reason="operator_stop", now="2026-08-29T03:01:00+00:00")
+    flattened = plane.control("flatten", coordinator=coordinator, reason="emergency", now="2026-08-29T03:02:00+00:00")
+
+    assert paused["status"] == "paused"
+    assert stopped["status"] == "stop_requested"
+    assert flattened["status"] == "flatten_requested"
+    assert all(row["execution_mutation"] is False for row in (paused, stopped, flattened))
+    assert [row[0] for row in coordinator.calls] == ["pause", "stop", "flatten"]
+
+
+def test_runtime_terminal_notification_waits_for_operator_and_never_opens_next_plan(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path)
+
+    result = plane.record_notification(
+        event="take_profit",
+        strategy_family="dca",
+        instrument_id="BTC-USD-PERP",
+        plan_digest="sha256:" + "d" * 64,
+        message="DCA aggregate take profit reached",
+        now="2026-08-29T03:10:00+00:00",
+    )
+
+    assert result["status"] == "AWAITING_OPERATOR"
+    assert result["event"] == "take_profit"
+    assert result["next_action"] == "await_operator_next_plan"
+    assert result["automatic_next_plan"] is False
+    assert result["notification_id"].startswith("dashboard-notification:")
+
+
+def test_runtime_unknown_is_query_first_and_not_a_retry_authorization(tmp_path: Path) -> None:
+    class Coordinator:
+        def command(self, *_args, **_kwargs):
+            raise AssertionError("unknown must not issue a coordinator mutation")
+
+    result = DashboardControlPlane(tmp_path).handle_unknown(
+        operation="submit",
+        plan_digest="sha256:" + "d" * 64,
+        instrument_id="BTC-USD-PERP",
+        coordinator=Coordinator(),
+        now="2026-08-29T03:20:00+00:00",
+    )
+
+    assert result["status"] == "blocked"
+    assert result["retry_authorized"] is False
+    assert result["reconcile_required"] is True
+    assert result["next_action"] == "reconcile_identity_bound"
+
+
+def test_dashboard_runtime_status_builder_projects_authoritative_coordinator_state(tmp_path: Path) -> None:
+    from pipelines import dashboard_server
+
+    class Coordinator:
+        def status(self):
+            return {
+                "status": "activated",
+                "strategy_family": "dca",
+                "instrument_id": "BTC-USD-PERP",
+                "execution_enabled": False,
+                "execution_blocker": "capability_gap:execution",
+                "next_action": "await_execution_capability",
+            }
+
+    result = dashboard_server.build_dashboard_control_runtime_status_response(
+        output_root=tmp_path,
+        coordinator=Coordinator(),
+    )
+
+    assert result["runtime"]["status"] == "activated"
+    assert result["runtime"]["execution_mutation"] is False
     assert result["safety"]["orders_submitted"] is False

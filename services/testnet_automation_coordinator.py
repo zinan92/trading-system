@@ -38,7 +38,17 @@ _TESTNET_TRANSPORT_PROFILES = frozenset(
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
 _RELEASE_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 _ACTIONS = frozenset(
-    {"activate", "status", "preflight", "pause", "interrupt", "resume", "select_candidate"}
+    {
+        "activate",
+        "status",
+        "preflight",
+        "pause",
+        "stop",
+        "flatten",
+        "interrupt",
+        "resume",
+        "select_candidate",
+    }
 )
 _APPROVED_MARKET_SOURCES = frozenset(
     {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"}
@@ -452,6 +462,16 @@ class TestnetAutomationCoordinator:
             event = "paused"
             execution_blocker = current.get("execution_blocker")
             next_action = "await_resume"
+        elif action == "stop":
+            status = "stop_requested"
+            event = "stop_requested"
+            execution_blocker = "cancel_and_flatten_reconciliation_required"
+            next_action = "await_cancel_and_flat_reconcile"
+        elif action == "flatten":
+            status = "flatten_requested"
+            event = "flatten_requested"
+            execution_blocker = "flat_reconciliation_required"
+            next_action = "await_flat_reconcile"
         elif action == "interrupt":
             status = "interrupted"
             event = "interrupted"
