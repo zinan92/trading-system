@@ -187,6 +187,59 @@ The lifecycle in which a Grid Rung fills, takes profit, and re-arms the same
 entry level while the Grid Strategy Revision remains active.
 _Avoid_: strategy restart, new revision
 
+## Product control language
+
+**Venue Profile**:
+The explicit Broker-and-Environment identity selected by the operator, such as
+Hyperliquid Testnet or Binance Paper. A Venue Profile is not a generic
+exchange name and cannot silently fall back to another environment.
+_Avoid_: exchange alias, hidden environment
+
+**Instrument Catalog**:
+The source-bound set of explicit Instruments exposed by a Venue Profile,
+including each instrument's identity, market-fact freshness, and execution
+eligibility. A ticker string alone is not an Instrument Catalog entry.
+_Avoid_: hard-coded pair list, symbol dropdown without identity
+
+**Dashboard Control Plane**:
+The authenticated Dashboard surface that lets Park select a Venue Profile,
+Instrument, and Strategy, inspect a non-authorizing preview, and issue explicit
+control intents. It observes and composes domain contracts; it does not own
+strategy, risk, or Broker wire semantics.
+_Avoid_: Dashboard strategy engine, browser-owned scheduler
+
+**Strategy Configuration**:
+The operator-facing fields used to describe one Strategy Position Plan through
+the canonical Grid or DCA vocabulary. It is a form-level representation, not a
+request to edit internal JSON or to invent missing strategy facts.
+_Avoid_: raw JSON plan, free-form order command
+
+**Strategy Preview**:
+The immutable, non-authorizing calculation of requested strategy sizing,
+Portfolio Gate effects, market and account facts, maximum loss, and execution
+identity before confirmation. A preview never submits an order or creates a
+position.
+_Avoid_: dry-run order, implicit authorization
+
+**Effective Plan**:
+The operator-visible result after the Portfolio Risk Gate accepts, scales down,
+or rejects a Strategy Position Plan. It preserves the requested plan and the
+reason for every downward change or rejection.
+_Avoid_: silently resized plan, rewritten strategy
+
+**Testnet Proof**:
+A bounded end-to-end demonstration in which one selected Testnet Instrument
+executes one canonical Strategy Revision through confirmation, order/fill,
+protection, reconciliation, and terminal notification evidence. It is not a
+promotion to Mainnet or Live.
+_Avoid_: fixture-only readiness, live canary
+
+**Operator Confirmation**:
+Park's explicit approval of one fresh Strategy Preview and its Effective Plan,
+bound to the Venue Profile, Instrument, Strategy Revision, and digest shown in
+the Dashboard. Selection or a complete set of fields alone is never approval.
+_Avoid_: implicit click-through, model authorization
+
 ## Operator actions
 
 **Trading Conversation**:

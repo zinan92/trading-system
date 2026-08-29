@@ -81,6 +81,7 @@
   </style>
 <style>.yesterday-pnl-head{align-items:center;padding:3px 12px 0}.yesterday-pnl-head .current-strategy-eyebrow{display:inline;margin-right:5px;font-size:7px;letter-spacing:.08em}.yesterday-pnl-head h2{display:inline;margin:0;font-size:12px}.yesterday-pnl-head .current-strategy-status{padding:2px 5px;font-size:8px}.yesterday-pnl-facts{grid-template-columns:repeat(6,minmax(0,1fr));gap:3px;padding:1px 12px 1px}.yesterday-pnl-facts .current-strategy-fact{padding:2px 4px;line-height:1}.yesterday-pnl-facts .current-strategy-facts span{font-size:6px}.yesterday-pnl-facts .current-strategy-fact span{font-size:6px}.yesterday-pnl-facts .current-strategy-fact b{margin-top:1px;font-size:8px}.yesterday-pnl-evidence{gap:3px;padding:0 12px 1px;font-size:7px;line-height:1}.yesterday-pnl-evidence span{padding:1px 3px}.yesterday-pnl-review-link{border:0;background:transparent;color:var(--gm-blue);font:7px var(--mono,monospace);cursor:pointer;text-decoration:underline}@media(max-width:760px){.yesterday-pnl-head .current-strategy-eyebrow{display:block;margin-right:0}.yesterday-pnl-head h2{display:block;margin-top:2px}.yesterday-pnl-facts{grid-template-columns:1fr 1fr}}</style>
 <style>.external-dca-card{border-left:2px solid var(--gm-blue)}.external-dca-card.blocked,.external-dca-card.recovery_required,.external-dca-card.expired_position_blocked{border-left-color:var(--gm-red)}.external-dca-head{align-items:center;padding:3px 12px 0}.external-dca-head .current-strategy-eyebrow{display:inline;margin-right:5px;font-size:7px;letter-spacing:.08em}.external-dca-head h2{display:inline;margin:0;font-size:12px}.external-dca-facts{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:3px;padding:1px 12px}.external-dca-facts .current-strategy-fact{padding:2px 4px}.external-dca-evidence{display:flex;flex-wrap:wrap;gap:3px;padding:1px 12px 3px;font-size:7px}.external-dca-evidence span{padding:1px 3px;background:rgba(148,163,184,.12)}.external-dca-evidence .blocker{color:var(--gm-red)}@media(max-width:760px){.external-dca-facts{grid-template-columns:1fr 1fr}}</style>
+<style>.dashboard-control-card{border:1px solid rgba(79,142,247,.42);border-left:4px solid var(--gm-blue);background:linear-gradient(135deg,rgba(79,142,247,.07),rgba(16,20,31,.98) 48%)}.dashboard-control-card .card-title{padding:13px 14px 8px;color:var(--gm-text);font-size:12px;letter-spacing:.08em}.dashboard-control-card .card-body{padding:9px 14px 12px}.dashboard-control-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.dashboard-control-step{min-width:0;padding:8px;border:1px solid var(--gm-line);border-radius:6px;background:rgba(9,12,19,.38)}.dashboard-control-step .label{font-size:8px;letter-spacing:.08em}.dashboard-control-step select{min-height:34px;padding:6px 8px;font-size:10px}.dashboard-control-step .choice-row{grid-template-columns:1fr 1fr;gap:5px;margin-top:0}.dashboard-control-step .choice{padding:7px 4px;font-size:10px}.dashboard-control-step .choice small{font-size:8px}.dashboard-control-status{min-height:14px;margin:7px 0 0;color:var(--gm-faint);font:8px/1.45 var(--mono,monospace)}.dashboard-control-status.blocked{color:var(--gm-red)}.dashboard-control-status.ready{color:var(--gm-green)}@media(max-width:760px){.dashboard-control-steps{grid-template-columns:1fr}.dashboard-control-step .choice-row{grid-template-columns:1fr 1fr}}</style>
 </head>
 <body>
   <header class="top">
@@ -95,6 +96,7 @@
   </header>
   <div class="trade-toast-stack" id="tradeToasts" aria-live="polite" aria-atomic="false"></div>
   <div class="console-wrap">
+    <section class="card dashboard-control-card" id="dashboardControlCard"><div class="card-title">Trading BOT · Venue → Asset → Strategy</div><div class="card-body"><div class="dashboard-control-steps"><div class="dashboard-control-step"><span class="label">1 · Venue Profile</span><select class="select" id="dashboardVenueSelect" aria-label="选择 Venue Profile"><option value="">读取中…</option></select></div><div class="dashboard-control-step"><span class="label">2 · Instrument</span><select class="select" id="dashboardInstrumentSelect" aria-label="选择交易资产" disabled><option value="">先选择 Venue</option></select></div><div class="dashboard-control-step"><span class="label">3 · Strategy Family</span><div class="choice-row" id="dashboardStrategyChoices"><button class="choice" data-dashboard-strategy="grid" type="button" disabled>Grid<small>旧版网格</small></button><button class="choice" data-dashboard-strategy="dca" type="button" disabled>DCA<small>旧版 DCA</small></button></div></div></div><p class="dashboard-control-status" id="dashboardControlStatus" aria-live="polite">正在读取可用 Venue Profile…</p></div></section>
     <section class="card current-strategy-card idle" id="currentStrategyCard"><div class="current-strategy-head"><div><span class="current-strategy-eyebrow">当前运行策略</span><h2 id="currentStrategyTitle">读取中</h2></div><span class="current-strategy-status" id="currentStrategyStatus">状态读取中</span></div><div class="current-strategy-facts" id="currentStrategyFacts"><div class="current-strategy-fact"><span>执行身份</span><b>等待权威读模型</b></div></div><div class="current-strategy-evidence" id="currentStrategyEvidence"></div></section>
     <section class="card yesterday-pnl-card partial" id="yesterdayPnlCard"><div class="yesterday-pnl-head"><div><span class="current-strategy-eyebrow">Yesterday PnL · Beijing</span><h2 id="yesterdayPnlTitle">读取中</h2></div><span class="current-strategy-status" id="yesterdayPnlStatus">证据读取中</span></div><div class="yesterday-pnl-facts" id="yesterdayPnlFacts"></div><div class="yesterday-pnl-evidence" id="yesterdayPnlEvidence"></div></section>
     <section class="card external-dca-card hidden" id="externalDcaCard"><div class="external-dca-head"><div><span class="current-strategy-eyebrow">Hyperliquid Testnet · 外部 DCA</span><h2 id="externalDcaTitle">读取中</h2></div><span class="current-strategy-status" id="externalDcaStatus">状态读取中</span></div><div class="external-dca-facts" id="externalDcaFacts"></div><div class="external-dca-evidence" id="externalDcaEvidence"></div></section>
@@ -793,6 +795,41 @@ load();setInterval(()=>{if(!state.busy&&!document.hidden)load()},5000);
     try{const response=await fetch("/api/park-paper/ai-chat",{credentials:"same-origin"});if(!response.ok)throw new Error(`HTTP ${response.status}`);const data=await response.json();if(data.pending_draft){pending=data.pending_draft;renderSnapshot(null,pending);confirm.disabled=!pending.confirmable;reject.disabled=false;setStatus("已恢复未过期 Draft；尚未下单。")}else if(Array.isArray(data.snapshots)&&data.snapshots.length){renderSnapshot(data.snapshots[data.snapshots.length-1],null);setStatus(`已读取 ${data.snapshots.length} 张策略 Snapshot；最新一张显示在上方。`)}}catch(error){setStatus(`AI 助手读取受限：${error.message}`)}
   }
   send.addEventListener("click",sendMessage);confirm.addEventListener("click",confirmDraft);reject.addEventListener("click",rejectDraft);input.addEventListener("keydown",event=>{if((event.metaKey||event.ctrlKey)&&event.key==="Enter"){event.preventDefault();sendMessage()}});hydrate();
+})();
+</script>
+<script>
+(function(){
+  const venue=document.getElementById("dashboardVenueSelect"),instrument=document.getElementById("dashboardInstrumentSelect"),status=document.getElementById("dashboardControlStatus"),strategyButtons=[...document.querySelectorAll("[data-dashboard-strategy]")];
+  if(!venue||!instrument||!status)return;
+  const control={catalog:null,selection:null};window.dashboardControlState=control;
+  const setStatus=(message,kind="")=>{status.textContent=String(message||"");status.className=`dashboard-control-status ${kind}`};
+  const selectedProfile=()=>control.catalog?.venue_profiles?.find(row=>row.id===venue.value)||null;
+  const renderInstruments=profile=>{
+    instrument.replaceChildren();
+    if(!profile){instrument.disabled=true;instrument.append(new Option("先选择 Venue",""));strategyButtons.forEach(button=>{button.disabled=true;button.classList.remove("on")});return;}
+    const rows=Array.isArray(profile.instruments)?profile.instruments:[];
+    instrument.disabled=rows.length===0;
+    instrument.append(new Option(rows.length?"选择 Instrument":(profile.blockers?.[0]||"Instrument Catalog 暂不可用"),""));
+    rows.forEach(row=>{const label=`${row.asset||row.instrument_id} · ${row.eligibility||"unknown"}`;const option=new Option(label,row.instrument_id);option.disabled=row.eligibility!=="eligible";option.title=(row.blockers||[]).join("、")||"可用于 Preview";instrument.append(option)});
+    strategyButtons.forEach(button=>{button.disabled=true;button.classList.remove("on")});
+  };
+  const renderVenues=data=>{
+    control.catalog=data||{};venue.replaceChildren();
+    (data?.venue_profiles||[]).forEach(profile=>venue.append(new Option(profile.label,profile.id)));
+    venue.value=control.selection?.venue_profile_id||data?.venue_profiles?.[0]?.id||"";
+    renderInstruments(selectedProfile());
+    const profile=selectedProfile();
+    setStatus(profile?`${profile.label} 已绑定；请选择 Instrument。`:"没有可用 Venue Profile。",profile?"ready":"blocked");
+  };
+  const postSelection=async payload=>{
+    const response=await api("/api/dashboard-control/selection",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    control.selection=response.selection||null;
+    return response;
+  };
+  venue.addEventListener("change",async()=>{try{renderInstruments(selectedProfile());const result=await postSelection({venue_profile_id:venue.value});setStatus(`${selectedProfile()?.label||venue.value} 已绑定；请选择 Instrument。`,"ready");control.selection=result.selection}catch(error){setStatus(`Venue 选择未保存：${error.message||error}`,"blocked");}});
+  instrument.addEventListener("change",async()=>{if(!instrument.value)return;try{await postSelection({venue_profile_id:venue.value,instrument_id:instrument.value});strategyButtons.forEach(button=>{button.disabled=false;button.classList.remove("on")});const row=selectedProfile()?.instruments?.find(item=>item.instrument_id===instrument.value);const blockers=(row?.blockers||[]).join("、");setStatus(`${instrument.value} 已选择${blockers?` · ${blockers}`:""}；请选择 Strategy。`,row?.eligibility==="eligible"?"ready":"blocked")}catch(error){setStatus(`Instrument 选择未保存：${error.message||error}`,"blocked");}});
+  strategyButtons.forEach(button=>button.addEventListener("click",async()=>{if(button.disabled)return;try{await postSelection({venue_profile_id:venue.value,instrument_id:instrument.value,strategy_family:button.dataset.dashboardStrategy});strategyButtons.forEach(item=>item.classList.toggle("on",item===button));setStatus(`${venue.options[venue.selectedIndex]?.text||venue.value} · ${instrument.value} · ${button.dataset.dashboardStrategy.toUpperCase()} 已选择；Preview 即将接入。`,"ready")}catch(error){setStatus(`Strategy 选择未保存：${error.message||error}`,"blocked");}}));
+  (async()=>{try{const [catalogResponse,selectionResponse]=await Promise.all([api("/api/dashboard-control/catalog"),api("/api/dashboard-control/selection")]);control.selection=selectionResponse.selection||null;renderVenues(catalogResponse)}catch(error){setStatus(`控制轨道暂不可用：${error.message||error}`,"blocked");}})();
 })();
 </script>
 </body></html>
