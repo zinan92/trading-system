@@ -118,15 +118,35 @@ Date: 2026-08-29
   `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`; #1094/#1095
   implement the fix pass.
 - Focused control-plane/Gateway/Coordinator tests, compileall, diff-check, and
-  gitleaks pass. A new final full-suite run is required before delivery is
-  claimed complete. No credential, order, scheduler, cloud, Mainnet, or Live
-  mutation occurred.
+  gitleaks pass. The final repository run is `3612 passed, 1 skipped,
+  3 warnings` on `origin/main=4c838d9`. No credential, order, scheduler, cloud,
+  Mainnet, or Live mutation occurred.
 
 ### Gotcha
 
 - A hash alone is not authorization. The server must recompute the Preview
   digest, compare it with a durable server-side Preview, and revalidate the
   selected Instrument/catalog revision before accepting the operator click.
+
+## Final Dashboard control-plane verification (2026-08-29)
+
+### Evidence
+
+- Claude Sonnet 5 completed the requested review with verified receipt
+  `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`; its account
+  freshness/coherence P2 was fixed once in #1092/#1093.
+- Independent Standards/Spec review found the public Gateway allowlist gap,
+  caller-trusted facts/digests/catalog, and dropped effective sizing. These
+  were fixed once in #1094/#1095; #1096 records the decision.
+- Final full pytest passes `3612`, with one pre-existing skip and three
+  warnings. Compileall, diff-check, and gitleaks pass on `4c838d9`.
+
+### Boundary
+
+- The Dashboard control/read path is ready for the separately attended
+  Hyperliquid Testnet BTC-DCA/BTC-Grid proof. This verification does not claim
+  an external fill, scheduler activation, Mainnet/Live readiness, or real-money
+  authorization.
 
 ## Bind explicit Jessie Testnet context to the Hyperliquid public market seam (#1069)
 

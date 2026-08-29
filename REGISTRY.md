@@ -62,14 +62,20 @@
   actor forwarding, Testnet facts resolve behind the composition-root facade,
   catalog membership and canonical/durable Preview digests are rechecked, and
   effective notional/loss are persisted into Coordinator activation identity.
-- Focused validation across the seven slices passes; full-suite validation and
-  independent Claude Sonnet 5 review are the remaining delivery gates. No
-  credential, Testnet order, position mutation, scheduler activation, cloud,
-  Mainnet, or Live state was touched.
+- Focused validation across the seven slices passes. Claude Sonnet 5 review
+  completed successfully with receipt
+  `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`; its P2 was
+  fixed in #1092/#1093. An independent Standards/Spec review then found and
+  closed the Gateway/facts/digest/effective-sizing gaps in #1094/#1095.
+- Final `origin/main` is `4c838d9`. Full pytest is `3612 passed, 1 skipped,
+  3 warnings`; compileall, diff-check, and gitleaks pass. No credential,
+  Testnet order, position mutation, scheduler activation, cloud, Mainnet, or
+  Live state was touched.
 
-_下一步_: run the full repository validation, then invoke the explicitly
-requested Claude Sonnet 5 review. Apply one bounded fix pass from that review,
-rerun all validation, and leave the Testnet execution gate attended.
+_下一步_: keep external Hyperliquid Testnet execution behind the separately
+attended BTC-DCA/BTC-Grid proof issues #1050 and #1051. The Dashboard control
+plane is implementation-complete and fail-closed; no Mainnet/Live promotion
+or automatic scheduler activation is implied.
 
 ## 现在在哪里(2026-08-27, Jessie Hyperliquid Testnet market binding)
 
