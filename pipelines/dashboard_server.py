@@ -3071,8 +3071,12 @@ def build_dualtrack_execution_response(
     try:
         adapter = build_configured_execution_engine_adapter(output)
     except RuntimeError as exc:
-        if os.getenv("GRIDMIND_RUNTIME_MODE") != "cloud":
-            raise
+        runtime_mode = str(os.getenv("GRIDMIND_RUNTIME_MODE") or "local").strip().lower()
+        unavailable_reason = (
+            "cloud_execution_authority_unavailable"
+            if runtime_mode == "cloud"
+            else "local_execution_authority_unavailable"
+        )
         return {
             "schema_version": "dualtrack-execution-v1",
             "cycle_id": cycle_id,
@@ -3085,20 +3089,20 @@ def build_dualtrack_execution_response(
             "accounting_snapshot": {},
             "reconciliation": {
                 "status": "blocked",
-                "reason": "cloud_execution_authority_unavailable",
+                "reason": unavailable_reason,
             },
             "grid_lifecycle": {},
             "execution_shadow_reconciliation": {
                 "status": "missing",
-                "reason": "cloud_execution_authority_unavailable",
+                "reason": unavailable_reason,
             },
             "shadow_cutover": {
                 "status": "missing",
-                "blocker": "cloud_execution_authority_unavailable",
+                "blocker": unavailable_reason,
             },
             "availability": {
                 "status": "blocked",
-                "reason": "cloud_execution_authority_unavailable",
+                "reason": unavailable_reason,
                 "detail": str(exc)[-300:],
                 "next_action": (
                     "Keep control disabled until the single-owner Paper cutover "
