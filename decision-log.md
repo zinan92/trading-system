@@ -119,7 +119,7 @@ Date: 2026-08-29
   implement the fix pass.
 - Focused control-plane/Gateway/Coordinator tests, compileall, diff-check, and
   gitleaks pass. The final repository run is `3612 passed, 1 skipped,
-  3 warnings` on `origin/main=4c838d9`. No credential, order, scheduler, cloud,
+  3 warnings` on `origin/main=cb9d14f`. No credential, order, scheduler, cloud,
   Mainnet, or Live mutation occurred.
 
 ### Gotcha
@@ -139,7 +139,7 @@ Date: 2026-08-29
   caller-trusted facts/digests/catalog, and dropped effective sizing. These
   were fixed once in #1094/#1095; #1096 records the decision.
 - Final full pytest passes `3612`, with one pre-existing skip and three
-  warnings. Compileall, diff-check, and gitleaks pass on `4c838d9`.
+  warnings. Compileall, diff-check, and gitleaks pass on `cb9d14f`.
 
 ### Boundary
 
