@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+from services.dca_plan import build_dca_preview
+from services.grid_sizing import build_grid_preview
 from services.journal_store import load_json, write_json
 
 
@@ -267,6 +269,193 @@ class DashboardControlPlane:
         }
         write_json(self.selection_path, [result])
         return result
+
+    def preview(
+        self,
+        *,
+        venue_profile_id: str,
+        instrument_id: str,
+        strategy_family: str,
+        strategy: Mapping[str, Any],
+        market: Mapping[str, Any] | None = None,
+        account: Mapping[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build a deterministic, non-authorizing DCA/Grid preview.
+
+        The canonical strategy builders remain the economic source of truth.
+        This facade only maps the Dashboard form into those builders and adds
+        venue/Instrument identity and explicit blockers around the result.
+        """
+
+        profile_id = str(venue_profile_id or "").strip().lower()
+        instrument = str(instrument_id or "").strip()
+        family = str(strategy_family or "").strip().lower()
+        if not any(row["id"] == profile_id for row in _VENUE_PROFILES):
+            raise ValueError("venue_profile_not_found")
+        if not instrument:
+            raise ValueError("instrument_id_required")
+        if family not in {"dca", "grid"}:
+            raise ValueError("strategy_family_invalid")
+        if not isinstance(strategy, Mapping):
+            raise ValueError("strategy_configuration_invalid")
+
+        blockers: list[str] = []
+        source_market = dict(market or {})
+        if not source_market:
+            blockers.append("market_facts_required")
+        source_account = dict(account or {})
+        if profile_id == "hyperliquid.testnet" and account is None:
+            blockers.append("testnet_account_unavailable")
+
+        normalized_market = self._normalise_market(source_market, instrument)
+        normalized_strategy = dict(strategy)
+        preview: dict[str, Any] | None = None
+        try:
+            if not source_market:
+                raise ValueError("market_facts_required")
+            if family == "dca":
+                preview = build_dca_preview(
+                    "dashboard-preview",
+                    {
+                        "direction": normalized_strategy.get("direction"),
+                        "dca": self._normalise_dca(normalized_strategy),
+                        "risk_budget": dict(normalized_strategy.get("risk_budget") or {}),
+                    },
+                    market=normalized_market,
+                    account=source_account,
+                    config=dict(config or self._default_strategy_config()),
+                )
+            else:
+                preview = build_grid_preview(
+                    "dashboard-preview",
+                    self._normalise_grid(normalized_strategy),
+                    market=normalized_market,
+                    account=source_account,
+                    config=dict(config or self._default_strategy_config()),
+                    allow_unsafe_manual_preview=False,
+                )
+        except (TypeError, ValueError, KeyError) as exc:
+            code = str(exc).strip() or "strategy_preview_invalid"
+            blockers.append(code)
+
+        hard_blockers = sorted(set(blockers))
+        payload = {
+            "schema_version": "dashboard-strategy-preview-v1",
+            "venue_profile_id": profile_id,
+            "instrument_id": instrument,
+            "strategy_family": family,
+            "requested": _public(normalized_strategy),
+            "preview": _public(preview) if preview is not None else None,
+            "market": _public(normalized_market),
+            "account": self._account_summary(source_account),
+            "blockers": hard_blockers,
+            "execution_ready": not hard_blockers,
+            "authorizing": False,
+        }
+        payload["preview_digest"] = _digest(payload)
+        return payload
+
+    @staticmethod
+    def _normalise_market(market: Mapping[str, Any], instrument_id: str) -> dict[str, Any]:
+        result = dict(market)
+        if result:
+            result.setdefault("latest_close", result.get("price") or result.get("mid"))
+            result.setdefault("latest_timestamp", result.get("observed_at"))
+            result.setdefault("status", "ready" if result.get("fresh") is True else result.get("raw_status"))
+            result.setdefault("is_synthetic", False)
+            result.setdefault("provider", result.get("source") or "dashboard")
+            result.setdefault("symbol", instrument_id)
+            result.setdefault("timeframe", "1m")
+        return result
+
+    @staticmethod
+    def _normalise_dca(strategy: Mapping[str, Any]) -> dict[str, Any]:
+        settings = dict(strategy.get("dca") or strategy)
+        levels = settings.get("entry_levels", settings.get("entry_prices"))
+        if levels is None and settings.get("range") is not None:
+            range_value = settings.get("range")
+            if isinstance(range_value, Mapping):
+                low = range_value.get("low")
+                high = range_value.get("high")
+                count = int(settings.get("max_additions") or settings.get("count") or 0)
+                if count > 0 and low is not None and high is not None:
+                    step = (float(high) - float(low)) / max(count - 1, 1)
+                    direction = str(strategy.get("direction") or "long").lower()
+                    levels = [
+                        float(high) - step * index
+                        if direction == "long"
+                        else float(low) + step * index
+                        for index in range(count)
+                    ]
+        return {
+            **settings,
+            "entry_levels": list(levels or []),
+            "target_price": settings.get("target_price", settings.get("take_profit")),
+            "stop_price": settings.get("stop_price", settings.get("stop_loss")),
+            "notional_per_addition": settings.get(
+                "notional_per_addition",
+                settings.get("notional_per_entry"),
+            ),
+            "max_additions": settings.get("max_additions", settings.get("count")),
+            "loop_enabled": False,
+        }
+
+    @staticmethod
+    def _normalise_grid(strategy: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(strategy)
+        grid = dict(result.get("grid") or {})
+        range_value = dict(result.get("range") or {})
+        if "low" not in range_value:
+            range_value["low"] = result.get("lower_boundary")
+        if "high" not in range_value:
+            range_value["high"] = result.get("upper_boundary")
+        grid.setdefault("count", result.get("count"))
+        grid.setdefault("notional_per_grid", result.get("notional_per_grid"))
+        grid.setdefault("notional_mode", "manual")
+        result["range"] = range_value
+        result["grid"] = grid
+        result.setdefault("solver", {"mode": "manual_adaptive", "locked": ["range", "grid_count", "notional_per_grid"]})
+        return result
+
+    @staticmethod
+    def _account_summary(account: Mapping[str, Any]) -> dict[str, Any]:
+        sensitive = {"private_key", "secret", "api_key", "api_secret", "signer"}
+        return {
+            str(key): _public(value)
+            for key, value in account.items()
+            if str(key).lower() not in sensitive
+        }
+
+    @staticmethod
+    def _default_strategy_config() -> dict[str, Any]:
+        return {
+            "max_leverage": 10.0,
+            "cost_per_side_bp": 0.5,
+            "execution_contract": {
+                "schema_version": "dashboard-preview-execution-v1",
+                "execution_instrument_id": "dashboard-preview",
+                "price_increment": "0.01",
+                "quantity_increment": "0.00001",
+            },
+            "strategy_grid": {
+                "range_timeframe": "1d",
+                "spacing_timeframe": "4h",
+                "execution_timeframe": "1m",
+                "range_atr_period": 14,
+                "spacing_atr_period": 14,
+                "styles": {
+                    "steady": {"range_atr_multiple": 2.0, "spacing_atr_multiple": 1.0},
+                    "aggressive": {"range_atr_multiple": 1.5, "spacing_atr_multiple": 0.75},
+                },
+                "capital_utilization_cap": 1.0,
+                "min_net_profit_per_grid_usd": 10.0,
+                "required_leverage": 10.0,
+                "min_grid_count": 2,
+                "max_grid_count": 70,
+                "default_mode": "arithmetic",
+            },
+        }
 
 
 __all__ = [

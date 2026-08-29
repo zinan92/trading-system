@@ -497,6 +497,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             except ValueError as exc:
                 self._write_error(400, "invalid_dashboard_control_selection", str(exc))
             return
+        if parsed.path == "/api/dashboard-control/preview":
+            if not _dualtrack_mutation_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+            ):
+                self._write_error(
+                    403,
+                    "dashboard_control_origin_blocked",
+                    "dashboard control preview requires the same local origin",
+                )
+                return
+            try:
+                self._handle_dashboard_control_preview_post()
+            except ValueError as exc:
+                self._write_error(400, "invalid_dashboard_control_preview", str(exc))
+            return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
     def _handle_dualtrack_current(self, query: str) -> None:
@@ -790,6 +806,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_dashboard_control_selection_post(self) -> None:
         payload = self._read_json_body(max_bytes=32_000)
         self._write_json(200, build_dashboard_control_selection_response(payload))
+
+    def _handle_dashboard_control_preview_post(self) -> None:
+        payload = self._read_json_body(max_bytes=64_000)
+        self._write_json(200, build_dashboard_control_preview_response(payload))
 
     def _handle_connector_config_status_get(self) -> None:
         self._write_json(200, build_connector_config_status_response())
@@ -3511,6 +3531,42 @@ def build_dashboard_control_selection_response(
             "read_only": True,
             "credentials_exposed": False,
             "orders_submitted": False,
+        },
+    }
+
+
+def build_dashboard_control_preview_response(
+    payload: Mapping[str, Any],
+    *,
+    output_root: Path | None = None,
+    market: Mapping[str, Any] | None = None,
+    account: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project one Dashboard Strategy Preview without execution side effects."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("dashboard_control_preview_payload_invalid")
+    plane = DashboardControlPlane(
+        _dualtrack_output_root(output_root),
+        catalog_loader=public_catalog_loader,
+    )
+    result = plane.preview(
+        venue_profile_id=str(payload.get("venue_profile_id") or ""),
+        instrument_id=str(payload.get("instrument_id") or ""),
+        strategy_family=str(payload.get("strategy_family") or ""),
+        strategy=payload.get("strategy") if isinstance(payload.get("strategy"), Mapping) else {},
+        market=market if market is not None else payload.get("market"),
+        account=account if account is not None else payload.get("account"),
+        config=payload.get("config") if isinstance(payload.get("config"), Mapping) else None,
+    )
+    return {
+        "schema_version": "dashboard-preview-response-v1",
+        "preview": result,
+        "safety": {
+            "read_only": True,
+            "authorizing": False,
+            "orders_submitted": False,
+            "credentials_exposed": False,
         },
     }
 

@@ -5,6 +5,26 @@ from pathlib import Path
 from services.dashboard_control_plane import DashboardControlPlane
 
 
+def _market() -> dict:
+    bars = [
+        {"open": 100, "high": 102, "low": 98, "close": 100, "timestamp": f"2026-08-29T00:{index:02d}:00+00:00"}
+        for index in range(20)
+    ]
+    return {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "testnet-fixture",
+        "latest_close": 100,
+        "latest_timestamp": "2026-08-29T00:20:00+00:00",
+        "bars": bars,
+        "strategy_timeframes": {
+            "1d": {"provider": "testnet-fixture", "is_synthetic": False, "bars": bars},
+            "4h": {"provider": "testnet-fixture", "is_synthetic": False, "bars": bars},
+        },
+    }
+
+
 def test_catalog_exposes_explicit_venue_profiles_without_live_environment() -> None:
     catalog = DashboardControlPlane(Path("/tmp/dashboard-control-test")).catalog()
 
@@ -132,3 +152,112 @@ def test_dashboard_v5_contains_the_venue_asset_strategy_track() -> None:
     assert "/api/dashboard-control/catalog" in html
     assert "/api/dashboard-control/selection" in html
     assert "Hyperliquid Testnet" not in html or "Venue Profile" in html
+
+
+def test_dca_preview_uses_the_canonical_builder_and_exposes_derived_risk(tmp_path: Path) -> None:
+    preview = DashboardControlPlane(tmp_path).preview(
+        venue_profile_id="binance.paper",
+        instrument_id="XAUUSDT.BINANCE",
+        strategy_family="dca",
+        strategy={
+            "direction": "long",
+            "dca": {
+                "entry_prices": [98, 96],
+                "count": 2,
+                "notional_per_entry": 1_000,
+                "take_profit": 105,
+                "stop_loss": 90,
+            },
+            "risk_budget": {"leverage": 5},
+        },
+        market=_market(),
+        account={"equity": 10_000},
+    )
+
+    assert preview["execution_ready"] is True
+    assert preview["authorizing"] is False
+    assert preview["preview"]["dca"]["entry_count"] == 2
+    assert preview["preview"]["risk"]["estimated_margin_at_full_depth"] == 400.0
+    assert preview["preview"]["risk"]["maximum_loss_at_full_depth"] > 0
+    assert preview["preview_digest"].startswith("sha256:")
+
+
+def test_grid_preview_preserves_grid_geometry_and_is_non_authorizing(tmp_path: Path) -> None:
+    preview = DashboardControlPlane(tmp_path).preview(
+        venue_profile_id="binance.paper",
+        instrument_id="XAUUSDT.BINANCE",
+        strategy_family="grid",
+        strategy={
+            "direction": "neutral",
+            "style": "steady",
+            "range": {"low": 80, "high": 120, "scope": "full"},
+            "grid": {
+                "mode": "arithmetic",
+                "count": 4,
+                "notional_per_grid": 1_000,
+                "notional_mode": "manual",
+            },
+        },
+        market=_market(),
+        account={"equity": 10_000},
+    )
+
+    assert preview["execution_ready"] is True
+    assert preview["authorizing"] is False
+    assert preview["preview"]["grid"]["count"] == 4
+    assert preview["preview"]["grid"]["levels"]
+    assert preview["preview"]["risk"]["estimated_margin"] > 0
+
+
+def test_preview_digest_changes_when_strategy_configuration_changes(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path)
+    base = {
+        "venue_profile_id": "binance.paper",
+        "instrument_id": "XAUUSDT.BINANCE",
+        "strategy_family": "dca",
+        "strategy": {
+            "direction": "short",
+            "dca": {
+                "entry_prices": [102, 104],
+                "count": 2,
+                "notional_per_entry": 1_000,
+                "take_profit": 95,
+                "stop_loss": 110,
+            },
+        },
+        "market": _market(),
+        "account": {"equity": 10_000},
+    }
+
+    first = plane.preview(**base)
+    second = plane.preview(**{**base, "strategy": {**base["strategy"], "dca": {**base["strategy"]["dca"], "stop_loss": 112}}})
+
+    assert first["preview_digest"] != second["preview_digest"]
+
+
+def test_dashboard_preview_builder_keeps_execution_non_authorizing(monkeypatch, tmp_path: Path) -> None:
+    from pipelines import dashboard_server
+
+    result = dashboard_server.build_dashboard_control_preview_response(
+        {
+            "venue_profile_id": "binance.paper",
+            "instrument_id": "XAUUSDT.BINANCE",
+            "strategy_family": "dca",
+            "strategy": {
+                "direction": "long",
+                "dca": {
+                    "entry_prices": [98, 96],
+                    "count": 2,
+                    "notional_per_entry": 1_000,
+                    "take_profit": 105,
+                    "stop_loss": 90,
+                },
+            },
+            "market": _market(),
+            "account": {"equity": 10_000},
+        },
+        output_root=tmp_path,
+    )
+
+    assert result["preview"]["authorizing"] is False
+    assert result["safety"]["orders_submitted"] is False
