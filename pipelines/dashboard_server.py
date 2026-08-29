@@ -31,8 +31,6 @@ from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
 from services.dashboard_control_plane import DashboardControlPlane, public_catalog_loader
-from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
-from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.dashboard_control_evidence import DashboardControlEvidenceStore
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
@@ -3595,11 +3593,15 @@ def build_dashboard_control_selection_response(
     payload: Mapping[str, Any],
     *,
     output_root: Path | None = None,
+    catalog_loader: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
     """Read or update the non-executing Dashboard selection identity."""
 
     output = _dualtrack_output_root(output_root)
-    plane = DashboardControlPlane(output, catalog_loader=public_catalog_loader)
+    plane = DashboardControlPlane(
+        output,
+        catalog_loader=catalog_loader or public_catalog_loader,
+    )
     if str(payload.get("action") or "").strip().lower() == "status":
         return {
             "schema_version": "dashboard-selection-response-v1",
@@ -3631,6 +3633,7 @@ def build_dashboard_control_preview_response(
     output_root: Path | None = None,
     market: Mapping[str, Any] | None = None,
     account: Mapping[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project one Dashboard Strategy Preview without execution side effects."""
 
@@ -3638,24 +3641,17 @@ def build_dashboard_control_preview_response(
         raise ValueError("dashboard_control_preview_payload_invalid")
     profile_id = str(payload.get("venue_profile_id") or "").strip().lower()
     instrument_id = str(payload.get("instrument_id") or "").strip()
-    resolved_market = market if market is not None else payload.get("market")
-    resolved_account = account if account is not None else payload.get("account")
-    if profile_id == "hyperliquid.testnet" and resolved_market is None and instrument_id:
-        try:
-            resolved_market = HyperliquidTestnetMarketReader().read(instrument_id)
-        except Exception:  # noqa: BLE001 - public market failure is a typed blocker.
-            resolved_market = None
-    if profile_id == "hyperliquid.testnet" and resolved_account is None:
-        address = str(os.getenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS") or "").strip()
-        if address:
-            try:
-                resolved_account = HyperliquidTestnetAccountReader(address).read(instrument_id)
-            except Exception:  # noqa: BLE001 - account failure stays fail-closed.
-                resolved_account = None
     plane = DashboardControlPlane(
         _dualtrack_output_root(output_root),
         catalog_loader=public_catalog_loader,
     )
+    resolved_market = market
+    resolved_account = account
+    if profile_id == "hyperliquid.testnet" and resolved_market is None and resolved_account is None:
+        resolved_market, resolved_account = plane.resolve_runtime_facts(
+            venue_profile_id=profile_id,
+            instrument_id=instrument_id,
+        )
     result = plane.preview(
         venue_profile_id=str(payload.get("venue_profile_id") or ""),
         instrument_id=str(payload.get("instrument_id") or ""),
@@ -3663,7 +3659,7 @@ def build_dashboard_control_preview_response(
         strategy=payload.get("strategy") if isinstance(payload.get("strategy"), Mapping) else {},
         market=resolved_market,
         account=resolved_account,
-        config=payload.get("config") if isinstance(payload.get("config"), Mapping) else None,
+        config=config,
     )
     return {
         "schema_version": "dashboard-preview-response-v1",
@@ -3687,15 +3683,11 @@ def build_dashboard_control_account_admission_response(
 
     if not isinstance(payload, Mapping):
         raise ValueError("dashboard_account_admission_payload_invalid")
-    reader = account_reader
-    if reader is None:
-        address = str(os.getenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS") or "").strip()
-        if address:
-            reader = HyperliquidTestnetAccountReader(address)
     plane = DashboardControlPlane(
         _dualtrack_output_root(output_root),
         catalog_loader=public_catalog_loader,
     )
+    reader = account_reader or plane.runtime_account_reader()
     result = plane.account_admission(
         venue_profile_id=str(payload.get("venue_profile_id") or ""),
         instrument_id=str(payload.get("instrument_id") or ""),
@@ -3719,6 +3711,7 @@ def build_dashboard_control_confirmation_response(
     output_root: Path | None = None,
     coordinator: object | None = None,
     now: str | None = None,
+    catalog_loader: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
     """Confirm one fresh Dashboard Preview and record Coordinator activation."""
 
@@ -3730,7 +3723,10 @@ def build_dashboard_control_confirmation_response(
         raise ValueError("dashboard_confirmation_preview_required")
     output = _dualtrack_output_root(output_root)
     runtime_coordinator = coordinator or TestnetAutomationCoordinator(output)
-    plane = DashboardControlPlane(output, catalog_loader=public_catalog_loader)
+    plane = DashboardControlPlane(
+        output,
+        catalog_loader=catalog_loader or public_catalog_loader,
+    )
     result = plane.confirm_and_run(
         preview,
         confirmation=confirmation,

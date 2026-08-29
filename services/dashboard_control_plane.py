@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -25,6 +26,7 @@ SELECTION_SCHEMA = "dashboard-selection-v1"
 SELECTION_PATH = "dashboard_control_plane/selection.json"
 CONFIRMATION_PATH = "dashboard_control_plane/confirmations.json"
 NOTIFICATION_PATH = "dashboard_control_plane/notifications.json"
+PREVIEW_PATH = "dashboard_control_plane/previews.json"
 
 
 _VENUE_PROFILES: tuple[dict[str, Any], ...] = (
@@ -56,6 +58,26 @@ def _digest(value: Any) -> str:
         default=str,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _canonical_preview_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): value[key]
+        for key in sorted(value)
+        if str(key) not in {"preview_digest", "authorizing"}
+    }
+
+
+def canonical_preview_digest(value: Mapping[str, Any]) -> str:
+    """Recompute a Preview digest without trusting a client-supplied token."""
+
+    return _digest(_canonical_preview_payload(value))
+
+
+def canonical_risk_gate_digest(value: Mapping[str, Any]) -> str:
+    """Return the stable digest for requested/effective gate evidence."""
+
+    return _digest(_public(dict(value)))
 
 
 def _now() -> str:
@@ -157,7 +179,30 @@ def public_catalog_loader(profile_id: str) -> Iterable[Mapping[str, Any]]:
         return _default_catalog_loader(profile_id)
     from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 
-    return HyperliquidTestnetMarketReader().read_catalog().get("instruments") or ()
+    reader = HyperliquidTestnetMarketReader()
+    rows = [dict(row) for row in (reader.read_catalog().get("instruments") or ())]
+    # The public metadata call establishes structural inventory.  The first
+    # proof candidate (BTC) is execution-eligible only when its current public
+    # market fact also passes the reader's BBO/mid checks; other pairs remain
+    # visible as unknown until an explicit market fact is read for them.
+    for row in rows:
+        if str(row.get("instrument_id") or "") != "BTC-USD-PERP":
+            continue
+        try:
+            market = reader.read("BTC-USD-PERP")
+        except Exception:
+            row["eligibility"] = "blocked"
+            row["blockers"] = ["market_facts_unavailable"]
+        else:
+            row["eligibility"] = "eligible"
+            row["blockers"] = []
+            row["market_fresh"] = market.get("fresh") is True
+            row["market_quality"] = {
+                "bid": market.get("bid"),
+                "ask": market.get("ask"),
+                "mid": market.get("mid"),
+            }
+    return rows
 
 
 class DashboardControlPlane:
@@ -193,7 +238,10 @@ class DashboardControlPlane:
                     if isinstance(row, Mapping)
                 ]
             except Exception as exc:  # noqa: BLE001 - catalog is a read blocker.
-                rows = []
+                rows = [
+                    _normalise_instrument(row, profile_id=profile_id)
+                    for row in _default_catalog_loader(profile_id)
+                ]
                 blockers.append(
                     "instrument_catalog_unavailable"
                     if isinstance(exc, (OSError, RuntimeError, ValueError))
@@ -220,6 +268,71 @@ class DashboardControlPlane:
                 "orders_submitted": False,
             },
         }
+
+    def _catalog_entry(self, profile_id: str, instrument_id: str) -> tuple[dict[str, Any] | None, str]:
+        snapshot = self.catalog()
+        profile = next(
+            (row for row in snapshot["venue_profiles"] if row.get("id") == profile_id),
+            None,
+        )
+        if not isinstance(profile, Mapping):
+            return None, str(snapshot.get("catalog_revision") or "")
+        entry = next(
+            (
+                row
+                for row in profile.get("instruments", [])
+                if isinstance(row, Mapping)
+                and str(row.get("instrument_id") or "") == instrument_id
+            ),
+            None,
+        )
+        return (dict(entry) if isinstance(entry, Mapping) else None), str(
+            profile.get("catalog_revision") or snapshot.get("catalog_revision") or ""
+        )
+
+    def resolve_runtime_facts(
+        self,
+        *,
+        venue_profile_id: str,
+        instrument_id: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Resolve trusted runtime facts at the composition-root seam.
+
+        This method deliberately performs only public Testnet reads.  The
+        Dashboard server calls this facade; it never imports a venue reader.
+        """
+
+        if str(venue_profile_id or "").strip().lower() != "hyperliquid.testnet":
+            return None, None
+        from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+
+        market: dict[str, Any] | None = None
+        account: dict[str, Any] | None = None
+        try:
+            market = HyperliquidTestnetMarketReader().read(instrument_id)
+        except Exception:  # noqa: BLE001 - preserve a typed blocker in preview.
+            market = None
+        reader = self.runtime_account_reader()
+        if reader is not None:
+            try:
+                account = reader.read(instrument_id)
+            except Exception:  # noqa: BLE001 - preserve a typed blocker in admission.
+                account = None
+        return market, account
+
+    @staticmethod
+    def runtime_account_reader() -> object | None:
+        """Build the configured public account reader without exposing secrets."""
+
+        address = str(os.getenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS") or "").strip()
+        if not address:
+            return None
+        from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
+
+        try:
+            return HyperliquidTestnetAccountReader(address)
+        except Exception:  # noqa: BLE001 - invalid runtime identity stays unavailable.
+            return None
 
     def status(self) -> dict[str, Any]:
         rows = load_json(self.selection_path)
@@ -248,6 +361,12 @@ class DashboardControlPlane:
         instrument = str(instrument_id or "").strip() or None
         if instrument is not None and any(character in instrument for character in "\r\n"):
             raise ValueError("instrument_id_invalid")
+        if instrument is not None:
+            entry, _catalog_revision = self._catalog_entry(profile_id, instrument)
+            if entry is None:
+                raise ValueError("instrument_not_in_catalog")
+            if str(entry.get("eligibility") or "unknown") != "eligible":
+                raise ValueError("instrument_not_eligible")
         family = str(strategy_family or "").strip().lower() or None
         if family is not None and family not in {"dca", "grid"}:
             raise ValueError("strategy_family_invalid")
@@ -303,6 +422,16 @@ class DashboardControlPlane:
             raise ValueError("strategy_configuration_invalid")
 
         blockers: list[str] = []
+        catalog_entry, catalog_revision = self._catalog_entry(profile_id, instrument)
+        if catalog_entry is None:
+            blockers.append("instrument_not_in_catalog")
+        elif str(catalog_entry.get("eligibility") or "unknown") != "eligible":
+            blockers.extend(
+                str(item)
+                for item in (catalog_entry.get("blockers") or [])
+                if str(item).strip()
+            )
+            blockers.append("instrument_not_eligible")
         source_market = dict(market or {})
         if not source_market:
             blockers.append("market_facts_required")
@@ -341,12 +470,37 @@ class DashboardControlPlane:
             code = str(exc).strip() or "strategy_preview_invalid"
             blockers.append(code)
 
+        if family == "grid" and preview is not None:
+            grid_preview = preview.get("grid") if isinstance(preview.get("grid"), Mapping) else {}
+            grid_preview = dict(grid_preview)
+            range_value = normalized_strategy.get("range") if isinstance(normalized_strategy.get("range"), Mapping) else {}
+            low = range_value.get("low")
+            high = range_value.get("high")
+            requested_hard_stop = normalized_strategy.get("hard_stop")
+            if requested_hard_stop in (None, ""):
+                direction = str(normalized_strategy.get("direction") or "neutral").lower()
+                requested_hard_stop = (
+                    low
+                    if direction == "long"
+                    else high
+                    if direction == "short"
+                    else {"long": low, "short": high}
+                )
+                hard_stop_source = "derived_from_grid_boundary"
+            else:
+                hard_stop_source = "operator_configured"
+            grid_preview["hard_stop"] = requested_hard_stop
+            grid_preview["hard_stop_source"] = hard_stop_source
+            preview["grid"] = grid_preview
+
         hard_blockers = sorted(set(blockers))
         payload = {
             "schema_version": "dashboard-strategy-preview-v1",
             "venue_profile_id": profile_id,
             "instrument_id": instrument,
             "strategy_family": family,
+            "catalog_revision": catalog_revision,
+            "instrument_eligibility": (catalog_entry or {}).get("eligibility"),
             "requested": _public(normalized_strategy),
             "preview": _public(preview) if preview is not None else None,
             "market": _public(normalized_market),
@@ -361,8 +515,19 @@ class DashboardControlPlane:
                 market=normalized_market if normalized_market else None,
                 account=source_account if account is not None else None,
             )
-        payload["preview_digest"] = _digest(payload)
+        payload["preview_digest"] = canonical_preview_digest(payload)
+        self.persist_preview(payload)
         return payload
+
+    def persist_preview(self, preview: Mapping[str, Any]) -> dict[str, Any]:
+        rows = load_json(self.output_root / PREVIEW_PATH)
+        digest = str(preview.get("preview_digest") or "")
+        if rows and isinstance(rows[-1], Mapping) and str(rows[-1].get("preview_digest") or "") == digest:
+            return dict(rows[-1])
+        write_json(self.output_root / PREVIEW_PATH, [*rows, _public(preview)])
+        return dict(preview)
+
+    _persist_preview = persist_preview
 
     def account_admission(
         self,
@@ -470,6 +635,24 @@ class DashboardControlPlane:
         blockers.extend(market_blockers)
         body_account = dict(account or {})
         equity = self._float_or_none(body_account.get("equity"))
+        if str(preview.get("venue_profile_id") or "").strip().lower() == "hyperliquid.testnet":
+            if not body_account:
+                blockers.append("testnet_account_unavailable")
+            else:
+                for field, blocker in (
+                    ("account_fingerprint", "testnet_account_identity_missing"),
+                    ("source_cursor", "testnet_account_cursor_missing"),
+                ):
+                    if body_account.get(field) in (None, ""):
+                        blockers.append(blocker)
+                if str(body_account.get("broker_id") or "").lower() != "hyperliquid":
+                    blockers.append("testnet_account_broker_mismatch")
+                if str(body_account.get("environment") or "").lower() != "testnet":
+                    blockers.append("testnet_account_environment_mismatch")
+                if body_account.get("fresh") is not True:
+                    blockers.append("testnet_account_stale")
+                if body_account.get("coherent") is not True:
+                    blockers.append("testnet_account_incoherent")
         if body_account:
             capabilities = body_account.get("capabilities")
             if isinstance(capabilities, Mapping) and capabilities.get("protection") is not True:
@@ -523,12 +706,13 @@ class DashboardControlPlane:
                 "market": _public(normalized_market),
                 "blockers": sorted(set(blockers)),
                 "risk_gate": gate,
+                "risk_gate_digest": canonical_risk_gate_digest(gate),
                 "execution_ready": bool(preview.get("execution_ready"))
                 and not blockers,
                 "authorizing": False,
             }
         )
-        result["preview_digest"] = _digest(result)
+        result["preview_digest"] = canonical_preview_digest(result)
         return result
 
     def confirm_and_run(
@@ -558,8 +742,15 @@ class DashboardControlPlane:
         preview_digest = str(preview.get("preview_digest") or "").strip().lower()
         if not preview_digest:
             blockers.append("preview_digest_missing")
+        elif canonical_preview_digest(preview) != preview_digest:
+            blockers.append("preview_digest_invalid")
         if str(confirmation.get("preview_digest") or "").strip().lower() != preview_digest:
             blockers.append("confirmation_digest_mismatch")
+        if preview_digest:
+            persisted = load_json(self.output_root / PREVIEW_PATH)
+            latest = persisted[-1] if persisted and isinstance(persisted[-1], Mapping) else None
+            if not isinstance(latest, Mapping) or str(latest.get("preview_digest") or "").strip().lower() != preview_digest:
+                blockers.append("preview_not_durable")
         if confirmation.get("acknowledged") is not True:
             blockers.append("operator_confirmation_required")
         if str(confirmation.get("operator_id") or "").strip().lower() != "park":
@@ -572,9 +763,35 @@ class DashboardControlPlane:
         if str(preview.get("environment") or "testnet").strip().lower() != "testnet":
             blockers.append("testnet_only")
         account = preview.get("account") if isinstance(preview.get("account"), Mapping) else {}
+        for field, blocker in (
+            ("account_fingerprint", "testnet_account_identity_missing"),
+            ("source_cursor", "testnet_account_cursor_missing"),
+        ):
+            if account.get(field) in (None, ""):
+                blockers.append(blocker)
+        if str(account.get("broker_id") or "").lower() != "hyperliquid":
+            blockers.append("testnet_account_broker_mismatch")
+        if str(account.get("environment") or "").lower() != "testnet":
+            blockers.append("testnet_account_environment_mismatch")
+        if account.get("fresh") is not True:
+            blockers.append("testnet_account_stale")
+        if account.get("coherent") is not True:
+            blockers.append("testnet_account_incoherent")
+        capabilities = account.get("capabilities") if isinstance(account.get("capabilities"), Mapping) else {}
+        if capabilities.get("protection") is not True:
+            blockers.append("testnet_protection_capability_unavailable")
         account_fingerprint = str(
             preview.get("account_fingerprint") or account.get("account_fingerprint") or ""
         ).strip().lower()
+        instrument_id = str(preview.get("instrument_id") or "").strip()
+        catalog_entry, catalog_revision = self._catalog_entry(profile_id, instrument_id)
+        if catalog_entry is None:
+            blockers.append("instrument_not_in_catalog")
+        else:
+            if str(catalog_entry.get("eligibility") or "unknown") != "eligible":
+                blockers.append("instrument_not_eligible")
+            if str(preview.get("catalog_revision") or "") != catalog_revision:
+                blockers.append("catalog_revision_mismatch")
         runtime_id = str(preview.get("runtime_id") or "").strip()
         release_sha = str(preview.get("release_sha") or "").strip().lower()
         capability_revision = str(preview.get("capability_revision") or "").strip()
@@ -585,6 +802,26 @@ class DashboardControlPlane:
             blockers.append("activation_identity_incomplete")
         if len(release_sha) != 40:
             blockers.append("release_sha_invalid")
+        risk_gate = preview.get("risk_gate") if isinstance(preview.get("risk_gate"), Mapping) else {}
+        requested_notional = risk_gate.get("requested_notional")
+        effective_notional = risk_gate.get("effective_notional")
+        requested_max_loss = risk_gate.get("requested_max_loss")
+        effective_max_loss = risk_gate.get("effective_max_loss")
+        if requested_notional in (None, "") or effective_notional in (None, ""):
+            blockers.append("effective_plan_missing")
+        else:
+            requested_number = self._float_or_none(requested_notional)
+            effective_number = self._float_or_none(effective_notional)
+            if requested_number is None or effective_number is None:
+                blockers.append("effective_plan_invalid")
+            elif effective_number > requested_number:
+                blockers.append("effective_plan_increased")
+        risk_gate_digest = canonical_risk_gate_digest(risk_gate) if risk_gate else ""
+        supplied_risk_gate_digest = str(preview.get("risk_gate_digest") or "").strip().lower()
+        if risk_gate and supplied_risk_gate_digest != risk_gate_digest:
+            blockers.append("risk_gate_digest_mismatch")
+        if risk_gate and not supplied_risk_gate_digest:
+            blockers.append("risk_gate_digest_missing")
         if blockers:
             return self._blocked_confirmation(preview_digest, sorted(set(blockers)))
 
@@ -605,10 +842,15 @@ class DashboardControlPlane:
             "broker_id": "hyperliquid",
             "environment": "testnet",
             "transport_profile": transport_profile,
-            "instrument_id": str(preview.get("instrument_id") or ""),
+            "instrument_id": instrument_id,
             "runtime_id": runtime_id,
             "release_sha": release_sha,
             "capability_revision": capability_revision,
+            "requested_notional": None if requested_notional in (None, "") else str(requested_notional),
+            "effective_notional": None if effective_notional in (None, "") else str(effective_notional),
+            "requested_max_loss": None if requested_max_loss in (None, "") else str(requested_max_loss),
+            "effective_max_loss": None if effective_max_loss in (None, "") else str(effective_max_loss),
+            "risk_gate_digest": risk_gate_digest or None,
         }
         activation_id = _digest(activation)
         occurred_at = str(now or self.clock())
@@ -794,6 +1036,7 @@ class DashboardControlPlane:
             "status": status,
             "automatic_next_plan": False,
             "retry_authorized": False,
+            "channels": {"dashboard": "persisted", "telegram": "queued"},
             "created_at": str(now or self.clock()),
             "next_action": "await_operator_next_plan" if status == "AWAITING_OPERATOR" else "notify_park_and_wait",
         }
@@ -801,6 +1044,25 @@ class DashboardControlPlane:
         if rows and isinstance(rows[-1], Mapping) and rows[-1].get("notification_id") == row["notification_id"]:
             return dict(rows[-1])
         write_json(self.output_root / NOTIFICATION_PATH, [*rows, row])
+        telegram_path = self.output_root / "dashboard_control_plane" / "telegram_outbox.json"
+        telegram_rows = load_json(telegram_path)
+        write_json(
+            telegram_path,
+            [
+                *telegram_rows,
+                {
+                    "schema_version": "dashboard-telegram-outbox-v1",
+                    "notification_id": row["notification_id"],
+                    "status": "queued",
+                    "message": row["message"],
+                    "plan_digest": row["plan_digest"],
+                    "instrument_id": row["instrument_id"],
+                    "created_at": row["created_at"],
+                    "network_sent": False,
+                    "credentials_exposed": False,
+                },
+            ],
+        )
         return row
 
     def handle_unknown(
@@ -848,6 +1110,19 @@ class DashboardControlPlane:
         }
         runtime_payload = dict(runtime) if isinstance(runtime, Mapping) else {"status": "blocked"}
         runtime = {**runtime_payload, "execution_mutation": False}
+        execution = runtime.get("execution") or runtime.get("execution_slice")
+        if isinstance(execution, Mapping):
+            for field in (
+                "orders",
+                "open_orders",
+                "fills",
+                "fees",
+                "positions",
+                "protection",
+                "reconciliation",
+            ):
+                if field in execution:
+                    runtime.setdefault(field, _public(execution[field]))
         rows = load_json(self.output_root / NOTIFICATION_PATH)
         latest = dict(rows[-1]) if rows and isinstance(rows[-1], Mapping) else None
         return {
