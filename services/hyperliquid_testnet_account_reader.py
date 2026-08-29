@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 HYPERLIQUID_TESTNET_INFO_URL = "https://api.hyperliquid-testnet.xyz/info"
 _ACCOUNT_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+ACCOUNT_FACT_MAX_AGE_SECONDS = 120.0
 
 
 class HyperliquidTestnetAccountError(ValueError):
@@ -41,6 +42,7 @@ class HyperliquidTestnetAccountReader:
         self.clock = clock
 
     def read(self, instrument_id: str | None = None) -> dict[str, Any]:
+        read_started = float(self.clock())
         state = self._post("clearinghouseState")
         open_orders = self._post("openOrders")
         frontend_orders = self._post("frontendOpenOrders")
@@ -62,7 +64,17 @@ class HyperliquidTestnetAccountReader:
             if selected
             else list(normalized_open_orders)
         )
-        observed_at = datetime.fromtimestamp(float(self.clock()), tz=timezone.utc).isoformat()
+        read_finished = float(self.clock())
+        observed_at = datetime.fromtimestamp(read_finished, tz=timezone.utc).isoformat()
+        fact_timestamp = self._fact_timestamp(state, fallback=read_finished)
+        fact_age_seconds = max(0.0, read_finished - fact_timestamp)
+        freshness = fact_age_seconds <= ACCOUNT_FACT_MAX_AGE_SECONDS
+        coherence_issues = self._coherence_issues(
+            state,
+            normalized_open_orders,
+            normalized_frontend_orders,
+            positions,
+        )
         raw = {
             "clearinghouseState": state,
             "openOrders": open_orders,
@@ -87,8 +99,14 @@ class HyperliquidTestnetAccountReader:
                 for row in normalized_fills
                 if row.get("fee") not in (None, "")
             ],
-            "fresh": True,
-            "coherent": True,
+            "fresh": freshness,
+            "coherent": not coherence_issues,
+            "fact_age_seconds": round(fact_age_seconds, 3),
+            "fact_max_age_seconds": ACCOUNT_FACT_MAX_AGE_SECONDS,
+            "coherence_issues": coherence_issues,
+            "read_started_at": datetime.fromtimestamp(
+                read_started, tz=timezone.utc
+            ).isoformat(),
             "observed_at": observed_at,
             "source": "hyperliquid.external_testnet",
             "source_cursor": self._fingerprint(raw),
@@ -102,6 +120,63 @@ class HyperliquidTestnetAccountReader:
             },
             "account_address_exposed": False,
         }
+
+    @staticmethod
+    def _fact_timestamp(state: Mapping[str, Any], *, fallback: float) -> float:
+        value: Any = None
+        for key in ("timestamp", "time", "updatedAt", "lastUpdate"):
+            if state.get(key) not in (None, ""):
+                value = state.get(key)
+                break
+        if value is None:
+            return fallback
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                return fallback
+            if parsed.tzinfo is None:
+                return fallback
+            return parsed.astimezone(timezone.utc).timestamp()
+        if numeric > 10_000_000_000:
+            numeric /= 1000.0
+        return numeric if numeric == numeric and numeric > 0 else fallback
+
+    @staticmethod
+    def _coherence_issues(
+        state: Mapping[str, Any],
+        open_orders: list[dict[str, Any]],
+        frontend_orders: list[dict[str, Any]],
+        positions: list[dict[str, Any]],
+    ) -> list[str]:
+        issues: list[str] = []
+        open_keys = {
+            str(row.get("oid") or row.get("cloid") or "")
+            for row in open_orders
+        }
+        frontend_keys = {
+            str(row.get("oid") or row.get("cloid") or "")
+            for row in frontend_orders
+        }
+        if open_keys != frontend_keys:
+            issues.append("open_order_views_mismatch")
+        position_keys = [str(row.get("instrument_id") or "") for row in positions]
+        if len(position_keys) != len(set(position_keys)):
+            issues.append("duplicate_position_identity")
+        summary = state.get("marginSummary") or state.get("crossMarginSummary")
+        if not isinstance(summary, Mapping):
+            issues.append("margin_summary_missing")
+        else:
+            try:
+                account_value = float(summary.get("accountValue"))
+                margin_used = float(summary.get("totalMarginUsed", 0.0))
+                if account_value < 0 or margin_used < 0:
+                    issues.append("margin_summary_negative")
+            except (TypeError, ValueError):
+                issues.append("margin_summary_invalid")
+        return sorted(set(issues))
 
     def _post(self, request_type: str) -> Mapping[str, Any] | list[Any]:
         request = Request(

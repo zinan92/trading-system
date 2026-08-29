@@ -457,10 +457,15 @@ class DashboardControlPlane:
             raise ValueError("dashboard_preview_invalid")
         result = dict(preview)
         blockers = [str(item) for item in (preview.get("blockers") or []) if str(item).strip()]
+        try:
+            requested_notional = self._requested_notional(preview)
+        except ValueError:
+            requested_notional = 0.0
+            blockers.append("preview_notional_missing")
         market_blockers, normalized_market = self._market_quality_blockers(
             market,
             instrument_id=str(preview.get("instrument_id") or ""),
-            requested_notional=self._requested_notional(preview),
+            requested_notional=requested_notional,
         )
         blockers.extend(market_blockers)
         body_account = dict(account or {})
@@ -477,7 +482,6 @@ class DashboardControlPlane:
             open_orders = [row for row in (body_account.get("open_orders") or []) if isinstance(row, Mapping)]
             if positions or open_orders or body_account.get("unknown_exposure") is True:
                 blockers.append("account_not_clean")
-        requested_notional = self._requested_notional(preview)
         requested_loss = self._requested_loss(preview)
         notional_cap = None
         loss_cap = None
@@ -947,7 +951,7 @@ class DashboardControlPlane:
                 if value == grid.get("notional_per_grid") and grid.get("count"):
                     return rendered * max(1, int(grid.get("count")))
                 return rendered
-        return 0.0
+        raise ValueError("preview_notional_missing")
 
     @staticmethod
     def _requested_loss(preview: Mapping[str, Any]) -> float:

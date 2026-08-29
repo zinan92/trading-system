@@ -66,6 +66,35 @@ Date: 2026-08-29
   added to the legacy fixtures.
 - No credentials, orders, scheduler, cloud, Mainnet, or Live mutation occurred.
 
+## Make Testnet account freshness/coherence gates reachable (#1092)
+
+Date: 2026-08-29
+
+### Decision
+
+- Derive account freshness from a fact timestamp with a 120-second bound rather
+  than asserting `fresh=true` on every successful response.
+- Derive account coherence from independent public payload checks: matching
+  open-order views, unique position identity, and valid non-negative margin
+  summary values. Any failed check blocks admission.
+- Treat missing preview notional as an explicit blocker instead of silently
+  allowing a zero-risk result. Exercise Coordinator stop/flatten transitions
+  directly at their public boundary.
+
+### Verification
+
+- The fix was driven by the Claude Sonnet 5 review receipt
+  `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`.
+- Focused account/control/Coordinator regression passes `49`; compileall and
+  diff-check pass. Full validation follows the merge. No credential, order,
+  scheduler, cloud, Mainnet, or Live mutation occurred.
+
+### Gotcha
+
+- A reader that returns structurally valid JSON is not automatically fresh or
+  coherent. The admission gate must derive both properties from observed facts;
+  otherwise the fail-closed branches become unreachable while appearing tested.
+
 ## Bind explicit Jessie Testnet context to the Hyperliquid public market seam (#1069)
 
 Date: 2026-08-27

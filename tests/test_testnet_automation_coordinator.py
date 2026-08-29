@@ -218,6 +218,33 @@ def test_pause_interrupt_and_resume_intent_are_durable_without_execution_side_ef
     assert coordinator.status()["status"] == "resume_pending"
 
 
+def test_stop_and_flatten_intents_are_durable_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    coordinator = _coordinator(tmp_path)
+    coordinator.activate(_activation(), command_id="activate-stop-flatten")
+
+    stopped = coordinator.command(
+        "stop",
+        {"reason": "operator_stop"},
+        command_id="stop-1",
+    )
+    flattened = coordinator.command(
+        "flatten",
+        {"reason": "operator_flatten"},
+        command_id="flatten-1",
+    )
+
+    assert stopped["status"] == "stop_requested"
+    assert stopped["execution_blocker"] == "cancel_and_flatten_reconciliation_required"
+    assert stopped["next_action"] == "await_cancel_and_flat_reconcile"
+    assert stopped["execution_mutation"] is False
+    assert flattened["status"] == "flatten_requested"
+    assert flattened["execution_blocker"] == "flat_reconciliation_required"
+    assert flattened["next_action"] == "await_flat_reconcile"
+    assert flattened["execution_mutation"] is False
+
+
 def test_candidate_selection_locks_after_activation_owns_a_slice(tmp_path: Path) -> None:
     from tests.test_testnet_candidate_selection import _candidate, _policy, _snapshot
 

@@ -49,6 +49,13 @@
 - Follow-up #1087 isolates the control bootstrap from browser-only static
   fixtures, and #1089 keeps Grid boundary drag responsive outside the overlay
   on compact viewports; both are merged as PRs #1088 and #1090.
+- Claude Sonnet 5 review identified a P2 in the account-admission proof: the
+  public reader had asserted freshness/coherence instead of deriving them.
+  Follow-up #1092 makes the 120-second account age and cross-payload coherence
+  checks reachable, blocks missing preview notionals, and adds direct
+  Coordinator stop/flatten coverage. The fix pass is ready for final full
+  validation; the Sonnet receipt is
+  `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`.
 - Focused validation across the seven slices passes; full-suite validation and
   independent Claude Sonnet 5 review are the remaining delivery gates. No
   credential, Testnet order, position mutation, scheduler activation, cloud,
