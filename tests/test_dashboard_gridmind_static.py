@@ -67,6 +67,8 @@ def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
     assert "dashboardMarketBinding" in html
     assert "dashboardMarketBarsUrl({symbol,timeframe,limit:240})" in html
     assert "headerMarket=state.market||data?.market||{}" in html
+    assert "function syncSelectedMarketLabels(market,execution)" in html
+    assert "syncSelectedMarketLabels(market,execution)" in html
     assert "build_strategy_timeframes" not in html
 
 
