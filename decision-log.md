@@ -1,5 +1,51 @@
 # Decision Log
 
+## Make Dashboard V5 the canonical Venue–Instrument–Strategy control plane (#1071)
+
+Date: 2026-08-29
+
+### Decision
+
+- Use one explicit product track: `Venue Profile → Instrument Catalog → one
+  Instrument → Canonical DCA/Grid → Strategy Preview → Operator Confirmation →
+  Testnet Automation Coordinator`.
+- Represent `Hyperliquid Testnet` and `Binance Paper` as separate Venue Profiles;
+  keep the full Hyperliquid default-perp inventory visible with source-bound
+  eligibility, while limiting the first activation to one perpetual Instrument
+  and one active Strategy Session per Testnet account.
+- Keep the old DCA/Grid algorithms and Strategy-owned sizing intact. The
+  Portfolio Gate can accept, scale down, or reject only; the Dashboard must
+  show requested/effective values and never rewrite the strategy silently.
+- Keep private keys in runtime configuration only. Dashboard previews and
+  confirmations expose fingerprints and identity digests, not account address,
+  signer, or native payloads. Testnet facts never fall back to Paper facts.
+- Let the Coordinator/runtime own scheduler continuity, lifecycle, protection,
+  fills, fees, reconciliation, and notifications. Dashboard is a control/read
+  surface, not a browser scheduler or Broker client; Jessie/Telegram shares the
+  same durable contract but cannot create a second execution path.
+- Preserve no-expiry Plan semantics, TP/SL/Interrupt terminals,
+  `AWAITING_OPERATOR` after plan-level exits, and fail-closed Unknown with
+  query-first reconciliation and no blind retry.
+
+### Verification
+
+- T1–T7 are published as #1072–#1078 and merged through PRs #1079–#1085. The
+  acceptance projector, Dashboard control/read routes, public Testnet market
+  metadata, public account facts, and Coordinator control intents are covered
+  by focused deterministic tests; `git diff --check` passes.
+- The current `origin/main` is `1311155`; the subsequent full-suite and
+  independent Claude Sonnet review remain required before claiming delivery
+  complete. No credential, order, position, scheduler, cloud, Mainnet, or Live
+  mutation occurred.
+
+### Gotcha
+
+- “All pairs are candidates” means inventory retention and eligibility
+  evaluation, not simultaneous DCA/Grid ownership. A Testnet public account
+  reader can prove positions/open orders/fills but cannot by itself prove the
+  protected execution capability required for an external run; that gap must
+  remain visible instead of being hidden by a ready-looking UI.
+
 ## Bind explicit Jessie Testnet context to the Hyperliquid public market seam (#1069)
 
 Date: 2026-08-27

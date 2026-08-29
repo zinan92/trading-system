@@ -12,6 +12,49 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-29, Dashboard V5 control-plane track)
+
+- Spec #1071 is accepted and the approved domain vocabulary/ADR are recorded
+  locally. T1–T7 are merged as PRs #1079–#1085; the current `origin/main` is
+  `1311155`.
+- Dashboard V5 now exposes an explicit `Venue Profile → Instrument Catalog →
+  Strategy Family → Preview → Confirm & Run` track. `Hyperliquid Testnet` and
+  `Binance Paper` are distinct; Mainnet/Live is not selectable and Testnet
+  never falls back to Paper or synthetic facts.
+- Hyperliquid public metadata preserves the complete default-perp inventory;
+  each Instrument carries identity, freshness/quality, precision, eligibility,
+  and stable blocker reasons. The first activation remains one perpetual
+  Instrument and one Strategy Session per Testnet account; BTC is a proof
+  candidate, not a hard-coded universe limit.
+- The Dashboard composes the existing Canonical DCA/Grid builders and
+  subtractive Portfolio Gate. It shows requested/effective size, gross
+  notional, margin, maximum loss, and identity before any authorization; it
+  does not call a Broker directly or expose JSON/secret material.
+- A credential-free public Hyperliquid account reader projects fingerprint,
+  equity, positions, open orders, fills, fees, cursor, and clean-state facts.
+  Missing account/protection capability remains an explicit blocker; the
+  account address and private key are never exposed to the browser.
+- Testnet market admission checks source identity, BBO/L2 depth,
+  mark/mid/oracle coherence, slippage, precision, and bounded risk. The first
+  slice caps gross notional at `min(10% equity, 100 USDC)` and worst-case loss at
+  `min(5% equity, 50 USDC)`; the gate may only reduce or reject.
+- `Confirm & Run` creates one immutable digest-bound Coordinator activation
+  intent. Runtime status, Pause/Stop/Flatten semantics, TP/SL
+  `AWAITING_OPERATOR`, and Unknown query-first/fail-closed notifications are
+  projected into the Dashboard. No automatic next Plan or blind retry exists.
+- The acceptance projector records ready/blocked/incomplete evidence and
+  explicitly leaves BTC-DCA/BTC-Grid external execution to human-gated issues
+  #1050 and #1051. Cloudflare Tunnel repair and Mainnet/Live remain outside
+  this implementation.
+- Focused validation across the seven slices passes; full-suite validation and
+  independent Claude Sonnet 5 review are the remaining delivery gates. No
+  credential, Testnet order, position mutation, scheduler activation, cloud,
+  Mainnet, or Live state was touched.
+
+_下一步_: run the full repository validation, then invoke the explicitly
+requested Claude Sonnet 5 review. Apply one bounded fix pass from that review,
+rerun all validation, and leave the Testnet execution gate attended.
+
 ## 现在在哪里(2026-08-27, Jessie Hyperliquid Testnet market binding)
 
 - Issue #1069 adds a credential-free Hyperliquid Testnet public market reader
