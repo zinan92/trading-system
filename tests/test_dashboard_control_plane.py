@@ -147,10 +147,15 @@ def test_dashboard_v5_contains_the_venue_asset_strategy_track() -> None:
         "dashboardInstrumentSelect",
         "dashboardStrategyChoices",
         "dashboardControlStatus",
+        "dashboardAccountSummary",
+        "dashboardPreviewButton",
+        "dashboardConfirmButton",
     ):
         assert f'id="{element_id}"' in html
     assert "/api/dashboard-control/catalog" in html
     assert "/api/dashboard-control/selection" in html
+    assert "/api/dashboard-control/preview" in html
+    assert "/api/dashboard-control/confirm" in html
     assert "Hyperliquid Testnet" not in html or "Venue Profile" in html
 
 
@@ -458,3 +463,130 @@ def test_execution_admission_never_adds_exposure_or_overrides_blockers(tmp_path:
     assert result["execution_ready"] is False
     assert result["risk_gate"]["effective_notional"] == 1.0
     assert "testnet_account_unavailable" in result["blockers"]
+
+
+def _confirmable_preview() -> dict[str, object]:
+    return {
+        "schema_version": "dashboard-strategy-preview-v1",
+        "venue_profile_id": "hyperliquid.testnet",
+        "instrument_id": "BTC-USD-PERP",
+        "strategy_family": "dca",
+        "preview_digest": "sha256:" + "d" * 64,
+        "execution_ready": True,
+        "authorizing": False,
+        "blockers": [],
+        "requested": {"direction": "long"},
+        "preview": {"dca": {"total_possible_notional": 100}, "risk": {"maximum_loss_at_full_depth": 5}},
+        "account": {"account_fingerprint": "sha256:" + "a" * 64, "equity": 995.46},
+        "transport_profile": "hyperliquid-testnet-position-protection",
+        "runtime_id": "runtime-dashboard-testnet",
+        "release_sha": "e" * 40,
+        "capability_revision": "hyperliquid-testnet-position-protection-runtime-v1",
+    }
+
+
+def test_confirm_and_run_creates_one_identity_bound_activation(tmp_path: Path) -> None:
+    class Coordinator:
+        def __init__(self):
+            self.calls = []
+
+        def activate(self, activation, *, command_id=None, now=None):
+            self.calls.append((dict(activation), command_id, now))
+            return {"status": "activated", "execution_enabled": False, "activation_id": "activation-1"}
+
+    coordinator = Coordinator()
+    result = DashboardControlPlane(tmp_path).confirm_and_run(
+        _confirmable_preview(),
+        confirmation={"preview_digest": "sha256:" + "d" * 64, "operator_id": "park", "acknowledged": True},
+        coordinator=coordinator,
+        now="2026-08-29T02:00:00+00:00",
+    )
+
+    assert result["status"] == "confirmed"
+    assert result["execution_mutation"] is False
+    assert result["environment"] == "testnet"
+    assert result["instrument_id"] == "BTC-USD-PERP"
+    assert result["confirmation_digest"].startswith("sha256:")
+    assert len(coordinator.calls) == 1
+    activation = coordinator.calls[0][0]
+    assert activation["environment"] == "testnet"
+    assert activation["account_fingerprint"].startswith("sha256:")
+    assert "private_key" not in activation
+
+
+def test_confirm_and_run_rejects_stale_digest_and_duplicate_identity(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path)
+    preview = _confirmable_preview()
+    first = plane.confirm_and_run(
+        preview,
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+    replay = plane.confirm_and_run(
+        preview,
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+
+    assert first == replay
+    blocked = plane.confirm_and_run(
+        {**preview, "preview_digest": "sha256:" + "f" * 64},
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+    assert blocked["status"] == "blocked"
+    assert "confirmation_digest_mismatch" in blocked["blockers"]
+
+
+def test_confirm_and_run_rejects_mainnet_and_secret_fields(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path)
+    preview = _confirmable_preview()
+
+    mainnet = plane.confirm_and_run(
+        {**preview, "environment": "mainnet"},
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+    secret = plane.confirm_and_run(
+        {**preview, "private_key": "should-never-cross"},
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+
+    assert mainnet["status"] == "blocked"
+    assert "testnet_only" in mainnet["blockers"]
+    assert secret["status"] == "blocked"
+    assert "secret_field_forbidden" in secret["blockers"]
+
+
+def test_dashboard_confirmation_builder_keeps_coordinator_activation_non_mutating(tmp_path: Path) -> None:
+    from pipelines import dashboard_server
+
+    class Coordinator:
+        def activate(self, activation, *, command_id=None, now=None):
+            return {
+                "status": "activated",
+                "activation_id": "sha256:" + "c" * 64,
+                "execution_mutation": False,
+                "command_id": command_id,
+                "occurred_at": now,
+                "instrument_id": activation["instrument_id"],
+            }
+
+    preview = _confirmable_preview()
+    result = dashboard_server.build_dashboard_control_confirmation_response(
+        {
+            "preview": preview,
+            "confirmation": {
+                "preview_digest": preview["preview_digest"],
+                "operator_id": "park",
+                "acknowledged": True,
+            },
+        },
+        output_root=tmp_path,
+        coordinator=Coordinator(),
+    )
+
+    assert result["confirmation"]["status"] == "confirmed"
+    assert result["confirmation"]["coordinator_invoked"] is True
+    assert result["safety"]["orders_submitted"] is False
