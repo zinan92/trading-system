@@ -15,8 +15,15 @@
 ## 现在在哪里(2026-08-29, Dashboard V5 control-plane track)
 
 - Spec #1071 is accepted and the approved domain vocabulary/ADR are recorded
-  locally. T1–T7 are merged as PRs #1079–#1085; the current `origin/main` is
-  `1311155`.
+  locally. T1–T7 are merged as PRs #1079–#1085. Issue #1100 / PR #1101 keeps
+  the local read model observable while execution authority remains fail-closed;
+  the running implementation is `80b4639`.
+- The actual launchd Dashboard, Gateway, and Park control checkout is synced to
+  that implementation. Local HTTP checks return 200 for Dashboard V5, Venue and
+  Instrument catalog, selection, runtime status, strategy read model, AI chat,
+  and K-line bars. Browser acceptance verified Hyperliquid Testnet → BTC → DCA,
+  current-strategy status, the AI strategy assistant, account facts, and the
+  visible K-line chart. No credential value or order action was used.
 - Dashboard V5 now exposes an explicit `Venue Profile → Instrument Catalog →
   Strategy Family → Preview → Confirm & Run` track. `Hyperliquid Testnet` and
   `Binance Paper` are distinct; Mainnet/Live is not selectable and Testnet
