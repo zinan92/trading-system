@@ -67,7 +67,7 @@
   `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`; its P2 was
   fixed in #1092/#1093. An independent Standards/Spec review then found and
   closed the Gateway/facts/digest/effective-sizing gaps in #1094/#1095.
-- Final `origin/main` is `4c838d9`. Full pytest is `3612 passed, 1 skipped,
+- Final `origin/main` is `cb9d14f`. Full pytest is `3612 passed, 1 skipped,
   3 warnings`; compileall, diff-check, and gitleaks pass. No credential,
   Testnet order, position mutation, scheduler activation, cloud, Mainnet, or
   Live state was touched.
