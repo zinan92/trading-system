@@ -320,6 +320,30 @@ class DashboardControlPlane:
                 account = None
         return market, account
 
+    def resolve_market_bars(
+        self,
+        *,
+        venue_profile_id: str,
+        instrument_id: str,
+        timeframe: str,
+        limit: int,
+        end: str | None,
+    ) -> dict[str, Any]:
+        """Resolve selected Testnet candles without a cross-venue fallback."""
+
+        profile_id = str(venue_profile_id or "").strip().lower()
+        instrument = str(instrument_id or "").strip()
+        if profile_id != "hyperliquid.testnet":
+            raise ValueError("dashboard_market_venue_not_supported")
+        from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+
+        return HyperliquidTestnetMarketReader().read_bars(
+            instrument,
+            timeframe=str(timeframe or ""),
+            limit=int(limit),
+            end=end,
+        )
+
     @staticmethod
     def runtime_account_reader() -> object | None:
         """Build the configured public account reader without exposing secrets."""

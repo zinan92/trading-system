@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from services.dashboard_control_plane import (
     DashboardControlPlane,
     canonical_preview_digest,
@@ -44,6 +46,61 @@ def test_catalog_exposes_explicit_venue_profiles_without_live_environment() -> N
         "broker_calls": False,
         "orders_submitted": False,
     }
+
+
+def test_control_plane_resolves_selected_testnet_bars_without_cross_venue_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+
+    observed: list[dict] = []
+
+    def read_bars(_reader, instrument_id, *, timeframe, limit, end):
+        observed.append(
+            {
+                "instrument_id": instrument_id,
+                "timeframe": timeframe,
+                "limit": limit,
+                "end": end,
+            }
+        )
+        return {
+            "provider": "hyperliquid",
+            "instrument_id": instrument_id,
+            "timeframe": timeframe,
+            "bars": [{"timestamp": "2026-08-29T00:00:00+00:00", "close": 80000.0}],
+            "trusted": True,
+        }
+
+    monkeypatch.setattr(HyperliquidTestnetMarketReader, "read_bars", read_bars)
+    plane = DashboardControlPlane(tmp_path)
+
+    result = plane.resolve_market_bars(
+        venue_profile_id="hyperliquid.testnet",
+        instrument_id="BTC-USD-PERP",
+        timeframe="30m",
+        limit=240,
+        end=None,
+    )
+
+    assert result["provider"] == "hyperliquid"
+    assert observed == [
+        {
+            "instrument_id": "BTC-USD-PERP",
+            "timeframe": "30m",
+            "limit": 240,
+            "end": None,
+        }
+    ]
+    with pytest.raises(ValueError, match="dashboard_market_venue_not_supported"):
+        plane.resolve_market_bars(
+            venue_profile_id="binance.paper",
+            instrument_id="XAUUSDT.BINANCE",
+            timeframe="30m",
+            limit=240,
+            end=None,
+        )
 
 
 def test_catalog_keeps_every_dynamic_perp_with_stable_eligibility() -> None:
@@ -171,6 +228,9 @@ def test_dashboard_v5_contains_the_venue_asset_strategy_track() -> None:
     assert "/api/dashboard-control/preview" in html
     assert "/api/dashboard-control/confirm" in html
     assert "/api/dashboard-control/runtime-status" in html
+    assert "/api/dashboard-control/market-bars" in html
+    assert "dashboardMarketBinding" in html
+    assert "applyPersistedDashboardSelection" in html
     assert "Hyperliquid Testnet" not in html or "Venue Profile" in html
 
 

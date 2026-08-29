@@ -26,6 +26,46 @@ ORAL_MARKET_VIEW = (
 )
 
 
+def test_dashboard_control_market_bars_route_uses_selected_testnet_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict] = []
+
+    def resolve(_plane, **kwargs):
+        observed.append(kwargs)
+        return {
+            "provider": "hyperliquid",
+            "venue_profile_id": kwargs["venue_profile_id"],
+            "instrument_id": kwargs["instrument_id"],
+            "timeframe": kwargs["timeframe"],
+            "bars": [{"timestamp": "2026-08-29T00:00:00+00:00", "close": 80000.0}],
+            "trusted": True,
+        }
+
+    monkeypatch.setattr(dashboard_server.DashboardControlPlane, "resolve_market_bars", resolve)
+
+    result = dashboard_server.build_dashboard_control_market_bars_response(
+        venue_profile_id="hyperliquid.testnet",
+        instrument_id="BTC-USD-PERP",
+        timeframe="30m",
+        limit=240,
+        end=None,
+        output_root=tmp_path,
+    )
+
+    assert result["provider"] == "hyperliquid"
+    assert observed == [
+        {
+            "venue_profile_id": "hyperliquid.testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "timeframe": "30m",
+            "limit": 240,
+            "end": None,
+        }
+    ]
+
+
 def test_dashboard_external_dca_loader_reads_latest_authoritative_row_without_network(tmp_path: Path) -> None:
     path = tmp_path / "standard_broker_external_dca" / "current.json"
     write_json(path, [{"status": "WAITING_ENTRY", "plan_id": "old"}, {"status": "BLOCKED", "plan_id": "current"}])
