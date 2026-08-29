@@ -56,6 +56,12 @@
   Coordinator stop/flatten coverage. The fix pass is ready for final full
   validation; the Sonnet receipt is
   `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`.
+- Independent Standards/Spec review then identified a remote Gateway allowlist
+  gap and caller-trusted Preview/catalog/effective-sizing fields. Follow-up
+  #1094 is merged as PR #1095: new control routes are allowlisted with signed
+  actor forwarding, Testnet facts resolve behind the composition-root facade,
+  catalog membership and canonical/durable Preview digests are rechecked, and
+  effective notional/loss are persisted into Coordinator activation identity.
 - Focused validation across the seven slices passes; full-suite validation and
   independent Claude Sonnet 5 review are the remaining delivery gates. No
   credential, Testnet order, position mutation, scheduler activation, cloud,
