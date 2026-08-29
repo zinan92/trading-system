@@ -34,6 +34,7 @@ from services.dashboard_control_plane import DashboardControlPlane, public_catal
 from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+from services.dashboard_control_evidence import DashboardControlEvidenceStore
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dca_plan import build_deterministic_dca_candidate_payload_v1
@@ -567,6 +568,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             except ValueError as exc:
                 self._write_error(400, "invalid_dashboard_runtime_control", str(exc))
             return
+        if parsed.path == "/api/dashboard-control/acceptance":
+            if not _dualtrack_mutation_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+            ):
+                self._write_error(
+                    403,
+                    "dashboard_control_origin_blocked",
+                    "dashboard acceptance requires the same local origin",
+                )
+                return
+            try:
+                self._handle_dashboard_control_acceptance_post()
+            except ValueError as exc:
+                self._write_error(400, "invalid_dashboard_acceptance", str(exc))
+            return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
     def _handle_dualtrack_current(self, query: str) -> None:
@@ -879,6 +896,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_dashboard_control_runtime_control_post(self) -> None:
         payload = self._read_json_body(max_bytes=32_000)
         self._write_json(200, build_dashboard_control_runtime_control_response(payload))
+
+    def _handle_dashboard_control_acceptance_post(self) -> None:
+        payload = self._read_json_body(max_bytes=128_000)
+        self._write_json(200, build_dashboard_control_acceptance_response(payload))
 
     def _handle_connector_config_status_get(self) -> None:
         self._write_json(200, build_connector_config_status_response())
@@ -3771,6 +3792,28 @@ def build_dashboard_control_runtime_control_response(
             "orders_submitted": result.get("execution_mutation") is True,
             "credentials_exposed": False,
             "browser_is_scheduler": False,
+        },
+    }
+
+
+def build_dashboard_control_acceptance_response(
+    payload: Mapping[str, Any],
+    *,
+    output_root: Path | None = None,
+) -> dict[str, Any]:
+    """Record one deterministic Dashboard acceptance snapshot."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("dashboard_acceptance_payload_invalid")
+    snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), Mapping) else payload
+    receipt = DashboardControlEvidenceStore(_dualtrack_output_root(output_root)).record(snapshot)
+    return {
+        "schema_version": "dashboard-acceptance-response-v1",
+        "evidence": receipt,
+        "safety": {
+            "orders_submitted": False,
+            "credentials_exposed": False,
+            "mainnet_live": False,
         },
     }
 
