@@ -31,6 +31,7 @@ from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
 from services.dashboard_control_plane import DashboardControlPlane, public_catalog_loader
+from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dca_plan import build_deterministic_dca_candidate_payload_v1
@@ -513,6 +514,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             except ValueError as exc:
                 self._write_error(400, "invalid_dashboard_control_preview", str(exc))
             return
+        if parsed.path == "/api/dashboard-control/account-admission":
+            if not _dualtrack_mutation_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+            ):
+                self._write_error(
+                    403,
+                    "dashboard_control_origin_blocked",
+                    "dashboard account admission requires the same local origin",
+                )
+                return
+            try:
+                self._handle_dashboard_control_account_admission_post()
+            except ValueError as exc:
+                self._write_error(400, "invalid_dashboard_account_admission", str(exc))
+            return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
     def _handle_dualtrack_current(self, query: str) -> None:
@@ -810,6 +827,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_dashboard_control_preview_post(self) -> None:
         payload = self._read_json_body(max_bytes=64_000)
         self._write_json(200, build_dashboard_control_preview_response(payload))
+
+    def _handle_dashboard_control_account_admission_post(self) -> None:
+        payload = self._read_json_body(max_bytes=32_000)
+        self._write_json(200, build_dashboard_control_account_admission_response(payload))
 
     def _handle_connector_config_status_get(self) -> None:
         self._write_json(200, build_connector_config_status_response())
@@ -3567,6 +3588,42 @@ def build_dashboard_control_preview_response(
             "authorizing": False,
             "orders_submitted": False,
             "credentials_exposed": False,
+        },
+    }
+
+
+def build_dashboard_control_account_admission_response(
+    payload: Mapping[str, Any],
+    *,
+    output_root: Path | None = None,
+    account_reader: object | None = None,
+) -> dict[str, Any]:
+    """Return a non-secret Testnet account admission projection."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("dashboard_account_admission_payload_invalid")
+    reader = account_reader
+    if reader is None:
+        address = str(os.getenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS") or "").strip()
+        if address:
+            reader = HyperliquidTestnetAccountReader(address)
+    plane = DashboardControlPlane(
+        _dualtrack_output_root(output_root),
+        catalog_loader=public_catalog_loader,
+    )
+    result = plane.account_admission(
+        venue_profile_id=str(payload.get("venue_profile_id") or ""),
+        instrument_id=str(payload.get("instrument_id") or ""),
+        account_reader=reader,
+    )
+    return {
+        "schema_version": "dashboard-account-admission-response-v1",
+        "admission": result,
+        "safety": {
+            "read_only": True,
+            "credentials_exposed": False,
+            "broker_mutation": False,
+            "orders_submitted": False,
         },
     }
 

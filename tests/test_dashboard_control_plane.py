@@ -261,3 +261,97 @@ def test_dashboard_preview_builder_keeps_execution_non_authorizing(monkeypatch, 
 
     assert result["preview"]["authorizing"] is False
     assert result["safety"]["orders_submitted"] is False
+
+
+def test_testnet_account_admission_is_identity_bound_and_requires_clean_state(tmp_path: Path) -> None:
+    class Reader:
+        def read(self, instrument_id=None):
+            return {
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+                "instrument_id": instrument_id,
+                "account_fingerprint": "sha256:" + "a" * 64,
+                "equity": 995.46,
+                "positions": [],
+                "open_orders": [],
+                "fills": [],
+                "fees": [],
+                "fresh": True,
+                "coherent": True,
+                "source_cursor": "sha256:" + "b" * 64,
+                "capabilities": {"protection": True},
+            }
+
+    result = DashboardControlPlane(tmp_path).account_admission(
+        venue_profile_id="hyperliquid.testnet",
+        instrument_id="BTC-USD-PERP",
+        account_reader=Reader(),
+    )
+
+    assert result["ready"] is True
+    assert result["clean_state"] is True
+    assert result["account"]["account_fingerprint"].startswith("sha256:")
+    assert result["safety"]["credentials_exposed"] is False
+
+
+def test_testnet_account_admission_blocks_open_orders_and_unknown_reader(tmp_path: Path) -> None:
+    class Reader:
+        def read(self, instrument_id=None):
+            return {
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+                "instrument_id": instrument_id,
+                "account_fingerprint": "sha256:" + "a" * 64,
+                "equity": 995.46,
+                "positions": [{"instrument_id": instrument_id, "signed_quantity": "0.01"}],
+                "open_orders": [{"instrument_id": instrument_id, "oid": 7}],
+                "fills": [],
+                "fees": [],
+                "fresh": True,
+                "coherent": True,
+                "source_cursor": "sha256:" + "b" * 64,
+                "capabilities": {"protection": True},
+            }
+
+    result = DashboardControlPlane(tmp_path).account_admission(
+        venue_profile_id="hyperliquid.testnet",
+        instrument_id="BTC-USD-PERP",
+        account_reader=Reader(),
+    )
+
+    assert result["ready"] is False
+    assert result["clean_state"] is False
+    assert "account_not_clean" in result["blockers"]
+
+
+def test_dashboard_account_admission_builder_never_exposes_account_address(tmp_path: Path) -> None:
+    from pipelines import dashboard_server
+
+    class Reader:
+        def read(self, instrument_id=None):
+            return {
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+                "instrument_id": instrument_id,
+                "account_fingerprint": "sha256:" + "a" * 64,
+                "equity": 995.46,
+                "positions": [],
+                "open_orders": [],
+                "fills": [],
+                "fees": [],
+                "fresh": True,
+                "coherent": True,
+                "source_cursor": "sha256:" + "b" * 64,
+                "capabilities": {"protection": True},
+                "account_address": "0x" + "a" * 40,
+            }
+
+    result = dashboard_server.build_dashboard_control_account_admission_response(
+        {"venue_profile_id": "hyperliquid.testnet", "instrument_id": "BTC-USD-PERP"},
+        output_root=tmp_path,
+        account_reader=Reader(),
+    )
+
+    assert result["admission"]["ready"] is True
+    assert "account_address" not in result["admission"]["account"]
+    assert result["safety"]["credentials_exposed"] is False

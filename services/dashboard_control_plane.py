@@ -356,6 +356,101 @@ class DashboardControlPlane:
         payload["preview_digest"] = _digest(payload)
         return payload
 
+    def account_admission(
+        self,
+        *,
+        venue_profile_id: str,
+        instrument_id: str,
+        account_reader: object | None,
+    ) -> dict[str, Any]:
+        """Project a fail-closed, non-secret Testnet account admission result."""
+
+        profile_id = str(venue_profile_id or "").strip().lower()
+        instrument = str(instrument_id or "").strip()
+        blockers: list[str] = []
+        account: dict[str, Any] = {}
+        if profile_id != "hyperliquid.testnet":
+            return {
+                "schema_version": "dashboard-account-admission-v1",
+                "venue_profile_id": profile_id,
+                "instrument_id": instrument,
+                "ready": True,
+                "clean_state": True,
+                "account": account,
+                "blockers": [],
+                "safety": self._account_safety(),
+            }
+        reader_method = getattr(account_reader, "read", None)
+        if not callable(reader_method):
+            blockers.append("testnet_account_unavailable")
+        else:
+            try:
+                raw = reader_method(instrument_id=instrument)
+            except Exception as exc:  # noqa: BLE001 - redact reader details.
+                blockers.append(
+                    str(getattr(exc, "code", "")).strip()
+                    or "testnet_account_unavailable"
+                )
+                raw = {}
+            if isinstance(raw, Mapping):
+                account = self._account_summary(raw)
+            else:
+                blockers.append("testnet_account_payload_invalid")
+                raw = {}
+            if raw:
+                if str(raw.get("broker_id") or "").lower() != "hyperliquid":
+                    blockers.append("testnet_account_broker_mismatch")
+                if str(raw.get("environment") or "").lower() != "testnet":
+                    blockers.append("testnet_account_environment_mismatch")
+                if raw.get("fresh") is not True:
+                    blockers.append("testnet_account_stale")
+                if raw.get("coherent") is not True:
+                    blockers.append("testnet_account_incoherent")
+                if raw.get("equity") in (None, ""):
+                    blockers.append("testnet_account_equity_unavailable")
+                capabilities = raw.get("capabilities") if isinstance(raw.get("capabilities"), Mapping) else {}
+                if capabilities.get("protection") is not True:
+                    blockers.append("testnet_protection_capability_unavailable")
+                positions = [
+                    row
+                    for row in (raw.get("positions") or [])
+                    if isinstance(row, Mapping)
+                    and self._non_zero(row.get("signed_quantity"))
+                ]
+                open_orders = [row for row in (raw.get("open_orders") or []) if isinstance(row, Mapping)]
+                if positions or open_orders or raw.get("unknown_exposure") is True:
+                    blockers.append("account_not_clean")
+                account["selected_instrument_id"] = instrument
+                account["open_position_count"] = len(positions)
+                account["open_order_count"] = len(open_orders)
+                account["unknown_exposure"] = raw.get("unknown_exposure") is True
+        clean_state = "account_not_clean" not in blockers
+        return {
+            "schema_version": "dashboard-account-admission-v1",
+            "venue_profile_id": profile_id,
+            "instrument_id": instrument,
+            "ready": not blockers,
+            "clean_state": clean_state and not blockers,
+            "account": account,
+            "blockers": sorted(set(blockers)),
+            "safety": self._account_safety(),
+        }
+
+    @staticmethod
+    def _non_zero(value: Any) -> bool:
+        try:
+            return float(value) != 0.0
+        except (TypeError, ValueError):
+            return bool(value)
+
+    @staticmethod
+    def _account_safety() -> dict[str, bool]:
+        return {
+            "credentials_exposed": False,
+            "broker_mutation": False,
+            "orders_submitted": False,
+        }
+
     @staticmethod
     def _normalise_market(market: Mapping[str, Any], instrument_id: str) -> dict[str, Any]:
         result = dict(market)
@@ -420,7 +515,15 @@ class DashboardControlPlane:
 
     @staticmethod
     def _account_summary(account: Mapping[str, Any]) -> dict[str, Any]:
-        sensitive = {"private_key", "secret", "api_key", "api_secret", "signer"}
+        sensitive = {
+            "private_key",
+            "secret",
+            "api_key",
+            "api_secret",
+            "signer",
+            "account_address",
+            "address",
+        }
         return {
             str(key): _public(value)
             for key, value in account.items()
