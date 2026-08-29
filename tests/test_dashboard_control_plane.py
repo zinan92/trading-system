@@ -231,6 +231,7 @@ def test_dashboard_v5_contains_the_venue_asset_strategy_track() -> None:
     assert "/api/dashboard-control/market-bars" in html
     assert "dashboardMarketBinding" in html
     assert "applyPersistedDashboardSelection" in html
+    assert "syncPersistedStrategyFamily" in html
     assert "Hyperliquid Testnet" not in html or "Venue Profile" in html
 
 
