@@ -84,6 +84,25 @@ def test_activation_accepts_reviewed_protected_testnet_profile(tmp_path: Path) -
     assert result["transport_profile"] == "hyperliquid-testnet-position-protection"
 
 
+def test_activation_persists_effective_portfolio_sizing_evidence(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    activation = _activation(
+        requested_notional="300",
+        effective_notional="100",
+        requested_max_loss="60",
+        effective_max_loss="50",
+        risk_gate_digest="sha256:" + "d" * 64,
+    )
+
+    result = coordinator.activate(activation, command_id="activate-effective-size")
+
+    assert result["requested_notional"] == "300"
+    assert result["effective_notional"] == "100"
+    assert result["requested_max_loss"] == "60"
+    assert result["effective_max_loss"] == "50"
+    assert result["risk_gate_digest"] == "sha256:" + "d" * 64
+
+
 def test_activation_rejects_protected_profile_with_unreviewed_capability_revision(
     tmp_path: Path,
 ) -> None:

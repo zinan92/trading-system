@@ -66,6 +66,11 @@ _ACTIVATION_FIELDS = (
     "runtime_id",
     "release_sha",
     "capability_revision",
+    "requested_notional",
+    "effective_notional",
+    "requested_max_loss",
+    "effective_max_loss",
+    "risk_gate_digest",
 )
 _FORBIDDEN_SECRET_FIELDS = frozenset(
     {
@@ -159,6 +164,11 @@ class TestnetActivation:
     runtime_id: str
     release_sha: str
     capability_revision: str
+    requested_notional: str | None = None
+    effective_notional: str | None = None
+    requested_max_loss: str | None = None
+    effective_max_loss: str | None = None
+    risk_gate_digest: str | None = None
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "TestnetActivation":
@@ -205,6 +215,31 @@ class TestnetActivation:
             and capability_revision != "hyperliquid-testnet-position-protection-runtime-v1"
         ):
             raise TestnetCoordinatorError("protected_capability_revision_required")
+        optional_numbers: dict[str, str | None] = {}
+        for field in (
+            "requested_notional",
+            "effective_notional",
+            "requested_max_loss",
+            "effective_max_loss",
+        ):
+            raw = value.get(field)
+            if raw in (None, ""):
+                optional_numbers[field] = None
+                continue
+            try:
+                number = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise TestnetCoordinatorError(f"{field}_invalid") from exc
+            if number < 0 or not number == number or number in {float("inf"), float("-inf")}:
+                raise TestnetCoordinatorError(f"{field}_invalid")
+            optional_numbers[field] = str(raw)
+        risk_gate_digest = value.get("risk_gate_digest")
+        if risk_gate_digest in (None, ""):
+            normalized_risk_gate_digest = None
+        else:
+            normalized_risk_gate_digest = str(risk_gate_digest).lower()
+            if _DIGEST_RE.fullmatch(normalized_risk_gate_digest) is None:
+                raise TestnetCoordinatorError("risk_gate_digest_invalid")
         return cls(
             strategy_family=strategy_family,
             strategy_session_id=_required_text(
@@ -222,10 +257,12 @@ class TestnetActivation:
             runtime_id=_required_text(value.get("runtime_id"), "runtime_id"),
             release_sha=release_sha,
             capability_revision=capability_revision,
+            **optional_numbers,
+            risk_gate_digest=normalized_risk_gate_digest,
         )
 
-    def to_mapping(self) -> dict[str, str]:
-        return {field: str(getattr(self, field)) for field in _ACTIVATION_FIELDS}
+    def to_mapping(self) -> dict[str, Any]:
+        return {field: getattr(self, field) for field in _ACTIVATION_FIELDS}
 
     @property
     def activation_id(self) -> str:

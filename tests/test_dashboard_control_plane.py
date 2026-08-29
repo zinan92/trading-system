@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from services.dashboard_control_plane import DashboardControlPlane
+from services.dashboard_control_plane import (
+    DashboardControlPlane,
+    canonical_preview_digest,
+    canonical_risk_gate_digest,
+)
 
 
 def _market() -> dict:
@@ -78,7 +82,11 @@ def test_catalog_keeps_every_dynamic_perp_with_stable_eligibility() -> None:
 
 
 def test_selecting_venue_and_instrument_clears_stale_downstream_selection(tmp_path: Path) -> None:
-    plane = DashboardControlPlane(tmp_path)
+    plane = DashboardControlPlane(tmp_path, catalog_loader=lambda profile_id: (
+        [{"instrument_id": "BTC-USD-PERP", "asset": "BTC", "eligibility": "eligible"}]
+        if profile_id == "hyperliquid.testnet"
+        else [{"instrument_id": "XAUUSDT.BINANCE", "asset": "XAU", "eligibility": "eligible"}]
+    ))
 
     selected = plane.select(venue_profile_id="hyperliquid.testnet", instrument_id="BTC-USD-PERP")
 
@@ -126,6 +134,11 @@ def test_dashboard_selection_builder_is_non_executing(tmp_path: Path) -> None:
             "instrument_id": "BTC-USD-PERP",
         },
         output_root=tmp_path,
+        catalog_loader=lambda profile_id: (
+            [{"instrument_id": "BTC-USD-PERP", "asset": "BTC", "eligibility": "eligible"}]
+            if profile_id == "hyperliquid.testnet"
+            else []
+        ),
     )
 
     assert selected["selection"]["instrument_id"] == "BTC-USD-PERP"
@@ -260,14 +273,42 @@ def test_dashboard_preview_builder_keeps_execution_non_authorizing(monkeypatch, 
                     "stop_loss": 90,
                 },
             },
-            "market": _market(),
-            "account": {"equity": 10_000},
         },
         output_root=tmp_path,
+        market=_market(),
+        account={"equity": 10_000},
     )
 
     assert result["preview"]["authorizing"] is False
     assert result["safety"]["orders_submitted"] is False
+
+
+def test_dashboard_preview_builder_does_not_trust_caller_supplied_testnet_facts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from pipelines import dashboard_server
+
+    monkeypatch.setattr(
+        DashboardControlPlane,
+        "resolve_runtime_facts",
+        lambda self, *, venue_profile_id, instrument_id: (None, None),
+    )
+    result = dashboard_server.build_dashboard_control_preview_response(
+        {
+            "venue_profile_id": "hyperliquid.testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "strategy_family": "dca",
+            "strategy": {"direction": "long", "dca": {}},
+            # These fields are intentionally ignored by the server boundary.
+            "market": {"fresh": True, "execution_ready": True, "equity": 1_000},
+            "account": {"fresh": True, "coherent": True, "equity": 1_000},
+        },
+        output_root=tmp_path,
+    )
+
+    assert result["preview"]["execution_ready"] is False
+    assert "market_facts_required" in result["preview"]["blockers"]
 
 
 def test_testnet_account_admission_is_identity_bound_and_requires_clean_state(tmp_path: Path) -> None:
@@ -392,6 +433,21 @@ def _execution_market(**overrides: object) -> dict[str, object]:
     return value
 
 
+def _testnet_account(equity: float) -> dict[str, object]:
+    return {
+        "broker_id": "hyperliquid",
+        "environment": "testnet",
+        "account_fingerprint": "sha256:" + "a" * 64,
+        "source_cursor": "sha256:" + "b" * 64,
+        "fresh": True,
+        "coherent": True,
+        "equity": equity,
+        "positions": [],
+        "open_orders": [],
+        "capabilities": {"protection": True},
+    }
+
+
 def test_execution_admission_scales_only_down_to_testnet_caps(tmp_path: Path) -> None:
     plane = DashboardControlPlane(tmp_path)
     result = plane.execution_admission(
@@ -408,7 +464,7 @@ def test_execution_admission_scales_only_down_to_testnet_caps(tmp_path: Path) ->
             "execution_ready": True,
         },
         market=_execution_market(),
-        account={"equity": 1_000, "positions": [], "open_orders": []},
+        account=_testnet_account(1_000),
     )
 
     assert result["risk_gate"]["outcome"] == "scale"
@@ -437,7 +493,7 @@ def test_execution_admission_blocks_thin_stale_and_oracle_dislocated_market(tmp_
             depth_notional=10,
             mark=104,
         ),
-        account={"equity": 1_000, "positions": [], "open_orders": []},
+        account=_testnet_account(1_000),
     )
 
     assert result["execution_ready"] is False
@@ -459,7 +515,7 @@ def test_execution_admission_never_adds_exposure_or_overrides_blockers(tmp_path:
             "execution_ready": False,
         },
         market=_execution_market(),
-        account={"equity": 100_000, "positions": [], "open_orders": []},
+        account=_testnet_account(100_000),
     )
 
     assert result["execution_ready"] is False
@@ -478,7 +534,7 @@ def test_execution_admission_blocks_missing_preview_notional(tmp_path: Path) -> 
             "execution_ready": True,
         },
         market=_execution_market(),
-        account={"equity": 1_000, "positions": [], "open_orders": []},
+        account=_testnet_account(1_000),
     )
 
     assert result["execution_ready"] is False
@@ -486,24 +542,79 @@ def test_execution_admission_blocks_missing_preview_notional(tmp_path: Path) -> 
     assert result["risk_gate"]["outcome"] == "reject"
 
 
+def test_execution_admission_blocks_stale_or_incoherent_account_facts(tmp_path: Path) -> None:
+    account = _testnet_account(1_000)
+    account["fresh"] = False
+    account["coherent"] = False
+    result = DashboardControlPlane(tmp_path).execution_admission(
+        {
+            "venue_profile_id": "hyperliquid.testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "strategy_family": "dca",
+            "blockers": [],
+            "preview": {"dca": {"total_possible_notional": 10}, "risk": {"maximum_loss_at_full_depth": 1}},
+            "execution_ready": True,
+        },
+        market=_execution_market(),
+        account=account,
+    )
+
+    assert result["execution_ready"] is False
+    assert {"testnet_account_stale", "testnet_account_incoherent"}.issubset(
+        set(result["blockers"])
+    )
+
+
+def _eligible_catalog_loader(profile_id: str):
+    if profile_id == "hyperliquid.testnet":
+        return [{"instrument_id": "BTC-USD-PERP", "asset": "BTC", "eligibility": "eligible"}]
+    return []
+
+
 def _confirmable_preview() -> dict[str, object]:
-    return {
+    risk_gate = {
+        "outcome": "allow",
+        "requested_notional": 100.0,
+        "effective_notional": 100.0,
+        "requested_max_loss": 5.0,
+        "effective_max_loss": 5.0,
+        "notional_cap": 100.0,
+        "loss_cap": 50.0,
+        "subtractive_only": True,
+    }
+    preview: dict[str, object] = {
         "schema_version": "dashboard-strategy-preview-v1",
         "venue_profile_id": "hyperliquid.testnet",
         "instrument_id": "BTC-USD-PERP",
         "strategy_family": "dca",
-        "preview_digest": "sha256:" + "d" * 64,
         "execution_ready": True,
         "authorizing": False,
         "blockers": [],
         "requested": {"direction": "long"},
         "preview": {"dca": {"total_possible_notional": 100}, "risk": {"maximum_loss_at_full_depth": 5}},
-        "account": {"account_fingerprint": "sha256:" + "a" * 64, "equity": 995.46},
+        "risk_gate": risk_gate,
+        "account": {
+            "account_fingerprint": "sha256:" + "a" * 64,
+            "source_cursor": "sha256:" + "b" * 64,
+            "broker_id": "hyperliquid",
+            "environment": "testnet",
+            "fresh": True,
+            "coherent": True,
+            "equity": 995.46,
+            "capabilities": {"protection": True},
+        },
         "transport_profile": "hyperliquid-testnet-position-protection",
         "runtime_id": "runtime-dashboard-testnet",
         "release_sha": "e" * 40,
         "capability_revision": "hyperliquid-testnet-position-protection-runtime-v1",
     }
+    catalog_plane = DashboardControlPlane(Path("/tmp/dashboard-confirmable"), catalog_loader=_eligible_catalog_loader)
+    _, catalog_revision = catalog_plane._catalog_entry("hyperliquid.testnet", "BTC-USD-PERP")
+    preview["catalog_revision"] = catalog_revision
+    preview["instrument_eligibility"] = "eligible"
+    preview["risk_gate_digest"] = canonical_risk_gate_digest(risk_gate)
+    preview["preview_digest"] = canonical_preview_digest(preview)
+    return preview
 
 
 def test_confirm_and_run_creates_one_identity_bound_activation(tmp_path: Path) -> None:
@@ -516,9 +627,12 @@ def test_confirm_and_run_creates_one_identity_bound_activation(tmp_path: Path) -
             return {"status": "activated", "execution_enabled": False, "activation_id": "activation-1"}
 
     coordinator = Coordinator()
-    result = DashboardControlPlane(tmp_path).confirm_and_run(
-        _confirmable_preview(),
-        confirmation={"preview_digest": "sha256:" + "d" * 64, "operator_id": "park", "acknowledged": True},
+    plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
+    preview = _confirmable_preview()
+    plane.persist_preview(preview)
+    result = plane.confirm_and_run(
+        preview,
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
         coordinator=coordinator,
         now="2026-08-29T02:00:00+00:00",
     )
@@ -532,12 +646,17 @@ def test_confirm_and_run_creates_one_identity_bound_activation(tmp_path: Path) -
     activation = coordinator.calls[0][0]
     assert activation["environment"] == "testnet"
     assert activation["account_fingerprint"].startswith("sha256:")
+    assert activation["requested_notional"] == "100.0"
+    assert activation["effective_notional"] == "100.0"
+    assert activation["effective_max_loss"] == "5.0"
+    assert activation["risk_gate_digest"].startswith("sha256:")
     assert "private_key" not in activation
 
 
 def test_confirm_and_run_rejects_stale_digest_and_duplicate_identity(tmp_path: Path) -> None:
-    plane = DashboardControlPlane(tmp_path)
+    plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
     preview = _confirmable_preview()
+    plane.persist_preview(preview)
     first = plane.confirm_and_run(
         preview,
         confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
@@ -560,8 +679,9 @@ def test_confirm_and_run_rejects_stale_digest_and_duplicate_identity(tmp_path: P
 
 
 def test_confirm_and_run_rejects_mainnet_and_secret_fields(tmp_path: Path) -> None:
-    plane = DashboardControlPlane(tmp_path)
+    plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
     preview = _confirmable_preview()
+    plane.persist_preview(preview)
 
     mainnet = plane.confirm_and_run(
         {**preview, "environment": "mainnet"},
@@ -580,6 +700,37 @@ def test_confirm_and_run_rejects_mainnet_and_secret_fields(tmp_path: Path) -> No
     assert "secret_field_forbidden" in secret["blockers"]
 
 
+def test_confirm_and_run_rejects_tampered_payload_with_old_digest(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
+    preview = _confirmable_preview()
+    plane.persist_preview(preview)
+    tampered = {**preview, "requested": {"direction": "short"}}
+
+    result = plane.confirm_and_run(
+        tampered,
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+
+    assert result["status"] == "blocked"
+    assert "preview_digest_invalid" in result["blockers"]
+
+
+def test_confirm_and_run_rejects_catalog_revision_or_eligibility_drift(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path, catalog_loader=lambda profile_id: [])
+    preview = _confirmable_preview()
+    plane.persist_preview(preview)
+
+    result = plane.confirm_and_run(
+        preview,
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+
+    assert result["status"] == "blocked"
+    assert "instrument_not_in_catalog" in result["blockers"]
+
+
 def test_dashboard_confirmation_builder_keeps_coordinator_activation_non_mutating(tmp_path: Path) -> None:
     from pipelines import dashboard_server
 
@@ -595,6 +746,9 @@ def test_dashboard_confirmation_builder_keeps_coordinator_activation_non_mutatin
             }
 
     preview = _confirmable_preview()
+    # The server builder accepts a test-only catalog loader so this test does
+    # not depend on a live public metadata response.
+    DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader).persist_preview(preview)
     result = dashboard_server.build_dashboard_control_confirmation_response(
         {
             "preview": preview,
@@ -606,6 +760,7 @@ def test_dashboard_confirmation_builder_keeps_coordinator_activation_non_mutatin
         },
         output_root=tmp_path,
         coordinator=Coordinator(),
+        catalog_loader=_eligible_catalog_loader,
     )
 
     assert result["confirmation"]["status"] == "confirmed"
@@ -656,6 +811,8 @@ def test_runtime_terminal_notification_waits_for_operator_and_never_opens_next_p
     assert result["next_action"] == "await_operator_next_plan"
     assert result["automatic_next_plan"] is False
     assert result["notification_id"].startswith("dashboard-notification:")
+    assert result["channels"] == {"dashboard": "persisted", "telegram": "queued"}
+    assert (tmp_path / "dashboard_control_plane" / "telegram_outbox.json").exists()
 
 
 def test_runtime_unknown_is_query_first_and_not_a_retry_authorization(tmp_path: Path) -> None:
@@ -689,6 +846,15 @@ def test_dashboard_runtime_status_builder_projects_authoritative_coordinator_sta
                 "execution_enabled": False,
                 "execution_blocker": "capability_gap:execution",
                 "next_action": "await_execution_capability",
+                "execution": {
+                    "orders": [],
+                    "open_orders": [],
+                    "fills": [],
+                    "fees": [],
+                    "positions": [],
+                    "protection": {"status": "blocked"},
+                    "reconciliation": {"status": "unknown"},
+                },
             }
 
     result = dashboard_server.build_dashboard_control_runtime_status_response(
@@ -698,4 +864,5 @@ def test_dashboard_runtime_status_builder_projects_authoritative_coordinator_sta
 
     assert result["runtime"]["status"] == "activated"
     assert result["runtime"]["execution_mutation"] is False
+    assert result["runtime"]["reconciliation"]["status"] == "unknown"
     assert result["safety"]["orders_submitted"] is False

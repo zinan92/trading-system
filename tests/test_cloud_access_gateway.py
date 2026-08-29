@@ -19,10 +19,18 @@ def test_gateway_allowlist_exposes_only_dashboard_contracts() -> None:
     assert gateway._is_allowed("/api/trading-system/cloud-health")
     assert gateway._is_allowed("/api/trading-system/supervisor-history")
     assert gateway._is_allowed("/api/park-paper/ai-chat")
+    assert gateway._is_allowed("/api/dashboard-control/catalog")
+    assert gateway._is_allowed("/api/dashboard-control/runtime-status")
     assert gateway.MUTATION_EXACT == {
         "/api/strategy-console/control",
         "/api/dualtrack/orders",
         "/api/park-paper/ai-chat",
+        "/api/dashboard-control/selection",
+        "/api/dashboard-control/preview",
+        "/api/dashboard-control/account-admission",
+        "/api/dashboard-control/confirm",
+        "/api/dashboard-control/control",
+        "/api/dashboard-control/acceptance",
     }
     assert not gateway._is_allowed("/outputs/dualtrack/strategy_control/runtime.json")
     assert not gateway._is_allowed("/api/trading-system/read-model/internal")

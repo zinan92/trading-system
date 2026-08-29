@@ -85,6 +85,9 @@ ALLOW_EXACT = frozenset(
         "/api/trading-system/ai-evaluation-receipt",
         "/api/dualtrack/market/bars",
         "/api/park-paper/ai-chat",
+        "/api/dashboard-control/catalog",
+        "/api/dashboard-control/selection",
+        "/api/dashboard-control/runtime-status",
     }
 )
 MUTATION_EXACT = frozenset(
@@ -92,6 +95,12 @@ MUTATION_EXACT = frozenset(
         "/api/strategy-console/control",
         "/api/dualtrack/orders",
         "/api/park-paper/ai-chat",
+        "/api/dashboard-control/selection",
+        "/api/dashboard-control/preview",
+        "/api/dashboard-control/account-admission",
+        "/api/dashboard-control/confirm",
+        "/api/dashboard-control/control",
+        "/api/dashboard-control/acceptance",
     }
 )
 _DROP_HEADERS = frozenset(
