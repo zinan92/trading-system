@@ -75,6 +75,45 @@ def test_rejects_non_btc_instrument_instead_of_silently_aliasing_market() -> Non
         raise AssertionError("reader must reject non-BTC until an explicit mapping is added")
 
 
+def test_reads_complete_public_default_perp_catalog_without_credentials() -> None:
+    calls: list[dict] = []
+    payloads = {
+        "meta": {
+            "universe": [
+                {"name": "BTC", "index": 0, "szDecimals": 5, "maxLeverage": 50},
+                {"name": "ZEC", "index": 9, "szDecimals": 3, "maxLeverage": 10},
+            ]
+        }
+    }
+
+    def opener(request, timeout):
+        body = json.loads(request.data.decode())
+        calls.append({"body": body, "timeout": timeout})
+        return Response(payloads[body["type"]])
+
+    reader = HyperliquidTestnetMarketReader(opener=opener, clock=lambda: 1787827000.0)
+
+    result = reader.read_catalog()
+
+    assert [row["instrument_id"] for row in result["instruments"]] == [
+        "BTC-USD-PERP",
+        "ZEC-USD-PERP",
+    ]
+    assert result["instrument_scope"] == "default_perpetuals"
+    assert all(row["eligibility"] == "unknown" for row in result["instruments"])
+    assert calls == [{"body": {"type": "meta"}, "timeout": 5.0}]
+
+
+def test_catalog_failure_is_typed_without_transport_details() -> None:
+    def opener(*_args, **_kwargs):
+        raise TimeoutError("private transport detail")
+
+    reader = HyperliquidTestnetMarketReader(opener=opener)
+
+    with pytest.raises(HyperliquidTestnetMarketError, match="testnet_market_unavailable"):
+        reader.read_catalog()
+
+
 def test_public_failure_is_typed_without_exposing_transport_exception() -> None:
     def opener(*_args, **_kwargs):
         raise TimeoutError("private transport detail")

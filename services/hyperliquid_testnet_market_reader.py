@@ -74,6 +74,53 @@ class HyperliquidTestnetMarketReader:
             "source_cursor": self._digest({"mids": mids, "book": book}),
         }
 
+    def read_catalog(self) -> dict[str, Any]:
+        """Read the public default-perp metadata without credentials.
+
+        Metadata is an inventory fact, not an execution-ready market fact.  A
+        caller must still read and validate market/account/protection facts for
+        the selected Instrument before confirmation.
+        """
+
+        payload = self._post({"type": "meta"})
+        universe = payload.get("universe")
+        if not isinstance(universe, list):
+            raise HyperliquidTestnetMarketError("testnet_catalog_universe_invalid")
+        instruments: list[dict[str, Any]] = []
+        for row in universe:
+            if not isinstance(row, Mapping):
+                raise HyperliquidTestnetMarketError("testnet_catalog_instrument_invalid")
+            symbol = str(row.get("name") or "").strip()
+            if not symbol:
+                raise HyperliquidTestnetMarketError("testnet_catalog_symbol_missing")
+            instruments.append(
+                {
+                    "instrument_id": f"{symbol}-USD-PERP",
+                    "asset": symbol,
+                    "asset_index": row.get("index"),
+                    "size_decimals": row.get("szDecimals"),
+                    "max_leverage": row.get("maxLeverage"),
+                    "eligibility": "unknown",
+                    "blockers": ["market_facts_pending"],
+                    "catalog_source": "hyperliquid.external_testnet",
+                }
+            )
+        return {
+            "schema_version": "hyperliquid-testnet-instrument-catalog-v1",
+            "provider": "hyperliquid",
+            "source": "hyperliquid.external_testnet",
+            "environment": "testnet",
+            "instrument_scope": "default_perpetuals",
+            "instruments": instruments,
+            "catalog_revision": self._digest({"universe": universe}),
+            "trusted": True,
+            "fresh": True,
+            "observed_at": datetime.fromtimestamp(
+                float(self.clock()), tz=timezone.utc
+            ).isoformat(),
+            "source_cursor": self._digest(payload),
+        }
+
     def _post(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         request = Request(
             self.endpoint,

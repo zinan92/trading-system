@@ -30,6 +30,7 @@ from services.cycle_decision import CycleDecisionLedger
 from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
+from services.dashboard_control_plane import DashboardControlPlane, public_catalog_loader
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dca_plan import build_deterministic_dca_candidate_payload_v1
@@ -406,6 +407,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/connectors/catalog":
             self._handle_connector_catalog_get()
             return
+        if parsed.path == "/api/dashboard-control/catalog":
+            self._handle_dashboard_control_catalog_get()
+            return
+        if parsed.path == "/api/dashboard-control/selection":
+            self._handle_dashboard_control_selection_get()
+            return
         if parsed.path == "/api/connectors/config/status":
             self._handle_connector_config_status_get()
             return
@@ -473,6 +480,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 self._handle_strategy_console_control()
             finally:
                 _TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT.advance_generation()
+            return
+        if parsed.path == "/api/dashboard-control/selection":
+            if not _dualtrack_mutation_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+            ):
+                self._write_error(
+                    403,
+                    "dashboard_control_origin_blocked",
+                    "dashboard control writes require the same local origin",
+                )
+                return
+            try:
+                self._handle_dashboard_control_selection_post()
+            except ValueError as exc:
+                self._write_error(400, "invalid_dashboard_control_selection", str(exc))
             return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
@@ -751,6 +774,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def _handle_connector_catalog_get(self) -> None:
         self._write_json(200, build_connector_catalog_response())
+
+    def _handle_dashboard_control_catalog_get(self) -> None:
+        try:
+            self._write_json(200, build_dashboard_control_catalog_response())
+        except Exception as exc:  # noqa: BLE001 - read-only catalog blocker.
+            self._write_error(503, "dashboard_control_catalog_unavailable", type(exc).__name__)
+
+    def _handle_dashboard_control_selection_get(self) -> None:
+        try:
+            self._write_json(200, build_dashboard_control_selection_response({"action": "status"}))
+        except ValueError as exc:
+            self._write_error(400, "dashboard_control_selection_unavailable", str(exc))
+
+    def _handle_dashboard_control_selection_post(self) -> None:
+        payload = self._read_json_body(max_bytes=32_000)
+        self._write_json(200, build_dashboard_control_selection_response(payload))
 
     def _handle_connector_config_status_get(self) -> None:
         self._write_json(200, build_connector_config_status_response())
@@ -3433,6 +3472,47 @@ def build_tiger_paper_order_refresh_runbook_response(*, output_root: Path | None
 
 def build_connector_catalog_response() -> dict:
     return ConnectorCatalog().snapshot()
+
+
+def build_dashboard_control_catalog_response(*, output_root: Path | None = None) -> dict[str, Any]:
+    """Return the explicit Venue/Instrument catalog for Dashboard V5."""
+
+    output = _dualtrack_output_root(output_root)
+    return DashboardControlPlane(output, catalog_loader=public_catalog_loader).catalog()
+
+
+def build_dashboard_control_selection_response(
+    payload: Mapping[str, Any],
+    *,
+    output_root: Path | None = None,
+) -> dict[str, Any]:
+    """Read or update the non-executing Dashboard selection identity."""
+
+    output = _dualtrack_output_root(output_root)
+    plane = DashboardControlPlane(output, catalog_loader=public_catalog_loader)
+    if str(payload.get("action") or "").strip().lower() == "status":
+        return {
+            "schema_version": "dashboard-selection-response-v1",
+            "selection": plane.status(),
+            "safety": {
+                "read_only": True,
+                "credentials_exposed": False,
+                "orders_submitted": False,
+            },
+        }
+    return {
+        "schema_version": "dashboard-selection-response-v1",
+        "selection": plane.select(
+            venue_profile_id=str(payload.get("venue_profile_id") or ""),
+            instrument_id=payload.get("instrument_id"),
+            strategy_family=payload.get("strategy_family"),
+        ),
+        "safety": {
+            "read_only": True,
+            "credentials_exposed": False,
+            "orders_submitted": False,
+        },
+    }
 
 
 def build_connector_onboarding_dry_run_response(payload: dict, *, output_root: Path | None = None) -> dict:
