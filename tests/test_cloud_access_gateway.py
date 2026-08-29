@@ -21,6 +21,7 @@ def test_gateway_allowlist_exposes_only_dashboard_contracts() -> None:
     assert gateway._is_allowed("/api/park-paper/ai-chat")
     assert gateway._is_allowed("/api/dashboard-control/catalog")
     assert gateway._is_allowed("/api/dashboard-control/runtime-status")
+    assert gateway._is_allowed("/api/dashboard-control/market-bars")
     assert gateway.MUTATION_EXACT == {
         "/api/strategy-console/control",
         "/api/dualtrack/orders",

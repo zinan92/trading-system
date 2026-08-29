@@ -11,7 +11,7 @@ from services.hyperliquid_testnet_market_reader import (
 
 
 class Response:
-    def __init__(self, payload: dict) -> None:
+    def __init__(self, payload: object) -> None:
         self.payload = payload
 
     def __enter__(self):
@@ -102,6 +102,63 @@ def test_reads_complete_public_default_perp_catalog_without_credentials() -> Non
     assert result["instrument_scope"] == "default_perpetuals"
     assert all(row["eligibility"] == "unknown" for row in result["instruments"])
     assert calls == [{"body": {"type": "meta"}, "timeout": 5.0}]
+
+
+def test_reads_btc_candles_in_standard_kline_shape_without_credentials() -> None:
+    calls: list[dict] = []
+    candles = [
+        {
+            "T": 1787825399999,
+            "c": "80020.0",
+            "h": "80040.0",
+            "i": "30m",
+            "l": "79980.0",
+            "n": 15,
+            "o": "80000.0",
+            "s": "BTC",
+            "t": 1787823600000,
+            "v": "12.5",
+        },
+        {
+            "T": 1787827199999,
+            "c": "80100.0",
+            "h": "80120.0",
+            "i": "30m",
+            "l": "80010.0",
+            "n": 21,
+            "o": "80020.0",
+            "s": "BTC",
+            "t": 1787825400000,
+            "v": "18.75",
+        },
+    ]
+
+    def opener(request, timeout):
+        body = json.loads(request.data.decode())
+        calls.append({"body": body, "timeout": timeout})
+        return Response(candles)
+
+    reader = HyperliquidTestnetMarketReader(opener=opener, clock=lambda: 1787827000.0)
+
+    result = reader.read_bars("BTC-USD-PERP", timeframe="30m", limit=2)
+
+    assert result["provider"] == "hyperliquid"
+    assert result["source_mode"] == "hyperliquid.external_testnet"
+    assert result["instrument_id"] == "BTC-USD-PERP"
+    assert result["symbol"] == "BTC"
+    assert result["provider_symbol"] == "BTC"
+    assert result["timeframe"] == "30m"
+    assert result["bar_count"] == 2
+    assert result["latest_close"] == 80100.0
+    assert result["trusted"] is True
+    assert result["fresh"] is True
+    assert result["is_synthetic"] is False
+    assert result["bars"][-1]["close"] == 80100.0
+    assert result["bars"][-1]["provider"] == "hyperliquid"
+    assert calls[0]["body"]["type"] == "candleSnapshot"
+    assert calls[0]["body"]["req"]["coin"] == "BTC"
+    assert calls[0]["body"]["req"]["interval"] == "30m"
+    assert calls[0]["timeout"] == 5.0
 
 
 def test_catalog_failure_is_typed_without_transport_details() -> None:

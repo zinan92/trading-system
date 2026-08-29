@@ -86,6 +86,7 @@ ALLOW_EXACT = frozenset(
         "/api/dualtrack/market/bars",
         "/api/park-paper/ai-chat",
         "/api/dashboard-control/catalog",
+        "/api/dashboard-control/market-bars",
         "/api/dashboard-control/selection",
         "/api/dashboard-control/runtime-status",
     }

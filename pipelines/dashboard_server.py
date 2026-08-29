@@ -418,6 +418,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/dashboard-control/runtime-status":
             self._handle_dashboard_control_runtime_status_get()
             return
+        if parsed.path == "/api/dashboard-control/market-bars":
+            self._handle_dashboard_control_market_bars_get(parsed.query)
+            return
         if parsed.path == "/api/connectors/config/status":
             self._handle_connector_config_status_get()
             return
@@ -890,6 +893,28 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def _handle_dashboard_control_runtime_status_get(self) -> None:
         self._write_json(200, build_dashboard_control_runtime_status_response())
+
+    def _handle_dashboard_control_market_bars_get(self, query: str) -> None:
+        params = parse_qs(query)
+        profile_id = str((params.get("venue_profile_id") or [""])[0]).strip()
+        instrument_id = str((params.get("instrument_id") or [""])[0]).strip()
+        timeframe = str((params.get("timeframe") or ["30m"])[0]).strip()
+        end = str((params.get("end") or [""])[0]).strip() or None
+        try:
+            limit = int((params.get("limit") or [240])[0])
+            result = build_dashboard_control_market_bars_response(
+                venue_profile_id=profile_id,
+                instrument_id=instrument_id,
+                timeframe=timeframe,
+                limit=limit,
+                end=end,
+            )
+        except ValueError as exc:
+            reason = str(exc) or "dashboard_control_market_bars_invalid"
+            status = 503 if reason in {"testnet_market_unavailable", "testnet_candles_missing"} else 400
+            self._write_error(status, reason, "selected Testnet K-line is unavailable")
+            return
+        self._write_json(200, result)
 
     def _handle_dashboard_control_runtime_control_post(self) -> None:
         payload = self._read_json_body(max_bytes=32_000)
@@ -3629,6 +3654,30 @@ def build_dashboard_control_selection_response(
             "orders_submitted": False,
         },
     }
+
+
+def build_dashboard_control_market_bars_response(
+    *,
+    venue_profile_id: str,
+    instrument_id: str,
+    timeframe: str,
+    limit: int,
+    end: str | None,
+    output_root: Path | None = None,
+) -> dict[str, Any]:
+    """Return source-bound candles for the selected Dashboard Instrument."""
+
+    plane = DashboardControlPlane(
+        _dualtrack_output_root(output_root),
+        catalog_loader=public_catalog_loader,
+    )
+    return plane.resolve_market_bars(
+        venue_profile_id=venue_profile_id,
+        instrument_id=instrument_id,
+        timeframe=timeframe,
+        limit=limit,
+        end=end,
+    )
 
 
 def build_dashboard_control_preview_response(
