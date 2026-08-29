@@ -46,6 +46,9 @@
   explicitly leaves BTC-DCA/BTC-Grid external execution to human-gated issues
   #1050 and #1051. Cloudflare Tunnel repair and Mainnet/Live remain outside
   this implementation.
+- Follow-up #1087 isolates the control bootstrap from browser-only static
+  fixtures, and #1089 keeps Grid boundary drag responsive outside the overlay
+  on compact viewports; both are merged as PRs #1088 and #1090.
 - Focused validation across the seven slices passes; full-suite validation and
   independent Claude Sonnet 5 review are the remaining delivery gates. No
   credential, Testnet order, position mutation, scheduler activation, cloud,
