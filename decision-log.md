@@ -46,6 +46,26 @@ Date: 2026-08-29
   protected execution capability required for an external run; that gap must
   remain visible instead of being hidden by a ready-looking UI.
 
+## Preserve legacy Dashboard browser behavior after the new control track (#1087, #1089)
+
+Date: 2026-08-29
+
+### Decision
+
+- The additive Venue/Instrument/Strategy control bootstrap must remain dormant
+  on browser-only static smoke servers; only real Dashboard ports should call
+  its control API.
+- Grid range adjustment must continue to track boundary pointers that briefly
+  leave the overlay, while wheel zoom keeps the handles aligned to prices. The
+  draft remains unsubmitted until explicit confirmation.
+
+### Verification
+
+- #1087/#1089 merged as PRs #1088/#1090. The Dashboard browser regression set
+  passes `86` cases after both fixes; no control or execution mutation was
+  added to the legacy fixtures.
+- No credentials, orders, scheduler, cloud, Mainnet, or Live mutation occurred.
+
 ## Bind explicit Jessie Testnet context to the Hyperliquid public market seam (#1069)
 
 Date: 2026-08-27
