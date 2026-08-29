@@ -353,6 +353,12 @@ class DashboardControlPlane:
             "execution_ready": not hard_blockers,
             "authorizing": False,
         }
+        if profile_id == "hyperliquid.testnet":
+            payload = self.execution_admission(
+                payload,
+                market=normalized_market if normalized_market else None,
+                account=source_account if account is not None else None,
+            )
         payload["preview_digest"] = _digest(payload)
         return payload
 
@@ -435,6 +441,198 @@ class DashboardControlPlane:
             "blockers": sorted(set(blockers)),
             "safety": self._account_safety(),
         }
+
+    def execution_admission(
+        self,
+        preview: Mapping[str, Any],
+        *,
+        market: Mapping[str, Any] | None,
+        account: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Apply execution-grade market checks and the subtractive risk gate."""
+
+        if not isinstance(preview, Mapping):
+            raise ValueError("dashboard_preview_invalid")
+        result = dict(preview)
+        blockers = [str(item) for item in (preview.get("blockers") or []) if str(item).strip()]
+        market_blockers, normalized_market = self._market_quality_blockers(
+            market,
+            instrument_id=str(preview.get("instrument_id") or ""),
+            requested_notional=self._requested_notional(preview),
+        )
+        blockers.extend(market_blockers)
+        body_account = dict(account or {})
+        equity = self._float_or_none(body_account.get("equity"))
+        if body_account:
+            capabilities = body_account.get("capabilities")
+            if isinstance(capabilities, Mapping) and capabilities.get("protection") is not True:
+                blockers.append("testnet_protection_capability_unavailable")
+            positions = [
+                row
+                for row in (body_account.get("positions") or [])
+                if isinstance(row, Mapping) and self._non_zero(row.get("signed_quantity"))
+            ]
+            open_orders = [row for row in (body_account.get("open_orders") or []) if isinstance(row, Mapping)]
+            if positions or open_orders or body_account.get("unknown_exposure") is True:
+                blockers.append("account_not_clean")
+        requested_notional = self._requested_notional(preview)
+        requested_loss = self._requested_loss(preview)
+        notional_cap = None
+        loss_cap = None
+        effective_notional = requested_notional
+        effective_loss = requested_loss
+        if equity is None or equity <= 0:
+            blockers.append("account_equity_unavailable")
+        else:
+            notional_cap = min(equity * 0.10, 100.0)
+            loss_cap = min(equity * 0.05, 50.0)
+            effective_notional = min(requested_notional, notional_cap)
+            if requested_loss > 0 and requested_loss > loss_cap:
+                effective_notional = min(
+                    effective_notional,
+                    requested_notional * loss_cap / requested_loss,
+                )
+            effective_loss = (
+                requested_loss * effective_notional / requested_notional
+                if requested_notional > 0 and requested_loss > 0
+                else requested_loss
+            )
+        risk_outcome = "allow"
+        if blockers:
+            risk_outcome = "reject"
+        elif effective_notional < requested_notional - 1e-9:
+            risk_outcome = "scale"
+        gate = {
+            "outcome": risk_outcome,
+            "requested_notional": round(requested_notional, 8),
+            "effective_notional": round(effective_notional, 8),
+            "requested_max_loss": round(requested_loss, 8),
+            "effective_max_loss": round(effective_loss, 8),
+            "notional_cap": None if notional_cap is None else round(notional_cap, 8),
+            "loss_cap": None if loss_cap is None else round(loss_cap, 8),
+            "subtractive_only": True,
+        }
+        result.update(
+            {
+                "market": _public(normalized_market),
+                "blockers": sorted(set(blockers)),
+                "risk_gate": gate,
+                "execution_ready": bool(preview.get("execution_ready"))
+                and not blockers,
+                "authorizing": False,
+            }
+        )
+        result["preview_digest"] = _digest(result)
+        return result
+
+    def _market_quality_blockers(
+        self,
+        market: Mapping[str, Any] | None,
+        *,
+        instrument_id: str,
+        requested_notional: float,
+    ) -> tuple[list[str], dict[str, Any]]:
+        if not isinstance(market, Mapping) or not market:
+            return ["market_facts_required"], {}
+        source = dict(market)
+        blockers: list[str] = []
+        required = (
+            "source",
+            "cursor",
+            "broker_id",
+            "environment",
+            "instrument_id",
+            "asset_index",
+            "mapping_revision",
+            "universe_revision",
+            "connection_epoch",
+            "observed_at",
+        )
+        blockers.extend(f"market_{field}_missing" for field in required if source.get(field) in (None, ""))
+        if source.get("fresh") is not True:
+            blockers.append("market_stale")
+        if source.get("execution_ready") is not True:
+            blockers.append("market_not_execution_ready")
+        if str(source.get("broker_id") or "").lower() != "hyperliquid":
+            blockers.append("market_broker_mismatch")
+        if str(source.get("environment") or "").lower() != "testnet":
+            blockers.append("market_environment_mismatch")
+        if instrument_id and str(source.get("instrument_id") or "") != instrument_id:
+            blockers.append("market_instrument_mismatch")
+        numbers: dict[str, float] = {}
+        for field in (
+            "bid",
+            "ask",
+            "mid",
+            "mark",
+            "oracle",
+            "impact",
+            "depth_notional",
+            "max_slippage",
+            "max_oracle_deviation_bps",
+        ):
+            value = self._float_or_none(source.get(field))
+            if value is None:
+                blockers.append(f"market_{field}_invalid")
+            else:
+                numbers[field] = value
+        if len(numbers) == 9:
+            if not numbers["bid"] < numbers["ask"]:
+                blockers.append("bbo_not_two_sided")
+            if not numbers["bid"] <= numbers["mid"] <= numbers["ask"]:
+                blockers.append("mid_outside_bbo")
+            if numbers["depth_notional"] < requested_notional:
+                blockers.append("insufficient_depth")
+            if numbers["max_slippage"] <= 0 or abs(numbers["impact"] - numbers["mid"]) > numbers["max_slippage"]:
+                blockers.append("impact_slippage_exceeded")
+            if numbers["oracle"] <= 0 or numbers["mark"] <= 0 or numbers["max_oracle_deviation_bps"] < 0:
+                blockers.append("oracle_facts_invalid")
+            elif (
+                abs(numbers["mark"] - numbers["oracle"])
+                / numbers["oracle"]
+                * 10_000
+                > numbers["max_oracle_deviation_bps"]
+            ):
+                blockers.append("oracle_dislocation")
+        return sorted(set(blockers)), source
+
+    @staticmethod
+    def _requested_notional(preview: Mapping[str, Any]) -> float:
+        body = preview.get("preview") if isinstance(preview.get("preview"), Mapping) else {}
+        dca = body.get("dca") if isinstance(body.get("dca"), Mapping) else {}
+        grid = body.get("grid") if isinstance(body.get("grid"), Mapping) else {}
+        risk = body.get("risk") if isinstance(body.get("risk"), Mapping) else {}
+        candidates = (
+            dca.get("total_possible_notional"),
+            risk.get("max_side_notional"),
+            grid.get("notional_per_grid"),
+            preview.get("requested_notional"),
+        )
+        for value in candidates:
+            rendered = DashboardControlPlane._float_or_none(value)
+            if rendered is not None and rendered >= 0:
+                if value == grid.get("notional_per_grid") and grid.get("count"):
+                    return rendered * max(1, int(grid.get("count")))
+                return rendered
+        return 0.0
+
+    @staticmethod
+    def _requested_loss(preview: Mapping[str, Any]) -> float:
+        body = preview.get("preview") if isinstance(preview.get("preview"), Mapping) else {}
+        risk = body.get("risk") if isinstance(body.get("risk"), Mapping) else {}
+        for key in ("maximum_loss_at_full_depth", "max_loss", "maximum_loss"):
+            rendered = DashboardControlPlane._float_or_none(risk.get(key))
+            if rendered is not None and rendered >= 0:
+                return rendered
+        return 0.0
+
+    @staticmethod
+    def _float_or_none(value: Any) -> float | None:
+        try:
+            rendered = float(value)
+        except (TypeError, ValueError):
+            return None
+        return rendered if rendered == rendered and rendered not in {float("inf"), float("-inf")} else None
 
     @staticmethod
     def _non_zero(value: Any) -> bool:

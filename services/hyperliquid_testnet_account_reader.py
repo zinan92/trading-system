@@ -52,17 +52,16 @@ class HyperliquidTestnetAccountReader:
         normalized_frontend_orders = self._orders(frontend_orders)
         normalized_fills = self._fills(fills)
         selected = str(instrument_id or "").strip()
-        if selected:
-            positions = [row for row in positions if row["instrument_id"] == selected]
-            normalized_open_orders = [
-                row for row in normalized_open_orders if row["instrument_id"] == selected
-            ]
-            normalized_frontend_orders = [
-                row for row in normalized_frontend_orders if row["instrument_id"] == selected
-            ]
-            normalized_fills = [
-                row for row in normalized_fills if row["instrument_id"] == selected
-            ]
+        selected_positions = (
+            [row for row in positions if row["instrument_id"] == selected]
+            if selected
+            else list(positions)
+        )
+        selected_open_orders = (
+            [row for row in normalized_open_orders if row["instrument_id"] == selected]
+            if selected
+            else list(normalized_open_orders)
+        )
         observed_at = datetime.fromtimestamp(float(self.clock()), tz=timezone.utc).isoformat()
         raw = {
             "clearinghouseState": state,
@@ -80,6 +79,9 @@ class HyperliquidTestnetAccountReader:
             "open_orders": normalized_open_orders,
             "frontend_open_orders": normalized_frontend_orders,
             "fills": normalized_fills,
+            "selected_instrument_id": selected or None,
+            "selected_positions": selected_positions,
+            "selected_open_orders": selected_open_orders,
             "fees": [
                 {"instrument_id": row["instrument_id"], "fee": row["fee"], "oid": row.get("oid")}
                 for row in normalized_fills

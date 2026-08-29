@@ -355,3 +355,106 @@ def test_dashboard_account_admission_builder_never_exposes_account_address(tmp_p
     assert result["admission"]["ready"] is True
     assert "account_address" not in result["admission"]["account"]
     assert result["safety"]["credentials_exposed"] is False
+
+
+def _execution_market(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "source": "hyperliquid.external_testnet",
+        "cursor": "cursor-1",
+        "broker_id": "hyperliquid",
+        "environment": "testnet",
+        "instrument_id": "BTC-USD-PERP",
+        "asset_index": 0,
+        "mapping_revision": "mapping-v1",
+        "universe_revision": "universe-v1",
+        "connection_epoch": "epoch-1",
+        "observed_at": "2026-08-29T01:00:00+00:00",
+        "fresh": True,
+        "execution_ready": True,
+        "bid": 99,
+        "ask": 101,
+        "mid": 100,
+        "mark": 100,
+        "oracle": 100,
+        "impact": 100,
+        "depth_notional": 500,
+        "max_slippage": 2,
+        "max_oracle_deviation_bps": 100,
+    }
+    value.update(overrides)
+    return value
+
+
+def test_execution_admission_scales_only_down_to_testnet_caps(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path)
+    result = plane.execution_admission(
+        {
+            "schema_version": "dashboard-strategy-preview-v1",
+            "venue_profile_id": "hyperliquid.testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "strategy_family": "dca",
+            "blockers": [],
+            "preview": {
+                "dca": {"total_possible_notional": 300},
+                "risk": {"maximum_loss_at_full_depth": 40},
+            },
+            "execution_ready": True,
+        },
+        market=_execution_market(),
+        account={"equity": 1_000, "positions": [], "open_orders": []},
+    )
+
+    assert result["risk_gate"]["outcome"] == "scale"
+    assert result["risk_gate"]["requested_notional"] == 300.0
+    assert result["risk_gate"]["effective_notional"] == 100.0
+    assert result["risk_gate"]["notional_cap"] == 100.0
+    assert result["risk_gate"]["effective_notional"] <= result["risk_gate"]["requested_notional"]
+    assert result["execution_ready"] is True
+    assert result["blockers"] == []
+
+
+def test_execution_admission_blocks_thin_stale_and_oracle_dislocated_market(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path)
+    result = plane.execution_admission(
+        {
+            "schema_version": "dashboard-strategy-preview-v1",
+            "venue_profile_id": "hyperliquid.testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "strategy_family": "grid",
+            "blockers": [],
+            "preview": {"grid": {"notional_per_grid": 100}, "risk": {"max_loss": 5}},
+            "execution_ready": True,
+        },
+        market=_execution_market(
+            fresh=False,
+            depth_notional=10,
+            mark=104,
+        ),
+        account={"equity": 1_000, "positions": [], "open_orders": []},
+    )
+
+    assert result["execution_ready"] is False
+    assert {"market_stale", "insufficient_depth", "oracle_dislocation"}.issubset(
+        set(result["blockers"])
+    )
+
+
+def test_execution_admission_never_adds_exposure_or_overrides_blockers(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path)
+    result = plane.execution_admission(
+        {
+            "schema_version": "dashboard-strategy-preview-v1",
+            "venue_profile_id": "hyperliquid.testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "strategy_family": "dca",
+            "blockers": ["testnet_account_unavailable"],
+            "preview": {"dca": {"total_possible_notional": 1}, "risk": {"maximum_loss_at_full_depth": 1}},
+            "execution_ready": False,
+        },
+        market=_execution_market(),
+        account={"equity": 100_000, "positions": [], "open_orders": []},
+    )
+
+    assert result["execution_ready"] is False
+    assert result["risk_gate"]["effective_notional"] == 1.0
+    assert "testnet_account_unavailable" in result["blockers"]

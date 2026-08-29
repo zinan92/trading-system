@@ -32,6 +32,7 @@ from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
 from services.dashboard_control_plane import DashboardControlPlane, public_catalog_loader
 from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
+from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dca_plan import build_deterministic_dca_candidate_payload_v1
@@ -3567,6 +3568,22 @@ def build_dashboard_control_preview_response(
 
     if not isinstance(payload, Mapping):
         raise ValueError("dashboard_control_preview_payload_invalid")
+    profile_id = str(payload.get("venue_profile_id") or "").strip().lower()
+    instrument_id = str(payload.get("instrument_id") or "").strip()
+    resolved_market = market if market is not None else payload.get("market")
+    resolved_account = account if account is not None else payload.get("account")
+    if profile_id == "hyperliquid.testnet" and resolved_market is None and instrument_id:
+        try:
+            resolved_market = HyperliquidTestnetMarketReader().read(instrument_id)
+        except Exception:  # noqa: BLE001 - public market failure is a typed blocker.
+            resolved_market = None
+    if profile_id == "hyperliquid.testnet" and resolved_account is None:
+        address = str(os.getenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS") or "").strip()
+        if address:
+            try:
+                resolved_account = HyperliquidTestnetAccountReader(address).read(instrument_id)
+            except Exception:  # noqa: BLE001 - account failure stays fail-closed.
+                resolved_account = None
     plane = DashboardControlPlane(
         _dualtrack_output_root(output_root),
         catalog_loader=public_catalog_loader,
@@ -3576,8 +3593,8 @@ def build_dashboard_control_preview_response(
         instrument_id=str(payload.get("instrument_id") or ""),
         strategy_family=str(payload.get("strategy_family") or ""),
         strategy=payload.get("strategy") if isinstance(payload.get("strategy"), Mapping) else {},
-        market=market if market is not None else payload.get("market"),
-        account=account if account is not None else payload.get("account"),
+        market=resolved_market,
+        account=resolved_account,
         config=payload.get("config") if isinstance(payload.get("config"), Mapping) else None,
     )
     return {
