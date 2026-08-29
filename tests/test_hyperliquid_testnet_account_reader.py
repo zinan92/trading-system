@@ -86,3 +86,57 @@ def test_account_transport_failure_is_typed_and_redacted() -> None:
         reader.read()
 
     assert "secret transport detail" not in str(raised.value)
+
+
+def test_account_freshness_is_derived_from_fact_timestamp() -> None:
+    payloads = {
+        "clearinghouseState": {
+            "time": 1787999000,
+            "marginSummary": {"accountValue": "995.46", "totalMarginUsed": "0"},
+            "assetPositions": [],
+        },
+        "openOrders": [],
+        "frontendOpenOrders": [],
+        "userFills": [],
+    }
+
+    def opener(request, timeout):
+        body = json.loads(request.data.decode())
+        return Response(payloads[body["type"]])
+
+    reader = HyperliquidTestnetAccountReader(
+        ACCOUNT,
+        opener=opener,
+        clock=lambda: 1788000000.0,
+    )
+
+    result = reader.read()
+
+    assert result["fresh"] is False
+    assert result["fact_age_seconds"] == 1000.0
+    assert result["fact_max_age_seconds"] == 120.0
+
+
+def test_account_coherence_is_derived_from_open_order_views() -> None:
+    payloads = {
+        "clearinghouseState": {
+            "marginSummary": {"accountValue": "995.46", "totalMarginUsed": "0"},
+            "assetPositions": [],
+        },
+        "openOrders": [{"coin": "BTC", "oid": 12, "sz": "0.01", "side": "B"}],
+        "frontendOpenOrders": [],
+        "userFills": [],
+    }
+
+    def opener(request, timeout):
+        body = json.loads(request.data.decode())
+        return Response(payloads[body["type"]])
+
+    result = HyperliquidTestnetAccountReader(
+        ACCOUNT,
+        opener=opener,
+        clock=lambda: 1788000000.0,
+    ).read()
+
+    assert result["coherent"] is False
+    assert result["coherence_issues"] == ["open_order_views_mismatch"]

@@ -467,6 +467,25 @@ def test_execution_admission_never_adds_exposure_or_overrides_blockers(tmp_path:
     assert "testnet_account_unavailable" in result["blockers"]
 
 
+def test_execution_admission_blocks_missing_preview_notional(tmp_path: Path) -> None:
+    result = DashboardControlPlane(tmp_path).execution_admission(
+        {
+            "venue_profile_id": "hyperliquid.testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "strategy_family": "dca",
+            "blockers": [],
+            "preview": {"risk": {"maximum_loss_at_full_depth": 1}},
+            "execution_ready": True,
+        },
+        market=_execution_market(),
+        account={"equity": 1_000, "positions": [], "open_orders": []},
+    )
+
+    assert result["execution_ready"] is False
+    assert "preview_notional_missing" in result["blockers"]
+    assert result["risk_gate"]["outcome"] == "reject"
+
+
 def _confirmable_preview() -> dict[str, object]:
     return {
         "schema_version": "dashboard-strategy-preview-v1",
