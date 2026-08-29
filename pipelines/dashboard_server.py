@@ -33,6 +33,7 @@ from services.dashboard_state import DashboardState
 from services.dashboard_control_plane import DashboardControlPlane, public_catalog_loader
 from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dca_plan import build_deterministic_dca_candidate_payload_v1
@@ -531,6 +532,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             except ValueError as exc:
                 self._write_error(400, "invalid_dashboard_account_admission", str(exc))
             return
+        if parsed.path == "/api/dashboard-control/confirm":
+            if not _dualtrack_mutation_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+            ):
+                self._write_error(
+                    403,
+                    "dashboard_control_origin_blocked",
+                    "dashboard confirmation requires the same local origin",
+                )
+                return
+            try:
+                self._handle_dashboard_control_confirm_post()
+            except ValueError as exc:
+                self._write_error(400, "invalid_dashboard_confirmation", str(exc))
+            return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
     def _handle_dualtrack_current(self, query: str) -> None:
@@ -832,6 +849,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_dashboard_control_account_admission_post(self) -> None:
         payload = self._read_json_body(max_bytes=32_000)
         self._write_json(200, build_dashboard_control_account_admission_response(payload))
+
+    def _handle_dashboard_control_confirm_post(self) -> None:
+        payload = self._read_json_body(max_bytes=64_000)
+        self._write_json(200, build_dashboard_control_confirmation_response(payload))
 
     def _handle_connector_config_status_get(self) -> None:
         self._write_json(200, build_connector_config_status_response())
@@ -3641,6 +3662,42 @@ def build_dashboard_control_account_admission_response(
             "credentials_exposed": False,
             "broker_mutation": False,
             "orders_submitted": False,
+        },
+    }
+
+
+def build_dashboard_control_confirmation_response(
+    payload: Mapping[str, Any],
+    *,
+    output_root: Path | None = None,
+    coordinator: object | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Confirm one fresh Dashboard Preview and record Coordinator activation."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("dashboard_confirmation_payload_invalid")
+    preview = payload.get("preview")
+    confirmation = payload.get("confirmation")
+    if not isinstance(preview, Mapping) or not isinstance(confirmation, Mapping):
+        raise ValueError("dashboard_confirmation_preview_required")
+    output = _dualtrack_output_root(output_root)
+    runtime_coordinator = coordinator or TestnetAutomationCoordinator(output)
+    plane = DashboardControlPlane(output, catalog_loader=public_catalog_loader)
+    result = plane.confirm_and_run(
+        preview,
+        confirmation=confirmation,
+        coordinator=runtime_coordinator,
+        now=now,
+    )
+    return {
+        "schema_version": "dashboard-confirmation-response-v1",
+        "confirmation": result,
+        "safety": {
+            "authorizing": result.get("status") == "confirmed",
+            "orders_submitted": result.get("execution_mutation") is True,
+            "credentials_exposed": False,
+            "environment": result.get("environment") or "testnet",
         },
     }
 

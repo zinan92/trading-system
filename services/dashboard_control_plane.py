@@ -23,6 +23,7 @@ from services.journal_store import load_json, write_json
 DASHBOARD_CONTROL_SCHEMA = "dashboard-control-plane-v1"
 SELECTION_SCHEMA = "dashboard-selection-v1"
 SELECTION_PATH = "dashboard_control_plane/selection.json"
+CONFIRMATION_PATH = "dashboard_control_plane/confirmations.json"
 
 
 _VENUE_PROFILES: tuple[dict[str, Any], ...] = (
@@ -524,6 +525,171 @@ class DashboardControlPlane:
         )
         result["preview_digest"] = _digest(result)
         return result
+
+    def confirm_and_run(
+        self,
+        preview: Mapping[str, Any],
+        *,
+        confirmation: Mapping[str, Any],
+        coordinator: object | None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one digest-bound activation intent after explicit approval."""
+
+        blockers: list[str] = [
+            str(item)
+            for item in (preview.get("blockers") if isinstance(preview, Mapping) else [])
+            if str(item).strip()
+        ]
+        if not isinstance(preview, Mapping):
+            blockers.append("dashboard_preview_invalid")
+            preview = {}
+        if not isinstance(confirmation, Mapping):
+            blockers.append("confirmation_invalid")
+            confirmation = {}
+        secret_keys = self._forbidden_fields(preview) | self._forbidden_fields(confirmation)
+        if secret_keys:
+            blockers.append("secret_field_forbidden")
+        preview_digest = str(preview.get("preview_digest") or "").strip().lower()
+        if not preview_digest:
+            blockers.append("preview_digest_missing")
+        if str(confirmation.get("preview_digest") or "").strip().lower() != preview_digest:
+            blockers.append("confirmation_digest_mismatch")
+        if confirmation.get("acknowledged") is not True:
+            blockers.append("operator_confirmation_required")
+        if str(confirmation.get("operator_id") or "").strip().lower() != "park":
+            blockers.append("operator_identity_invalid")
+        if preview.get("execution_ready") is not True:
+            blockers.append("preview_not_execution_ready")
+        profile_id = str(preview.get("venue_profile_id") or "").strip().lower()
+        if profile_id != "hyperliquid.testnet":
+            blockers.append("testnet_venue_required")
+        if str(preview.get("environment") or "testnet").strip().lower() != "testnet":
+            blockers.append("testnet_only")
+        account = preview.get("account") if isinstance(preview.get("account"), Mapping) else {}
+        account_fingerprint = str(
+            preview.get("account_fingerprint") or account.get("account_fingerprint") or ""
+        ).strip().lower()
+        runtime_id = str(preview.get("runtime_id") or "").strip()
+        release_sha = str(preview.get("release_sha") or "").strip().lower()
+        capability_revision = str(preview.get("capability_revision") or "").strip()
+        transport_profile = str(
+            preview.get("transport_profile") or "hyperliquid-testnet-position-protection"
+        ).strip()
+        if not account_fingerprint or not runtime_id or not release_sha or not capability_revision:
+            blockers.append("activation_identity_incomplete")
+        if len(release_sha) != 40:
+            blockers.append("release_sha_invalid")
+        if blockers:
+            return self._blocked_confirmation(preview_digest, sorted(set(blockers)))
+
+        rows = load_json(self.output_root / CONFIRMATION_PATH)
+        previous = rows[-1] if rows and isinstance(rows[-1], Mapping) else None
+        if previous and previous.get("status") == "confirmed":
+            if str(previous.get("preview_digest") or "") == preview_digest:
+                return dict(previous)
+            return self._blocked_confirmation(preview_digest, ["active_plan_conflict"])
+        strategy_family = str(preview.get("strategy_family") or "").strip().lower()
+        suffix = preview_digest.replace("sha256:", "")[:16]
+        activation = {
+            "strategy_family": strategy_family,
+            "strategy_session_id": f"dashboard-session:{suffix}",
+            "strategy_revision_id": f"dashboard-revision:{suffix}",
+            "plan_digest": preview_digest,
+            "account_fingerprint": account_fingerprint,
+            "broker_id": "hyperliquid",
+            "environment": "testnet",
+            "transport_profile": transport_profile,
+            "instrument_id": str(preview.get("instrument_id") or ""),
+            "runtime_id": runtime_id,
+            "release_sha": release_sha,
+            "capability_revision": capability_revision,
+        }
+        activation_id = _digest(activation)
+        occurred_at = str(now or self.clock())
+        result = {
+            "schema_version": "dashboard-confirmation-v1",
+            "status": "confirmed",
+            "event": "operator_confirmed",
+            "confirmation_id": f"dashboard-confirmation:{suffix}",
+            "confirmation_digest": _digest({"preview_digest": preview_digest, "operator_id": "park"}),
+            "preview_digest": preview_digest,
+            "operator_id": "park",
+            "confirmed_at": occurred_at,
+            "activation_id": activation_id,
+            **activation,
+            "execution_mutation": False,
+            "network_operation_invoked": False,
+            "secret_material_present": False,
+            "coordinator_invoked": False,
+            "coordinator_result": None,
+            "blockers": [],
+            "next_action": "await_coordinator_execution",
+        }
+        if coordinator is not None:
+            activate = getattr(coordinator, "activate", None)
+            if not callable(activate):
+                return self._blocked_confirmation(preview_digest, ["coordinator_activation_unavailable"])
+            try:
+                coordinator_result = activate(
+                    activation,
+                    command_id=result["confirmation_id"],
+                    now=occurred_at,
+                )
+            except Exception as exc:  # noqa: BLE001 - activation is fail-closed.
+                code = str(getattr(exc, "code", "")).strip() or "coordinator_activation_blocked"
+                return self._blocked_confirmation(preview_digest, [code])
+            result["coordinator_invoked"] = True
+            result["coordinator_result"] = _public(coordinator_result)
+            result["next_action"] = str(
+                coordinator_result.get("next_action")
+                if isinstance(coordinator_result, Mapping)
+                else "await_coordinator_execution"
+            )
+        write_json(self.output_root / CONFIRMATION_PATH, [*rows, result])
+        return result
+
+    @staticmethod
+    def _forbidden_fields(value: Any) -> set[str]:
+        forbidden = {
+            "private_key",
+            "secret",
+            "api_key",
+            "api_secret",
+            "signer",
+            "signature",
+            "signed_payload",
+            "authorization",
+        }
+        found: set[str] = set()
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                normalized = str(key).strip().lower()
+                if normalized in forbidden:
+                    found.add(normalized)
+                found.update(DashboardControlPlane._forbidden_fields(item))
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                found.update(DashboardControlPlane._forbidden_fields(item))
+        return found
+
+    @staticmethod
+    def _blocked_confirmation(preview_digest: str, blockers: list[str]) -> dict[str, Any]:
+        return {
+            "schema_version": "dashboard-confirmation-v1",
+            "status": "blocked",
+            "event": "operator_confirmation_blocked",
+            "confirmation_id": None,
+            "confirmation_digest": None,
+            "preview_digest": preview_digest or None,
+            "execution_mutation": False,
+            "network_operation_invoked": False,
+            "secret_material_present": False,
+            "coordinator_invoked": False,
+            "coordinator_result": None,
+            "blockers": sorted(set(blockers)),
+            "next_action": "notify_park_and_wait",
+        }
 
     def _market_quality_blockers(
         self,
