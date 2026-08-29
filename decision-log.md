@@ -95,6 +95,39 @@ Date: 2026-08-29
   coherent. The admission gate must derive both properties from observed facts;
   otherwise the fail-closed branches become unreachable while appearing tested.
 
+## Harden Dashboard control-plane gateway, facts, and effective sizing (#1094)
+
+Date: 2026-08-29
+
+### Decision
+
+- Add every Dashboard control-plane read/mutation route to the Cloud Gateway's
+  exact allowlists while retaining authenticated identity, same-origin, and
+  signed actor forwarding.
+- Treat market/account facts supplied by a browser as untrusted. Resolve public
+  Testnet facts in the Trading System composition-root facade and bind Preview
+  and confirmation to catalog membership, eligibility, catalog revision, and a
+  recomputed durable Preview digest.
+- Carry Portfolio requested/effective notional and maximum loss, plus the risk
+  gate digest, into the immutable Coordinator activation identity so downward
+  scaling cannot disappear at the execution boundary.
+
+### Verification
+
+- Independent Standards/Spec review findings are recorded against
+  `20260829T040946Z_2c70ce66-550a-43d5-9d79-f8c44fbcca1f.json`; #1094/#1095
+  implement the fix pass.
+- Focused control-plane/Gateway/Coordinator tests, compileall, diff-check, and
+  gitleaks pass. A new final full-suite run is required before delivery is
+  claimed complete. No credential, order, scheduler, cloud, Mainnet, or Live
+  mutation occurred.
+
+### Gotcha
+
+- A hash alone is not authorization. The server must recompute the Preview
+  digest, compare it with a durable server-side Preview, and revalidate the
+  selected Instrument/catalog revision before accepting the operator click.
+
 ## Bind explicit Jessie Testnet context to the Hyperliquid public market seam (#1069)
 
 Date: 2026-08-27
