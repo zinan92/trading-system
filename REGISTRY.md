@@ -12,14 +12,16 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-29, Dashboard V5 control-plane track)
+## 现在在哪里(2026-08-30, Dashboard V5 control-plane track)
 
 - Spec #1071 is accepted and the approved domain vocabulary/ADR are recorded
   locally. T1–T7 are merged as PRs #1079–#1085. Issue #1100 / PR #1101 keeps
   the local read model observable while execution authority remains fail-closed.
   Issues #1103, #1105, and #1107 bind the selected Testnet market, visible
   broker/pair labels, and restored strategy family through PRs #1104, #1106,
-  and #1108. The running implementation is `7f74fdc`.
+  and #1108. Issue #1110 / PR #1111 applies the semantic graphite/cyan palette
+  without changing DOM, JS, or API contracts. The running implementation is
+  `3b91230`.
 - The actual launchd Dashboard, Gateway, and Park control checkout is synced to
   that implementation. Local HTTP checks return 200 for Dashboard V5, Venue and
   Instrument catalog, selection, runtime status, strategy read model, AI chat,
@@ -27,7 +29,9 @@
   current-strategy status, the AI strategy assistant, account facts, and the
   visible Hyperliquid BTC K-line chart with 240 trusted 30m bars. The selected
   DCA family is restored in both strategy controls after refresh. No credential
-  value or order action was used.
+  value or order action was used. Palette acceptance also verified exact live
+  tokens, populated read models, semantic status colors, and zero browser
+  console errors; before/after screenshots remain outside the repository.
 - Dashboard V5 now exposes an explicit `Venue Profile → Instrument Catalog →
   Strategy Family → Preview → Confirm & Run` track. `Hyperliquid Testnet` and
   `Binance Paper` are distinct; Mainnet/Live is not selectable and Testnet
