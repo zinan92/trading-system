@@ -560,7 +560,7 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         assert page.locator("#executeGridRangeReplacement").evaluate(
             "button => button.classList.contains('confirmed')"
         ) is True
-        assert "rgb(47, 191, 113)" in page.locator(
+        assert "rgb(47, 201, 138)" in page.locator(
             "#executeGridRangeReplacement"
         ).evaluate("button => getComputedStyle(button).backgroundColor")
         page.locator("#executeGridRangeReplacement").click()

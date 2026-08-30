@@ -212,7 +212,7 @@ def test_gridmind_places_park_ai_chat_at_the_top_of_the_console() -> None:
     workspace = html.index('<main class="workspace"')
     assert yesterday_card < ai_card < metrics < workspace
     assert 'class="card park-ai-chat-card top-ai-card"' in html
-    assert ".top-ai-card{border:1px solid rgba(152,94,255,.42)" in html
+    assert ".top-ai-card{border:1px solid rgba(63,208,224,.42)" in html
 
 
 def test_gridmind_labels_a_running_strategy_with_a_stale_execution_tick_as_degraded() -> None:
