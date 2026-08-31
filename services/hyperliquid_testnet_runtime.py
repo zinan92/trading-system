@@ -160,8 +160,11 @@ class _ParkTestnetAccountReader:
         capabilities = dict(raw.get("capabilities") or {})
         # The protected capability is an explicit host opt-in.  It never
         # becomes true merely because a public account read succeeded.
-        capabilities["protection"] = bool(self.config.protected_profile_enabled)
-        if self.config.protected_profile_enabled:
+        protection_ready = bool(
+            self.config.protected_profile_enabled and self.config.start_ready
+        )
+        capabilities["protection"] = protection_ready
+        if protection_ready:
             capabilities["protection_profile"] = TESTNET_PROFILE
             capabilities["capability_revision"] = TESTNET_CAPABILITY_REVISION
         raw["capabilities"] = capabilities
@@ -304,11 +307,17 @@ def build_testnet_start_handler(
             return blocked("testnet_environment_required")
         decision = payload.get("decision") if isinstance(payload.get("decision"), Mapping) else {}
         proposal = payload.get("proposal") if isinstance(payload.get("proposal"), Mapping) else {}
-        if decision.get("execution_authorized") is not True:
+        if (
+            decision.get("execution_authorized") is not True
+            or str(decision.get("execution_environment") or "").lower() != "testnet"
+            or str(proposal.get("execution_environment") or "testnet").lower() != "testnet"
+        ):
             return blocked("testnet_confirmation_required")
         digest = str(payload.get("plan_digest") or proposal.get("plan_digest") or "").strip()
         if not digest:
             return blocked("testnet_plan_digest_required")
+        if proposal.get("plan_digest") not in (None, "", digest) or decision.get("plan_digest") not in (None, "", digest):
+            return blocked("testnet_confirmation_digest_mismatch")
         rows = load_json(root / "park_strategy" / "plans.jsonl")
         stored = next(
             (
