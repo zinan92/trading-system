@@ -348,13 +348,10 @@ class DashboardControlPlane:
     def runtime_account_reader() -> object | None:
         """Build the configured public account reader without exposing secrets."""
 
-        address = str(os.getenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS") or "").strip()
-        if not address:
-            return None
-        from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
-
         try:
-            return HyperliquidTestnetAccountReader(address)
+            from services.hyperliquid_testnet_runtime import build_dashboard_account_reader
+
+            return build_dashboard_account_reader()
         except Exception:  # noqa: BLE001 - invalid runtime identity stays unavailable.
             return None
 
@@ -539,6 +536,36 @@ class DashboardControlPlane:
                 market=normalized_market if normalized_market else None,
                 account=source_account if account is not None else None,
             )
+            # Carry only the non-secret runtime identity needed by the later
+            # confirmation seam.  The protected profile remains opt-in; no
+            # identity value here authorizes an order or resolves a signer.
+            try:
+                from services.hyperliquid_testnet_runtime import (
+                    TESTNET_PROFILE,
+                    HyperliquidTestnetRuntimeConfig,
+                )
+
+                runtime_config = HyperliquidTestnetRuntimeConfig.from_environment()
+            except Exception:  # noqa: BLE001 - leave activation identity blocked.
+                runtime_config = None
+                TESTNET_PROFILE = "hyperliquid-testnet-position-protection"
+            if runtime_config is not None:
+                payload.update(
+                    {
+                        "account_fingerprint": str(
+                            source_account.get("account_fingerprint")
+                            or runtime_config.account_fingerprint
+                        ),
+                        "runtime_id": runtime_config.runtime_id,
+                        "release_sha": runtime_config.release_sha,
+                        "capability_revision": runtime_config.capability_revision,
+                        "transport_profile": (
+                            TESTNET_PROFILE
+                            if runtime_config.protected_profile_enabled
+                            else "hyperliquid-testnet-default"
+                        ),
+                    }
+                )
         payload["preview_digest"] = canonical_preview_digest(payload)
         self.persist_preview(payload)
         return payload

@@ -198,3 +198,40 @@ def test_external_host_bridge_cannot_start_grid_before_protection_story(tmp_path
 
     assert plane.active_plan(plan["cycle_id"]) is None
     assert runtime.invoke_calls == []
+
+
+def test_protected_external_testnet_adapter_is_accepted_as_networked_testnet(
+    tmp_path: Path,
+) -> None:
+    from tests.test_dca_testnet_lifecycle import _broker, _plan
+
+    broker, _backend = _broker(tmp_path, protection=True)
+    broker.name = "standard_broker_external_testnet_protected"
+    broker.transport_state = "external_testnet"
+    original_preflight = broker.preflight
+
+    def external_preflight(*args, **kwargs):
+        result = dict(original_preflight(*args, **kwargs))
+        result.update({"network_io": True, "external_network": True})
+        return result
+
+    broker.preflight = external_preflight
+    plane = StrategyControlPlane(tmp_path)
+    plan = _plan()
+    confirmation = _durable_confirmation(tmp_path, plan)
+
+    result = plane.start_testnet_dca(
+        plan,
+        confirmation=confirmation,
+        market={
+            "execution_ready": True,
+            "fresh": True,
+            "is_synthetic": False,
+            "fallback_policy": "none",
+        },
+        adapter=broker,
+        now="2026-08-31T01:00:00+00:00",
+    )
+
+    assert result["runtime"]["execution_environment"] == "testnet"
+    assert result["lifecycle"]["status"] == "waiting_entry"

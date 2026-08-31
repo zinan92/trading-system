@@ -1442,6 +1442,14 @@ class ParkTelegramRouter:
                 {
                     "strategy_session_id": session_id,
                     "strategy_revision_id": revision_id,
+                    # Carry the source-bound instrument through the Park
+                    # plan.  The Testnet activation seam must never infer an
+                    # asset from a provider default after confirmation.
+                    "instrument_id": str(
+                        normalized.get("instrument_id")
+                        or market.get("instrument_id")
+                        or ""
+                    ).strip(),
                 }
             )
             plan = build_deterministic_risk_plan(
@@ -1466,7 +1474,7 @@ class ParkTelegramRouter:
             _append_jsonl(plan_path, {"event": "plan_proposed", **plan, "created_at": observed_at})
             proposal_id = f"park-proposal-{str(plan['plan_digest']).removeprefix('sha256:')[:24]}"
             risk_digest = _digest(plan.get("risk") or {})
-            execution_environment = "testnet" if re.search(r"\btestnet\b", str(text or ""), re.IGNORECASE) else "paper"
+            execution_environment = "testnet" if self._is_testnet_text(text) else "paper"
             proposal = self.confirmations.create_proposal(
                 proposal_id=proposal_id,
                 strategy_session_id=session_id,
