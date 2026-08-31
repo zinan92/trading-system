@@ -65,6 +65,7 @@ def test_control_plane_resolves_selected_testnet_bars_without_cross_venue_fallba
                 "end": end,
             }
         )
+
         return {
             "provider": "hyperliquid",
             "instrument_id": instrument_id,
@@ -101,6 +102,76 @@ def test_control_plane_resolves_selected_testnet_bars_without_cross_venue_fallba
             limit=240,
             end=None,
         )
+
+
+def test_runtime_facts_include_trusted_strategy_history_for_preview(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import hyperliquid_testnet_market_reader
+
+    class Reader:
+        def read(self, instrument_id):
+            return {
+                "provider": "hyperliquid",
+                "source": "hyperliquid.external_testnet",
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+                "instrument_id": instrument_id,
+                "price": 100.0,
+                "mid": 100.0,
+                "bid": 99.0,
+                "ask": 101.0,
+                "mark": 100.0,
+                "oracle": 100.0,
+                "impact": 100.1,
+                "depth_notional": 1000.0,
+                "max_slippage": 50.0,
+                "max_oracle_deviation_bps": 50.0,
+                "asset_index": 0,
+                "mapping_revision": "mapping-v1",
+                "universe_revision": "universe-v1",
+                "connection_epoch": "epoch-v1",
+                "cursor": "cursor-v1",
+                "source_cursor": "cursor-v1",
+                "observed_at": "2026-08-31T00:00:00+00:00",
+                "fresh": True,
+                "trusted": True,
+                "execution_ready": True,
+                "is_synthetic": False,
+            }
+
+        def read_bars(self, instrument_id, *, timeframe, limit, end):
+            return {
+                "provider": "hyperliquid",
+                "source": "hyperliquid.external_testnet",
+                "instrument_id": instrument_id,
+                "timeframe": timeframe,
+                "bars": [
+                    {
+                        "timestamp": f"2026-08-31T00:{index:02d}:00+00:00",
+                        "open": 100.0,
+                        "high": 101.0,
+                        "low": 99.0,
+                        "close": 100.0,
+                    }
+                    for index in range(limit)
+                ],
+                "fresh": True,
+                "is_synthetic": False,
+            }
+
+    monkeypatch.setattr(hyperliquid_testnet_market_reader, "HyperliquidTestnetMarketReader", Reader)
+    plane = DashboardControlPlane(tmp_path)
+    market, account = plane.resolve_runtime_facts(
+        venue_profile_id="hyperliquid.testnet",
+        instrument_id="BTC-USD-PERP",
+    )
+
+    assert account is None
+    assert market is not None
+    assert len(market["bars"]) == 240
+    assert set(market["strategy_timeframes"]) == {"1m", "1d", "4h"}
 
 
 def test_catalog_keeps_every_dynamic_perp_with_stable_eligibility() -> None:

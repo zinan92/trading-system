@@ -81,6 +81,7 @@ class HyperliquidTestnetMarketReader:
             "provider": "hyperliquid",
             "source": "hyperliquid.external_testnet",
             "source_id": "hyperliquid.external_testnet",
+            "broker_id": "hyperliquid",
             "environment": "testnet",
             "instrument_id": instrument,
             "symbol": symbol,
@@ -107,6 +108,7 @@ class HyperliquidTestnetMarketReader:
             "raw_status": "ready",
             "observed_at": observed_at,
             "source_cursor": source_cursor,
+            "cursor": source_cursor,
         }
 
     @classmethod
