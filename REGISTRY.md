@@ -9,6 +9,34 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-08-31, Hyperliquid Testnet host wiring)
+
+- Issue #1113 is merged as PR #1114 at `origin/main@82724f1`. The reviewed
+  `hyperliquid-testnet-position-protection` public standard-broker binding is
+  now composed into the production Jessie Telegram path and Dashboard account
+  / preview seams. Source-bound BTC identity survives into a Testnet plan;
+  Chinese `测试网` input is classified as Testnet.
+- The actual launchd Dashboard checkout is synced to `82724f1`, with the
+  standard-broker source path and the explicit BTC Testnet protected profile
+  configured as an opaque signer reference. Dashboard V5 is serving
+  `http://127.0.0.1:8765/dashboard-v5.html`; catalog returns 211 public
+  Hyperliquid perpetuals, and the live public BTC account admission is
+  `ready=true`, `clean_state=true`, `protection=true`, with equity and zero
+  open positions/orders observed from Hyperliquid Testnet.
+- Jessie launchd remains a one-pass 60-second worker. Its latest post-restart
+  receipt is `status=pass`, `updates_received=0`, `orders_created=0`,
+  `positions_created=0`, `execution=idle`, `next_action=await_new_park_strategy`.
+  It will route a newly confirmed Testnet plan through the guarded protected
+  start seam; no order was submitted in this deployment.
+- The default protection-disabled profile, durable Park confirmation, clean
+  state, fresh/coherent facts, Testnet-only and `real_money_eligible=false`
+  gates remain fail-closed. Mainnet/Live, scheduler promotion, blind retry,
+  and automatic next-entry remain out of scope.
+
+_下一步_: in Telegram, describe a fresh BTC Testnet DCA or Grid plan and wait
+for Jessie to present its immutable proposal; only an explicit `确认当前计划`
+or exact digest confirmation can submit the first guarded Testnet action.
+
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
