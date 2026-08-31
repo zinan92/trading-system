@@ -18,6 +18,8 @@ from services.run_date import utc_run_date
 from services.accounting_projection_core import project_execution_accounting
 from services.broker_adapter import PaperBrokerAdapter
 from services.broker_read_model import project_broker_read_model
+from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+from services.hyperliquid_testnet_runtime import build_dashboard_account_reader
 from services.code_reload import CodeReloadGuard
 from services.paper_release_receipt import (
     PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE,
@@ -1364,6 +1366,13 @@ def build_trading_system_read_model_response(
     """Stable operator projection over one observational console snapshot."""
 
     output = _dualtrack_output_root(output_root)
+    selection = DashboardControlPlane(output).status()
+    if str(selection.get("venue_profile_id") or "").strip().lower() == "hyperliquid.testnet":
+        return _build_selected_testnet_read_model(
+            output,
+            selection=selection,
+            as_of=as_of,
+        )
     source = _assemble_strategy_console_snapshot(output_root=output, as_of=as_of)
     risk = _current_strategy_risk_decision(output, source)
     observed_at = parse_utc(as_of)
@@ -1384,6 +1393,413 @@ def build_trading_system_read_model_response(
         generated_at=observed_at.isoformat(),
     ).to_dict()
     return _compact_dashboard_read_model_payload(payload)
+
+
+def _build_selected_testnet_read_model(
+    output_root: Path,
+    *,
+    selection: Mapping[str, Any],
+    as_of: str | None,
+) -> dict[str, Any]:
+    """Project one source-bound Hyperliquid Testnet console snapshot.
+
+    The legacy console assembler is intentionally Paper-specific.  Once the
+    Dashboard has selected Hyperliquid, this branch avoids that assembler and
+    builds the same public read-model contract from Testnet facts so Paper
+    equity, market labels, and execution state cannot leak into the view.
+    """
+
+    instrument = str(selection.get("instrument_id") or "").strip()
+    observed_at = parse_utc(as_of).isoformat()
+    blockers: list[str] = []
+    market: dict[str, Any] = {}
+    account: dict[str, Any] = {}
+    try:
+        market = dict(HyperliquidTestnetMarketReader().read(instrument))
+    except Exception as exc:  # noqa: BLE001 - typed source blocker below.
+        blockers.append(f"testnet_market_unavailable:{type(exc).__name__}")
+    account_reader = build_dashboard_account_reader()
+    if account_reader is None:
+        blockers.append("testnet_account_unavailable")
+    else:
+        try:
+            account = dict(account_reader.read(instrument_id=instrument))
+        except Exception as exc:  # noqa: BLE001 - typed source blocker below.
+            blockers.append(f"testnet_account_unavailable:{type(exc).__name__}")
+
+    if market:
+        market.setdefault("status", "ready" if market.get("fresh") is True else "blocked")
+        market.setdefault("latest_close", market.get("price") or market.get("mid"))
+        market.setdefault("latest_timestamp", market.get("observed_at"))
+        market.setdefault("timeframe", "1m")
+        market.setdefault("is_synthetic", False)
+        market.setdefault("execution_ready", market.get("fresh") is True)
+    if account:
+        if account.get("fresh") is not True:
+            blockers.append("testnet_account_stale")
+        if account.get("coherent") is not True:
+            blockers.append("testnet_account_incoherent")
+        capabilities = account.get("capabilities") if isinstance(account.get("capabilities"), Mapping) else {}
+        if capabilities.get("protection") is not True:
+            blockers.append("testnet_protection_capability_unavailable")
+        if account.get("unknown_exposure") is True:
+            blockers.append("testnet_unknown_exposure")
+
+    orders = _testnet_read_model_orders(account, instrument)
+    positions = _testnet_read_model_positions(account, instrument)
+    fills = _testnet_read_model_fills(account, instrument)
+    accounting = _testnet_accounting_snapshot(
+        account,
+        orders=orders,
+        positions=positions,
+        fills=fills,
+        observed_at=observed_at,
+    )
+    cycle_id = observed_at[:10] + "_TESTNET"
+    coordinator = TestnetAutomationCoordinator(output_root).status()
+    runtime = _testnet_runtime_read_model(
+        selection,
+        coordinator=coordinator,
+        cycle_id=cycle_id,
+        instrument_id=instrument,
+        observed_at=observed_at,
+        open_order_count=len(orders),
+    )
+    source = {
+        "schema_version": "strategy-production-console-v1",
+        "cycle": {
+            "cycle_id": cycle_id,
+            "environment": "testnet",
+            "broker_id": "hyperliquid",
+            "instrument_id": instrument,
+            "observed_at": observed_at,
+        },
+        "production_plan": {},
+        "production_plan_history": [],
+        "proposals": [],
+        "proposal_diff": {},
+        "production_execution": {
+            "schema_version": "hyperliquid-testnet-execution-read-model-v1",
+            "engine": "standard_broker_external_testnet_protected",
+            "cycle_id": cycle_id,
+            "orders": orders,
+            "positions": positions,
+            "fills": fills,
+            "trades": [],
+            "account": accounting["account"],
+            "accounting_snapshot": accounting,
+            "production_history_accounting_snapshot": accounting,
+            "pnl": accounting["pnl"],
+            "reconciliation": accounting["reconciliation"],
+            "trade_summary": {},
+            "history_contract": {
+                "status": "source_bound",
+                "source": "hyperliquid.external_testnet",
+            },
+        },
+        "runtime": runtime,
+        "market": market,
+        "ledger": {},
+        "cycle_packages": [],
+        "daily_reports": {"reports": [], "latest": None},
+        "strategy_shadows": [],
+        "strategy_shadow_promotion": {},
+        "safe_repair_queue": {},
+        "cloud_health": {},
+        "cycle_decision": {},
+        "external_dca_lifecycle": {},
+        "testnet_readiness": TestnetSoakReadiness(output_root).public_status(now=observed_at),
+        "execution_shadow": {},
+        "runtime_utilization": {},
+        "paper_supervisor": {},
+        "portfolio_selection": None,
+        "portfolio_snapshot": None,
+        "safety": {
+            "read_only": True,
+            "command_authority": False,
+            "broker_mutation": False,
+            "orders_submitted": False,
+            "credentials_exposed": False,
+        },
+        "ui_capabilities": {
+            "manual_order": False,
+            "manual_close": False,
+            "start_stop_production": True,
+            "parameter_mutation": False,
+            "cancel_order": True,
+            "market_timeframes": ["1m", "5m", "15m", "30m", "1h", "4h"],
+        },
+    }
+    park = {
+        "generated_at": observed_at,
+        "status": "ok" if not blockers else "blocked",
+        "blockers": list(blockers),
+        "strategy": {
+            "active": False,
+            "state": "IDLE_CLEAN" if not blockers else "EVIDENCE_BLOCKED",
+            "strategy_type": selection.get("strategy_family"),
+            "direction": None,
+        },
+        "execution": {
+            "counts": {
+                "accepted_orders": len(orders),
+                "filled_orders": len(fills),
+                "fills": len(fills),
+                "open_positions": len(positions),
+                "closed_positions": 0,
+            },
+            "reconciliation": accounting["reconciliation"],
+        },
+        "market": market,
+        "safety": {"status": "pass" if not blockers else "blocked"},
+        "recording": {"status": "none"},
+    }
+    broker = {
+        "schema_version": "broker-read-model-v1",
+        "adapter": "standard_broker_external_testnet_protected",
+        "adapter_name": "standard_broker_external_testnet_protected",
+        "provider": "standard_broker",
+        "environment": "testnet",
+        "mode": "external_testnet_broker_port",
+        "display_label": "Hyperliquid Testnet",
+        "capabilities": [
+            "preflight",
+            "submit_order",
+            "cancel_order",
+            "replace_order",
+            "query_order",
+            "open_orders",
+            "order_fill",
+            "order_reconciliation",
+        ],
+        "credentials_present": None,
+        "dry_run": False,
+        "live_trading_enabled": False,
+        "armed": False,
+        "live_endpoint_allowed": False,
+        "ready": not blockers,
+        "external_testnet": True,
+        "symbol": instrument,
+        "profile": "hyperliquid-testnet-position-protection",
+        "readiness": {
+            "status": "ready" if not blockers else "blocked",
+            "blockers": list(blockers),
+            "environment": "testnet",
+            "live_trading_enabled": False,
+        },
+    }
+    projected = project_trading_system_read_model(
+        source,
+        broker=broker,
+        park=park,
+        generated_at=observed_at,
+    ).to_dict()
+    if blockers:
+        projected.setdefault("completeness", {})["issues"] = list(
+            dict.fromkeys([*(projected.get("completeness", {}).get("issues") or []), *blockers])
+        )
+        projected["completeness"]["status"] = "degraded"
+    return _compact_dashboard_read_model_payload(projected)
+
+
+def _testnet_runtime_read_model(
+    selection: Mapping[str, Any],
+    *,
+    coordinator: Mapping[str, Any],
+    cycle_id: str,
+    instrument_id: str,
+    observed_at: str,
+    open_order_count: int,
+) -> dict[str, Any]:
+    status = str(coordinator.get("status") or "idle").lower()
+    active = status not in {"idle", "blocked"}
+    actual = "running" if coordinator.get("execution_enabled") is True else "stopped"
+    if status in {"canary_blocked", "candidate_blocked", "portfolio_held"}:
+        actual = "error"
+    return {
+        **dict(coordinator),
+        "cycle_id": cycle_id,
+        "strategy_type": selection.get("strategy_family"),
+        "instrument_id": instrument_id,
+        "broker_id": "hyperliquid",
+        "environment": "testnet",
+        "transport_profile": "hyperliquid-testnet-position-protection",
+        "desired_state": "running" if active and actual == "running" else "stopped",
+        "actual_state": actual,
+        "updated_at": observed_at,
+        "open_order_count": open_order_count,
+        "unknown_order_count": 0,
+        "execution_tick_health": {"status": "not_applicable"},
+        "next_action": coordinator.get("next_action") or "await_activation",
+        "execution_mutation": False,
+        "network_operation_invoked": False,
+        "secret_material_present": False,
+    }
+
+
+def _testnet_read_model_orders(account: Mapping[str, Any], instrument: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for index, row in enumerate(account.get("open_orders") or [], start=1):
+        if not isinstance(row, Mapping):
+            continue
+        order_id = str(row.get("oid") or row.get("cloid") or f"external-order-{index}")
+        side = str(row.get("side") or "").upper()
+        result.append(
+            {
+                "order_id": order_id,
+                "broker_order_id": order_id,
+                "client_order_id": row.get("cloid"),
+                "instrument_id": instrument,
+                "symbol": instrument,
+                "side": "buy" if side in {"B", "BUY"} else "sell",
+                "order_type": "limit",
+                "price": row.get("price"),
+                "requested_price": row.get("price"),
+                "quantity": row.get("size"),
+                "state": "accepted",
+                "source": "hyperliquid.external_testnet",
+                "environment": "testnet",
+            }
+        )
+    return result
+
+
+def _testnet_read_model_positions(account: Mapping[str, Any], instrument: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for index, row in enumerate(account.get("positions") or [], start=1):
+        if not isinstance(row, Mapping) or str(row.get("instrument_id") or "") != instrument:
+            continue
+        try:
+            signed = float(row.get("signed_quantity") or 0)
+        except (TypeError, ValueError):
+            continue
+        if abs(signed) <= 1e-12:
+            continue
+        result.append(
+            {
+                "position_id": f"{instrument}:external:{index}",
+                "instrument_id": instrument,
+                "symbol": instrument,
+                "status": "open",
+                "side": "long" if signed > 0 else "short",
+                "quantity": abs(signed),
+                "remaining_quantity": abs(signed),
+                "remaining_units": abs(signed),
+                "signed_quantity": signed,
+                "entry_price": row.get("entry_price"),
+                "source": "hyperliquid.external_testnet",
+                "environment": "testnet",
+            }
+        )
+    return result
+
+
+def _testnet_read_model_fills(account: Mapping[str, Any], instrument: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for index, row in enumerate(account.get("fills") or [], start=1):
+        if not isinstance(row, Mapping) or str(row.get("instrument_id") or "") != instrument:
+            continue
+        result.append(
+            {
+                **dict(row),
+                "fill_id": str(row.get("tid") or row.get("hash") or f"external-fill-{index}"),
+                "event": "fill",
+                "quantity": row.get("size"),
+                "price": row.get("price"),
+                "timestamp": row.get("time"),
+                "source": "hyperliquid.external_testnet",
+                "environment": "testnet",
+            }
+        )
+    return result
+
+
+def _testnet_accounting_snapshot(
+    account: Mapping[str, Any],
+    *,
+    orders: list[dict[str, Any]],
+    positions: list[dict[str, Any]],
+    fills: list[dict[str, Any]],
+    observed_at: str,
+) -> dict[str, Any]:
+    from schemas.accounting import build_accounting_snapshot
+
+    fees = []
+    for row in fills:
+        try:
+            fee = float(row.get("fee"))
+        except (TypeError, ValueError):
+            continue
+        fees.append(fee)
+    equity = account.get("equity")
+    try:
+        exposure = sum(
+            abs(float(row.get("quantity") or 0)) * float(row.get("entry_price") or 0)
+            for row in positions
+        )
+    except (TypeError, ValueError):
+        exposure = None
+    coherent = account.get("coherent") is True and account.get("fresh") is True
+    counts = {
+        "order_count": len(orders),
+        "open_order_count": len(orders),
+        "fill_count": len(fills),
+        "entry_fill_count": None,
+        "exit_fill_count": None,
+        "position_count": len(positions),
+        "open_position_count": len(positions),
+        "trade_count": None,
+        "open_trade_count": None,
+        "completed_trade_count": None,
+    }
+    pnl = {
+        "gross_realized_pnl": None,
+        "commission": round(sum(fees), 8) if fees else None,
+        "fees": round(sum(fees), 8) if fees else None,
+        "funding": None,
+        "net_realized_pnl": None,
+        "unrealized_pnl": None,
+        "slippage": None,
+        "total_pnl": None,
+    }
+    snapshot = build_accounting_snapshot(
+        source_type="external_testnet",
+        source_name="hyperliquid.external_testnet",
+        source_schema_version="hyperliquid-testnet-account-facts-v1",
+        scope={
+            "account_fingerprint": account.get("account_fingerprint"),
+            "instrument_scope": "selected_dashboard_instrument",
+            "observed_at": observed_at,
+        },
+        currency="USDC",
+        orders=orders,
+        fills=fills,
+        positions=positions,
+        trades=[],
+        counts=counts,
+        pnl=pnl,
+        account={
+            "starting_balance": None,
+            "ending_cash": None,
+            "equity": equity,
+            "available_balance": None,
+            "margin": None,
+            "exposure": exposure,
+            "leverage": None,
+        },
+        completeness={
+            "status": "partial",
+            "limitations": ["starting_balance", "ending_cash", "realized_pnl", "unrealized_pnl", "funding", "slippage"],
+            "unknown_is_not_zero": True,
+        },
+        reconciliation={
+            "status": "pass" if coherent else "blocked",
+            "issues": list(account.get("coherence_issues") or []),
+            "source_cursor": account.get("source_cursor"),
+            "observed_at": account.get("observed_at"),
+        },
+    )
+    return snapshot.to_dict()
 
 
 def build_trading_system_read_model_response_singleflight(

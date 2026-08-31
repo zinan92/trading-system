@@ -613,3 +613,97 @@ def test_safe_start_post_is_observable_through_new_get(tmp_path: Path, monkeypat
     assert observed["execution"]["counts"]["open_order_count"] == posted["accepted_orders"]
     assert observed["execution"]["counts"]["open_order_count"] > 0
     assert observed["risk"]["status"] == "current"
+
+
+def test_main_read_model_follows_selected_hyperliquid_source_instead_of_paper(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    write_json(
+        output / "dashboard_control_plane" / "selection.json",
+        [
+            {
+                "schema_version": "dashboard-selection-v1",
+                "venue_profile_id": "hyperliquid.testnet",
+                "instrument_id": "BTC-USD-PERP",
+                "strategy_family": "dca",
+            }
+        ],
+    )
+
+    class MarketReader:
+        def read(self, instrument_id):
+            return {
+                "status": "ready",
+                "provider": "hyperliquid",
+                "source": "hyperliquid.external_testnet",
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+                "instrument_id": instrument_id,
+                "symbol": "BTC",
+                "price": 78_000.0,
+                "mid": 78_000.0,
+                "bid": 77_999.0,
+                "ask": 78_001.0,
+                "mark": 78_000.0,
+                "oracle": 78_000.0,
+                "impact": 78_000.5,
+                "depth_notional": 50_000.0,
+                "max_slippage": 50.0,
+                "max_oracle_deviation_bps": 50.0,
+                "asset_index": 3,
+                "mapping_revision": "mapping-v1",
+                "universe_revision": "universe-v1",
+                "connection_epoch": "epoch-v1",
+                "cursor": "cursor-v1",
+                "source_cursor": "cursor-v1",
+                "observed_at": "2026-08-31T00:00:00+00:00",
+                "fresh": True,
+                "trusted": True,
+                "execution_ready": True,
+                "is_synthetic": False,
+            }
+
+    class AccountReader:
+        def read(self, instrument_id=None):
+            return {
+                "schema_version": "hyperliquid-testnet-account-facts-v1",
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+                "account_fingerprint": "sha256:" + "a" * 64,
+                "source_cursor": "cursor-account-v1",
+                "equity": 995.466158,
+                "positions": [],
+                "open_orders": [],
+                "fills": [],
+                "fresh": True,
+                "coherent": True,
+                "capabilities": {"protection": True},
+                "observed_at": "2026-08-31T00:00:00+00:00",
+            }
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "HyperliquidTestnetMarketReader",
+        lambda: MarketReader(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_dashboard_account_reader",
+        lambda: AccountReader(),
+        raising=False,
+    )
+
+    response = dashboard_server.build_trading_system_read_model_response(
+        output_root=output,
+        as_of="2026-08-31T00:00:00+00:00",
+    )
+
+    assert response["market"]["provider"] == "hyperliquid"
+    assert response["market"]["environment"] == "testnet"
+    assert response["execution"]["broker"]["environment"] == "testnet"
+    assert response["execution"]["accounting"]["source_name"] == "hyperliquid.external_testnet"
+    assert response["execution"]["accounting"]["account"]["equity"] == 995.466158
+    assert response["execution"]["accounting"]["account"]["equity"] != 10_000.0
