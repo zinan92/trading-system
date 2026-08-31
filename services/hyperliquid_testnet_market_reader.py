@@ -51,6 +51,8 @@ class HyperliquidTestnetMarketReader:
             raise HyperliquidTestnetMarketError("unsupported_testnet_instrument")
         mids = self._post({"type": "allMids"})
         book = self._post({"type": "l2Book", "coin": symbol})
+        meta_and_contexts = self._request({"type": "metaAndAssetCtxs"})
+        meta, asset_context = self._asset_context(meta_and_contexts, symbol)
         mid = self._positive_number(mids.get(symbol), "testnet_mid_missing")
         bids, asks = self._book_levels(book, symbol)
         bid = max(level["price"] for level in bids)
@@ -60,6 +62,19 @@ class HyperliquidTestnetMarketReader:
         book_mid = (bid + ask) / 2
         if abs(book_mid - mid) > max(mid * 0.01, 1e-9):
             raise HyperliquidTestnetMarketError("testnet_mid_bbo_incoherent")
+        oracle = self._positive_number(asset_context.get("oraclePx"), "testnet_oracle_missing")
+        mark = self._positive_number(asset_context.get("markPx"), "testnet_mark_missing")
+        impact = self._impact_price(bids, asks, mid)
+        depth_notional = sum(
+            level["price"] * level["size"] for level in (*bids, *asks)
+        )
+        if depth_notional <= 0:
+            raise HyperliquidTestnetMarketError("testnet_depth_missing")
+        universe_revision = str(meta.get("universe_revision") or "")
+        mapping_revision = self._digest({"instrument_id": instrument, "meta": meta})
+        source_cursor = self._digest(
+            {"mids": mids, "book": book, "meta": meta, "asset_context": asset_context}
+        )
         observed_at = datetime.fromtimestamp(float(self.clock()), tz=timezone.utc).isoformat()
         return {
             "schema_version": "hyperliquid-testnet-market-v1",
@@ -76,12 +91,84 @@ class HyperliquidTestnetMarketReader:
             "spread": ask - bid,
             "bids": bids,
             "asks": asks,
+            "asset_index": meta.get("asset_index"),
+            "mark": mark,
+            "oracle": oracle,
+            "impact": impact,
+            "depth_notional": depth_notional,
+            "max_slippage": max(50.0, ask - bid),
+            "max_oracle_deviation_bps": 50.0,
+            "mapping_revision": mapping_revision,
+            "universe_revision": universe_revision,
+            "connection_epoch": "epoch:" + source_cursor[7:23],
+            "execution_ready": True,
             "trusted": True,
             "fresh": True,
             "raw_status": "ready",
             "observed_at": observed_at,
-            "source_cursor": self._digest({"mids": mids, "book": book}),
+            "source_cursor": source_cursor,
         }
+
+    @classmethod
+    def _asset_context(
+        cls,
+        payload: Any,
+        symbol: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not isinstance(payload, list) or len(payload) != 2:
+            raise HyperliquidTestnetMarketError("testnet_asset_context_payload_invalid")
+        universe, contexts = payload
+        if not isinstance(universe, Mapping) or not isinstance(contexts, list):
+            raise HyperliquidTestnetMarketError("testnet_asset_context_payload_invalid")
+        rows = universe.get("universe")
+        if not isinstance(rows, list) or len(rows) != len(contexts):
+            raise HyperliquidTestnetMarketError("testnet_asset_context_payload_invalid")
+        for index, row in enumerate(rows):
+            if not isinstance(row, Mapping) or str(row.get("name") or "") != symbol:
+                continue
+            context = contexts[index]
+            if not isinstance(context, Mapping):
+                raise HyperliquidTestnetMarketError("testnet_asset_context_invalid")
+            meta = {
+                "asset_index": index,
+                "name": symbol,
+                "szDecimals": row.get("szDecimals"),
+                "maxLeverage": row.get("maxLeverage"),
+                "universe_revision": cls._digest({"universe": rows}),
+            }
+            return meta, dict(context)
+        raise HyperliquidTestnetMarketError("testnet_asset_context_missing")
+
+    @classmethod
+    def _impact_price(
+        cls,
+        bids: list[dict[str, float]],
+        asks: list[dict[str, float]],
+        mid: float,
+    ) -> float:
+        """Estimate the worse 100-USD book VWAP without provider-native data."""
+
+        notional = 100.0
+
+        def vwap(levels: list[dict[str, float]]) -> float:
+            remaining = notional
+            value = 0.0
+            filled = 0.0
+            for level in levels:
+                capacity = level["price"] * level["size"]
+                take = min(remaining, capacity)
+                value += take
+                filled += take / level["price"]
+                remaining -= take
+                if remaining <= 1e-9:
+                    break
+            if remaining > 1e-9 or filled <= 0:
+                raise HyperliquidTestnetMarketError("testnet_depth_insufficient")
+            return value / filled
+
+        buy = vwap(sorted(asks, key=lambda row: row["price"]))
+        sell = vwap(sorted(bids, key=lambda row: row["price"], reverse=True))
+        return buy if abs(buy - mid) >= abs(sell - mid) else sell
 
     def read_catalog(self) -> dict[str, Any]:
         """Read the public default-perp metadata without credentials.

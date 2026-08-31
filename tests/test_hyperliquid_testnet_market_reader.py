@@ -35,6 +35,16 @@ def test_reads_btc_mid_and_l2_from_hyperliquid_testnet_without_credentials() -> 
                 [{"px": "79670.0", "sz": "0.20", "n": 1}],
             ],
         },
+        "metaAndAssetCtxs": [
+            {
+                "universe": [
+                    {"name": "BTC", "szDecimals": 5, "maxLeverage": 40},
+                ]
+            },
+            [
+                {"oraclePx": "79665.0", "markPx": "79665.5"},
+            ],
+        ],
     }
 
     def opener(request, timeout):
@@ -57,9 +67,18 @@ def test_reads_btc_mid_and_l2_from_hyperliquid_testnet_without_credentials() -> 
     assert result["environment"] == "testnet"
     assert result["instrument_id"] == "BTC-USD-PERP"
     assert result["symbol"] == "BTC"
+    assert result["asset_index"] == 0
+    assert result["execution_ready"] is True
+    assert result["oracle"] == 79665.0
+    assert result["mark"] == 79665.5
+    assert result["depth_notional"] > 100
     assert len(result["bids"]) == 1
     assert len(result["asks"]) == 1
-    assert [call["body"]["type"] for call in calls] == ["allMids", "l2Book"]
+    assert [call["body"]["type"] for call in calls] == [
+        "allMids",
+        "l2Book",
+        "metaAndAssetCtxs",
+    ]
     assert all(call["timeout"] == 5.0 for call in calls)
     assert all("Authorization" not in call["body"] for call in calls)
 
