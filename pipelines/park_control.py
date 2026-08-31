@@ -27,6 +27,11 @@ from services.park_paper_runtime import (
 )
 from services.park_safety_evidence import build_park_safety_evidence
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+from services.hyperliquid_testnet_runtime import (
+    HyperliquidTestnetRuntimeConfig,
+    build_park_account_reader,
+    build_testnet_start_handler,
+)
 from services.park_telegram_runtime import (
     ParkTelegramRouter,
     ParkTelegramRuntimeError,
@@ -75,12 +80,26 @@ def main(argv: list[str] | None = None) -> int:
             pass
         transport = TelegramBotTransport(chat_id=args.chat_id)
         intent_parser = ParkAiProviderGateway()
+        testnet_runtime = HyperliquidTestnetRuntimeConfig.from_environment()
+        testnet_account_reader = (
+            build_park_account_reader(testnet_runtime)
+            if testnet_runtime is not None
+            else None
+        )
+        testnet_start_handler = build_testnet_start_handler(
+            output_root,
+            config=testnet_runtime,
+            park_user_id=args.park_user_id,
+            chat_id=args.chat_id,
+        )
         router = ParkTelegramRouter(
             output_root,
             park_user_id=args.park_user_id,
             chat_id=args.chat_id,
             intent_parser=intent_parser,
             testnet_market_reader=HyperliquidTestnetMarketReader().read,
+            testnet_account_reader=testnet_account_reader,
+            testnet_start_handler=testnet_start_handler,
             config=config,
         )
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)

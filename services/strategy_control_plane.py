@@ -117,7 +117,36 @@ FIELD_SOURCES = {
     "confirmed",
     PAPER_CONTINUITY_PROPOSAL_SOURCE,
 }
+_APPROVED_TESTNET_ADAPTERS = frozenset(
+    {
+        "standard_broker_testnet",
+        "standard_broker_external_testnet_protected",
+    }
+)
 _CONTROL_LOCK = threading.RLock()
+
+
+def _is_approved_testnet_adapter(adapter: object) -> bool:
+    """Accept the local fixture and the reviewed external protected host."""
+
+    return str(getattr(adapter, "name", "") or "") in _APPROVED_TESTNET_ADAPTERS
+
+
+def _testnet_network_preflight_is_safe(
+    adapter: object,
+    preflight: Mapping[str, Any],
+) -> bool:
+    """External Testnet may use network I/O while remaining non-live."""
+
+    if preflight.get("network_io") is False:
+        return True
+    return bool(
+        preflight.get("external_network") is True
+        and str(preflight.get("environment") or "").lower() == "testnet"
+        and preflight.get("real_money_eligible") is False
+        and str(getattr(adapter, "transport_state", "") or "").lower()
+        == "external_testnet"
+    )
 _PROCESS_LOCK_STATE = threading.local()
 MANUAL_RANGE_RISK_ACK_SCHEMA = "grid-range-risk-ack-v1"
 PREPARED_START_SCHEMA = "strategy-prepared-start-v1"
@@ -6962,7 +6991,7 @@ class StrategyControlPlane:
                 "testnet_market_not_authoritative",
                 {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")},
             )
-        if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+        if not _is_approved_testnet_adapter(adapter):
             raise StrategyControlMachineError(
                 "testnet_adapter_required",
                 {"adapter": str(getattr(adapter, "name", ""))},
@@ -6974,7 +7003,7 @@ class StrategyControlPlane:
         if (
             preflight.get("ready") is not True
             or preflight.get("environment") != "testnet"
-            or preflight.get("network_io") is not False
+            or not _testnet_network_preflight_is_safe(adapter, preflight)
             or preflight.get("real_money_eligible") is not False
             or preflight.get("protection_ready") is not True
             or preflight.get("account_read_ready") is not True
@@ -7089,7 +7118,7 @@ class StrategyControlPlane:
                 or market_dict.get("fallback_policy") not in {"none", None}
             ):
                 raise StrategyControlMachineError("testnet_market_not_authoritative", {"execution_ready": market_dict.get("execution_ready"), "fresh": market_dict.get("fresh")})
-            if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+            if not _is_approved_testnet_adapter(adapter):
                 raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
             try:
                 preflight = adapter.preflight(strategy_family="grid")
@@ -7098,7 +7127,7 @@ class StrategyControlPlane:
             if (
                 preflight.get("ready") is not True
                 or preflight.get("environment") != "testnet"
-                or preflight.get("network_io") is not False
+                or not _testnet_network_preflight_is_safe(adapter, preflight)
                 or preflight.get("real_money_eligible") is not False
                 or preflight.get("protection_ready") is not True
                 or preflight.get("account_read_ready") is not True
@@ -7173,7 +7202,7 @@ class StrategyControlPlane:
         runtime = self.runtime_state(cycle_id)
         if not plan or plan.get("strategy_type") != "grid" or runtime.get("execution_environment") != "testnet" or runtime.get("actual_state") not in {"running", "active", "hard_stop_triggered", "blocked_risk", "blocked_protection", "blocked_reconciliation"}:
             raise StrategyControlMachineError("testnet_grid_not_running", {"cycle_id": cycle_id, "runtime": runtime})
-        if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+        if not _is_approved_testnet_adapter(adapter):
             raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
         observed_at = str(timestamp or self._authorization_clock())
         lifecycle = GridTestnetLifecycle(self.output_root, adapter)
@@ -7296,7 +7325,7 @@ class StrategyControlPlane:
                 "testnet_dca_not_running",
                 {"cycle_id": cycle_id, "runtime": runtime},
             )
-        if str(getattr(adapter, "name", "")) != "standard_broker_testnet":
+        if not _is_approved_testnet_adapter(adapter):
             raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
         if price is not None:
             market_dict = dict(market or {})

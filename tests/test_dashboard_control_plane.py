@@ -263,6 +263,62 @@ def test_dca_preview_uses_the_canonical_builder_and_exposes_derived_risk(tmp_pat
     assert preview["preview_digest"].startswith("sha256:")
 
 
+def test_testnet_preview_carries_non_secret_activation_identity_from_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS", "0x" + "11" * 20)
+    monkeypatch.setenv(
+        "HYPERLIQUID_TESTNET_PROTECTION_PROFILE",
+        "hyperliquid-testnet-position-protection",
+    )
+    monkeypatch.setenv("HYPERLIQUID_TESTNET_SECRET_FILE", "/opaque/testnet-secret")
+    monkeypatch.setenv("HYPERLIQUID_TESTNET_RUNTIME_ID", "dashboard-testnet-runtime")
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_RELEASE_SHA", "a" * 40)
+
+    account = {
+        "broker_id": "hyperliquid",
+        "environment": "testnet",
+        "account_fingerprint": "sha256:" + "b" * 64,
+        "source_cursor": "sha256:" + "c" * 64,
+        "fresh": True,
+        "coherent": True,
+        "equity": 10_000,
+        "positions": [],
+        "open_orders": [],
+        "capabilities": {"protection": True},
+    }
+    market = {
+        **_market(),
+        "provider": "hyperliquid",
+        "source": "hyperliquid.external_testnet",
+        "instrument_id": "BTC-USD-PERP",
+        "environment": "testnet",
+    }
+    preview = DashboardControlPlane(tmp_path).preview(
+        venue_profile_id="hyperliquid.testnet",
+        instrument_id="BTC-USD-PERP",
+        strategy_family="dca",
+        strategy={
+            "direction": "long",
+            "dca": {
+                "entry_prices": [98, 96],
+                "count": 2,
+                "notional_per_entry": 100,
+                "take_profit": 105,
+                "stop_loss": 90,
+            },
+        },
+        market=market,
+        account=account,
+    )
+
+    assert preview["runtime_id"] == "dashboard-testnet-runtime"
+    assert preview["release_sha"] == "a" * 40
+    assert preview["transport_profile"] == "hyperliquid-testnet-position-protection"
+    assert "private_key" not in str(preview)
+
+
 def test_grid_preview_preserves_grid_geometry_and_is_non_authorizing(tmp_path: Path) -> None:
     preview = DashboardControlPlane(tmp_path).preview(
         venue_profile_id="binance.paper",

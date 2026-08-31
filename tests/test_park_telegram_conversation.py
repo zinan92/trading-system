@@ -637,6 +637,60 @@ def test_testnet_finalize_requires_testnet_account_instead_of_mixing_paper_facts
     assert not (tmp_path / "outputs" / "dualtrack").exists()
 
 
+def test_chinese_testnet_strategy_proposal_keeps_testnet_confirmation_environment(
+    tmp_path: Path,
+) -> None:
+    class UnavailableConversationProvider:
+        def parse(self, text: str, **kwargs) -> dict:
+            raise AssertionError("deterministic input should not call provider")
+
+        def converse(self, text: str, **kwargs) -> dict:
+            raise AssertionError("deterministic input should not call provider")
+
+    router = ParkTelegramRouter(
+        tmp_path / "outputs",
+        park_user_id="park-user",
+        chat_id="park-chat",
+        intent_parser=UnavailableConversationProvider(),
+        market_reader=lambda: (_ for _ in ()).throw(AssertionError("Paper market fallback is forbidden")),
+        testnet_market_reader=lambda: {
+            "price": 79665.5,
+            "mid": 79665.5,
+            "bid": 79660.0,
+            "ask": 79670.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "hyperliquid.external_testnet",
+            "provider": "hyperliquid",
+            "environment": "testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "observed_at": "2026-08-31T00:00:00+00:00",
+        },
+        testnet_account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+            "snapshot": {"orders": [], "positions": []},
+        },
+        now=lambda: "2026-08-31T00:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-31_DAY",
+    )
+
+    result = router.handle_update(
+        _update(
+            500,
+            "finalize 执行这个测试网 BTC 做多 DCA，区间 79000 到 80000，最大 2 倍杠杆，止损 78000，止盈 81000",
+        )
+    )
+
+    assert result["status"] == "proposal_created"
+    assert result["proposal"]["execution_environment"] == "testnet"
+    assert result["plan"]["normalized_input"]["instrument_id"] == "BTC-USD-PERP"
+
+
 def test_provider_timeout_returns_deterministic_grid_loss_preview(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
