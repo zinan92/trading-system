@@ -70,8 +70,7 @@ class HyperliquidTestnetMarketReader:
         )
         if depth_notional <= 0:
             raise HyperliquidTestnetMarketError("testnet_depth_missing")
-        universe = meta.get("universe")
-        universe_revision = self._digest({"universe": universe})
+        universe_revision = str(meta.get("universe_revision") or "")
         mapping_revision = self._digest({"instrument_id": instrument, "meta": meta})
         source_cursor = self._digest(
             {"mids": mids, "book": book, "meta": meta, "asset_context": asset_context}
@@ -135,6 +134,7 @@ class HyperliquidTestnetMarketReader:
                 "name": symbol,
                 "szDecimals": row.get("szDecimals"),
                 "maxLeverage": row.get("maxLeverage"),
+                "universe_revision": cls._digest({"universe": rows}),
             }
             return meta, dict(context)
         raise HyperliquidTestnetMarketError("testnet_asset_context_missing")
