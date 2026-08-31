@@ -11,7 +11,8 @@
 
 ## 现在在哪里(2026-08-31, Hyperliquid Testnet host wiring)
 
-- Issue #1113 is merged as PR #1114 at `origin/main@82724f1`. The reviewed
+- Issue #1113 is merged as PR #1114 at code merge `82724f1` (current
+  `origin/main` also contains the follow-up registry merge). The reviewed
   `hyperliquid-testnet-position-protection` public standard-broker binding is
   now composed into the production Jessie Telegram path and Dashboard account
   / preview seams. Source-bound BTC identity survives into a Testnet plan;
