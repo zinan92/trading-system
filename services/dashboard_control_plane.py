@@ -309,7 +309,36 @@ class DashboardControlPlane:
         market: dict[str, Any] | None = None
         account: dict[str, Any] | None = None
         try:
-            market = HyperliquidTestnetMarketReader().read(instrument_id)
+            reader = HyperliquidTestnetMarketReader()
+            market = reader.read(instrument_id)
+            # The canonical DCA/Grid builders require the same trusted
+            # source for execution bars and their 1d/4h planning contexts.
+            # Resolve these facts at the composition seam so Preview never
+            # silently falls back to Paper or synthetic history.
+            contexts: dict[str, Any] = {}
+            for timeframe, limit in (("1m", 240), ("1d", 32), ("4h", 32)):
+                bars = reader.read_bars(
+                    instrument_id,
+                    timeframe=timeframe,
+                    limit=limit,
+                    end=None,
+                )
+                contexts[timeframe] = {
+                    "provider": bars.get("provider") or "hyperliquid",
+                    "is_synthetic": bars.get("is_synthetic") is True,
+                    "bars": list(bars.get("bars") or []),
+                    "fresh": bars.get("fresh") is True,
+                    "source": bars.get("source") or "hyperliquid.external_testnet",
+                }
+            market.update(
+                {
+                    "bars": contexts["1m"]["bars"],
+                    "strategy_timeframes": contexts,
+                    "latest_close": market.get("price") or market.get("mid"),
+                    "latest_timestamp": market.get("observed_at"),
+                    "timeframe": "1m",
+                }
+            )
         except Exception:  # noqa: BLE001 - preserve a typed blocker in preview.
             market = None
         reader = self.runtime_account_reader()
