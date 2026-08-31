@@ -27,6 +27,12 @@
   gate scaling requested notional down to the account cap. Public account
   admission is `ready=true`, `clean_state=true`, `protection=true`, with
   equity and zero open positions/orders observed from Hyperliquid Testnet.
+- Issue #1122 is merged as PR #1123. The main `/api/trading-system/read-model`
+  now follows the durable Dashboard broker selection: with Hyperliquid
+  selected it reports `hyperliquid.external_testnet` and the public Testnet
+  equity; with Binance Paper selected it keeps the Paper authoritative
+  snapshot. If Testnet facts fail, the read-model reports a Testnet blocker
+  rather than silently displaying Paper equity.
 - Jessie launchd remains a one-pass 60-second worker. Its latest post-restart
   receipt is `status=pass`, `updates_received=0`, `orders_created=0`,
   `positions_created=0`, `execution=idle`, `next_action=await_new_park_strategy`.
