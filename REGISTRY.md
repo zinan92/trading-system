@@ -17,13 +17,16 @@
   now composed into the production Jessie Telegram path and Dashboard account
   / preview seams. Source-bound BTC identity survives into a Testnet plan;
   Chinese `测试网` input is classified as Testnet.
-- The actual launchd Dashboard checkout is synced to `82724f1`, with the
+- Issues #1117/#1119 are merged as PRs #1118/#1120; the actual launchd
+  Dashboard checkout is synced to `9a5e3c7`, with the
   standard-broker source path and the explicit BTC Testnet protected profile
   configured as an opaque signer reference. Dashboard V5 is serving
   `http://127.0.0.1:8765/dashboard-v5.html`; catalog returns 211 public
-  Hyperliquid perpetuals, and the live public BTC account admission is
-  `ready=true`, `clean_state=true`, `protection=true`, with equity and zero
-  open positions/orders observed from Hyperliquid Testnet.
+  Hyperliquid perpetuals, market bars include trusted 1m/4h/1d history, and
+  a live BTC DCA Preview returned `execution_ready=true` with the subtractive
+  gate scaling requested notional down to the account cap. Public account
+  admission is `ready=true`, `clean_state=true`, `protection=true`, with
+  equity and zero open positions/orders observed from Hyperliquid Testnet.
 - Jessie launchd remains a one-pass 60-second worker. Its latest post-restart
   receipt is `status=pass`, `updates_received=0`, `orders_created=0`,
   `positions_created=0`, `execution=idle`, `next_action=await_new_park_strategy`.
