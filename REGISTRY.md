@@ -9,21 +9,6 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
-## 现在在哪里(2026-09-08, Cloud Paper retired; local Park Paper owner)
-
-- Issue #1126 retires Cloud Paper as a scheduler owner. The local Mac Park
-  Paper control loop is the sole Paper scheduler owner; its formal owner is
-  `local-mac` with a monotonic epoch. Read models expose this identity and do
-  not replay the retired Cloud health snapshot or show Cloud as awaiting
-  recovery.
-- The Alibaba Cloud host remains only a Park decision: `待 Park 停机`; no
-  shutdown, release, credential, deployment, or cloud mutation was performed
-  by this issue. Cloud deployment, preflight, dead-man, timer, and access
-  gateway surfaces remain in the repository as retired reference code.
-- The local `com.wendy.goldbot-gateway` Cloud Access launchd service was
-  booted out under this issue. Its plist is retained; Dashboard and
-  `park-paper-control` were not restarted.
-
 ## 现在在哪里(2026-08-31, Hyperliquid Testnet host wiring)
 
 - Issue #1113 is merged as PR #1114 at code merge `82724f1` (current
