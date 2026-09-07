@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping
 from services.journal_store import load_json
 from services.park_paper_runtime import park_paper_namespace
 from services.park_strategy_session import ParkStrategyIdentityJournal
+from services.scheduler_ownership import read_local_owner
 
 
 PARK_PUBLIC_READ_MODEL_SCHEMA = "park-paper-public-read-model-v1"
@@ -353,6 +354,9 @@ def build_park_public_read_model(
         checked_at = checked_at.replace(tzinfo=timezone.utc)
     checked_at = checked_at.astimezone(timezone.utc)
     blockers: list[str] = []
+    ownership = read_local_owner(root)
+    if not ownership.get("ok"):
+        blockers.append(str(ownership.get("blocker") or "scheduler_ownership_blocked"))
     active: dict[str, Any] = {}
     plan: dict[str, Any] = {}
     lifecycle: dict[str, Any] = {}
@@ -651,6 +655,7 @@ def build_park_public_read_model(
             "control_plane": "telegram_only",
             "mutations_allowed": False,
         },
+        "scheduler_ownership": ownership,
         "strategy": strategy,
         "recording": recording,
         "terminal": terminal,

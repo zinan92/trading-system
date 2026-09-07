@@ -15,6 +15,37 @@ from services.journal_store import load_json, write_json
 LOCAL_OWNER_ID = "local-mac"
 
 
+def read_local_owner(output_root: Path) -> dict[str, Any]:
+    """Return a pure local-owner observation for read-only projections."""
+
+    current = SchedulerOwnershipStore(output_root).current()
+    if current:
+        active = (
+            current.get("status") == "active"
+            and current.get("active_owner_id") == LOCAL_OWNER_ID
+            and isinstance(current.get("epoch"), int)
+            and current["epoch"] >= 1
+        )
+        return {
+            "ok": active,
+            "status": "pass" if active else "blocked",
+            "owner_status": "local" if active else None,
+            "owner_id": current.get("active_owner_id"),
+            "epoch": current.get("epoch"),
+            **({} if active else {"blocker": "scheduler_owner_mismatch"}),
+            "durable": True,
+        }
+    return {
+        "ok": True,
+        "status": "pass",
+        "owner_status": "local",
+        "owner_id": LOCAL_OWNER_ID,
+        "epoch": 1,
+        "durable": False,
+        "next_action": "Materialize the local owner record at the next Park Paper control pass.",
+    }
+
+
 class SchedulerOwnershipStore:
     def __init__(
         self,
@@ -165,12 +196,19 @@ class SchedulerOwnershipGuard:
         if not current:
             if self.runtime_mode == "cloud":
                 return self._blocked("scheduler_ownership_missing", current)
+            # Local Park Paper is the default and sole owner.  Materialize the
+            # owner record instead of treating an absent record as legacy
+            # compatibility; the epoch is then available to every observer.
+            initialized = SchedulerOwnershipStore(self.output_root).initialize_local(
+                owner_id=self.owner_id,
+            )
             return self._receipt(
                 {
                     "ok": True,
-                    "status": "legacy_local",
+                    "status": "pass",
                     "owner_id": self.owner_id,
-                    "epoch": None,
+                    "epoch": initialized["epoch"],
+                    "owner_status": "local",
                 }
             )
         if current.get("status") != "active":
@@ -185,6 +223,7 @@ class SchedulerOwnershipGuard:
                 "status": "pass",
                 "owner_id": self.owner_id,
                 "epoch": current.get("epoch"),
+                "owner_status": "local" if self.runtime_mode != "cloud" else "cloud",
             }
         )
 

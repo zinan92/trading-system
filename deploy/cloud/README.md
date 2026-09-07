@@ -1,4 +1,10 @@
-# Cloud Paper runtime (M1)
+# Cloud Paper runtime (M1) — RETIRED
+
+Cloud Paper is retired as a scheduler owner under issue #1126. This directory,
+including Cloud preflight, dead-man expectations, timer/systemd staging, and
+provider bootstrap templates, is retained as historical reference only. Do
+not provision, activate, or treat its health output as current runtime truth;
+local Mac Park Paper (`local-mac`, epoch-bound) is the sole Paper owner.
 
 These files define the dependency and path contract only. They do not install
 services or start a Paper strategy.
