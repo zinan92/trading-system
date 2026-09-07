@@ -101,6 +101,7 @@ from services.trading_system_read_model import (
 from services.trading_daily_24h_report import load_daily_report_rows
 from services.cloud_daily_self_review import load_daily_self_review
 from services.testnet_soak_readiness import TestnetSoakReadiness
+from services.scheduler_ownership import read_local_owner
 from services.cloud_access_gateway import authenticated_access_identity
 from pipelines.cloud_health import build_cloud_health
 
@@ -2074,7 +2075,7 @@ def _assemble_strategy_console_snapshot(
     cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
     cycle_id = str(cycle["cycle_id"])
     control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
-    cloud_health = _load_current_cloud_health(output)
+    cloud_health = _local_cloud_retirement_projection(output)
     supervisor_evidence = dict(
         ((cloud_health.get("checks") or {}).get("supervisor") or {}).get(
             "evidence"
@@ -2218,6 +2219,48 @@ def _load_current_cloud_health(output_root: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         pass
     return {}
+
+
+def _local_cloud_retirement_projection(output_root: Path) -> dict[str, Any]:
+    """Expose local ownership without replaying retired Cloud health evidence."""
+
+    ownership = read_local_owner(output_root)
+    owner_id = ownership.get("owner_id")
+    epoch = ownership.get("epoch")
+    owner_check = {
+        "stage": "scheduler_ownership",
+        "status": "ready" if ownership.get("ok") else "blocked",
+        "code": "local_owner_active" if ownership.get("ok") else ownership.get("blocker"),
+        "severity": "none" if ownership.get("ok") else "critical",
+        "summary": "Local Park Paper is the sole scheduler owner."
+        if ownership.get("ok")
+        else "Local Park Paper owner evidence is unavailable.",
+        "next_action": "Continue with the local Park Paper owner."
+        if ownership.get("ok")
+        else "Restore the local owner record before any scheduler action.",
+        "evidence": {
+            "active_owner_id": owner_id,
+            "epoch": epoch,
+            "runtime_mode": "local",
+        },
+    }
+    return {
+        "schema_version": "cloud-paper-health-v1",
+        "runtime_mode": "local",
+        "paper_only": True,
+        "status": "retired",
+        "severity": "none" if ownership.get("ok") else "critical",
+        "retired": True,
+        "retirement_reason": "Cloud Paper is retired; local Park Paper is the sole scheduler owner.",
+        "checks": {"scheduler_ownership": owner_check},
+        "incidents": [],
+        "critical_incidents": [],
+        "warning_incidents": [],
+        "insufficient_conditions": [],
+        "dashboard_reachable_is_not_system_health": True,
+        "control_actions_executed": 0,
+        "secrets_included": False,
+    }
 
 
 def _load_external_dca_lifecycle(output_root: Path) -> dict[str, Any]:

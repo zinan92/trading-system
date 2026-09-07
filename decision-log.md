@@ -1,5 +1,43 @@
 # Decision Log
 
+## Retire Cloud Paper ownership and keep local Park Paper as sole owner (#1126)
+
+Date: 2026-09-08
+
+### Decision
+
+- Retire Alibaba Cloud Paper as scheduler owner. The local Mac Park Paper
+  control loop is the only Paper scheduler owner, identified as `local-mac`
+  with a monotonic owner epoch. An absent local record is a compatibility
+  state only for read-only projection; the next control pass materializes the
+  durable owner record.
+- Read models project the local owner and epoch and omit stale Cloud health as
+  an active recovery concern. Cloud deployment, preflight, dead-man, timer,
+  and access-gateway code is retained but marked retired; no deploy/cloud code
+  or 8100 HTTP contract is changed.
+- The Alibaba Cloud instance is recorded as `待 Park 停机`; shutdown/release
+  remains a Park console billing action and is not performed here.
+- The local `com.wendy.goldbot-gateway` (Cloud Access, port 8766) is retired
+  and booted out. Its plist remains as a rollback artifact. Dashboard and
+  `park-paper-control` were not restarted.
+
+### Verification
+
+- Fixture-based owner/read-model tests verify `local-mac`, epoch `1`, and no
+  Cloud critical incident projection. No online output was read.
+- Before the service action, `launchctl print gui/501/com.wendy.goldbot-gateway`
+  showed `state = running`, with its plist at
+  `~/Library/LaunchAgents/com.wendy.goldbot-gateway.plist`; the plist was
+  backed up before bootout. Post-action evidence is recorded in the PR.
+
+### Gotchas
+
+- The historical Cloud health file dated 2026-08-24 is not current local
+  health. Reusing it in the Dashboard would falsely present Cloud recovery as
+  pending.
+- `NORTH_STAR.md` milestones 2/3 need a separate Park-approved PR; this issue
+  intentionally does not edit that file.
+
 ## Make Dashboard V5 the canonical Venue–Instrument–Strategy control plane (#1071)
 
 Date: 2026-08-29

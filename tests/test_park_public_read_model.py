@@ -121,6 +121,15 @@ def test_public_read_model_projects_persisted_facts_without_writes(tmp_path: Pat
     assert _digests(output) == before
     assert result["status"] == "ok"
     assert result["blockers"] == []
+    assert result["scheduler_ownership"] == {
+        "ok": True,
+        "status": "pass",
+        "owner_status": "local",
+        "owner_id": "local-mac",
+        "epoch": 1,
+        "durable": False,
+        "next_action": "Materialize the local owner record at the next Park Paper control pass.",
+    }
     assert result["viewer"] == {
         "mode": "public_read_only",
         "paper_only": True,

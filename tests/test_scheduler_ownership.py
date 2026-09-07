@@ -89,3 +89,14 @@ def test_cloud_guard_blocks_missing_or_paused_ownership(tmp_path: Path):
         owner_id="cloud-primary",
     ).verify()
     assert paused["blocker"] == "scheduler_ownership_paused"
+
+
+def test_local_guard_materializes_formal_local_owner_with_epoch(tmp_path: Path):
+    result = SchedulerOwnershipGuard(tmp_path, runtime_mode="local").verify()
+
+    assert result["ok"] is True
+    assert result["status"] == "pass"
+    assert result["owner_status"] == "local"
+    assert result["owner_id"] == LOCAL_OWNER_ID
+    assert result["epoch"] == 1
+    assert SchedulerOwnershipStore(tmp_path).current()["active_owner_id"] == LOCAL_OWNER_ID

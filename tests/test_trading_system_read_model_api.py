@@ -16,6 +16,26 @@ from tests.test_strategy_control_plane import account_context, market, proposal,
 from tests.test_trading_system_read_model import _accounting, _risk, _source
 
 
+def test_local_projection_retires_persisted_cloud_health(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    write_json(
+        output / "cloud" / "health" / "current.json",
+        [{"status": "blocked", "severity": "critical", "incidents": [{"code": "old_cloud_failure"}]}],
+    )
+
+    result = dashboard_server._local_cloud_retirement_projection(output)
+
+    assert result["retired"] is True
+    assert result["status"] == "retired"
+    assert result["runtime_mode"] == "local"
+    assert result["incidents"] == []
+    assert result["checks"]["scheduler_ownership"]["evidence"] == {
+        "active_owner_id": "local-mac",
+        "epoch": 1,
+        "runtime_mode": "local",
+    }
+
+
 def _two_cycle_history_accounting() -> dict:
     trades = [
         {
