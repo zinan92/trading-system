@@ -340,7 +340,7 @@ class DashboardState(
             "paper_risk_action_plan": paper_risk_action_plan_rows[-1] if paper_risk_action_plan_rows else {},
             "paper_auto_approval_gate": paper_auto_gate_rows[-1] if paper_auto_gate_rows else {},
             "health": health,
-            "system_vitals": SystemVitals(self.output_root, self.market_db).run(run_date, persist=False),
+            "system_vitals": SystemVitals(self.output_root, self.market_db, park_paper_authority=True).run(run_date, persist=False),
             "alerts": alerts_rows[-1] if alerts_rows else {},
             "strategy_leaderboard": leaderboard,
             "strategy_frequency": strategy_frequency_rows[-1] if strategy_frequency_rows else {},
