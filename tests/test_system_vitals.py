@@ -77,6 +77,17 @@ def _write(path: Path, payload) -> None:
 def _healthy_root(tmp_path: Path, *, runner_age_min=2.0, summary_run_date=RUN_DATE,
                   open_trade=("protected",), strategies_evaluated=2) -> Path:
     root = tmp_path / "outputs"
+    park_checked = _iso(NOW - timedelta(minutes=runner_age_min))
+    _write(root / "park_strategy" / "safety_evidence.json", {
+        "status": "pass",
+        "checked_at": park_checked,
+        "expires_at": _iso(NOW + timedelta(minutes=5 - runner_age_min)),
+    })
+    _write(root / "release_gates" / "paper_service_boot_park-paper-runtime_current.json", {
+        "status": "pass",
+        "checked_at": park_checked,
+        "service": "park-paper-runtime",
+    })
     # runner heartbeat — fresh
     _write(root / "runner_status" / "current.json", {
         "updated_at": _iso(NOW - timedelta(minutes=runner_age_min)),
@@ -109,7 +120,7 @@ def _vital(payload: dict, name: str) -> dict:
 def _vitals(tmp_path, root, *, bar_age_minutes=3.0, registry_n=2, now=NOW):
     db = tmp_path / "market.db"
     _make_db(db, bar_age_minutes)
-    return SystemVitals(root, market_db=db, now=now, registry=_Registry(registry_n)).run(RUN_DATE)
+    return SystemVitals(root, market_db=db, now=now, registry=_Registry(registry_n), park_paper_authority=True).run(RUN_DATE)
 
 
 def test_all_healthy_machine_is_alive(tmp_path):
@@ -117,6 +128,8 @@ def test_all_healthy_machine_is_alive(tmp_path):
     payload = _vitals(tmp_path, root)
     assert payload["overall"] == "alive"
     assert payload["alive"] is True
+    assert _vital(payload, "runner_liveness")["status"] == "up"
+    assert "Park Paper" in _vital(payload, "runner_liveness")["message"]
     assert {v["name"] for v in payload["vitals"]} == {
         "data_feed", "runner_liveness", "strategy_evaluation",
         "tp_sl_coverage", "execution_blocker", "no_trade_attribution",
@@ -135,7 +148,7 @@ def test_stale_data_feed_takes_machine_down(tmp_path):
 def test_dead_runner_detected_by_age_not_just_state(tmp_path):
     # state still says "ok" — the bug M0 fixes is that a frozen-but-ok heartbeat
     # from hours ago must NOT read as alive.
-    root = _healthy_root(tmp_path, runner_age_min=45)  # >3x the 5min interval
+    root = _healthy_root(tmp_path, runner_age_min=45)  # >5m Park Paper freshness window
     payload = _vitals(tmp_path, root)
     assert _vital(payload, "runner_liveness")["status"] == "down"
     assert payload["overall"] == "down"
@@ -144,20 +157,27 @@ def test_dead_runner_detected_by_age_not_just_state(tmp_path):
 
 
 def test_one_missed_heartbeat_does_not_false_page_before_stale_threshold(tmp_path):
-    # Cadence is 300s; Row 7 requires the stale threshold to be beyond a single
-    # missed beat. A 12m-old runner heartbeat is stale-looking but under the
-    # 900s floor and must still read fresh.
+    # The Park Paper contract has a five-minute maximum age.
     root = _healthy_root(tmp_path, runner_age_min=12)
     payload = _vitals(tmp_path, root)
     runner = _vital(payload, "runner_liveness")
-    assert runner["status"] == "up"
-    job = next(item for item in payload["always_on"]["jobs"] if item["name"] == "runner")
-    assert job["freshness"]["stale_after_seconds"] == 900.0
-    assert payload["always_on"]["status"] != "BLOCKED_ALWAYS_ON_STALE"
+    assert runner["status"] == "down"
+    job = next(item for item in payload["always_on"]["jobs"] if item["name"] == "park_paper_control")
+    assert job["freshness"]["stale_after_seconds"] == 300.0
+    assert payload["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
 
 
 def test_future_dated_runner_heartbeat_blocks_instead_of_degrading(tmp_path):
     root = _healthy_root(tmp_path)
+    _write(root / "park_strategy" / "safety_evidence.json", {
+        "status": "pass",
+        "checked_at": _iso(NOW + timedelta(minutes=5)),
+        "expires_at": _iso(NOW + timedelta(minutes=10)),
+    })
+    _write(root / "release_gates" / "paper_service_boot_park-paper-runtime_current.json", {
+        "status": "pass",
+        "checked_at": _iso(NOW + timedelta(minutes=5)),
+    })
     _write(root / "runner_status" / "current.json", {
         "updated_at": _iso(NOW + timedelta(minutes=5)),
         "run_date": RUN_DATE,
@@ -172,6 +192,32 @@ def test_future_dated_runner_heartbeat_blocks_instead_of_degrading(tmp_path):
     assert "FUTURE" in runner["message"]
     assert payload["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
     assert payload["always_on"]["blocks_new_orders"] is True
+
+
+def test_park_paper_heartbeat_missing_blocks_new_orders(tmp_path):
+    root = _healthy_root(tmp_path)
+    (root / "park_strategy" / "safety_evidence.json").unlink()
+    (root / "runner_status" / "current.json").unlink()
+    payload = _vitals(tmp_path, root)
+
+    runner = _vital(payload, "runner_liveness")
+    assert runner["status"] == "down"
+    assert "missing" in runner["message"]
+    assert payload["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
+
+
+def test_park_paper_safety_status_blocks_even_when_timestamp_is_fresh(tmp_path):
+    root = _healthy_root(tmp_path)
+    _write(root / "park_strategy" / "safety_evidence.json", {
+        "status": "blocked",
+        "checked_at": _iso(NOW - timedelta(minutes=1)),
+        "expires_at": _iso(NOW + timedelta(minutes=4)),
+    })
+    payload = _vitals(tmp_path, root)
+
+    runner = _vital(payload, "runner_liveness")
+    assert runner["status"] == "down"
+    assert "status is blocked" in runner["message"]
 
 
 def test_stale_strategy_heartbeat_is_a_canonical_always_on_block(tmp_path):
@@ -348,11 +394,11 @@ def test_future_dated_feed_is_not_treated_as_fresh(tmp_path):
 
 
 def test_unparseable_runner_timestamp_degrades_vital(tmp_path):
-    # a present-but-malformed heartbeat timestamp must flag, not silently read up.
+    # A present-but-malformed Park Paper timestamp must flag, not silently read up.
     root = _healthy_root(tmp_path)
-    _write(root / "runner_status" / "current.json", {
-        "updated_at": "2026-06-21T12:00:00+00:00Z",  # double offset -> unparseable
-        "run_date": RUN_DATE, "state": "ok", "interval_seconds": 300,
+    _write(root / "park_strategy" / "safety_evidence.json", {
+        "status": "pass", "checked_at": "2026-06-21T12:00:00+00:00Z",
+        "expires_at": _iso(NOW + timedelta(minutes=5)),
     })
     payload = _vitals(tmp_path, root)
     assert _vital(payload, "runner_liveness")["status"] != "up"
@@ -379,21 +425,21 @@ def test_down_vital_becomes_an_alerting_health_check(tmp_path):
 
 def test_runner_self_reported_failed_takes_machine_down_even_when_fresh(tmp_path):
     root = _healthy_root(tmp_path)
-    _write(root / "runner_status" / "current.json", {
-        "updated_at": _iso(NOW - timedelta(minutes=2)),  # heartbeat is FRESH
-        "run_date": RUN_DATE, "state": "failed", "interval_seconds": 300,
+    _write(root / "park_strategy" / "safety_evidence.json", {
+        "checked_at": _iso(NOW - timedelta(minutes=2)),
+        "expires_at": _iso(NOW + timedelta(minutes=3)), "status": "blocked",
     })
     payload = _vitals(tmp_path, root)
     runner = _vital(payload, "runner_liveness")
     assert runner["status"] == "down"
-    assert "failed" in runner["message"]
+    assert "blocked" in runner["message"]
     assert payload["overall"] == "down"
 
 
 def test_data_feed_down_when_no_gold_bars(tmp_path):
     root = _healthy_root(tmp_path)
     missing_db = tmp_path / "absent.db"  # never created
-    payload = SystemVitals(root, market_db=missing_db, now=NOW, registry=_Registry(2)).run(RUN_DATE)
+    payload = SystemVitals(root, market_db=missing_db, now=NOW, registry=_Registry(2), park_paper_authority=True).run(RUN_DATE)
     feed = _vital(payload, "data_feed")
     assert feed["status"] == "down"
     assert "no GOLD bars" in feed["message"]
@@ -542,7 +588,7 @@ def test_historical_run_date_feed_reads_up_even_when_stale(tmp_path):
     root = _healthy_root(tmp_path)
     db = tmp_path / "market.db"
     _make_db(db, 300)  # a 5h-old bar
-    payload = SystemVitals(root, market_db=db, now=NOW, registry=_Registry(2)).run("2026-06-19")
+    payload = SystemVitals(root, market_db=db, now=NOW, registry=_Registry(2), park_paper_authority=True).run("2026-06-19")
     feed = _vital(payload, "data_feed")
     assert feed["status"] == "up"
     assert "historical" in feed["message"]
@@ -550,6 +596,7 @@ def test_historical_run_date_feed_reads_up_even_when_stale(tmp_path):
 
 def test_missing_runner_heartbeat_takes_machine_down(tmp_path):
     root = _healthy_root(tmp_path)
+    (root / "park_strategy" / "safety_evidence.json").unlink()
     (root / "runner_status" / "current.json").unlink()
     payload = _vitals(tmp_path, root)
     runner = _vital(payload, "runner_liveness")

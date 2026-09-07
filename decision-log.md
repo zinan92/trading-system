@@ -17430,3 +17430,32 @@ auditable datafeed port; broker execution remains a separate port.
   enable external Testnet execution until the public standard-broker
   position-protection capability is available and a new attended activation is
   explicitly authorized.
+
+# 2026-09-07 — Use Park Paper control heartbeat for Dashboard ops status (#1125)
+
+## Decision
+
+- Choose issue #1125 option A. Keep `/api/ops/status` and its read-only
+  diagnostics, but make the existing `runner_liveness` and `always_on` rows
+  read the Park Paper control loop evidence instead of the retired local
+  runner heartbeat.
+- Treat `park_strategy/safety_evidence.json` and
+  `release_gates/paper_service_boot_park-paper-runtime_current.json` as the
+  paired read-only evidence. Both must be present, `status=pass`, timestamped,
+  and no older than five minutes; safety evidence must also remain unexpired.
+- Missing, stale, future-dated, malformed, or non-passing evidence remains a
+  fail-closed `BLOCKED_ALWAYS_ON_STALE` result. No Park Paper control loop,
+  order path, launchd plist, or read-model field shape is changed.
+
+## Gotchas
+
+- The Dashboard recomputes `SystemVitals` during a GET, so changing only the
+  contract formatter would leave the retired runner as the liveness authority.
+- The two evidence files are fixture inputs in tests; the live
+  `~/work/park-paper-output` tree is not read by validation.
+
+## Verification
+
+- Focused dashboard and system-vitals tests cover fresh, stale, missing, and
+  non-passing Park Paper evidence. Full pytest and temporary local HTTP server
+  verification are recorded in the issue PR.

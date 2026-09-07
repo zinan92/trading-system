@@ -40,6 +40,7 @@ _FUTURE_SKEW_SECONDS = 120.0
 _DEFAULT_HEARTBEAT_CADENCE_SECONDS = 300.0
 _MISSED_BEATS_BEFORE_STALE = 3.0
 _MIN_STALE_AFTER_SECONDS = 900.0
+_PARK_PAPER_HEARTBEAT_MAX_AGE_SECONDS = 300.0
 
 
 def _load_any(path: Path) -> Any:
@@ -75,12 +76,14 @@ class SystemVitals:
         market_db: Path,
         now: datetime | None = None,
         registry: Any = None,
+        park_paper_authority: bool = False,
     ) -> None:
         self.output_root = Path(output_root)
         self.market_db = Path(market_db)
         self.now = (now or _utcnow()).astimezone(timezone.utc).replace(microsecond=0)
         self.run_date = ""
         self.registry = registry
+        self.park_paper_authority = bool(park_paper_authority)
 
     def run(self, run_date: str, persist: bool = True) -> dict:
         # persist=False is for read-only callers (the dashboard GET recomputes
@@ -149,6 +152,59 @@ class SystemVitals:
         return _parse_ts(row.get("timestamp")) if row else None
 
     def _runner_liveness_vital(self) -> dict:
+        if not self.park_paper_authority:
+            return self._legacy_runner_liveness_vital()
+        safety_path = self.output_root / "park_strategy" / "safety_evidence.json"
+        boot_path = self.output_root / "release_gates" / "paper_service_boot_park-paper-runtime_current.json"
+        safety = _latest_record(safety_path)
+        boot = _latest_record(boot_path)
+        if (not safety or not boot) and _latest_record(self.output_root / "runner_status" / "current.json"):
+            # Historical non-Dashboard jobs still use this fixture contract.
+            # The live Park Paper tree has no retired runner artifact, so a
+            # missing Park receipt remains fail-closed there.
+            return self._legacy_runner_liveness_vital()
+        detail = {
+            "source": "park_paper_control",
+            "safety_evidence_path": str(safety_path),
+            "boot_receipt_path": str(boot_path),
+            "max_age_seconds": _PARK_PAPER_HEARTBEAT_MAX_AGE_SECONDS,
+            "safety_evidence": safety,
+            "boot_receipt": boot,
+        }
+        missing = []
+        if not safety:
+            missing.append("safety evidence")
+        if not boot:
+            missing.append("Paper service boot receipt")
+        if missing:
+            return self._vital("runner_liveness", "down", f"Park Paper heartbeat missing: {', '.join(missing)}", detail)
+
+        safety_checked = _parse_ts(safety.get("checked_at"))
+        safety_expires = _parse_ts(safety.get("expires_at"))
+        boot_checked = _parse_ts(boot.get("checked_at"))
+        if not safety_checked or not safety_expires or not boot_checked:
+            return self._vital("runner_liveness", "down", "Park Paper heartbeat timestamp missing or unparseable", detail)
+
+        safety_age = (self.now - safety_checked).total_seconds()
+        boot_age = (self.now - boot_checked).total_seconds()
+        detail.update({
+            "checked_at": safety_checked.isoformat(),
+            "age_seconds": round(max(safety_age, boot_age), 2),
+            "safety_age_seconds": round(safety_age, 2),
+            "boot_age_seconds": round(boot_age, 2),
+            "expires_at": safety_expires.isoformat(),
+        })
+        if min(safety_age, boot_age) < -_FUTURE_SKEW_SECONDS:
+            return self._vital("runner_liveness", "down", "Park Paper heartbeat is in the FUTURE — clock skew", detail)
+        if safety.get("status") != "pass":
+            return self._vital("runner_liveness", "down", f"Park Paper safety evidence status is {safety.get('status') or 'missing'}", detail)
+        if boot.get("status") != "pass":
+            return self._vital("runner_liveness", "down", f"Park Paper service boot status is {boot.get('status') or 'missing'}", detail)
+        if safety_age > _PARK_PAPER_HEARTBEAT_MAX_AGE_SECONDS or boot_age > _PARK_PAPER_HEARTBEAT_MAX_AGE_SECONDS or safety_expires <= self.now:
+            return self._vital("runner_liveness", "down", "Park Paper heartbeat stale or expired", detail)
+        return self._vital("runner_liveness", "up", "Park Paper control heartbeat is fresh", detail)
+
+    def _legacy_runner_liveness_vital(self) -> dict:
         heartbeat = _latest_record(self.output_root / "runner_status" / "current.json")
         if not heartbeat:
             return self._vital("runner_liveness", "down", "runner heartbeat missing", {})
@@ -161,7 +217,7 @@ class SystemVitals:
         )
         updated = _parse_ts(raw_ts)
         state = str(heartbeat.get("state", "")).lower()
-        detail = {"state": state, "interval_seconds": interval}
+        detail = {"state": state, "interval_seconds": interval, "source": "legacy_runner_fixture"}
         if raw_ts and updated is None:
             return self._vital("runner_liveness", "warn", "runner heartbeat timestamp is unparseable", {**detail, "raw_updated_at": str(raw_ts)})
         if updated:
@@ -267,13 +323,15 @@ class SystemVitals:
 
     def _always_on_contract(self, vitals: list[dict]) -> dict:
         vital_by_name = {str(item.get("name") or ""): item for item in vitals if isinstance(item, dict)}
+        park_authoritative = (vital_by_name.get("runner_liveness", {}).get("detail", {}) or {}).get("source") == "park_paper_control"
         jobs = [
             self._job_from_vital(
-                job_name="runner",
+                job_name="park_paper_control" if park_authoritative else "runner",
                 vital=vital_by_name.get("runner_liveness", {}),
                 criticality="critical",
-                cadence_seconds=self._runner_interval_seconds(),
-                source_path=self.output_root / "runner_status" / "current.json",
+                cadence_seconds=_PARK_PAPER_HEARTBEAT_MAX_AGE_SECONDS if park_authoritative else self._runner_interval_seconds(),
+                source_path=(self.output_root / "park_strategy" / "safety_evidence.json" if park_authoritative else self.output_root / "runner_status" / "current.json"),
+                stale_after_seconds=_PARK_PAPER_HEARTBEAT_MAX_AGE_SECONDS if park_authoritative else None,
             ),
             self._job_from_vital(
                 job_name="strategies",
@@ -363,12 +421,13 @@ class SystemVitals:
         criticality: str,
         cadence_seconds: float,
         source_path: Path,
+        stale_after_seconds: float | None = None,
     ) -> dict:
         detail = vital.get("detail", {}) if isinstance(vital.get("detail"), dict) else {}
         status = str(vital.get("status") or "warn")
         message = str(vital.get("message") or "vital missing")
         age = detail.get("age_seconds")
-        stale_after = _stale_after_seconds(cadence_seconds)
+        stale_after = stale_after_seconds if stale_after_seconds is not None else _stale_after_seconds(cadence_seconds)
         state = "fresh"
         if status == "down":
             state = "stale" if self._message_names_staleness(message) else "down"
