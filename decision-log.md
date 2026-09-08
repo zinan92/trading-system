@@ -1,5 +1,31 @@
 # Decision Log
 
+# 2026-09-08 — Retry Testnet market sampling races without scheduler strikes (#1212)
+
+## Decision
+
+- Extend the shared `read_coherent_market` bounded retry to
+  `market_price_mismatch`, re-reading binding and public facts on every
+  attempt and recording both prices in each check. Exhaustion remains
+  fail-closed with the full attempt evidence.
+- Treat `market_price_mismatch` and `market_bbo_inconsistent` returned from a
+  Testnet tick as sampling-race warnings that do not consume the scheduler's
+  three-strike advance failure budget. Other market, account, and broker
+  failures retain the existing strike policy.
+
+## Gotchas
+
+- This does not add price tolerance or alter the Coordinator's authoritative
+  market validation; a coherent document is still required before lifecycle
+  advancement.
+- The scheduler exception path remains strike-counted because an untyped
+  exception cannot prove that it was a market sampling race.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_testnet_scheduler.py` — 40 passed.
+- No launchd service, online output root, HTTP 8100 interface, data source, or live-money path was changed or invoked.
+
 # 2026-09-08 — Recover durable Grid identities before cancel retry (#1206)
 
 ## Decision

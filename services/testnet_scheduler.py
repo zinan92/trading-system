@@ -15,6 +15,7 @@ from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 
 TESTNET_SCHEDULER_SCHEMA = "testnet-scheduler-ownership-v1"
 _TERMINAL_COORDINATOR_STATES = frozenset({"dca_terminal", "grid_terminal"})
+_SAMPLING_RACE_REASONS = frozenset({"market_price_mismatch", "market_bbo_inconsistent"})
 
 
 def _redacted_exception_message(exc: BaseException) -> str:
@@ -422,6 +423,11 @@ class TestnetScheduler:
                     f"scheduler_advance_failed:{type(exc).__name__}:{_redacted_exception_message(exc)}",
                 )
             if str(advanced.get("status") or "").lower() in {"blocked", "unknown", "fail", "failed"}:
+                if self._is_sampling_race_failure(advanced):
+                    return self._record_sampling_race_warning(
+                        current, tick_key, now, coordinator_state,
+                        restart_reconciled, advanced,
+                    )
                 return self._record_advance_failure(
                     current, tick_key, now, coordinator_state, restart_reconciled,
                     str(advanced.get("reason") or "scheduler_advance_blocked"), advanced,
@@ -473,6 +479,40 @@ class TestnetScheduler:
             "advance_failure_count": count,
             "advance_failure_threshold": self.advance_failure_threshold,
             "advance_result": dict(advance_result or {}),
+            "alerts_authorize_actions": False,
+        }
+        return self._record_tick(tick_id, result)
+
+    @staticmethod
+    def _is_sampling_race_failure(advance_result: Mapping[str, Any]) -> bool:
+        failure = advance_result.get("market_failure")
+        return (
+            isinstance(failure, Mapping)
+            and str(failure.get("reason") or "") in _SAMPLING_RACE_REASONS
+        )
+
+    def _record_sampling_race_warning(
+        self, current: Mapping[str, Any], tick_id: str, now: str,
+        coordinator_state: str, restart_reconciled: bool,
+        advance_result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        reason = str(advance_result.get("reason") or "scheduler_sampling_race")
+        result = {
+            **current,
+            "event": "scheduler_advance_warning",
+            "status": "active",
+            "occurred_at": now,
+            "tick_id": tick_id,
+            "coordinator_status": coordinator_state,
+            "restart_reconciled": restart_reconciled,
+            "restart_reconcile_required": False,
+            "execution_enabled": current.get("execution_enabled", True),
+            "next_action": "await_event_or_heartbeat",
+            "blocker": None,
+            "warning": reason,
+            "advance_failure_count": int(current.get("advance_failure_count") or 0),
+            "advance_failure_threshold": self.advance_failure_threshold,
+            "advance_result": dict(advance_result),
             "alerts_authorize_actions": False,
         }
         return self._record_tick(tick_id, result)
