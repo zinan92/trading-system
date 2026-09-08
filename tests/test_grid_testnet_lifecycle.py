@@ -75,6 +75,29 @@ def test_grid_initial_ladder_is_complete_and_geometry_is_locked(tmp_path: Path) 
     assert started["events"][-1]["event"] == "ladder_activated"
 
 
+def test_grid_five_rung_ladder_has_unique_canonical_and_client_identities(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    plan = _plan()
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": 64000.0 + index * 100, "side": "buy",
+         "take_profit": 64500.0 + index * 100, "hard_stop": 63000.0, "quantity": 0.1}
+        for index in range(5)
+    ]
+    plan["risk_budget"].update(max_open_orders=5, max_open_positions=5)
+    plan["risk_budget"]["max_notional"] = 40000.0
+    plan["risk_budget"]["maximum_loss_at_full_depth"] = 3000.0
+
+    started = GridTestnetLifecycle(tmp_path / "outputs", broker).start(
+        plan, timestamp="2026-08-22T01:00:00+00:00"
+    )
+
+    assert started["status"] == "active"
+    assert len(started["orders"]) == 5
+    for field in ("order_id", "idempotency_key", "client_order_id"):
+        values = [row[field] for row in started["orders"]]
+        assert len(values) == len(set(values)) == 5
+
+
 def test_grid_canonical_boundary_and_external_hard_stop_are_accepted(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path, protection=False)
     plan = _plan(lower=75000.0, upper=78531.5)

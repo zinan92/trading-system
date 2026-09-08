@@ -18293,3 +18293,29 @@ auditable datafeed port; broker execution remains a separate port.
   `incomplete`, with both family counts `0/2`, `live_enabled=false`, and
   `execution_authorized=false`; no online files were written.
 - `gitleaks git --no-banner --redact --log-opts='--all'` — no leaks found.
+# 2026-09-08 — Project Instrument Catalog facts into Grid proof plans and make rung identities explicit (#1190)
+
+## Decision
+
+- The proof driver now loads the selected Dashboard catalog and projects its
+  public Hyperliquid metadata through the standard-broker instrument mapping.
+  The resulting `minimum_notional`, `quantity_step`, `minimum_quantity`,
+  `price_tick`, and catalog `max_leverage` are carried in `execution_context`;
+  missing catalog identity or facts fail closed.
+- Every Grid command now carries a deterministic `client_order_id` derived
+  from its unique ticket identity, and the standard-broker adapter preserves
+  that identity in `OrderIntent`. This makes canonical order, idempotency, and
+  client identities independently inspectable across a multi-rung ladder.
+
+## Gotchas
+
+- `price_tick` is derived from the standard-broker Hyperliquid `PriceRule`; it
+  is not guessed from Dashboard `price_decimals`, which may be null.
+- The supplied receipt remains read-only evidence: its first rung was accepted
+  then cancelled and the second rung failed locally. No Testnet execution,
+  launchd operation, or online output mutation was performed for this change.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_grid_testnet_lifecycle.py tests/test_standard_broker_external_execution.py` — 48 passed.
+- `git diff --check` — passed.
