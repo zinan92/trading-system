@@ -39,6 +39,10 @@ def _preview() -> tuple[dict, dict]:
         "preview_digest": digest,
         "strategy_family": "grid",
         "instrument_id": "BTC-USD-PERP",
+        "minimum_notional": "10",
+        "quantity_step": "1",
+        "price_tick": "1",
+        "minimum_quantity": "1",
         "preview": {
             "cycle_id": "2026-09-08_DAY",
             "direction": "long",
@@ -127,6 +131,46 @@ def test_validate_grid_plan_fails_closed_with_missing_source() -> None:
         validate_grid_plan(build_plan(preview, confirmation))
 
     assert error.value.details["fields"] == ["max_slippage"]
+
+
+def test_validate_grid_plan_checks_effective_rungs_against_instrument_catalog() -> None:
+    preview, confirmation = _preview()
+    preview["price_tick"] = "1"
+    preview["quantity_step"] = "0.1"
+    preview["minimum_quantity"] = "0.1"
+    preview["minimum_notional"] = "10"
+    preview["preview"]["range"]["low"] = 80
+    preview["account"] = {"equity": 10_000}
+    preview["risk"] = {
+        "maximum_loss_at_full_depth": 100,
+        "selected_leverage": 5,
+        "max_slippage": 10,
+    }
+    preview["risk_gate"] = {"effective_notional": 1_000}
+    preview["preview"]["grid"].update({"max_open_orders": 4, "max_open_positions": 2})
+    preview["preview"]["orders"][0]["quantity"] = "0.1"
+    preview["preview"]["orders"][1]["quantity"] = "0.1"
+
+    with pytest.raises(ProofDriverError, match="instrument_constraints_blocked") as error:
+        validate_grid_plan(build_plan(preview, confirmation))
+
+    violation = error.value.details["violations"][0]
+    assert float(violation["notional"]) == 9.0
+    assert "minimum_notional=10" in violation["reasons"][-1]
+    assert "reduce grid count" in error.value.details["suggestion"]
+
+
+def test_validate_grid_plan_accepts_effective_rungs_on_catalog_rules() -> None:
+    preview, confirmation = _preview()
+    preview.update({"price_tick": "1", "quantity_step": "0.1", "minimum_quantity": "0.1", "minimum_notional": "10"})
+    preview["preview"]["range"]["low"] = 80
+    preview["account"] = {"equity": 10_000}
+    preview["risk"] = {"maximum_loss_at_full_depth": 100, "selected_leverage": 5, "max_slippage": 10}
+    preview["risk_gate"] = {"effective_notional": 1_000}
+    preview["preview"]["grid"].update({"max_open_orders": 4, "max_open_positions": 2})
+
+    result = validate_grid_plan(build_plan(preview, confirmation))
+    assert next(check for check in result["checks"] if check["name"] == "venue_constraints")["passed"] is True
 
 
 def test_plan_requires_canonical_cycle_identity() -> None:

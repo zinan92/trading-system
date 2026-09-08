@@ -430,7 +430,7 @@ class GridTestnetLifecycle:
             except GridTestnetLifecycleError as exc:
                 self._record_event(state, "ladder_incomplete", timestamp=timestamp, reason=str(exc), accepted_order_ids=accepted)
                 self._rollback_ladder(state, timestamp=timestamp, reason="initial_ladder_incomplete")
-                state["status"] = "blocked_reconciliation"
+                state["status"] = "blocked_local_validation" if str(exc).startswith("blocked_local_validation:") else "blocked_reconciliation"
                 state["blocker"] = f"initial_ladder_incomplete:{exc}"
                 raise
 
@@ -529,6 +529,10 @@ class GridTestnetLifecycle:
             except Exception as exc:  # noqa: BLE001 - bounded retry evidence.
                 last = exc
                 state.setdefault("retry_events", []).append({"operation": "submit", "attempt": attempt, "ticket_id": command["ticket_id"], "status": "failed", "error": type(exc).__name__, "timestamp": timestamp})
+                if self._is_local_validation_error(exc):
+                    raise GridTestnetLifecycleError(
+                        self._local_validation_reason(command, exc)
+                    ) from exc
                 # Never blindly repeat an ambiguous side effect.  A retry is
                 # allowed only after the public Broker seam proves that the
                 # idempotency key is absent; a known/unknown query outcome
@@ -541,8 +545,14 @@ class GridTestnetLifecycle:
                 try:
                     observed = query(str(command.get("idempotency_key") or command.get("ticket_id") or ""))
                 except Exception as query_exc:  # noqa: BLE001 - query uncertainty is terminal.
+                    detail = str(query_exc).strip()
+                    if isinstance(query_exc, KeyError):
+                        missing_key = query_exc.args[0] if query_exc.args else "unknown"
+                        detail = f"missing_key={missing_key}"
+                    elif not detail:
+                        detail = "query returned no reason"
                     raise GridTestnetLifecycleError(
-                        f"submit_unknown_query_failed:{type(query_exc).__name__}"
+                        f"submit_unknown_query_failed:{type(query_exc).__name__}:{detail}"
                     ) from query_exc
                 observed_state = str(
                     getattr(getattr(observed, "state", None), "value", getattr(observed, "state", ""))
@@ -555,6 +565,32 @@ class GridTestnetLifecycle:
                 if attempt >= max(1, retries):
                     break
         raise GridTestnetLifecycleError(f"submit_retries_exhausted:{type(last).__name__ if last else 'unknown'}")
+
+    @staticmethod
+    def _is_local_validation_error(exc: Exception) -> bool:
+        """Identify failures raised before an order can reach the venue."""
+
+        return isinstance(exc, (TypeError, ValueError)) or type(exc).__name__ in {
+            "BrokerCapabilityError",
+            "InstrumentBindingError",
+            "StandardBrokerExternalExecutionError",
+            "UnsupportedBrokerCapability",
+        }
+
+    @staticmethod
+    def _local_validation_reason(command: Mapping[str, Any], exc: Exception) -> str:
+        price = command.get("price")
+        quantity = command.get("quantity")
+        try:
+            notional = float(price) * float(quantity)
+        except (TypeError, ValueError):
+            notional = "unavailable"
+        detail = str(exc).strip() or "validation failed"
+        return (
+            "blocked_local_validation:"
+            f"{type(exc).__name__}:price={price}:quantity={quantity}:"
+            f"notional={notional}:reason={detail}"
+        )
 
     def _rollback_ladder(self, state: dict[str, Any], *, timestamp: str, reason: str) -> None:
         for row in state["orders"]:
