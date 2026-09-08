@@ -543,9 +543,9 @@ class StandardBrokerExternalExecutionAdapter:
             if normalized_operation == "query":
                 return self._binding.query(self._reference(payload))
             if normalized_operation == "open_orders":
-                return self._read_bundle(
-                    str(payload or self._instrument_id()).strip()
-                ).open_orders
+                return self._public_open_orders(
+                    self._read_bundle(str(payload or self._instrument_id()).strip()).open_orders
+                )
             if normalized_operation == "fills":
                 if isinstance(payload, Mapping):
                     return self._read_bundle(
@@ -602,6 +602,22 @@ class StandardBrokerExternalExecutionAdapter:
 
         if not str(instrument_id or "").strip():
             raise StandardBrokerExternalExecutionError("external_facts_instrument_required")
+        bundle = self._read_raw_facts(
+            instrument_id=instrument_id,
+            now=now,
+            order_id=order_id,
+            client_order_id=client_order_id,
+        )
+        return self._public_facts(bundle)
+
+    def _read_raw_facts(
+        self,
+        *,
+        instrument_id: str,
+        now: datetime | None = None,
+        order_id: str = "",
+        client_order_id: str | None = None,
+    ) -> object:
         reader = getattr(self._binding, "read_facts", None)
         if not callable(reader):
             raise StandardBrokerExternalExecutionError("external_facts_reader_missing")
@@ -624,12 +640,76 @@ class StandardBrokerExternalExecutionAdapter:
         order_id: str = "",
         client_order_id: str | None = None,
     ) -> object:
-        return self.read_facts(
+        return self._read_raw_facts(
             order_id=order_id,
             instrument_id=scope or self._instrument_id(),
             now=self._clock(),
             client_order_id=client_order_id,
         )
+
+    @classmethod
+    def _public_facts(cls, bundle: object) -> dict[str, Any]:
+        """Project the typed Broker bundle into the tick/read-model contract."""
+
+        reconciliation = getattr(bundle, "reconciliation", None)
+        cursor = getattr(getattr(reconciliation, "cursor", None), "value", None)
+        passed = getattr(reconciliation, "passed", None)
+        return {
+            "status": "pass" if passed is True and cursor not in (None, "") else "unknown",
+            "cursor": cls._safe_value(cursor),
+            "fills": cls._safe_value(getattr(bundle, "fills", ())),
+            "positions": cls._safe_value(getattr(bundle, "positions", ())),
+            "open_orders": cls._public_open_orders(getattr(bundle, "open_orders", ())),
+            "fees": cls._safe_value(getattr(bundle, "fees", ())),
+            "account": cls._safe_value(getattr(bundle, "account", None)),
+            "reconciliation": cls._safe_value(reconciliation),
+        }
+
+    @classmethod
+    def _public_open_orders(cls, rows: object) -> list[dict[str, Any]]:
+        """Expose stable broker/native identities for restart reconciliation."""
+
+        result: list[dict[str, Any]] = []
+        for row in rows or ():
+            value = cls._safe_value(row)
+            if isinstance(value, Mapping):
+                item = dict(value)
+                item.setdefault("oid", item.get("broker_order_id"))
+                item.setdefault("broker_order_id", item.get("oid"))
+                item.setdefault("cloid", item.get("client_order_id"))
+                item.setdefault("client_order_id", item.get("cloid"))
+                item.setdefault("size", item.get("quantity"))
+                result.append(item)
+            else:
+                result.append(
+                    {
+                        "order_id": getattr(row, "order_id", None),
+                        "broker_order_id": getattr(row, "broker_order_id", None),
+                        "oid": getattr(row, "oid", None),
+                        "client_order_id": getattr(row, "client_order_id", None),
+                        "cloid": getattr(row, "cloid", None),
+                        "price": cls._safe_value(getattr(row, "price", None)),
+                        "size": cls._safe_value(
+                            getattr(row, "size", getattr(row, "quantity", None))
+                        ),
+                    }
+                )
+        return result
+
+    @classmethod
+    def _safe_value(cls, value: object) -> Any:
+        if isinstance(value, Mapping):
+            return {str(key): cls._safe_value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._safe_value(item) for item in value]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        fields = getattr(value, "__dataclass_fields__", None)
+        if fields:
+            return {name: cls._safe_value(getattr(value, name)) for name in fields}
+        if hasattr(value, "value"):
+            return cls._safe_value(value.value)
+        return str(value)
 
     def _instrument_scope(self, payload: object) -> str:
         if isinstance(payload, Mapping):
