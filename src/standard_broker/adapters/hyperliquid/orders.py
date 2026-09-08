@@ -842,6 +842,9 @@ class HyperliquidOrderAdapter:
         self._intent_fingerprints[intent.idempotency_key] = self._intent_fingerprint(intent)
         self._by_client[receipt.client_order_id] = intent.order_id
         self._instrument_ids[intent.order_id] = intent.instrument_id
+        remember_instrument = getattr(self._transport, "remember_instrument", None)
+        if callable(remember_instrument):
+            remember_instrument(intent.order_id, intent.instrument_id)
         self._sides[intent.order_id] = intent.side
         self._intents[intent.order_id] = intent
 
@@ -931,6 +934,11 @@ class _RuntimeOrderTransport:
             "submit",
             self._native_order(intent, client_order_id),
         )
+
+    def remember_instrument(self, order_id: str, instrument_id: str) -> None:
+        """Keep recovered canonical orders usable before a submit call occurs."""
+
+        self._instrument_ids[order_id] = instrument_id
 
     def cancel(self, receipt: OrderReceipt) -> object:
         if receipt.broker_order_id is None:

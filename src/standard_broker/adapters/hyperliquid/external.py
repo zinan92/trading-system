@@ -1164,7 +1164,19 @@ class NautilusHyperliquidTestnetBackend:
             # rebuild only the default validator-operated universe from the
             # authoritative perp metadata instead of silently accepting it.
             result = self._build_standard_instruments_from_meta()
-        for instrument in result or []:
+        instruments = list(result or [])
+        standard_perps = [
+            instrument
+            for instrument in instruments
+            if self._is_standard_perp(instrument)
+        ]
+        if any(self._asset_index(instrument) is None for instrument in standard_perps):
+            # load_instrument_definitions may return a usable instrument whose
+            # info omits Hyperliquid's asset index.  Nautilus cancel/replace
+            # resolves that index from the cached instrument, so rebuild the
+            # default perp set from the authoritative metadata before caching.
+            instruments = self._build_standard_instruments_from_meta()
+        for instrument in instruments:
             cache = getattr(self._client_for_use(), "cache_instrument", None)
             if callable(cache):
                 cache(instrument)
@@ -1173,6 +1185,18 @@ class NautilusHyperliquidTestnetBackend:
                 continue
             self._instruments[str(instrument.id)] = instrument
             self._instruments[str(instrument.raw_symbol)] = instrument
+
+    @staticmethod
+    def _is_standard_perp(instrument: object) -> bool:
+        instrument_id = str(getattr(instrument, "id", ""))
+        return instrument_id.endswith("-USD-PERP.HYPERLIQUID") and ":" not in instrument_id
+
+    @staticmethod
+    def _asset_index(instrument: object) -> object | None:
+        info = getattr(instrument, "info", None)
+        if isinstance(info, Mapping):
+            return info.get("asset_index")
+        return None
 
     def _build_standard_instruments_from_meta(self) -> list[object]:
         try:

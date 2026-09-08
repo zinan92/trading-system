@@ -41,7 +41,7 @@ class FakeClient:
 
     async def load_instrument_definitions(self, **kwargs: object) -> list[object]:
         self.calls.append(("load_instrument_definitions", (), kwargs))
-        return [SimpleNamespace(id="HYPE-USD-PERP.HYPERLIQUID", raw_symbol="HYPE")]
+        return [AssetIndexInstrument("HYPE", 0)]
 
     async def get_perp_meta(self) -> str:
         self.calls.append(("get_perp_meta", (), {}))
@@ -87,6 +87,34 @@ class FakeClient:
             "quantity": "0.2",
             "ts_last": 1_800_000_000_000_000_000,
         }
+
+
+class AssetIndexInstrument(SimpleNamespace):
+    def __init__(self, name: str, asset_index: int | None) -> None:
+        super().__init__(
+            id=f"{name}-USD-PERP.HYPERLIQUID",
+            raw_symbol=name,
+            info={} if asset_index is None else {"asset_index": asset_index},
+        )
+
+
+class InstrumentLoadingClient(FakeClient):
+    def __init__(self, loaded: object, metadata: object) -> None:
+        super().__init__()
+        self.loaded = loaded
+        self.metadata = metadata
+
+    async def load_instrument_definitions(self, **kwargs: object) -> list[object]:
+        self.calls.append(("load_instrument_definitions", (), kwargs))
+        return [self.loaded]
+
+    async def get_perp_meta(self) -> object:
+        self.calls.append(("get_perp_meta", (), {}))
+        return self.metadata
+
+    async def cancel_order(self, *args: object, **kwargs: object) -> object:
+        self.calls.append(("cancel_order", args, kwargs))
+        return {"status": "ok"}
 
 
 class HyperliquidExternalBackendTests(unittest.TestCase):
@@ -154,6 +182,40 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
             self.assertTrue(backend.external_network)
             self.assertEqual(result["provenance"].transport_state, "external_testnet")
             self.assertEqual(len(client.cached), 1)
+
+    def test_loaded_perp_without_asset_index_is_rebuilt_before_cancel(self) -> None:
+        class MetadataBackend(NautilusHyperliquidTestnetBackend):
+            @staticmethod
+            def _build_standard_instruments_from_meta() -> list[object]:
+                return [AssetIndexInstrument("HYPE", 7)]
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = InstrumentLoadingClient(
+                AssetIndexInstrument("HYPE", None),
+                {"universe": [{"name": "HYPE", "index": 7, "szDecimals": 2}]},
+            )
+            session = self.session()
+            backend = MetadataBackend(
+                session=session,
+                config=HyperliquidTestnetBackendConfig(
+                    account_address=session.account.address,
+                    capabilities=session.capabilities,
+                ),
+                secrets=self.provider(directory),
+                client_factory=lambda private_key, account: client,
+            )
+            backend.activate(release_sha="a" * 40)
+
+            result = backend.invoke(
+                "order_execution",
+                "cancel",
+                {"instrument_id": "HYPE-USD-PERP"},
+            )
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(client.cached[0].info["asset_index"], 7)
+            self.assertEqual(client.calls[-1][0], "cancel_order")
+            self.assertEqual(client.calls[-1][1][0], "HYPE-USD-PERP.HYPERLIQUID")
 
     def test_account_read_keeps_native_payload_behind_provenance_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

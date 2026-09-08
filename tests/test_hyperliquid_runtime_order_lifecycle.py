@@ -321,6 +321,21 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(preflight.release_sha, "a" * 40)
 
+    def test_recovered_order_cancel_uses_intent_instrument_in_native_request(self) -> None:
+        adapter, backend = self.adapter()
+
+        recovered = adapter.recover(
+            self.intent(order_id="recovered", key="recovered"),
+            broker_order_id="701",
+            state="resting",
+        )
+
+        pending = adapter.cancel(recovered.order_id)
+
+        self.assertEqual(pending.state, OrderState.CANCEL_PENDING)
+        cancel_request = next(request for _, operation, request in backend.calls if operation == "cancel")
+        self.assertEqual(cancel_request["instrument_id"], "BTC-USD-PERP")
+
     def test_testnet_runtime_rejects_empty_capability_profile_before_ready(self) -> None:
         profile = capabilities_for(BrokerEnvironment.TESTNET)
         backend = FakeOrderBackend(profile)
