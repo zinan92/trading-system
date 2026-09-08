@@ -17846,6 +17846,38 @@ auditable datafeed port; broker execution remains a separate port.
 - Read-only dry-run against the online root stopped at
   `durable_park_confirmation_missing`; receipt recorded
   `secret_material_present=false` and no online files changed.
+
+# 2026-09-08 — Accept Dashboard durable Park confirmation in attended proof (#1163)
+
+## Decision
+
+- Define one shared durable-confirmation parser for the historical Telegram/Jessie
+  ledger and the Dashboard confirmations projection. Dashboard evidence is
+  accepted only when it is confirmed, acknowledged, attributed to `park`, and
+  bound to the same plan and activation identities.
+- Dashboard projections map `proposal_id` to `preview_digest` and
+  `receipt_digest` to `confirmation_digest`; `execution_authorized` is set only
+  after the caller supplies explicit `--approval-id` and `--approved-by park`.
+- Keep the proof path Paper/Testnet-only and dry-run writes isolated to its
+  temporary evidence copy; no launchd, service, order, or secret contents are
+  touched.
+
+## Gotchas
+
+- The current online Dashboard sample is an older confirmed activation without
+  `acknowledged=true`; the strict dry-run therefore stops at
+  `dashboard_confirmation_not_acknowledged`. It must not be upgraded to a pass.
+- Telegram historical confirmations continue through the Coordinator durable
+  ledger checks unchanged. Dashboard confirmations do not manufacture a
+  Telegram proposal.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_testnet_automation_proof.py` — 12 passed.
+- Read-only dry-run against `/Users/wendy/work/park-paper-output` wrote
+  `receipts/issue-1163-dry-run.json` and returned
+  `dashboard_confirmation_not_acknowledged`; `secret_material_present=false`.
+- `git diff --check` passed; no launchd or online output files were modified.
 ## 2026-09-08 — Add deterministic 48-hour Testnet soak report (#1150)
 
 ## Decision

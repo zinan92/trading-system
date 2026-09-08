@@ -22,6 +22,10 @@ from unittest.mock import patch
 from pipelines import testnet_automation_proof as proof
 from services.dashboard_control_plane import canonical_preview_digest
 from services.journal_store import load_json, write_json
+from services.park_confirmation_ledger import (
+    DurableParkConfirmationError,
+    parse_durable_confirmation,
+)
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 
 
@@ -141,6 +145,28 @@ def map_confirmation(
     if not approval_id.strip() or approved_by.strip().lower() != "park":
         raise ProofDriverError("park_approval_required")
     digest = str(dashboard.get("plan_digest") or dashboard.get("preview_digest") or "")
+    dashboard_path = output_root / DASHBOARD_CONFIRMATIONS
+    if dashboard_path.exists() and dashboard.get("status") != "confirmed":
+        raise ProofDriverError("dashboard_confirmation_not_confirmed")
+    if dashboard_path.exists() and dashboard.get("acknowledged") is not True:
+        raise ProofDriverError("dashboard_confirmation_not_acknowledged")
+    if dashboard_path.exists() and str(dashboard.get("operator_id") or "").strip().lower() != "park":
+        raise ProofDriverError("dashboard_operator_invalid")
+    dashboard_confirmation = {
+        "event": "confirmed", "execution_authorized": True, "execution_environment": "testnet",
+        "plan_digest": digest, "confirmation_id": str(dashboard.get("confirmation_id") or ""),
+        "proposal_id": digest, "receipt_digest": str(dashboard.get("confirmation_digest") or ""),
+        "confirmed_at": dashboard.get("confirmed_at"), "operator_id": "park",
+        "activation_id": dashboard.get("activation_id"), "confirmation_source": "dashboard",
+    }
+    if dashboard_path.exists():
+        try:
+            return parse_durable_confirmation(
+                output_root, plan={"plan_digest": digest}, confirmation=dashboard_confirmation,
+            )
+        except DurableParkConfirmationError as exc:
+            if exc.reason_code.startswith("dashboard_") or exc.reason_code == "activation_identity_mismatch":
+                raise ProofDriverError(exc.reason_code) from exc
     rows = _rows(output_root / PARK_CONFIRMATIONS)
     decisions = [row for row in rows if row.get("event") in {"confirmed", "rejected"} and row.get("plan_digest") == digest]
     if not decisions or decisions[-1].get("event") != "confirmed":
