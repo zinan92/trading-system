@@ -1,5 +1,36 @@
 # Decision Log
 
+# 2026-09-08 — Recover durable Grid identities before cancel retry (#1206)
+
+## Decision
+
+- Keep Canonical Grid `upper_boundary_invalidated` terminal semantics. A long
+  Grid with only resting entries still exits on an upper-boundary breach: it
+  freezes new exposure, cancels every entry, and seals only after exchange
+  readback proves zero open orders. It must not continue leaving orders live
+  above the authorised range.
+- When a restarted external standard-broker binding cannot resolve a persisted
+  broker OID, restore the submission-ledger identity and retry cancel. The
+  persisted cloid remains the fallback identity when no broker OID is present.
+- A failed cancel records `exchange_exposure_open` with the affected
+  identities. Each later Testnet tick performs one bounded cancel pass and an
+  `open_orders` readback; only an empty readback clears the fact and permits
+  terminal reconciliation. Every attempt is recorded in the lifecycle events.
+
+## Gotchas
+
+- `cancel_pending` is an acknowledgement of the cancel request, not proof that
+  the venue order is gone. Treating it as closed would recreate the incident.
+- Real Testnet lifecycle JSON showed five accepted OID/cloid pairs and the
+  exact `KeyError: unknown Hyperliquid order identity` failure. Those files and
+  the standard-broker ledger namespace were read only; tests use `tmp_path` and
+  fake broker bindings, never the online output root or network.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_standard_broker_external_execution.py` — 32 passed.
+- `git diff --check` — passed.
+
 # 2026-09-08 — Bind durable Dashboard approval to Testnet ticks and repair deferred exception handling (#1202)
 
 ## Decision
