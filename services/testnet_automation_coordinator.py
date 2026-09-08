@@ -71,6 +71,7 @@ _ACTIVATION_FIELDS = (
     "requested_max_loss",
     "effective_max_loss",
     "risk_gate_digest",
+    "execution_slice",
 )
 _FORBIDDEN_SECRET_FIELDS = frozenset(
     {
@@ -169,6 +170,7 @@ class TestnetActivation:
     requested_max_loss: str | None = None
     effective_max_loss: str | None = None
     risk_gate_digest: str | None = None
+    execution_slice: Mapping[str, Any] | None = None
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "TestnetActivation":
@@ -240,6 +242,11 @@ class TestnetActivation:
             normalized_risk_gate_digest = str(risk_gate_digest).lower()
             if _DIGEST_RE.fullmatch(normalized_risk_gate_digest) is None:
                 raise TestnetCoordinatorError("risk_gate_digest_invalid")
+        execution_slice = value.get("execution_slice")
+        if execution_slice is not None and not isinstance(execution_slice, Mapping):
+            raise TestnetCoordinatorError("execution_slice_invalid")
+        if isinstance(execution_slice, Mapping) and not str(execution_slice.get("execution_slice_id") or "").strip():
+            raise TestnetCoordinatorError("execution_slice_identity_missing")
         return cls(
             strategy_family=strategy_family,
             strategy_session_id=_required_text(
@@ -259,6 +266,7 @@ class TestnetActivation:
             capability_revision=capability_revision,
             **optional_numbers,
             risk_gate_digest=normalized_risk_gate_digest,
+            execution_slice=deepcopy(dict(execution_slice)) if isinstance(execution_slice, Mapping) else None,
         )
 
     def to_mapping(self) -> dict[str, Any]:
@@ -612,6 +620,63 @@ class TestnetAutomationCoordinator:
             # caller supplied a fresh command id.
             return dict(current)
         timestamp = self._timestamp(now)
+        execution_slice = deepcopy(activation.execution_slice)
+        if execution_slice is None:
+            # Dashboard confirmation already selected one explicit
+            # instrument. Materialize the pending broker-bound slice at the
+            # composition root so enable_* cannot expose a null slice. The
+            # full candidate selector may replace this envelope later when
+            # fresh market/account facts are supplied via select_candidate.
+            suffix = activation.activation_id.replace("sha256:", "")[:16]
+            asset = activation.instrument_id.split("-", 1)[0].split(".", 1)[0]
+            quantity = "1"
+            execution_slice = {
+                "schema_version": "execution-slice-v1",
+                "execution_slice_id": f"execution-activation:{suffix}",
+                "portfolio_session_id": activation.strategy_session_id,
+                "allocation_id": f"allocation-activation:{suffix}",
+                "asset": asset,
+                "broker_binding": {
+                    "activation_id": activation.activation_id,
+                    "broker_id": activation.broker_id,
+                    "environment": activation.environment,
+                    "transport_profile": activation.transport_profile,
+                    "instrument_id": activation.instrument_id,
+                    "account_fingerprint": activation.account_fingerprint,
+                    "runtime_id": activation.runtime_id,
+                    "release_sha": activation.release_sha,
+                    "capability_revision": activation.capability_revision,
+                },
+                "allocation": {
+                    "allocation_id": f"allocation-activation:{suffix}",
+                    "portfolio_session_id": activation.strategy_session_id,
+                    "candidate_id": f"activation-candidate:{suffix}",
+                    "asset": asset,
+                    "instrument_id": activation.instrument_id,
+                    "direction": "flat",
+                    "requested_quantity": quantity,
+                    "effective_quantity": quantity,
+                    "requested_notional": activation.requested_notional,
+                    "effective_notional": activation.effective_notional,
+                    "position_action": "open",
+                    "status": "accepted",
+                    "execution_slice_id": f"execution-activation:{suffix}",
+                    "source_strategy_plan_digest": activation.plan_digest,
+                    "candidate_rank": 1,
+                    "reasons": [],
+                },
+                "selection_id": f"activation-selection:{suffix}",
+                "status": "pending",
+            }
+        if execution_slice is not None:
+            allocation = execution_slice.get("allocation")
+            if not isinstance(allocation, Mapping):
+                raise TestnetCoordinatorError("execution_slice_allocation_required")
+            if str(allocation.get("asset") or "").strip() != str(execution_slice.get("asset") or "").strip():
+                raise TestnetCoordinatorError("execution_slice_asset_mismatch")
+            binding = dict(execution_slice.get("broker_binding") or {})
+            binding["activation_id"] = activation.activation_id
+            execution_slice["broker_binding"] = binding
         state = {
             "schema_version": COORDINATOR_SCHEMA,
             "event": "activated",
@@ -631,6 +696,10 @@ class TestnetAutomationCoordinator:
             "execution_mutation": False,
             "secret_material_present": False,
             "blocker": None,
+            "execution_slice": execution_slice,
+            "selected_execution_slice_id": execution_slice.get("execution_slice_id") if execution_slice else None,
+            "selected_asset": execution_slice.get("asset") if execution_slice else None,
+            "selected_instrument_id": (execution_slice.get("broker_binding") or {}).get("instrument_id") if execution_slice else None,
         }
         return self._record(state)
 

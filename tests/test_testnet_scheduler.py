@@ -42,39 +42,38 @@ def _scheduler(tmp_path: Path) -> tuple[TestnetScheduler, TestnetAutomationCoord
         tmp_path / "outputs",
         clock=lambda: NOW_DT,
     )
-    owner_store.initialize_cloud(owner_id="cloud-primary")
+    owner_store.initialize_local(owner_id="local-mac")
     return (
         TestnetScheduler(
             tmp_path / "outputs",
             coordinator,
-            owner_id="cloud-primary",
-            runtime_mode="cloud",
+            owner_id="local-mac",
+            runtime_mode="local",
             clock=lambda: NOW,
         ),
         coordinator,
     )
 
 
-def test_testnet_ownership_is_cloud_only_and_epoch_bound(tmp_path: Path) -> None:
+def test_testnet_ownership_is_local_only_and_epoch_bound(tmp_path: Path) -> None:
     store = TestnetSchedulerOwnershipStore(tmp_path / "outputs", clock=lambda: NOW_DT)
-    active = store.initialize_cloud(owner_id="cloud-primary")
+    active = store.initialize_local(owner_id="local-mac")
 
     assert active["schema_version"] == TESTNET_SCHEDULER_SCHEMA
     assert active["scope"] == "testnet_only"
     assert active["status"] == "active"
     assert active["epoch"] == 1
-    assert TestnetSchedulerGuard(tmp_path / "outputs", runtime_mode="local").verify()["ok"] is False
-    assert TestnetSchedulerGuard(tmp_path / "outputs", runtime_mode="local").verify()["blocker"] == "testnet_scheduler_cloud_only"
+    assert TestnetSchedulerGuard(tmp_path / "outputs", runtime_mode="local", owner_id="local-mac").verify()["ok"] is True
     assert TestnetSchedulerGuard(
         tmp_path / "outputs",
-        runtime_mode="cloud",
-        owner_id="cloud-primary",
+        runtime_mode="local",
+        owner_id="local-mac",
     ).verify()["ok"] is True
 
-    paused = store.pause(expected_owner_id="cloud-primary", expected_epoch=1)
-    restored = store.activate(new_owner_id="cloud-secondary", expected_epoch=paused["epoch"])
+    paused = store.pause(expected_owner_id="local-mac", expected_epoch=1)
+    restored = store.activate(new_owner_id="local-secondary", expected_epoch=paused["epoch"])
     assert restored["epoch"] == 3
-    assert restored["active_owner_id"] == "cloud-secondary"
+    assert restored["active_owner_id"] == "local-secondary"
 
 
 def test_scheduler_activation_and_duplicate_tick_are_idempotent(tmp_path: Path) -> None:
@@ -159,8 +158,8 @@ def test_scheduler_rejects_wrong_owner_without_touching_coordinator(tmp_path: Pa
     wrong = TestnetScheduler(
         tmp_path / "outputs",
         coordinator,
-        owner_id="cloud-secondary",
-        runtime_mode="cloud",
+        owner_id="local-secondary",
+        runtime_mode="local",
         clock=lambda: NOW,
     )
 
@@ -169,3 +168,12 @@ def test_scheduler_rejects_wrong_owner_without_touching_coordinator(tmp_path: Pa
     assert result["status"] == "blocked"
     assert result["blocker"] == "testnet_scheduler_owner_mismatch"
     assert coordinator.status()["status"] == "activated"
+
+
+def test_dead_man_marks_missing_heartbeat_without_authorizing_actions(tmp_path: Path) -> None:
+    scheduler, _coordinator = _scheduler(tmp_path)
+    result = scheduler.dead_man(timestamp="2026-08-26T01:06:00+00:00")
+
+    assert result["dead_man"]["status"] == "execution_tick_scheduler_down"
+    assert result["next_action"] == "notify_park_and_wait"
+    assert result["alerts_authorize_actions"] is False
