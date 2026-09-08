@@ -324,6 +324,28 @@ def test_reconcile_stop_closes_never_executed_activation(tmp_path: Path) -> None
     assert result["receipt"]["submitted_order_count"] == 0
 
 
+def test_reconcile_stop_closes_candidate_selected_without_execution(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    coordinator.activate(_activation(), command_id="activate-candidate-stop")
+    coordinator._record({
+        **coordinator.status(),
+        "status": "candidate_selected",
+        "execution_enabled": False,
+        "execution_mutation": False,
+        "network_operation_invoked": False,
+        "canonical_order_count": 0,
+        "execution_receipts": [],
+    })
+
+    result = coordinator.command(
+        "reconcile_stop", {"reason": "candidate_selected_zero_orders"},
+        command_id="reconcile-candidate-stop",
+    )
+
+    assert result["status"] == "idle"
+    assert result["receipt"]["reason"] == "never_executed"
+
+
 def test_reconcile_stop_keeps_enabled_testnet_activation_blocked(tmp_path: Path) -> None:
     class Broker:
         transport_state = "external_testnet"
@@ -351,6 +373,51 @@ def test_reconcile_stop_keeps_enabled_testnet_activation_blocked(tmp_path: Path)
         coordinator.command(
             "reconcile_stop", {"reason": "zero_orders"}, command_id="reconcile-enabled-testnet"
         )
+
+
+def test_protected_start_confirmation_accepts_durable_dashboard_projection(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    coordinator = _coordinator(tmp_path)
+    activation = _activation(
+        transport_profile="hyperliquid-testnet-position-protection",
+        capability_revision="hyperliquid-testnet-position-protection-runtime-v1",
+    )
+    coordinator.activate(activation, command_id="activate-dashboard-confirmation")
+    confirmed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    confirmation_digest = "sha256:" + "d" * 64
+    row = {
+        "schema_version": "dashboard-confirmation-v1",
+        "status": "confirmed",
+        "event": "operator_confirmed",
+        "confirmation_id": "dashboard-confirmation:test",
+        "confirmation_digest": confirmation_digest,
+        "preview_digest": activation["plan_digest"],
+        "acknowledged": True,
+        "operator_id": "park",
+        "confirmed_at": confirmed_at,
+        "activation_id": activation_digest(activation),
+    }
+    path = tmp_path / "outputs" / "dashboard_control_plane" / "confirmations.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps([row]), encoding="utf-8")
+
+    coordinator.verify_confirmation(
+        {"plan_digest": activation["plan_digest"]},
+        {
+            "event": "confirmed",
+            "execution_authorized": True,
+            "execution_environment": "testnet",
+            "plan_digest": activation["plan_digest"],
+            "confirmation_id": row["confirmation_id"],
+            "proposal_id": activation["plan_digest"],
+            "receipt_digest": confirmation_digest,
+            "confirmed_at": confirmed_at,
+            "operator_id": "park",
+            "activation_id": row["activation_id"],
+            "confirmation_source": "dashboard",
+        },
+    )
 
 
 @pytest.mark.parametrize(
