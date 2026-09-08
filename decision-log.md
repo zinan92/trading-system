@@ -18293,6 +18293,34 @@ auditable datafeed port; broker execution remains a separate port.
   `incomplete`, with both family counts `0/2`, `live_enabled=false`, and
   `execution_authorized=false`; no online files were written.
 - `gitleaks git --no-banner --redact --log-opts='--all'` — no leaks found.
+# 2026-09-08 — Quantize Hyperliquid Grid prices before proof and lifecycle (#1192)
+
+## Decision
+
+- Project Hyperliquid `szDecimals` into catalog price facts: five significant
+  digits and at most `6 - szDecimals` decimal places. The same venue facts now
+  set the preview execution increments and quantity increment.
+- Quantize Grid entry, TP, and hard-stop prices before preview identity/digest
+  calculation. Entry prices round toward the grid interior, preserving the
+  requested range and monotonic ladder; proof and lifecycle validation apply
+  the same precision rule and fail closed.
+
+## Gotchas
+
+- Hyperliquid price precision is magnitude-dependent; `price_decimals` alone
+  is not a complete tick. For BTC `75688.6` becomes `75689` for a buy rung.
+- The supplied lifecycle receipt remains read-only evidence: its second rung
+  was rejected locally and the first rung was cancelled. No Testnet execution,
+  launchd operation, or online output mutation was performed for this issue.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_dashboard_control_plane.py tests/test_grid_sizing.py tests/test_testnet_proof_driver.py tests/test_grid_testnet_lifecycle.py` — 111 passed.
+- `python3 -m compileall -q services/... pipelines/testnet_proof_driver.py` and
+  `git diff --check` — passed.
+- Standard-broker Hyperliquid `PriceRule` and order validation were read-only
+  inputs; no changes were made in `~/work/standard-broker`.
+
 # 2026-09-08 — Project Instrument Catalog facts into Grid proof plans and make rung identities explicit (#1190)
 
 ## Decision

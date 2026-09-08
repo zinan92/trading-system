@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -37,6 +38,7 @@ class GridTestnetLifecycle:
         identity = self._identity(plan)
         self._validate_risk_inputs(plan)
         rungs = self._rungs(plan, identity)
+        self._validate_venue_precision(plan, rungs)
         self._validate_full_depth_risk(plan, rungs)
         existing = self._load(identity["plan_id"])
         if existing is not None:
@@ -1038,6 +1040,24 @@ class GridTestnetLifecycle:
         equity = float(risk.get("equity") or 0.0)
         if equity <= 0 or total_notional / equity > float(risk.get("leverage_limit") or 0.0) + 1e-9:
             raise GridTestnetLifecycleError("leverage_exceeded_at_full_depth")
+
+    @staticmethod
+    def _validate_venue_precision(plan: Mapping[str, Any], rungs: list[dict[str, Any]]) -> None:
+        context = plan.get("execution_context") if isinstance(plan.get("execution_context"), Mapping) else {}
+        max_decimal_places = context.get("price_max_decimal_places")
+        if max_decimal_places in (None, ""):
+            return
+        max_decimal_places = int(max_decimal_places)
+        max_significant_digits = int(context.get("price_max_significant_digits") or 5)
+        for rung in rungs:
+            for field in ("price", "tp", "hard_stop"):
+                value = Decimal(str(rung[field])).normalize()
+                decimal_places = max(0, -value.as_tuple().exponent)
+                digits = "".join(str(digit) for digit in value.as_tuple().digits).lstrip("0").rstrip("0")
+                if decimal_places > max_decimal_places or len(digits) > max_significant_digits:
+                    raise GridTestnetLifecycleError(
+                        f"instrument_precision_invalid:{field}={rung[field]}:{max_significant_digits}sig/{max_decimal_places}dp"
+                    )
         # Canonical execution rounding may produce adjacent quantity steps
         # (for example .00013 and .00012).  Each rung remains authoritative;
         # aggregate notional and loss checks below are the risk gate.

@@ -125,6 +125,8 @@ def test_plan_projects_catalog_and_standard_broker_instrument_constraints() -> N
         "runtime_id": None,
         "capability_revision": None,
         "price_tick": "0.1",
+        "price_max_decimal_places": 1,
+        "price_max_significant_digits": 5,
         "quantity_step": "0.00001",
         "minimum_quantity": "0.00001",
         "minimum_notional": "10",
@@ -192,6 +194,27 @@ def test_validate_grid_plan_checks_effective_rungs_against_instrument_catalog() 
     assert float(violation["notional"]) == 9.0
     assert "minimum_notional=10" in violation["reasons"][-1]
     assert "reduce grid count" in error.value.details["suggestion"]
+
+
+def test_validate_grid_plan_rejects_hyperliquid_significant_digit_violation() -> None:
+    preview, confirmation = _preview()
+    preview["preview"]["range"] = {"low": 75000, "high": 76000}
+    preview["preview"]["grid"]["hard_stop"] = 74000
+    preview["preview"]["orders"] = [
+        {"level": 0, "side": "buy", "price": 75688.6, "quantity": "0.00025", "tp": 75800},
+        {"level": 1, "side": "buy", "price": 75500, "quantity": "0.00025", "tp": 75700},
+    ]
+    preview["preview"]["direction"] = "long"
+    preview["account"] = {"equity": 10_000}
+    preview["risk"] = {"maximum_loss_at_full_depth": 100, "selected_leverage": 5, "max_slippage": 10}
+    preview["risk_gate"] = {"effective_notional": 1_000}
+    preview["preview"]["grid"].update({"max_open_orders": 4, "max_open_positions": 2})
+    preview["instrument"] = {"instrument_id": "BTC-USD-PERP", "asset": "BTC", "size_decimals": 5, "max_leverage": 40}
+
+    with pytest.raises(ProofDriverError, match="instrument_constraints_blocked") as error:
+        validate_grid_plan(build_plan(preview, confirmation, catalog_rows=[preview["instrument"]]))
+
+    assert "5sig/1dp" in error.value.details["violations"][0]["reasons"][0]
 
 
 def test_validate_grid_plan_accepts_effective_rungs_on_catalog_rules() -> None:

@@ -18,7 +18,7 @@ import hashlib
 import json
 import math
 from copy import deepcopy
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Any
 
 from services.dualtrack_execution_contract import normalize_execution_command
@@ -80,6 +80,47 @@ def _floor_quantity(value: float, config: dict[str, Any]) -> float:
     return float(quantity)
 
 
+def venue_price_increment(value: Any, *, max_decimal_places: int, max_significant_digits: int = 5) -> Decimal:
+    """Return the Hyperliquid-style price increment at one price magnitude."""
+
+    price = Decimal(str(value))
+    if price <= 0:
+        raise ValueError("venue price must be positive")
+    exponent = price.adjusted() - max_significant_digits + 1
+    significant = Decimal(1).scaleb(exponent)
+    decimal_limit = Decimal(1).scaleb(-int(max_decimal_places))
+    return max(significant, decimal_limit)
+
+
+def _quantize_venue_price(value: Any, config: dict[str, Any], *, rounding: str) -> float:
+    settings = dict(config.get("execution_contract") or {})
+    max_decimal_places = settings.get("price_max_decimal_places")
+    if max_decimal_places in (None, ""):
+        return float(value)
+    increment = venue_price_increment(
+        value,
+        max_decimal_places=int(max_decimal_places),
+        max_significant_digits=int(settings.get("price_max_significant_digits") or 5),
+    )
+    decimal_value = Decimal(str(value))
+    mode = ROUND_CEILING if rounding == "ceiling" else ROUND_FLOOR
+    return float((decimal_value / increment).to_integral_value(rounding=mode) * increment)
+
+
+def _quantize_grid_command(command: dict[str, Any], config: dict[str, Any], *, low: float, high: float) -> dict[str, Any]:
+    side = str(command.get("side") or "").lower()
+    price_rounding = "ceiling" if side == "buy" else "floor"
+    if side == "buy" and _quantize_venue_price(command["price"], config, rounding=price_rounding) > high:
+        price_rounding = "floor"
+    if side == "sell" and _quantize_venue_price(command["price"], config, rounding=price_rounding) < low:
+        price_rounding = "ceiling"
+    result = dict(command)
+    result["price"] = _quantize_venue_price(command["price"], config, rounding=price_rounding)
+    result["tp"] = _quantize_venue_price(command["tp"], config, rounding="floor" if side == "buy" else "ceiling")
+    result["sl"] = _quantize_venue_price(command["sl"], config, rounding="floor" if side == "buy" else "ceiling")
+    return result
+
+
 def _grid_geometry(
     *,
     low: float,
@@ -127,6 +168,7 @@ def _grid_geometry(
             },
             config,
         )
+        normalized = _quantize_grid_command(normalized, config, low=low, high=high)
         price = positive_number(normalized.get("price"), "executable grid price")
         tp = positive_number(normalized.get("tp"), "executable grid take profit")
         if price == tp:

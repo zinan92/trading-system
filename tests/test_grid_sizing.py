@@ -131,6 +131,36 @@ def test_average_true_range_requires_history() -> None:
         grid_sizing.average_true_range([{"high": 1, "low": 1, "close": 1}], period=14)
 
 
+@pytest.mark.parametrize(
+    ("price", "max_decimal_places", "expected"),
+    [
+        (75688.6, 1, 75689.0),  # BTC: 5 significant digits, one decimal place allowed
+        (3123.45, 2, 3123.5),   # ETH-like precision: 5 significant digits
+        (0.00123456, 6, 0.001235),  # low-priced asset: decimal cap is not the only rule
+    ],
+)
+def test_hyperliquid_grid_prices_quantize_to_venue_precision(
+    price: float, max_decimal_places: int, expected: float,
+) -> None:
+    increment = grid_sizing.venue_price_increment(price, max_decimal_places=max_decimal_places)
+    assert float(increment) > 0
+    config = {
+        "execution_contract": {
+            "price_increment": str(increment),
+            "quantity_increment": "0.00001",
+            "price_max_decimal_places": max_decimal_places,
+            "price_max_significant_digits": 5,
+        }
+    }
+    command = grid_sizing._quantize_grid_command(
+        {"side": "buy", "price": price, "tp": price * 2, "sl": price / 2},
+        config,
+        low=price - 1000,
+        high=price + 1000,
+    )
+    assert command["price"] == pytest.approx(expected)
+
+
 def test_build_grid_preview_matches_control_plane_preview(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     body = {"direction": "neutral", "style": "steady"}
