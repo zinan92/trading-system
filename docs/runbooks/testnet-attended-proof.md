@@ -43,6 +43,23 @@ PYTHONPATH=src python3 -m pipelines.testnet_proof_driver \
   --dry-run
 ```
 
+For Issue #1165, run the driver inside the installed Nautilus application
+environment so `nautilus_trader` is importable in the same process:
+
+```sh
+V="$HOME/.local/share/trading-orchestrator/nautilus-1.230.0"
+PYTHONPATH=src "$V/bin/python" -m pipelines.testnet_proof_driver \
+  ...the same arguments as above... \
+  --dry-run
+```
+
+The driver combines the Dashboard preview market facts with the protected
+binding fact. The binding `source`, observed `price` (as `mid`), and
+`observed_at` are authoritative; the protected profile's fixed
+`fallback_policy=none` is explicit, and any other missing required field stops
+with `market_facts_missing`. The receipt must report `candidate_selected=true`,
+`execution_mutation=false`, and `network_operation_invoked=false`.
+
 `--dry-run` copies the required evidence into a temporary directory before
 running the existing proof gates, so it does not write the online output root
 or submit an order. A real start still requires Park and the exact

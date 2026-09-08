@@ -42,6 +42,43 @@ class ProofDriverError(ValueError):
         super().__init__(reason_code)
 
 
+def build_market_document(
+    preview: Mapping[str, Any], binding_market: Mapping[str, Any], *, instrument_id: str
+) -> dict[str, Any]:
+    """Combine Dashboard quality with the protected binding fact.
+
+    Missing fields remain missing, except for the protected profile's explicit
+    no-fallback invariant, so proof validation stays fail-closed.
+    """
+    dashboard_market = preview.get("market")
+    if not isinstance(dashboard_market, Mapping) or not isinstance(binding_market, Mapping):
+        raise ProofDriverError("market_fact_invalid")
+    binding = dict(binding_market)
+    source = str(binding.get("source") or "").strip().lower()
+    price = binding.get("price")
+    observed_at = binding.get("observed_at")
+    if not source or price in (None, "") or observed_at in (None, ""):
+        raise ProofDriverError("market_fact_invalid")
+
+    market = dict(dashboard_market)
+    # Keep Dashboard's richer quality fields when the adapter exposes only its
+    # sparse contract, while binding metadata remains authoritative when set.
+    market.update({key: value for key, value in binding.items() if value is not None})
+    market["source"] = source
+    market["instrument_id"] = str(binding.get("instrument_id") or instrument_id)
+    market["mid"] = price
+    market["observed_at"] = observed_at
+    # The protected exact-source Testnet profile has no fallback by contract.
+    market.setdefault("fallback_policy", "none")
+    if "fresh" not in market and "freshness" in binding:
+        market["fresh"] = str(binding["freshness"]).lower() == "fresh"
+
+    missing = [field for field in proof._MARKET_REQUIRED if field not in market]
+    if missing:
+        raise ProofDriverError("market_facts_missing", fields=missing)
+    return market
+
+
 def _rows(path: Path) -> list[dict[str, Any]]:
     try:
         if path.suffix == ".jsonl":
@@ -200,6 +237,38 @@ def _copy_evidence(source: Path, target: Path) -> None:
             shutil.copy2(origin, destination)
 
 
+def _reset_paper_capability_in_dry_run(work_root: Path) -> None:
+    """Project a prior local-Paper capability back to the proof baseline.
+
+    #1164 can leave the shared Paper output at ``paper_execution_ready``.
+    Dry-run must still exercise activation and candidate selection, but only
+    in its temporary copy; the online state is never rewritten.
+    """
+    current_path = work_root / "testnet_automation/current.json"
+    try:
+        rows = load_json(current_path)
+    except Exception:  # noqa: BLE001 - let the normal proof gates report state errors.
+        return
+    if not isinstance(rows, list) or not rows or not isinstance(rows[-1], Mapping):
+        return
+    current = dict(rows[-1])
+    if current.get("status") != "paper_execution_ready":
+        return
+    current.update(
+        {
+            "event": "activated",
+            "action": "activate",
+            "status": "activated",
+            "execution_enabled": False,
+            "execution_ready": False,
+            "execution_blocker": "capability_gap:execution",
+            "execution_profile": None,
+            "next_action": "await_execution_capability",
+        }
+    )
+    write_json(current_path, [current])
+
+
 def _write_input(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json(path, dict(value))
@@ -218,6 +287,7 @@ def run(
         if dry_run:
             work_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="testnet-proof-driver-")))
             _copy_evidence(output_root, work_root)
+            _reset_paper_capability_in_dry_run(work_root)
         plan_path = work_root / "driver-inputs/plan.json"
         confirmation_path = work_root / "driver-inputs/confirmation.json"
         market_path = work_root / "driver-inputs/market.json"
@@ -239,8 +309,9 @@ def run(
             market = broker.market_fact(instrument_id=plan["instrument_id"], now=observed_at)
             if not isinstance(market, Mapping):
                 raise ProofDriverError("market_fact_invalid")
-            market = dict(market)
-            market.setdefault("mid", market.get("price"))
+            market = build_market_document(
+                preview, market, instrument_id=plan["instrument_id"]
+            )
             _write_input(market_path, market)
         finally:
             close = getattr(broker, "close", None)
@@ -307,4 +378,11 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["ProofDriverError", "build_plan", "map_confirmation", "run", "main"]
+__all__ = [
+    "ProofDriverError",
+    "build_market_document",
+    "build_plan",
+    "map_confirmation",
+    "run",
+    "main",
+]
