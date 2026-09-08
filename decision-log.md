@@ -17756,3 +17756,28 @@ auditable datafeed port; broker execution remains a separate port.
 - `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_testnet_scheduler.py tests/test_dashboard_control_plane.py tests/test_testnet_automation_coordinator.py tests/test_testnet_execution_order_port.py` — 71 passed.
 - `git diff --check` passed. No deployment, launchd operation, data source,
   HTTP 8100 contract, or live-money path was changed.
+
+# 2026-09-08 — Use compact Dashboard Confirm body (#1156)
+
+## Decision
+
+- Dashboard V5 Confirm sends only the durable `preview_digest` plus the
+  operator acknowledgement, identity, and statement. The full non-authorizing
+  preview is never copied into the confirmation request body.
+- A confirmed response exposes the server-issued `activation_id`; tampered,
+  expired, digest-mismatched, and active-plan-conflict responses remain blocked
+  with operator-facing recovery text.
+
+## Gotchas
+
+- The server resolves the durable preview from the top-level digest and fills
+  the nested confirmation digest at its boundary. The browser must not restore
+  the old `preview` request field or the request can exceed the 64 KB limit.
+- Confirmation remains a Testnet Coordinator activation receipt only; this UI
+  change does not submit, cancel, or close any order.
+
+## Verification
+
+- Focused Dashboard static checks and the #1155 real-browser acceptance are
+  run against an isolated temporary output root and local port; evidence is
+  recorded under `docs/evidence/issue-1156/`.
