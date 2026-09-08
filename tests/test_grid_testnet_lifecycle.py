@@ -98,6 +98,44 @@ def test_grid_five_rung_ladder_has_unique_canonical_and_client_identities(tmp_pa
         assert len(values) == len(set(values)) == 5
 
 
+def test_quantized_grid_spacing_tp_and_sl_allow_one_tick(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    plan = _plan(lower=75000.0, upper=78212.0)
+    plan["execution_context"] = {"price_tick": "1", "price_max_decimal_places": 0}
+    plan["hard_stop"] = 68000.0
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": price, "side": "buy", "take_profit": tp,
+         "hard_stop": 74358, "quantity": 0.1}
+        for index, (price, tp) in enumerate(
+            [(75000, 75642), (75642, 76285), (76285, 76927),
+             (76927, 77569), (77569, 78212)], start=1
+        )
+    ]
+    plan["risk_budget"].update(max_open_orders=5, max_open_positions=5,
+                                max_notional=40000, maximum_loss_at_full_depth=3000)
+
+    started = GridTestnetLifecycle(tmp_path / "outputs", broker).start(
+        plan, timestamp="2026-09-08T13:00:00+00:00"
+    )
+    assert started["status"] == "active"
+
+
+def test_quantized_grid_spacing_two_tick_deviation_is_rejected(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    plan = _plan()
+    plan["execution_context"] = {"price_tick": "1", "price_max_decimal_places": 0}
+    plan["grid"]["rungs"] = [
+        {"rung": 1, "price": 64000, "side": "buy", "take_profit": 64500, "hard_stop": 63000, "quantity": 0.1},
+        {"rung": 2, "price": 64642, "side": "buy", "take_profit": 65142, "hard_stop": 63000, "quantity": 0.1},
+        {"rung": 3, "price": 65286, "side": "buy", "take_profit": 65786, "hard_stop": 63000, "quantity": 0.1},
+        {"rung": 4, "price": 65928, "side": "buy", "take_profit": 66428, "hard_stop": 63000, "quantity": 0.1},
+    ]
+    with pytest.raises(GridTestnetLifecycleError, match="grid_spacing_inconsistent"):
+        GridTestnetLifecycle(tmp_path / "outputs", broker).start(
+            plan, timestamp="2026-09-08T13:00:00+00:00"
+        )
+
+
 def test_grid_canonical_boundary_and_external_hard_stop_are_accepted(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path, protection=False)
     plan = _plan(lower=75000.0, upper=78531.5)

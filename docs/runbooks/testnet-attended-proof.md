@@ -90,6 +90,11 @@ PYTHONPATH=src python3 -m pipelines.testnet_proof_driver \
 The normal `--dry-run` receipt contains the same per-field results under
 `steps.lifecycle_preflight`.
 
+For arithmetic Grid plans, the lifecycle compares the quantized entry, TP, and
+SL spacings with each sequence's mean spacing. Each spacing may differ from its
+mean by at most the selected Instrument's `price_tick` (BTC is `1`); a larger
+deviation, non-monotonic sequence, or duplicate price remains a blocker.
+
 Before any attended start, create a fresh Dashboard preview and confirmation
 again. The Coordinator accepts a Dashboard confirmation only while it is within
 `MAX_TESTNET_CONFIRMATION_AGE_SECONDS` (currently 900 seconds); do not reuse a

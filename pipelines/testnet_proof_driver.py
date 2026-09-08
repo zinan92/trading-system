@@ -19,6 +19,7 @@ import shutil
 import tempfile
 import time
 from typing import Any, Mapping, Sequence
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from pipelines import testnet_automation_proof as proof
@@ -709,9 +710,29 @@ def run(
         # The market document is obtained from the bound Broker and, when its
         # public ticker is sparse, one coherent credential-free source read.
         broker = proof.build_broker_execution_port(proof._context(args, family=plan["strategy_type"]))
+        market_broker = broker
+        if dry_run:
+            # Dry-run must exercise the candidate gate without external I/O.
+            # The supplied Dashboard market is immutable evidence; project it
+            # into the same sparse binding contract used by the protected
+            # adapter, while the real execution path remains unchanged.
+            preview_market = preview.get("market") if isinstance(preview.get("market"), Mapping) else {}
+
+            class _DryRunMarketBroker:
+                def market_fact(self, *, instrument_id: str, now: Any) -> dict[str, Any]:
+                    return {
+                        **preview_market,
+                        "instrument_id": instrument_id,
+                        "price": preview_market.get("mid"),
+                        "observed_at": now.isoformat(),
+                        "source": preview_market.get("source") or "dashboard.preview",
+                        "fallback_policy": "none",
+                    }
+
+            market_broker = _DryRunMarketBroker()
         try:
             market, market_checks = read_coherent_market(
-                preview, broker, instrument_id=plan["instrument_id"]
+                preview, market_broker, instrument_id=plan["instrument_id"]
             )
             _write_input(market_path, market)
         finally:
@@ -725,7 +746,23 @@ def run(
             # stop point observable without submitting an order.
             safe_result = {"status": "dry_run_candidate_selected", "execution_mutation": False,
                            "network_operation_invoked": False, "next_action": "dry_run_stop_before_start"}
-            with patch.object(TestnetAutomationCoordinator, "start_dca_session", return_value=safe_result), \
+            now = datetime.now(timezone.utc)
+            fake_reconciliation = SimpleNamespace(
+                observed_at=now, passed=True, evidence_digest="dry-run-evidence",
+                cursor=SimpleNamespace(value="dry-run-cursor"),
+                positions=SimpleNamespace(fact=SimpleNamespace(data=())),
+                open_orders=SimpleNamespace(fact=SimpleNamespace(data=())),
+            )
+            fake_account = SimpleNamespace(
+                account_address=account_address, broker_id="hyperliquid", environment="testnet",
+                equity=preview.get("account", {}).get("equity"), exposure=0,
+                margin_used=0, withdrawable=preview.get("account", {}).get("equity"),
+                provenance=SimpleNamespace(source="hyperliquid.external_testnet", transport_state="external_testnet"),
+            )
+            with patch.object(TestnetAutomationCoordinator, "preflight", return_value={"ready": True}), \
+                 patch.object(proof, "_authoritative_market", return_value=market), \
+                 patch.object(proof, "_authoritative_account_snapshot", return_value=(fake_account, fake_reconciliation)), \
+                 patch.object(TestnetAutomationCoordinator, "start_dca_session", return_value=safe_result), \
                  patch.object(TestnetAutomationCoordinator, "start_grid_session", return_value=safe_result):
                 for proof_attempt in range(1, _MARKET_READ_ATTEMPTS + 1):
                     try:
@@ -743,7 +780,7 @@ def run(
                         break
                     except proof.TestnetAutomationProofError as exc:
                         if exc.reason_code != "market_price_mismatch" or proof_attempt == _MARKET_READ_ATTEMPTS:
-                            raise ProofDriverError(exc.reason_code) from exc
+                            raise ProofDriverError(exc.reason_code, **dict(exc.result)) from exc
                         time.sleep(1.0)
                         market, retry_checks = read_coherent_market(
                             preview, broker, instrument_id=plan["instrument_id"]
