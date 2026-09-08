@@ -613,7 +613,7 @@ class TestnetAutomationCoordinator:
         if replay is not None:
             return replay
         current = self._read_current_or_raise()
-        if current is not None:
+        if current is not None and current.get("status") != "idle":
             current_activation = str(current.get("activation_id") or "")
             if current_activation != activation.activation_id:
                 raise TestnetCoordinatorError(
@@ -2115,7 +2115,80 @@ class TestnetAutomationCoordinator:
         events.append(row)
         write_json(self.events_path, events)
         write_json(self.current_path, [row])
+        self._record_plan_closed(row)
         return dict(row)
+
+    def _record_plan_closed(self, state: Mapping[str, Any]) -> None:
+        reason = self._plan_closed_reason(state)
+        if reason is None:
+            return
+        activation_id = str(
+            state.get("activation_id") or state.get("previous_activation_id") or ""
+        )
+        if not activation_id:
+            return
+        confirmation_path = self.output_root / "dashboard_control_plane" / "confirmations.json"
+        rows = load_json(confirmation_path)
+        confirmed = next(
+            (
+                row
+                for row in reversed(rows)
+                if isinstance(row, Mapping)
+                and row.get("status") == "confirmed"
+                and str(row.get("activation_id") or "") == activation_id
+            ),
+            None,
+        )
+        if not isinstance(confirmed, Mapping):
+            return
+        if any(
+            isinstance(row, Mapping)
+            and row.get("event") == "plan_closed"
+            and str(row.get("activation_id") or "") == activation_id
+            and row.get("reason") == reason
+            for row in rows
+        ):
+            return
+        final_state = dict(state)
+        closed = {
+            "schema_version": "dashboard-confirmation-v1",
+            "status": "plan_closed",
+            "event": "plan_closed",
+            "reason": reason,
+            "activation_id": activation_id,
+            "plan_digest": confirmed.get("preview_digest"),
+            "closed_at": state.get("occurred_at") or self._timestamp(None),
+            "coordinator_final_state_digest": _digest(final_state),
+            "execution_mutation": False,
+            "network_operation_invoked": False,
+            "secret_material_present": False,
+        }
+        write_json(confirmation_path, [*rows, closed])
+
+    @staticmethod
+    def _plan_closed_reason(state: Mapping[str, Any]) -> str | None:
+        event = str(state.get("event") or "").strip().lower()
+        status = str(state.get("status") or "").strip().lower()
+        if event == "stop_requested" and status == "stop_requested":
+            return "stop"
+        if event == "reconcile_stop" and status == "idle":
+            return "reconcile_stop"
+        if event == "interrupted":
+            return "interrupt"
+        if status not in {"dca_terminal", "grid_terminal"}:
+            return None
+        lifecycle = state.get("lifecycle")
+        lifecycle = lifecycle if isinstance(lifecycle, Mapping) else {}
+        terminal_reason = str(
+            lifecycle.get("terminal_reason") or state.get("terminal_reason") or ""
+        ).lower()
+        if "hard_stop" in terminal_reason:
+            return "hard_stop"
+        if terminal_reason in {"stop", "strategy_stop_before_entry"}:
+            return "stop"
+        if "stop_loss" in terminal_reason or terminal_reason.endswith("_sl"):
+            return "terminal_sl"
+        return "terminal_tp"
 
     def _replay(self, command_id: str) -> dict[str, Any] | None:
         for row in reversed(self._read_events()):

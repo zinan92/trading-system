@@ -931,7 +931,22 @@ class DashboardControlPlane:
         if previous and previous.get("status") == "confirmed":
             if str(previous.get("preview_digest") or "") == preview_digest:
                 return dict(previous)
-            return self._blocked_confirmation(preview_digest, ["active_plan_conflict"])
+            coordinator_status = self._coordinator_status(coordinator)
+            previous_activation_id = str(previous.get("activation_id") or "")
+            current_activation_id = str(coordinator_status.get("activation_id") or "")
+            if coordinator_status.get("status") == "idle" and previous_activation_id:
+                migration = self._plan_closed(
+                    previous,
+                    reason="reconciled_idle",
+                    coordinator_state=coordinator_status,
+                    closed_at=str(now or self.clock()),
+                )
+                write_json(self.output_root / CONFIRMATION_PATH, [*rows, migration])
+                rows = [*rows, migration]
+            elif current_activation_id == previous_activation_id:
+                return self._blocked_confirmation(preview_digest, ["active_plan_conflict"])
+            else:
+                return self._blocked_confirmation(preview_digest, ["active_plan_conflict"])
         strategy_family = str(preview.get("strategy_family") or "").strip().lower()
         suffix = preview_digest.replace("sha256:", "")[:16]
         activation = {
@@ -990,6 +1005,8 @@ class DashboardControlPlane:
                 return self._blocked_confirmation(preview_digest, [code])
             result["coordinator_invoked"] = True
             result["coordinator_result"] = _public(coordinator_result)
+            if isinstance(coordinator_result, Mapping) and coordinator_result.get("activation_id"):
+                result["activation_id"] = str(coordinator_result["activation_id"])
             result["next_action"] = str(
                 coordinator_result.get("next_action")
                 if isinstance(coordinator_result, Mapping)
@@ -997,6 +1014,39 @@ class DashboardControlPlane:
             )
         write_json(self.output_root / CONFIRMATION_PATH, [*rows, result])
         return result
+
+    def _coordinator_status(self, coordinator: object | None) -> Mapping[str, Any]:
+        status = getattr(coordinator, "status", None)
+        if not callable(status):
+            return {}
+        try:
+            value = status()
+        except Exception:  # noqa: BLE001 - confirmation remains fail-closed.
+            return {}
+        return value if isinstance(value, Mapping) else {}
+
+    @staticmethod
+    def _plan_closed(
+        confirmed: Mapping[str, Any],
+        *,
+        reason: str,
+        coordinator_state: Mapping[str, Any],
+        closed_at: str,
+    ) -> dict[str, Any]:
+        final_state_digest = _digest(dict(coordinator_state))
+        return {
+            "schema_version": "dashboard-confirmation-v1",
+            "status": "plan_closed",
+            "event": "plan_closed",
+            "reason": reason,
+            "activation_id": confirmed.get("activation_id"),
+            "plan_digest": confirmed.get("preview_digest"),
+            "closed_at": closed_at,
+            "coordinator_final_state_digest": final_state_digest,
+            "execution_mutation": False,
+            "network_operation_invoked": False,
+            "secret_material_present": False,
+        }
 
     @staticmethod
     def _forbidden_fields(value: Any) -> set[str]:
