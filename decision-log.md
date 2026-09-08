@@ -17816,3 +17816,34 @@ auditable datafeed port; broker execution remains a separate port.
 - Real Playwright runs reached trusted Hyperliquid Testnet BTC Preview with
   `execution_ready=true` and no blockers; Confirm was blocked by the 64,000
   byte server request limit as recorded above.
+
+# 2026-09-08 — Assemble attended Testnet proof inputs from Dashboard activation (#1159)
+
+## Decision
+
+- Add `pipelines/testnet_proof_driver.py` as a composition adapter over the
+  existing Testnet proof and Coordinator contracts. It selects the durable
+  Dashboard preview/confirmation by `activation_id`, projects preview orders
+  into the canonical plan shape, and obtains market facts through the same
+  protected Broker binding.
+- The driver accepts authorization only through explicit `--approval-id` and
+  `--approved-by park`, then requires the matching durable Park confirmation;
+  it never promotes a Dashboard boolean into execution authorization.
+- `--dry-run` executes the existing gates in a temporary evidence copy and
+  stops before the lifecycle start call. Receipts are written only to the
+  caller-selected local path, not an online output root.
+
+## Gotchas
+
+- Dashboard confirmation is an activation receipt, not proof of a Testnet
+  order. A matching durable Park proposal/confirmed decision is still required
+  by `_verify_durable_confirmation`.
+- The driver does not repair missing or stale market facts, alter the
+  Coordinator, write launchd state, or read secret contents.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_testnet_automation_proof.py` — 8 passed.
+- Read-only dry-run against the online root stopped at
+  `durable_park_confirmation_missing`; receipt recorded
+  `secret_material_present=false` and no online files changed.
