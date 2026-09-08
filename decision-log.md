@@ -1,5 +1,39 @@
 # Decision Log
 
+## 2026-09-08 — Assemble complete protected market facts in proof driver (#1165)
+
+### Decision
+
+- Build the proof driver's market document by combining the Dashboard preview's
+  market-quality fields with the protected Broker binding's market fact.
+- Treat the binding source, observed price as `mid`, and `observed_at` as
+  authoritative. The protected exact-source profile explicitly has
+  `fallback_policy=none`; all other missing required fields remain a hard
+  `market_facts_missing` blocker and the proof CLI is not relaxed.
+- Run the proof driver with
+  `~/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python`, because
+  `nautilus_trader` is installed in that application environment while the
+  system Python used by the old control script cannot import it. This is a
+  runbook/interpreter choice only; launchd and service configuration remain
+  unchanged.
+
+### Gotchas
+
+- The Dashboard preview is non-authorizing evidence and supplies the quality
+  fields; it does not replace the protected Broker binding or authorize an
+  order.
+- The dry-run still calls the existing proof gates in a temporary evidence
+  copy and stops before the first exposure-changing coordinator call.
+
+### Verification
+
+- Focused driver and automation-proof tests cover the complete required market
+  field set, binding price/timestamp/source precedence, and fail-closed missing
+  facts.
+- Owner acceptance must run the Nautilus venv command from the runbook against
+  the read-only online output root and preserve the receipt showing
+  `candidate_selected=true`, no execution mutation, and no network operation.
+
 ## 2026-09-08 — Deliver attended Hyperliquid Testnet Grid execution seam (#1145)
 
 ### Decision

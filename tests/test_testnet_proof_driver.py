@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from pipelines.testnet_proof_driver import ProofDriverError, build_plan, map_confirmation
+from pipelines.testnet_proof_driver import (
+    ProofDriverError,
+    build_market_document,
+    build_plan,
+    map_confirmation,
+)
+from pipelines.testnet_automation_proof import _MARKET_REQUIRED
 from services.park_confirmation_ledger import DurableParkConfirmationError, parse_durable_confirmation
 
 
@@ -55,6 +61,47 @@ def test_plan_uses_preview_orders_and_keeps_plan_digest() -> None:
         {"rung": 0, "side": "buy", "price": 90, "quantity": "1", "tp": 95, "hard_stop": 80},
         {"rung": 1, "side": "buy", "price": 95, "quantity": "1", "tp": 100, "hard_stop": 80},
     ]
+
+
+def test_market_document_combines_preview_facts_with_binding_price_and_identity() -> None:
+    preview, _ = _preview()
+    preview["market"] = {
+        "execution_ready": True, "fresh": True, "is_synthetic": False,
+        "fallback_policy": "none", "bid": "59999", "ask": "60001",
+        "mark": "60000", "oracle": "60000", "impact": "60000.1",
+        "depth_notional": "100000", "max_slippage": "10",
+        "max_oracle_deviation_bps": "5", "cursor": "cursor-1",
+        "broker_id": "hyperliquid", "environment": "testnet", "asset_index": 0,
+        "mapping_revision": "mapping-v1", "universe_revision": "universe-v1",
+        "connection_epoch": "epoch-1",
+    }
+    binding = {
+        "instrument_id": "BTC-USD-PERP", "price": "60000", "freshness": "fresh",
+        "observed_at": "2026-09-08T01:00:03+00:00",
+        "source": "nautilus-hyperliquid.testnet", "mapping_revision": "mapping-v1",
+    }
+
+    market = build_market_document(preview, binding, instrument_id="BTC-USD-PERP")
+
+    assert set(_MARKET_REQUIRED).issubset(market)
+    assert market["mid"] == binding["price"]
+    assert market["observed_at"] == binding["observed_at"]
+    assert market["source"] == binding["source"]
+
+
+def test_market_document_missing_dashboard_fact_fails_closed() -> None:
+    preview, _ = _preview()
+    preview["market"] = {"execution_ready": True, "fallback_policy": "none"}
+    binding = {
+        "instrument_id": "BTC-USD-PERP", "price": "60000", "freshness": "fresh",
+        "observed_at": "2026-09-08T01:00:03+00:00",
+        "source": "nautilus-hyperliquid.testnet",
+    }
+
+    with pytest.raises(ProofDriverError, match="market_facts_missing") as error:
+        build_market_document(preview, binding, instrument_id="BTC-USD-PERP")
+
+    assert "bid" in error.value.details["fields"]
 
 
 def test_confirmation_mapping_rejects_dashboard_authorization_forgery(tmp_path: Path) -> None:
