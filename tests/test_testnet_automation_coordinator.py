@@ -346,6 +346,31 @@ def test_reconcile_stop_closes_candidate_selected_without_execution(tmp_path: Pa
     assert result["receipt"]["reason"] == "never_executed"
 
 
+def test_reconcile_stop_closes_grid_blocked_without_execution(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    activation = _activation()
+    coordinator.activate(activation, command_id="activate-grid-blocked")
+    coordinator._record({
+        **coordinator.status(),
+        "status": "grid_blocked",
+        "execution_blocker": "grid_start_failed:ValueError:Grid StrategyPlan identity is incomplete: cycle_id",
+        "execution_enabled": False,
+        "execution_ready": False,
+        "execution_mutation": False,
+        "network_operation_invoked": False,
+        "canonical_order_count": 0,
+        "execution_receipts": [],
+    })
+
+    result = coordinator.command(
+        "reconcile_stop", {"reason": "grid_blocked_zero_orders"}, command_id="reconcile-grid-blocked"
+    )
+
+    assert result["status"] == "idle"
+    assert result["receipt"]["submitted_order_count"] == 0
+    assert result["receipt"]["network_operation_invoked"] is False
+
+
 def test_reconcile_stop_keeps_enabled_testnet_activation_blocked(tmp_path: Path) -> None:
     class Broker:
         transport_state = "external_testnet"
