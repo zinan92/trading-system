@@ -17698,7 +17698,6 @@ auditable datafeed port; broker execution remains a separate port.
 
 ## Verification
 
-
 # 2026-09-08 — Disable Telegram strategy entry and confirmation (#1148)
 # 2026-09-08 — Disable Telegram strategy entry and confirmation (#1148)
 
@@ -17726,7 +17725,6 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused Telegram and Dashboard suites run with `PYTHONPATH=src`.
 - No deployment, launchd operation, live path, data source, or port 8100 API
   change is included.
-
 # 2026-09-08 — Local Testnet control tick and activation slice binding (#1146)
 
 ## Decision
@@ -17781,3 +17779,40 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused Dashboard static checks and the #1155 real-browser acceptance are
   run against an isolated temporary output root and local port; evidence is
   recorded under `docs/evidence/issue-1156/`.
+
+- Focused Paper execution and Coordinator tests cover ten-rung mapping,
+  identity/idempotency, one-query unknown handling, public port selection, and
+  local Paper enablement.
+
+# 2026-09-08 — Add Dashboard V5 Testnet Grid browser acceptance (#1149)
+
+## Decision
+
+- Add an attended Playwright acceptance script for the real Dashboard V5
+  Venue → Instrument → Strategy → Preview → Confirm flow. The script uses
+  Hyperliquid Testnet BTC only, derives bounded Grid inputs from the selected
+  venue market response, captures screenshots, and records only non-secret
+  public receipt fields.
+- Keep the acceptance fail-closed: it requires `confirmed`, a non-empty
+  `activation_id`, idempotent repeat confirmation, no console/page errors, and
+  `execution_mutation=false`. It does not mock or rewrite API responses.
+
+## Gotchas
+
+- The current Dashboard sends the full preview, including historical market
+  bars and account fills, to `/api/dashboard-control/confirm`. The server's
+  existing 64,000-byte request limit returns `400 request body exceeds 64000
+  bytes`; this issue is restricted to the E2E script and cannot change the
+  backend contract, so live confirmation remains blocked until that separate
+  limit/payload issue is resolved.
+- Local V5 control initialization is enabled only on `127.0.0.1:8765` or
+  `127.0.0.1:8766`; the acceptance uses an isolated temporary output root on
+  the unused local `8766` port and never touches launchd or the online output.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_dashboard_control_plane.py tests/test_dashboard_server.py` — 93 passed.
+- `gitleaks git --no-banner --redact --log-opts='--all'` — no leaks found.
+- Real Playwright runs reached trusted Hyperliquid Testnet BTC Preview with
+  `execution_ready=true` and no blockers; Confirm was blocked by the 64,000
+  byte server request limit as recorded above.
