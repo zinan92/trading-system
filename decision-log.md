@@ -1,5 +1,36 @@
 # Decision Log
 
+## 2026-09-08 — Accept durable Dashboard confirmations at Testnet start (#1180)
+
+### Decision
+
+- Protected Testnet Coordinator starts accept the Dashboard
+  `dashboard_control_plane/confirmations.json` projection as a durable
+  confirmation source. The projection is checked against the current
+  activation, plan digest, confirmation id/digest, Park operator, explicit
+  authorization, Testnet environment, and the existing 900-second freshness
+  gate; the Telegram proposal/decision ledger path is unchanged.
+- `reconcile_stop` accepts a `candidate_selected` activation only when it has
+  zero submitted orders and never enabled execution, and records the same
+  durable `never_executed` reconciliation evidence.
+- The proof driver converts Coordinator machine errors into a redacted
+  `BLOCKED` receipt containing `reason_code` and typed `detail`; it does not
+  expose a traceback or authorize a retry.
+
+### Gotchas
+
+- A Dashboard confirmation is not trusted from its boolean alone. The matching
+  durable row and `testnet_automation/current.json` activation identity are
+  required before the Coordinator accepts it.
+- `candidate_selected` is only a pre-execution state. Any execution enable,
+  order receipt, network operation, or mutation keeps reconciliation blocked.
+
+### Verification
+
+- Focused Coordinator, proof-driver, and confirmation-ledger suites pass
+  locally with `PYTHONPATH=src`; no online output root, launchd service, or
+  Testnet execution path is modified.
+
 ## 2026-09-08 — Keep proof-driver market facts at one observation (#1177)
 
 ### Decision

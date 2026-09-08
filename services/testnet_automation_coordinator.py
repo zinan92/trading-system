@@ -790,7 +790,7 @@ class TestnetAutomationCoordinator:
         replay = self._replay(normalized_command_id)
         if replay is not None:
             return replay
-        if current.get("status") != "stop_requested":
+        if current.get("status") not in {"stop_requested", "candidate_selected"}:
             raise TestnetCoordinatorError("stop_reconciliation_required")
         if current.get("execution_mutation") is True or current.get("network_operation_invoked") is True:
             raise TestnetCoordinatorError("submitted_orders_require_reconciliation")
@@ -1787,6 +1787,31 @@ class TestnetAutomationCoordinator:
             if not rendered == rendered or rendered in {float("inf"), float("-inf")}:
                 raise TestnetCoordinatorError(f"{field}_invalid")
             return rendered
+
+        if str(confirmation.get("confirmation_source") or "").strip().lower() == "dashboard":
+            from services.park_confirmation_ledger import (
+                DurableParkConfirmationError,
+                parse_durable_confirmation,
+            )
+
+            try:
+                parse_durable_confirmation(
+                    self.output_root,
+                    plan=plan,
+                    confirmation=confirmation,
+                )
+            except DurableParkConfirmationError as exc:
+                raise TestnetCoordinatorError(exc.reason_code) from exc
+            try:
+                confirmed_at = datetime.fromisoformat(
+                    str(confirmation.get("confirmed_at") or "").replace("Z", "+00:00")
+                ).timestamp()
+            except ValueError as exc:
+                raise TestnetCoordinatorError("testnet_confirmation_timestamp_invalid") from exc
+            age = time.time() - confirmed_at
+            if age < 0 or age > MAX_TESTNET_CONFIRMATION_AGE_SECONDS:
+                raise TestnetCoordinatorError("testnet_confirmation_not_fresh")
+            return
 
         from services.park_confirmation import ParkConfirmationLedger
 

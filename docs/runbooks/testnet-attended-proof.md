@@ -73,6 +73,11 @@ binding fact. The binding `source`, observed `price` (as `mid`), and
 with `market_facts_missing`. The receipt must report `candidate_selected=true`,
 `execution_mutation=false`, and `network_operation_invoked=false`.
 
+Before any attended start, create a fresh Dashboard preview and confirmation
+again. The Coordinator accepts a Dashboard confirmation only while it is within
+`MAX_TESTNET_CONFIRMATION_AGE_SECONDS` (currently 900 seconds); do not reuse a
+confirmation from an earlier review window.
+
 `--dry-run` copies the required evidence into a temporary directory before
 running the existing proof gates, so it does not write the online output root
 or submit an order. A real start still requires Park and the exact

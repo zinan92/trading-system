@@ -81,6 +81,15 @@ def parse_durable_confirmation(
             raise DurableParkConfirmationError(reason)
         if str(row.get("preview_digest") or row.get("plan_digest") or "") != digest:
             raise DurableParkConfirmationError("dashboard_plan_digest_mismatch")
+        if (
+            str(row.get("confirmation_id") or "")
+            != str(confirmation.get("confirmation_id") or "")
+            or str(row.get("confirmed_at") or "")
+            != str(confirmation.get("confirmed_at") or "")
+            or str(row.get("confirmation_digest") or "")
+            != str(confirmation.get("receipt_digest") or "")
+        ):
+            raise DurableParkConfirmationError("dashboard_confirmation_identity_invalid")
         historical_acknowledged = (
             row.get("acknowledged") is None
             and is_dashboard_confirm_and_run_record(row)

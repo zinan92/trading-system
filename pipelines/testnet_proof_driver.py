@@ -30,6 +30,7 @@ from services.park_confirmation_ledger import (
     parse_durable_confirmation,
 )
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+from services.strategy_control_plane import StrategyControlMachineError
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 
 
@@ -415,6 +416,16 @@ def run(
                     try:
                         result = proof._start(args)
                         break
+                    except StrategyControlMachineError as exc:
+                        result = {
+                            "status": "BLOCKED",
+                            "reason_code": exc.code,
+                            "detail": dict(exc.evidence),
+                            "execution_mutation": False,
+                            "network_operation_invoked": False,
+                            "next_action": "notify_park_and_wait",
+                        }
+                        break
                     except proof.TestnetAutomationProofError as exc:
                         if exc.reason_code != "market_price_mismatch" or proof_attempt == _MARKET_READ_ATTEMPTS:
                             raise ProofDriverError(exc.reason_code) from exc
@@ -427,16 +438,27 @@ def run(
         else:
             try:
                 result = proof._start(args)
+            except StrategyControlMachineError as exc:
+                result = {
+                    "status": "BLOCKED",
+                    "reason_code": exc.code,
+                    "detail": dict(exc.evidence),
+                    "execution_mutation": False,
+                    "network_operation_invoked": False,
+                    "next_action": "notify_park_and_wait",
+                }
             except proof.TestnetAutomationProofError as exc:
                 raise ProofDriverError(exc.reason_code) from exc
         output = {
             "schema_version": "testnet-proof-driver-receipt-v1", "status": result.get("status"),
             "dry_run": dry_run, "activation_id": activation_id, "plan_digest": plan["plan_digest"],
             "preview_digest": preview["preview_digest"], "confirmation_id": confirmation["confirmation_id"],
+            "reason_code": result.get("reason_code"),
+            "detail": result.get("detail"),
             "steps": {"preview_loaded": True, "plan_built": True, "market_bound": True,
                        "confirmation_mapped": True, "candidate_selected": result.get("status") in {"candidate_selected", "dry_run_candidate_selected"}},
             "market_self_check": market_checks,
-            "result": {key: result.get(key) for key in ("status", "lifecycle_status", "execution_mutation", "network_operation_invoked", "next_action")},
+            "result": {key: result.get(key) for key in ("status", "reason_code", "detail", "lifecycle_status", "execution_mutation", "network_operation_invoked", "next_action")},
             "secret_material_present": False,
         }
     receipt.parent.mkdir(parents=True, exist_ok=True)
