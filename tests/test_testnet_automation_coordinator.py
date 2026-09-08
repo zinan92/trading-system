@@ -309,6 +309,50 @@ def test_reconcile_stop_closes_zero_order_local_paper_activation(tmp_path: Path)
     assert closed["activation_id"] == activation_digest(activation)
 
 
+def test_reconcile_stop_closes_never_executed_activation(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    activation = _activation()
+    coordinator.activate(activation, command_id="activate-never-executed")
+    coordinator.command("stop", {"reason": "operator_stop"}, command_id="stop-never-executed")
+
+    result = coordinator.command(
+        "reconcile_stop", {"reason": "zero_orders"}, command_id="reconcile-never-executed"
+    )
+
+    assert result["status"] == "idle"
+    assert result["receipt"]["reason"] == "never_executed"
+    assert result["receipt"]["submitted_order_count"] == 0
+
+
+def test_reconcile_stop_keeps_enabled_testnet_activation_blocked(tmp_path: Path) -> None:
+    class Broker:
+        transport_state = "external_testnet"
+        broker_config = {
+            "transport_profile": "hyperliquid-testnet-position-protection",
+            "environment": "testnet",
+            "real_money_eligible": False,
+            "live_trading_enabled": False,
+        }
+
+        def preflight(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return {"ready": True, "environment": "testnet", "real_money_eligible": False}
+
+    coordinator = _coordinator(tmp_path)
+    activation = _activation(
+        transport_profile="hyperliquid-testnet-position-protection",
+        capability_revision="hyperliquid-testnet-position-protection-runtime-v1",
+    )
+    coordinator.activate(activation, command_id="activate-enabled-testnet")
+    coordinator.enable_testnet_execution(Broker(), now="2026-09-08T01:00:00+00:00")
+    coordinator.command("stop", {"reason": "operator_stop"}, command_id="stop-enabled-testnet")
+
+    with pytest.raises(TestnetCoordinatorError, match="paper_stop_reconciliation_required"):
+        coordinator.command(
+            "reconcile_stop", {"reason": "zero_orders"}, command_id="reconcile-enabled-testnet"
+        )
+
+
 @pytest.mark.parametrize(
     ("terminal_reason", "expected_reason"),
     [("take_profit", "terminal_tp"), ("stop_loss", "terminal_sl"), ("hard_stop", "hard_stop")],

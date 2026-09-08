@@ -1,5 +1,28 @@
 # Decision Log
 
+## 2026-09-08 — Reconcile never-executed activations (#1175)
+
+### Decision
+
+- Allow `reconcile_stop` to close a `stop_requested` activation directly to
+  `idle` when its activation history contains no successful execution enable or
+  order submission and the current state proves zero submitted orders.
+- Mark this receipt `reason=never_executed`; an activation that enabled
+  external Testnet execution remains on the existing reconciliation-required
+  path.
+
+### Gotchas
+
+- The current stop state has `execution_enabled=false`, so the decision must
+  inspect activation-scoped historical events rather than that field alone.
+- This local transition does not access a Broker, network, launchd, or online
+  output root. The owner must still reconcile the supplied live activation and
+  verify the subsequent preview/confirm flow.
+
+### Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_automation_coordinator*.py tests/test_dashboard_control*.py` — 69 passed.
+
 ## 2026-09-08 — Align account fingerprint with standard-broker preflight (#1173)
 
 ### Decision

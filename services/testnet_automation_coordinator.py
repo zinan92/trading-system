@@ -792,12 +792,13 @@ class TestnetAutomationCoordinator:
             return replay
         if current.get("status") != "stop_requested":
             raise TestnetCoordinatorError("stop_reconciliation_required")
-        if current.get("execution_profile") != "standard-broker-paper":
-            raise TestnetCoordinatorError("paper_stop_reconciliation_required")
         if current.get("execution_mutation") is True or current.get("network_operation_invoked") is True:
             raise TestnetCoordinatorError("submitted_orders_require_reconciliation")
         if int(current.get("canonical_order_count") or 0) != 0 or current.get("execution_receipts"):
             raise TestnetCoordinatorError("submitted_orders_require_reconciliation")
+        never_executed = self._never_executed_activation(current)
+        if current.get("execution_profile") != "standard-broker-paper" and not never_executed:
+            raise TestnetCoordinatorError("paper_stop_reconciliation_required")
         timestamp = self._timestamp(now)
         receipt = {
             "schema_version": "testnet-stop-reconciliation-receipt-v1",
@@ -812,7 +813,7 @@ class TestnetAutomationCoordinator:
             "network_operation_invoked": False,
             "execution_mutation": False,
             "occurred_at": timestamp,
-            "reason": str(payload.get("reason") or "") or None,
+            "reason": "never_executed" if never_executed else str(payload.get("reason") or "") or None,
         }
         state = {
             **self._idle_state(),
@@ -826,6 +827,30 @@ class TestnetAutomationCoordinator:
             "fingerprint_scheme": receipt["fingerprint_scheme"],
         }
         return self._record(state)
+
+    def _never_executed_activation(self, current: Mapping[str, Any]) -> bool:
+        """Allow local closure only when this activation never enabled execution."""
+
+        activation_id = str(current.get("activation_id") or "")
+        for row in self._read_events():
+            if str(row.get("activation_id") or "") != activation_id:
+                continue
+            action = str(row.get("action") or "").strip().lower()
+            if (
+                action.startswith("enable_")
+                and action.endswith("_execution")
+                and row.get("execution_enabled") is True
+            ):
+                return False
+            if action.startswith("submit_") and (
+                row.get("execution_mutation") is True
+                or any(
+                    isinstance(receipt, Mapping) and receipt.get("unknown") is not True
+                    for receipt in (row.get("execution_receipts") or [])
+                )
+            ):
+                return False
+        return current.get("execution_enabled") is not True
 
     def _select_candidate(
         self,
