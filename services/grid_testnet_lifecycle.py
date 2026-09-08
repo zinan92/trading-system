@@ -830,6 +830,10 @@ class GridTestnetLifecycle:
             rows = self.broker.request("order_execution", "open_orders", str(state["instrument_id"])) or ()
         except Exception:  # noqa: BLE001 - unknown venue truth must remain open.
             return None
+        return self._exchange_order_identities(rows)
+
+    @staticmethod
+    def _exchange_order_identities(rows: Any) -> set[str]:
         identities: set[str] = set()
         for row in rows:
             if isinstance(row, Mapping):
@@ -839,6 +843,61 @@ class GridTestnetLifecycle:
             if value not in (None, ""):
                 identities.add(str(value))
         return identities
+
+    def _local_order_has_fills(self, state: Mapping[str, Any], row: Mapping[str, Any]) -> bool:
+        identities = self._order_identities(row)
+        for fill in state.get("fills", ()):
+            fill_identities = {
+                str(fill.get(field))
+                for field in ("order_id", "broker_order_id", "client_order_id")
+                if fill.get(field) not in (None, "")
+            }
+            fill_identities.update(str(value) for value in fill.get("fill_identities", ()) if value not in (None, ""))
+            if identities.intersection(fill_identities):
+                return True
+        return False
+
+    def _local_order_open_quantity(self, state: Mapping[str, Any], row: Mapping[str, Any]) -> float | None:
+        rung_id = str(row.get("rung_id") or "")
+        rung = next((item for item in state.get("rungs", ()) if str(item.get("rung_id") or "") == rung_id), None)
+        if rung is None or not isinstance(rung.get("line"), Mapping):
+            return None
+        try:
+            return GridLineLifecycle.from_snapshot(rung["line"]).open_quantity
+        except (TypeError, ValueError, KeyError):
+            return None
+
+    def _reconcile_broker_absent_orders(
+        self,
+        state: dict[str, Any],
+        *,
+        local_open: list[dict[str, Any]],
+        broker_order_ids: set[str],
+        positions: tuple[Any, ...],
+        timestamp: str,
+    ) -> str | None:
+        """Close only provably unfilled local rows absent from broker truth."""
+
+        if positions:
+            return "local_row_missing_but_position_open"
+        unresolved_reason: str | None = None
+        for row in local_open:
+            if self._order_identities(row).intersection(broker_order_ids):
+                continue
+            if self._local_order_has_fills(state, row) or self._local_order_open_quantity(state, row) != 0.0:
+                unresolved_reason = "local_row_missing_but_position_open"
+                continue
+            row["state"] = "cancelled"
+            row["cancel_reason"] = "broker_absent_reconciled"
+            self._record_event(
+                state,
+                "broker_absent_reconciled",
+                timestamp=timestamp,
+                broker_order_id=row.get("broker_order_id"),
+                client_order_id=row.get("client_order_id"),
+                reason="broker_absent_reconciled",
+            )
+        return unresolved_reason
 
     def _ensure_hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         net_quantity = self._net_quantity(state)
@@ -926,12 +985,22 @@ class GridTestnetLifecycle:
             positions = tuple(position for position in getattr(account, "positions", ()) if abs(float(getattr(position, "signed_quantity", 0) or 0)) > 1e-9)
         except Exception as exc:  # noqa: BLE001
             return {"status": "blocked", "reason": f"broker_truth_query_failed:{type(exc).__name__}:{exc}", "at": timestamp}
-        local_open = [row for row in state["orders"] if row.get("state") == "accepted"]
+        local_open = [row for row in state["orders"] if row.get("state") in {"accepted", "cancel_pending"}]
+        unresolved_reason = self._reconcile_broker_absent_orders(
+            state,
+            local_open=local_open,
+            broker_order_ids=self._exchange_order_identities(open_orders),
+            positions=positions,
+            timestamp=timestamp,
+        )
+        local_open = [row for row in state["orders"] if row.get("state") in {"accepted", "cancel_pending"}]
         return {
             "status": "ok" if not open_orders and not local_open and not positions else "blocked",
+            **({"reason": unresolved_reason} if unresolved_reason else {}),
             "broker_open_order_count": len(open_orders),
             "local_open_order_count": len(local_open),
             "broker_position_count": len(positions),
+            "broker_absent_reconciled_count": sum(row.get("cancel_reason") == "broker_absent_reconciled" for row in state["orders"]),
             "at": timestamp,
         }
 

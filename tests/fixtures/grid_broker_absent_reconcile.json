@@ -1,0 +1,16 @@
+{
+  "source": "redacted_copy_of_dashboard_plan",
+  "plan_digest": "sha256:REDACTED_PLAN_DIGEST",
+  "status": "blocked_reconciliation",
+  "blocker": "hard_stop_reconciliation_blocked",
+  "orders": [
+    {"broker_order_id": "redacted-broker-order-1", "client_order_id": "redacted-client-order-1", "state": "accepted"},
+    {"broker_order_id": "redacted-broker-order-2", "client_order_id": "redacted-client-order-2", "state": "accepted"},
+    {"broker_order_id": "redacted-broker-order-3", "client_order_id": "redacted-client-order-3", "state": "accepted"},
+    {"broker_order_id": "redacted-broker-order-4", "client_order_id": "redacted-client-order-4", "state": "accepted"},
+    {"broker_order_id": "redacted-broker-order-5", "client_order_id": "redacted-client-order-5", "state": "accepted"}
+  ],
+  "open_orders": [],
+  "positions": [],
+  "fills": []
+}

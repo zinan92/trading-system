@@ -413,6 +413,71 @@ def test_blocked_dashboard_fixture_discovers_and_retries_all_plan_orders(tmp_pat
     assert recovered["reconciliation"]["broker_open_order_count"] == 0
 
 
+def test_blocked_dashboard_state_reconciles_broker_absent_unfilled_rows(tmp_path: Path) -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "grid_broker_absent_reconcile.json").read_text()
+    )
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": 64000.0 + index * 100, "side": "buy",
+         "take_profit": 64500.0 + index * 100, "hard_stop": 63000.0, "quantity": 0.1}
+        for index in range(5)
+    ]
+    plan["risk_budget"].update(max_open_orders=5, max_open_positions=5,
+                                max_notional=40000.0, maximum_loss_at_full_depth=3000.0)
+    lifecycle.start(plan, timestamp="2026-09-08T13:47:21+00:00")
+    state = lifecycle._state(plan)
+    for row, fixture_order in zip(state["orders"], fixture["orders"]):
+        row["broker_order_id"] = fixture_order["broker_order_id"]
+        row["client_order_id"] = fixture_order["client_order_id"]
+        row["state"] = fixture_order["state"]
+    state.update(status=fixture["status"], blocker=fixture["blocker"], hard_stop_requested=True)
+    lifecycle._save(state)
+
+    recovered = lifecycle.on_market_event(plan, price=78488.5, timestamp="2026-09-08T16:05:00+00:00")
+
+    assert all(row["state"] == "cancelled" for row in recovered["orders"])
+    assert all(row["cancel_reason"] == "broker_absent_reconciled" for row in recovered["orders"])
+    assert recovered["status"] == "terminal"
+    assert recovered["sealed"] is True
+    assert recovered["park_notification_required"] is True
+    assert recovered["reconciliation"]["local_open_order_count"] == 0
+    assert recovered["reconciliation"]["broker_absent_reconciled_count"] == 5
+    assert sum(event["event"] == "broker_absent_reconciled" for event in recovered["events"]) == 5
+
+
+@pytest.mark.parametrize("account_positions, add_fill", [([{"signed_quantity": "0.1"}], False), ([], True)])
+def test_broker_absent_row_with_position_or_fill_remains_blocked(
+    tmp_path: Path, account_positions: list[dict], add_fill: bool
+) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    lifecycle.start(plan, timestamp="2026-09-08T13:47:21+00:00")
+    state = lifecycle._state(plan)
+    state.update(status="blocked_reconciliation", blocker="hard_stop_reconciliation_blocked", hard_stop_requested=True)
+    if add_fill:
+        state["fills"] = [{"order_id": state["orders"][0]["order_id"], "fill_identities": ["fill-1"]}]
+    original_request = broker.request
+    broker.request = lambda port, operation, payload=None: (
+        [] if port == "order_execution" and operation == "open_orders"
+        else SimpleNamespace(
+            positions=tuple(SimpleNamespace(signed_quantity=row["signed_quantity"]) for row in account_positions)
+        ) if port == "account" and operation == "read"
+        else original_request(port, operation, payload)
+    )
+    lifecycle._save(state)
+
+    blocked = lifecycle.on_market_event(plan, price=78488.5, timestamp="2026-09-08T16:05:00+00:00")
+
+    assert blocked["status"] == "blocked_reconciliation"
+    assert blocked["blocker"] == "hard_stop_reconciliation_blocked"
+    assert blocked["reconciliation"]["reason"] == "local_row_missing_but_position_open"
+    assert any(row["state"] == "accepted" for row in blocked["orders"])
+
+
 def test_blocked_interrupt_still_cancels_resting_entries(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
