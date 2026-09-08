@@ -1040,6 +1040,8 @@ class GridTestnetLifecycle:
         equity = float(risk.get("equity") or 0.0)
         if equity <= 0 or total_notional / equity > float(risk.get("leverage_limit") or 0.0) + 1e-9:
             raise GridTestnetLifecycleError("leverage_exceeded_at_full_depth")
+        if round(modeled_loss, 2) > round(maximum_loss, 2):
+            raise GridTestnetLifecycleError("maximum_loss_budget_exceeded_at_full_depth")
 
     @staticmethod
     def _validate_venue_precision(plan: Mapping[str, Any], rungs: list[dict[str, Any]]) -> None:
@@ -1058,21 +1060,39 @@ class GridTestnetLifecycle:
                     raise GridTestnetLifecycleError(
                         f"instrument_precision_invalid:{field}={rung[field]}:{max_significant_digits}sig/{max_decimal_places}dp"
                     )
-        # Canonical execution rounding may produce adjacent quantity steps
-        # (for example .00013 and .00012).  Each rung remains authoritative;
-        # aggregate notional and loss checks below are the risk gate.
+        # Canonical execution rounding may produce adjacent price steps. The
+        # venue tick is the tolerance because quantization makes exact spacing
+        # impossible (for example 642, 643, 642, 642 for a 642.3 target).
         grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
-        spacing = grid.get("spacing")
         mode = str(grid.get("mode") or "arithmetic").lower()
-        if spacing not in (None, "") and mode != "geometric":
+        tick = Decimal(str(context.get("price_tick") or "1"))
+        if tick <= 0:
+            raise GridTestnetLifecycleError("instrument_price_tick_invalid")
+        if mode != "geometric":
             ordered = sorted(float(rung["price"]) for rung in rungs)
-            if any(abs((right - left) - float(spacing)) > max(1e-9, abs(float(spacing)) * 1e-6) for left, right in zip(ordered, ordered[1:])):
-                raise GridTestnetLifecycleError("grid_spacing_inconsistent")
-        # Dashboard/canonical Grid publishes monetary risk to cents. Compare
-        # at that contract precision after using the exact rounded quantities;
-        # all structural risk caps above remain exact and fail closed.
-        if round(modeled_loss, 2) > round(maximum_loss, 2):
-            raise GridTestnetLifecycleError("maximum_loss_budget_exceeded_at_full_depth")
+            # Hyperliquid's five-significant-digit rule widens a nominal 0.1
+            # tick to 1 at BTC prices around 75,000.
+            effective_tick = max(
+                (tick,)
+                + tuple(
+                    Decimal(10) ** int(Decimal(str(value)).adjusted() - int(context.get("price_max_significant_digits") or 5) + 1)
+                    for value in ordered
+                    if value > 0
+                )
+            )
+            GridTestnetLifecycle._validate_quantized_spacings(ordered, effective_tick, "grid_spacing_inconsistent")
+            for field in ("tp", "hard_stop"):
+                values = [float(rung[field]) for rung in sorted(rungs, key=lambda row: float(row["price"]))]
+                GridTestnetLifecycle._validate_quantized_spacings(values, effective_tick, f"grid_{field}_inconsistent")
+
+    @staticmethod
+    def _validate_quantized_spacings(values: list[float], tick: Decimal, error: str) -> None:
+        if len(values) < 3:
+            return
+        spacings = [Decimal(str(right)) - Decimal(str(left)) for left, right in zip(values, values[1:])]
+        spacing_mean = sum(spacings, Decimal("0")) / Decimal(len(spacings))
+        if any(abs(spacing - spacing_mean) > tick for spacing in spacings):
+            raise GridTestnetLifecycleError(error)
 
     @staticmethod
     def _risk_within_budget(plan: Mapping[str, Any], state: Mapping[str, Any]) -> bool:

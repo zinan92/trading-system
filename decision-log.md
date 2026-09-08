@@ -1,5 +1,31 @@
 # Decision Log
 
+## 2026-09-08 — Tolerate one venue tick in quantized Grid geometry (#1194)
+
+### Decision
+
+- Arithmetic Grid lifecycle preflight now compares quantized entry, TP, and SL
+  spacings with their sequence mean and allows at most one Instrument
+  `price_tick` of deviation. This preserves fail-closed rejection for larger
+  geometry inconsistencies while accepting unavoidable venue rounding.
+- The proof runbook records the same lifecycle preflight checklist and
+  tolerance contract used by the offline fake-broker validation.
+
+### Gotchas
+
+- The tolerance is measured in price units from `execution_context.price_tick`,
+  not Dashboard display decimals; BTC's current Hyperliquid Testnet tick is
+  `1`.
+- The supplied activation and preview remain read-only evidence. No launchd,
+  service, online output root, or Testnet execution is changed by this issue.
+
+### Verification
+
+- Focused lifecycle and proof-driver tests cover the quantized five-rung sample
+  and reject a two-tick spacing deviation.
+- The required dry-run uses the supplied activation `4684c6bb...` and stops at
+  `candidate_selected` with fake-broker preflight evidence.
+
 ## 2026-09-08 — Project the complete Grid lifecycle pre-write gate (#1184)
 
 ### Decision
