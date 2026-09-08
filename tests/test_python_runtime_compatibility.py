@@ -50,6 +50,10 @@ def _complete_probe(command, *, returncode=0, stderr=""):
     api_surface = {} if is_nautilus else {name: "ok" for name in LAUNCHD_API_SURFACE}
     payload = {
         "version": [3, 13] if is_nautilus else [3, 14],
+        "compileall": {
+            name: "ok"
+            for name in (NAUTILUS_IMPORT_TARGETS if is_nautilus else LAUNCHD_IMPORT_TARGETS)
+        },
         "imports": imports,
         "api_surface": api_surface,
     }
