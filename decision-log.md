@@ -17611,3 +17611,32 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused dashboard and system-vitals tests cover fresh, stale, missing, and
   non-passing Park Paper evidence. Full pytest and temporary local HTTP server
   verification are recorded in the issue PR.
+
+# 2026-09-08 — Add opt-in datafeed execution-market reads (#1138)
+
+## Decision
+
+- Keep `TRADING_ORCHESTRATOR_MARKET_SOURCE=direct` as the default. `dual` reads
+  both source-bound markets, writes one comparison receipt per read, and
+  returns the direct result; `datafeed` uses only the 8100 execution-market
+  endpoint and never falls back to direct.
+- Bind Paper XAU to `binance/XAUUSDT.BINANCE` and Hyperliquid Testnet BTC to
+  `hyperliquid/BTC-USD-PERP.HYPERLIQUID`. A missing, unsupported, untrusted, or
+  stale 8100 response blocks the affected market read.
+
+## Gotchas
+
+- The execution endpoint returns `execution-market-v1`; its venue-bound
+  instrument key is not the public ticker (`BTCUSDT` is unsupported here).
+- `dual` comparison evidence is written under the caller's `output_root` when
+  the Telegram router owns that seam, otherwise it uses the configured output
+  root environment variable. No strategy, tick cadence, order, launchd, or
+  live-money path is changed.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_telegram_runtime*.py tests/test_datafeed_execution_market_client.py`
+  passed 35 tests.
+- `git diff --check` and scoped `compileall` passed. Live read-only probes
+  confirmed XAU and Hyperliquid BTC endpoint keys and confirmed unsupported
+  `BTCUSDT` keys fail closed.

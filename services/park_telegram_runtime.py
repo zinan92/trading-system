@@ -95,8 +95,38 @@ def _default_cycle_id(now: str) -> str:
     return str(recording_window(now)["record_window_id"])
 
 
-def default_market_reader() -> dict[str, Any]:
+def default_market_reader(*, output_root: Path | str | None = None) -> dict[str, Any]:
     """Read one trusted market envelope without inventing a current price."""
+
+    from services.datafeed_execution_market_client import (
+        DatafeedExecutionMarketClient,
+        ExecutionMarketUnavailable,
+        execution_market_payload,
+        market_source_mode,
+        write_compare_receipt,
+    )
+
+    mode = market_source_mode()
+    if mode in {"dual", "datafeed"}:
+        client = DatafeedExecutionMarketClient()
+        try:
+            payload = client.read(venue="binance", instrument_id="XAUUSDT.BINANCE")
+            datafeed = execution_market_payload(
+                payload,
+                source="binance_usdm_futures",
+                provider="binance_usdm_futures",
+                environment="production",
+                instrument_id="XAUUSDT.BINANCE",
+                symbol="XAUUSDT",
+            )
+        except ExecutionMarketUnavailable as exc:
+            if mode == "datafeed":
+                raise ParkTelegramRuntimeError("market_unavailable", str(exc)) from exc
+            datafeed = {"price": None, "observed_at": None, "fresh": False, "age_seconds": None, "reason": str(exc)}
+        if mode == "datafeed":
+            if datafeed.get("trusted") is not True or datafeed.get("fresh") is not True:
+                raise ParkTelegramRuntimeError("market_unavailable", "execution market is not trusted and fresh")
+            return datafeed
 
     try:
         from pipelines.dashboard_server import build_dualtrack_market_bars_response
@@ -104,7 +134,7 @@ def default_market_reader() -> dict[str, Any]:
         source = dict(build_dualtrack_market_bars_response(timeframe="1m", limit=240))
     except Exception as exc:  # noqa: BLE001 - turned into a typed worker blocker.
         raise ParkTelegramRuntimeError("market_unavailable", type(exc).__name__) from exc
-    return {
+    direct = {
         "price": source.get("latest_close"),
         "trusted": source.get("status") in {"ready", "derived"}
         and source.get("is_synthetic") is False
@@ -115,6 +145,14 @@ def default_market_reader() -> dict[str, Any]:
         "provider": str(source.get("provider") or ""),
         "raw_status": str(source.get("status") or ""),
     }
+    if mode == "dual":
+        write_compare_receipt(
+            output_root or os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", "outputs"),
+            mode=mode,
+            direct=direct,
+            datafeed=datafeed,
+        )
+    return direct
 
 
 def mark_paper_account_to_market(
@@ -528,7 +566,7 @@ class ParkTelegramRouter:
             ttl_seconds=max(self.confirmation_ttl_seconds, 12 * 60 * 60),
         )
         self._uses_default_market_reader = market_reader is None
-        self.market_reader = market_reader or default_market_reader
+        self.market_reader = market_reader or (lambda: default_market_reader(output_root=self.output_root))
         self.testnet_market_reader = testnet_market_reader
         self.config = dict(config or {})
         self.testnet_start_handler = testnet_start_handler
