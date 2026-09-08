@@ -70,6 +70,7 @@ from services.testnet_soak_readiness import TestnetSoakReadiness
 from services.live_activation_gate import LiveActivationGate
 
 PARK_TELEGRAM_RUNTIME_SCHEMA = "park-telegram-runtime-v1"
+PARK_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v5.html"
 
 
 class ParkTelegramRuntimeError(RuntimeError):
@@ -681,6 +682,12 @@ class ParkTelegramRouter:
             result = self.telegram.record_rejected_update(update=update, code=exc.code, detail=str(exc))
             return self._remember_result(update_id, result, update_digest=update_digest)
         text = _safe_text(received.get("text"))
+        if self._telegram_entry_disabled(text):
+            result = self._entry_disabled(
+                received,
+                "Telegram 现在只负责通知和只读问答；策略创建与确认请前往 Dashboard 的 AI 助手和 Confirm & Run。",
+            )
+            return self._remember_result(update_id, result, update_digest=update_digest)
         legacy_candidate = deterministic_legacy_clean_slate_candidate(text)
         legacy_digest = parse_legacy_cutover_digest(text)
         if legacy_candidate is not None:
@@ -707,6 +714,76 @@ class ParkTelegramRouter:
                 update_id=received.get("update_id"),
             )
         return self._remember_result(update_id, result, update_digest=update_digest)
+
+    @classmethod
+    def _telegram_entry_disabled(cls, text: str) -> bool:
+        """Return whether Telegram text attempts to authorise a strategy.
+
+        This guard intentionally runs before any parser, market read, account
+        read, draft, proposal, or confirmation ledger write.  Read-only
+        questions remain available to the conversation path.
+        """
+
+        value = str(text or "").strip()
+        if not value or cls._looks_like_read_query(value):
+            return False
+        lowered = value.lower()
+        if lowered in {"/start", "start", "/help", "help"}:
+            return False
+        if has_explicit_execution_intent(value):
+            return True
+        # Natural-language discussion and research remain read-only.  A terse
+        # imperative such as "做多网格..." has no discussion marker and is an
+        # entry request, so it is rejected without invoking the provider.
+        discussion = re.search(
+            r"研究|比较|对比|我想|想要|你帮我|理解|缺什么|看看|继续|先讨论|先研究|不要执行|不确认",
+            value,
+            re.IGNORECASE,
+        )
+        if discussion:
+            return False
+        return bool(
+            re.search(
+                r"做多|做空|中性网格|\b(?:long|short|grid|dca)\b|策略|杠杆|止损|止盈|价格区间|确认当前计划|确认执行|拒绝当前计划|confirm(?: live)?\b|reject\b|clean\s*slate|旧挂单",
+                value,
+                re.IGNORECASE,
+            )
+        )
+
+    def _entry_disabled(self, received: Mapping[str, Any], reason: str) -> dict[str, Any]:
+        """Record and notify a Telegram mutation attempt without creating a draft."""
+
+        receipt = self.telegram.record_rejected_update(
+            update={
+                "update_id": received.get("update_id"),
+                "message": {
+                    "message_id": received.get("message_id"),
+                    "from": {"id": received.get("sender_id")},
+                    "chat": {"id": received.get("chat_id")},
+                },
+            },
+            code="entry_disabled",
+            detail=reason,
+        )
+        message = (
+            "Telegram 已退为通知与只读问答，不能创建或确认策略，也不会生成 draft。\n"
+            f"请前往 Dashboard：{PARK_DASHBOARD_URL}"
+        )
+        outbound = self.telegram.queue_outbound(
+            idempotency_key=f"park-entry-disabled:{received.get('update_id')}",
+            message_type="entry_disabled",
+            text=message,
+            binding=None,
+        )
+        return {
+            "status": "blocked",
+            "code": "entry_disabled",
+            "receipt": receipt,
+            "message": message,
+            "outbound": outbound,
+            "next_action": "use_dashboard_confirm_and_run",
+            "execution_authorized": False,
+        }
 
     def _handle_live_activation_confirmation(self, text: str, *, received: Mapping[str, Any]) -> dict[str, Any]:
         """Route the exact Live activation command through the source-bound gate."""
@@ -812,7 +889,13 @@ class ParkTelegramRouter:
         return recovered
 
     def recover_pending_strategy_inputs(self) -> list[dict[str, Any]]:
-        """Reprocess a strategy message misclassified by an unavailable provider."""
+        """Reject legacy pending strategy inputs after the Telegram cutover.
+
+        Recovery used to call the strategy builder directly, which would
+        bypass the public ``handle_update`` guard on the next 60-second tick.
+        The durable inbox is retained for audit, but it can no longer be used
+        to manufacture a draft or proposal.
+        """
 
         recovered: list[dict[str, Any]] = []
         for received in self.telegram.inbox_rows():
@@ -830,17 +913,12 @@ class ParkTelegramRouter:
                         continue
                 except ParkContinuationError:
                     continue
-            recovery_key = f"park-strategy-rejected:{update_id}:strategy-recovery"
+            recovery_key = f"park-entry-disabled:{update_id}"
             if any(row.get("idempotency_key") == recovery_key for row in self.telegram.outbox_rows()):
                 continue
-            active = self.identity.active_session()
-            result = self._handle_strategy(
-                _safe_text(received.get("text")),
-                active=active,
-                # Keep the original Telegram update id in the durable result,
-                # but give the repaired response a fresh outbound key so an
-                # old misclassification cannot mask the new guidance text.
-                update_id=f"{update_id}:strategy-recovery",
+            result = self._entry_disabled(
+                received,
+                "Telegram 策略入口已关闭；历史待处理消息不会恢复为 draft，请前往 Dashboard 的 AI 助手和 Confirm & Run。",
             )
             self._remember_result(
                 update_id,
@@ -1233,6 +1311,21 @@ class ParkTelegramRouter:
         if str(text or "").strip().lower() in {"/start", "start", "/help", "help"}:
             return self._handle_strategy(text, active=active, update_id=update_id)
         if self.conversation_agent is None:
+            if self._looks_like_read_query(text):
+                context = self._conversation_context(active, text=text)
+                result = self._deterministic_conversation_fallback(
+                    text,
+                    context=context,
+                    active=active,
+                    update_id=update_id,
+                )
+                outbound = self.telegram.queue_outbound(
+                    idempotency_key=f"park-conversation:{update_id}",
+                    message_type="conversation_reply",
+                    text=str(result.get("message") or ""),
+                    binding=active,
+                )
+                return {**result, "outbound": outbound}
             return self._handle_strategy(text, active=active, update_id=update_id)
         context = self._conversation_context(active, text=text)
         quick_candidate = {

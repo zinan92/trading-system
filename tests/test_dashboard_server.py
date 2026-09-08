@@ -1751,6 +1751,19 @@ def test_dashboard_ai_chat_dispatch_is_proposal_only_and_action_explicit(tmp_pat
     assert calls[1][2] == {"actor": "park@example.com"}
 
 
+def test_dashboard_strategy_mutation_routes_are_explicitly_allowlisted() -> None:
+    assert dashboard_server.STRATEGY_MUTATION_ENDPOINT_ALLOWLIST == {
+        "/api/park-paper/ai-chat",
+        "/api/dashboard-control/selection",
+        "/api/dashboard-control/preview",
+        "/api/dashboard-control/account-admission",
+        "/api/dashboard-control/confirm",
+    }
+    source = Path(dashboard_server.__file__).read_text(encoding="utf-8")
+    for endpoint in dashboard_server.STRATEGY_MUTATION_ENDPOINT_ALLOWLIST:
+        assert endpoint in source
+
+
 def test_dashboard_ai_chat_public_request_accepts_verified_identity_but_not_cross_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

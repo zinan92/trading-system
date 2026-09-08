@@ -554,7 +554,11 @@ def test_router_creates_deterministic_proposal_without_execution_mutation(tmp_pa
         now=lambda: "2026-08-14T10:00:00+00:00",
         cycle_id_provider=lambda now: "2026-08-14_DAY",
     )
-    result = router.handle_update(_update(1, "做空 DCA，最多 10 倍杠杆，价格区间是 4444~4200，止损4450，止盈4210"))
+    result = router._handle_strategy(
+        "做空 DCA，最多 10 倍杠杆，价格区间是 4444~4200，止损4450，止盈4210",
+        active=None,
+        update_id=1,
+    )
 
     assert result["status"] == "proposal_created"
     plan = result["plan"]
@@ -566,6 +570,56 @@ def test_router_creates_deterministic_proposal_without_execution_mutation(tmp_pa
     assert result["proposal"]["execution_authorized"] is False
     assert not list(output.glob("dualtrack/**/commands*.json"))
     assert router.telegram.pending_outbound()
+
+
+def test_telegram_strategy_entry_is_disabled_before_draft_or_provider(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class UnexpectedParser:
+        def parse(self, _text: str):
+            calls.append("parser")
+            raise AssertionError("Telegram entry guard must run before parsing")
+
+    router = ParkTelegramRouter(
+        tmp_path / "outputs",
+        park_user_id="park-user",
+        chat_id="park-chat",
+        intent_parser=UnexpectedParser(),
+        market_reader=lambda: calls.append("market") or {},
+        account_reader=lambda *_args: calls.append("account") or {},
+    )
+
+    result = router.handle_update(_update(100, "做多网格，区间 4200~4400，确认执行"))
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "entry_disabled"
+    assert result["receipt"]["code"] == "entry_disabled"
+    assert "dashboard-v5.html" in result["message"]
+    assert calls == []
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+    assert not (tmp_path / "outputs" / "park_strategy" / "telegram_continuations.jsonl").exists()
+    assert any(row.get("message_type") == "entry_disabled" for row in router.telegram.pending_outbound())
+
+
+def test_telegram_read_only_question_remains_available(tmp_path: Path) -> None:
+    router = ParkTelegramRouter(
+        tmp_path / "outputs",
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: {"price": 4300.0, "trusted": True, "fresh": True},
+        account_reader=lambda *_args: {
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "nav_is_current": False,
+            "status": "ok",
+        },
+    )
+
+    result = router.handle_update(_update(101, "当前策略状态是什么？"))
+
+    assert result["status"] == "conversation_replied"
+    assert result["execution_authorized"] is False
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
 def test_router_understands_screenshot_style_short_dca_without_json_rephrasing(tmp_path: Path) -> None:
@@ -594,16 +648,15 @@ def test_router_understands_screenshot_style_short_dca_without_json_rephrasing(t
         cycle_id_provider=lambda _now: "2026-08-14_DAY",
     )
 
-    result = router.handle_update(
-        _update(
-            2,
+    result = router._handle_strategy(
             "你帮我做一个比特币做空的 Testnet DCA 策略，具体参数如下："
             "1. 杠杆：最高 10 倍；"
             "2. 价格区间：78000 ~ 80000；"
             "3. 止损 (Stop Loss)：81000；"
             "4. 止盈 (Take Profit)：73000",
+            active=None,
+            update_id=2,
         )
-    )
 
     assert result["status"] == "proposal_created"
     normalized = result["plan"]["normalized_input"]
@@ -625,7 +678,7 @@ def test_router_blocks_dca_without_explicit_strategy_tp_and_sl(tmp_path: Path) -
         cycle_id_provider=lambda _now: "2026-08-14_DAY",
     )
 
-    result = router.handle_update(_update(26, "short DCA 10x 4444~4200"))
+    result = router._handle_strategy("short DCA 10x 4444~4200", active=None, update_id=26)
 
     assert result["status"] == "blocked"
     assert result["code"] == "dca_exit_levels_missing"
@@ -657,7 +710,7 @@ def test_router_snapshot_exposes_grid_boundary_entry_range_spacing_and_hard_stop
         cycle_id_provider=lambda _now: "2026-08-14_DAY",
     )
 
-    result = router.handle_update(_update(23, "中性网格，区间 3800~4000，间距 10，最大10倍杠杆"))
+    result = router._handle_strategy("中性网格，区间 3800~4000，间距 10，最大10倍杠杆", active=None, update_id=23)
 
     assert result["status"] == "proposal_created"
     text = router.telegram.pending_outbound()[0]["text"]
@@ -691,9 +744,9 @@ def test_router_accepts_bounded_confirmation_shortcut_for_current_proposal(tmp_p
         now=lambda: "2026-08-14T10:00:00+00:00",
         cycle_id_provider=lambda now: "2026-08-14_DAY",
     )
-    proposal = router.handle_update(_update(10, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
+    proposal = router._handle_strategy("short DCA 10x 4444~4200 stop 4444 tp 4200", active=None, update_id=10)
 
-    confirmed = router.handle_update(_update(11, "确认当前计划"))
+    confirmed = router._handle_confirmation("确认当前计划", active=router.identity.active_session(), update_id=11)
 
     assert confirmed["status"] == "confirmed"
     assert confirmed["confirmation_mode"] == "pending_proposal_shortcut"
@@ -728,10 +781,10 @@ def test_router_releases_expired_unconfirmed_session_only_on_clean_slate(
         now=lambda: "2026-08-14T10:00:00+00:00",
         cycle_id_provider=lambda now: "2026-08-14_DAY",
     )
-    first = router.handle_update(_update(20, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
+    first = router._handle_strategy("short DCA 10x 4444~4200 stop 4444 tp 4200", active=None, update_id=20)
     clock["value"] = 2000.0
 
-    replacement = router.handle_update(_update(21, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
+    replacement = router._handle_strategy("short DCA 10x 4444~4200 stop 4444 tp 4200", active=router.identity.active_session(), update_id=21)
 
     assert first["status"] == "proposal_created"
     assert replacement["status"] == "proposal_created"
@@ -769,10 +822,10 @@ def test_confirmation_is_exact_idempotent_and_still_zero_execution(tmp_path: Pat
         now=lambda: "2026-08-14T10:00:00+00:00",
         cycle_id_provider=lambda now: "2026-08-14_DAY",
     )
-    proposal = router.handle_update(_update(2, "short DCA 10x 4444~4200 stop 4444 tp 4200"))["proposal"]
+    proposal = router._handle_strategy("short DCA 10x 4444~4200 stop 4444 tp 4200", active=None, update_id=2)["proposal"]
     command = f"confirm {proposal['plan_digest']}"
-    first = router.handle_update(_update(3, command))
-    duplicate = router.handle_update(_update(3, command))
+    first = router._handle_confirmation(command, active=router.identity.active_session(), update_id=3)
+    duplicate = router._handle_confirmation(command, active=router.identity.active_session(), update_id=3)
 
     assert first == duplicate
     assert first["status"] == "confirmed"
@@ -824,7 +877,7 @@ def test_worker_persists_cursor_and_replays_duplicate_without_new_result(tmp_pat
 
     assert first["next_offset"] == 21
     assert second["next_offset"] == 21
-    assert second["updates_handled"][0]["status"] == "proposal_created"
+    assert second["updates_handled"][0]["status"] == "blocked"
     assert transport.sent == 1
 
 
@@ -855,6 +908,7 @@ def test_worker_keeps_durable_recovery_when_telegram_poll_fails(tmp_path: Path, 
     assert result["next_action"] == "retry_telegram_poll"
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy recovery is disabled by issue #1148")
 def test_worker_recovers_explicit_dca_after_provider_type_misclassification(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     router = ParkTelegramRouter(
@@ -924,8 +978,8 @@ def test_dca_followup_merges_stop_and_take_profit_into_pending_intent(tmp_path: 
         cycle_id_provider=lambda _now: "2026-08-14_DAY",
     )
 
-    first = router.handle_update(_update(40, "做多 4200~4400 的 DCA，然后最大10倍杠杆。"))
-    completed = router.handle_update(_update(41, "止损4190 止盈4800"))
+    first = router._handle_strategy("做多 4200~4400 的 DCA，然后最大10倍杠杆。", active=None, update_id=40)
+    completed = router._handle_strategy("止损4190 止盈4800", active=router.identity.active_session(), update_id=41)
 
     assert first["code"] == "dca_exit_levels_missing"
     assert completed["status"] == "proposal_created"
@@ -936,6 +990,7 @@ def test_dca_followup_merges_stop_and_take_profit_into_pending_intent(tmp_path: 
     assert not (output / "dualtrack").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy recovery is disabled by issue #1148")
 def test_recovery_merges_already_consumed_dca_and_exit_followup(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     router = ParkTelegramRouter(
@@ -976,6 +1031,7 @@ def test_recovery_merges_already_consumed_dca_and_exit_followup(tmp_path: Path) 
     assert recovered[1]["plan"]["normalized_input"]["stop_price"] == 4190.0
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy recovery is disabled by issue #1148")
 def test_worker_refreshes_stale_missing_risk_guidance_once(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     router = ParkTelegramRouter(
@@ -1051,14 +1107,14 @@ def test_duplicate_update_id_with_changed_content_is_blocked_and_audited(tmp_pat
     first = router.handle_update(_update(21, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     conflict = router.handle_update(_update(21, "short Grid 10x 4444~4200"))
 
-    assert first["status"] == "proposal_created"
+    assert first["code"] == "entry_disabled"
     assert conflict == {
         "status": "blocked",
         "code": "duplicate_update_conflict",
         "next_action": "notify_park_and_wait",
     }
     rejected = [row for row in router.telegram.inbox_rows() if row.get("event") == "inbound_rejected"]
-    assert rejected and rejected[-1]["code"] == "duplicate_update_conflict"
+    assert rejected and rejected[-1]["code"] == "entry_disabled"
 
 
 def test_unauthorized_update_is_persisted_and_never_notified_to_attacker(tmp_path: Path) -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from services.park_telegram_runtime import ParkTelegramRouter, ParkTelegramRuntimeError
 
 
@@ -106,6 +108,7 @@ def test_strategy_discussion_can_ask_for_missing_fields_without_creating_plan(tm
     assert any(json.loads(line)["event"] == "assistant_message" for line in ledger.read_text().splitlines())
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_complete_strategy_becomes_proposal_only_after_conversation_convergence(tmp_path: Path) -> None:
     provider = ConversationProvider(
         {
@@ -180,6 +183,7 @@ def test_active_strategy_does_not_block_macro_read_only_question_on_provider_fal
     assert result.get("code") != "strategy_locked"
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_provider_outage_keeps_explicit_strategy_as_unconfirmed_draft(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
@@ -230,6 +234,7 @@ def test_provider_outage_preserves_parenthetical_dca_exit_fields(tmp_path: Path)
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_provider_outage_preserves_chinese_number_dca_entry_ladder(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
@@ -255,6 +260,7 @@ def test_provider_outage_preserves_chinese_number_dca_entry_ladder(tmp_path: Pat
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_provider_outage_finalize_reuses_complete_durable_strategy_patch(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
@@ -298,6 +304,7 @@ def test_provider_outage_finalize_reuses_complete_durable_strategy_patch(tmp_pat
     assert not (tmp_path / "outputs" / "dualtrack").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_provider_outage_finalize_surfaces_market_mismatch_after_reusing_draft(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
@@ -329,6 +336,7 @@ def test_provider_outage_finalize_surfaces_market_mismatch_after_reusing_draft(t
     assert not (tmp_path / "outputs" / "dualtrack").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_provider_outage_replays_revised_dca_geometry_without_raw_market_exception(
     tmp_path: Path,
 ) -> None:
@@ -496,6 +504,7 @@ def test_strategy_discussion_with_open_position_does_not_enter_clean_slate_gate(
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_explicit_finalize_uses_preview_candidate_and_keeps_confirmation_gate(tmp_path: Path) -> None:
     provider = ConversationProvider(
         {
@@ -595,6 +604,7 @@ def test_testnet_conversation_uses_public_testnet_market_without_paper_fallback(
     assert result["conversation"]["risk_preview"]["status"] == "derived"
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_testnet_finalize_requires_testnet_account_instead_of_mixing_paper_facts(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
@@ -637,6 +647,7 @@ def test_testnet_finalize_requires_testnet_account_instead_of_mixing_paper_facts
     assert not (tmp_path / "outputs" / "dualtrack").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_chinese_testnet_strategy_proposal_keeps_testnet_confirmation_environment(
     tmp_path: Path,
 ) -> None:
@@ -743,6 +754,7 @@ def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_candidate_patch_is_merged_across_natural_language_turns(tmp_path: Path) -> None:
     class MultiTurnProvider:
         def __init__(self) -> None:
@@ -787,6 +799,7 @@ def test_candidate_patch_is_merged_across_natural_language_turns(tmp_path: Path)
     assert second["plan"]["normalized_input"]["stop_price"] == 4190.0
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_explicit_finalize_uses_deterministic_completeness_when_provider_contradicts_candidate(
     tmp_path: Path,
 ) -> None:
@@ -845,6 +858,7 @@ def test_explicit_finalize_uses_deterministic_completeness_when_provider_contrad
     assert not (tmp_path / "outputs" / "dualtrack").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_explicit_finalize_keeps_genuinely_incomplete_provider_candidate_in_conversation(
     tmp_path: Path,
 ) -> None:
@@ -875,6 +889,7 @@ def test_explicit_finalize_keeps_genuinely_incomplete_provider_candidate_in_conv
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_explicit_dca_fields_are_recovered_when_model_patch_is_incomplete(tmp_path: Path) -> None:
     class IncompletePatchProvider:
         def __init__(self) -> None:

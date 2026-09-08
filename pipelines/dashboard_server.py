@@ -155,6 +155,19 @@ _DUALTRACK_POST_ENDPOINTS = {"/api/dualtrack/plan", "/api/dualtrack/orders", "/a
 
 _PARK_AI_CHAT_ENDPOINT = "/api/park-paper/ai-chat"
 
+# Every strategy-authoring/confirmation mutation is intentionally visible in
+# one exact contract.  A new Dashboard strategy mutation must update this set
+# and its focused allowlist test before it can be accepted.
+STRATEGY_MUTATION_ENDPOINT_ALLOWLIST = frozenset(
+    {
+        _PARK_AI_CHAT_ENDPOINT,
+        "/api/dashboard-control/selection",
+        "/api/dashboard-control/preview",
+        "/api/dashboard-control/account-admission",
+        "/api/dashboard-control/confirm",
+    }
+)
+
 
 class _SingleFlightCall:
     def __init__(self) -> None:
