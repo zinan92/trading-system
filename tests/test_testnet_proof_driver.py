@@ -11,6 +11,7 @@ from pipelines.testnet_proof_driver import (
     build_plan,
     map_confirmation,
     read_coherent_market,
+    validate_grid_plan,
 )
 from pipelines.testnet_automation_proof import _MARKET_REQUIRED
 from services.park_confirmation_ledger import DurableParkConfirmationError, parse_durable_confirmation
@@ -68,6 +69,64 @@ def test_plan_uses_preview_orders_and_keeps_plan_digest() -> None:
     assert plan["execution_context"]["cycle_id"] == plan["cycle_id"]
     identity = GridTestnetLifecycle._identity(plan)
     assert identity["cycle_id"] == "2026-09-08_DAY"
+
+
+def test_plan_projects_all_dashboard_grid_risk_sources_for_lifecycle() -> None:
+    preview, confirmation = _preview()
+    preview["preview"]["range"]["low"] = 80
+    preview["account"] = {"equity": 10_000}
+    preview["risk"] = {
+        "maximum_loss_at_full_depth": 100,
+        "selected_leverage": 5,
+        "max_slippage": 10,
+    }
+    preview["risk_gate"] = {"effective_notional": 1_000}
+    preview["preview"]["grid"].update({"max_open_orders": 4, "max_open_positions": 2})
+    plan = build_plan(preview, confirmation)
+
+    assert plan["risk_budget"] == {
+        "maximum_loss_at_full_depth": 100,
+        "equity": 10_000,
+        "leverage_limit": 5,
+        "max_notional": 1_000,
+        "max_open_orders": 4,
+        "max_open_positions": 2,
+        "max_slippage": 10,
+    }
+
+
+def test_validate_grid_plan_reports_every_lifecycle_prewrite_check() -> None:
+    preview, confirmation = _preview()
+    preview["preview"]["range"]["low"] = 80
+    preview["account"] = {"equity": 10_000}
+    preview["risk"] = {
+        "maximum_loss_at_full_depth": 100,
+        "selected_leverage": 5,
+        "max_slippage": 10,
+    }
+    preview["risk_gate"] = {"effective_notional": 1_000}
+    preview["preview"]["grid"].update({"max_open_orders": 4, "max_open_positions": 2})
+    checks = validate_grid_plan(build_plan(preview, confirmation))["checks"]
+
+    assert all(check["passed"] for check in checks)
+    assert {check["name"] for check in checks} >= {
+        "maximum_loss_at_full_depth", "equity", "leverage_limit", "max_notional",
+        "max_open_orders", "max_open_positions", "max_slippage",
+        "grid_geometry", "full_depth_risk",
+    }
+
+
+def test_validate_grid_plan_fails_closed_with_missing_source() -> None:
+    preview, confirmation = _preview()
+    preview["preview"]["range"]["low"] = 80
+    preview["account"] = {"equity": 10_000}
+    preview["risk"] = {"maximum_loss_at_full_depth": 100, "selected_leverage": 5}
+    preview["risk_gate"] = {"effective_notional": 1_000}
+
+    with pytest.raises(ProofDriverError, match="lifecycle_preflight_missing") as error:
+        validate_grid_plan(build_plan(preview, confirmation))
+
+    assert error.value.details["fields"] == ["max_slippage"]
 
 
 def test_plan_requires_canonical_cycle_identity() -> None:

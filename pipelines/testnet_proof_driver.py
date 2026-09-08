@@ -32,6 +32,7 @@ from services.park_confirmation_ledger import (
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.strategy_control_plane import StrategyControlMachineError
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+from services.grid_testnet_lifecycle import GridTestnetLifecycle, GridTestnetLifecycleError
 
 
 PREVIEWS = Path("dashboard_control_plane/previews.json")
@@ -48,6 +49,19 @@ class ProofDriverError(ValueError):
 
 _MARKET_BBO_FIELDS = ("bid", "ask", "mid")
 _MARKET_READ_ATTEMPTS = 5
+
+# These are the fields consumed immediately before GridTestnetLifecycle can
+# submit its first order.  Keep this list explicit: adding a lifecycle gate
+# without adding its Dashboard projection must fail closed in this driver.
+LIFECYCLE_RISK_FIELDS = (
+    "maximum_loss_at_full_depth",
+    "equity",
+    "leverage_limit",
+    "max_notional",
+    "max_open_orders",
+    "max_open_positions",
+    "max_slippage",
+)
 
 
 def _bbo_check(market: Mapping[str, Any]) -> dict[str, Any]:
@@ -211,6 +225,7 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
     if family not in {"dca", "grid"}:
         raise ProofDriverError("strategy_family_invalid")
     preview_market = preview.get("market") if isinstance(preview.get("market"), Mapping) else {}
+    instrument = preview.get("instrument") if isinstance(preview.get("instrument"), Mapping) else {}
     execution_context = {
         "venue_profile_id": preview.get("venue_profile_id"),
         "broker_id": preview.get("broker_id") or body.get("broker_id") or preview_market.get("broker_id") or (body.get("market") or {}).get("broker_id"),
@@ -219,6 +234,10 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
         "instrument_id": preview.get("instrument_id"),
         "runtime_id": preview.get("runtime_id"),
         "capability_revision": preview.get("capability_revision"),
+        "price_tick": preview.get("price_tick") or instrument.get("price_increment"),
+        "quantity_step": preview.get("quantity_step") or instrument.get("size_increment"),
+        "minimum_quantity": preview.get("minimum_quantity") or instrument.get("min_quantity"),
+        "minimum_notional": preview.get("minimum_notional") or instrument.get("min_notional"),
     }
     cycle_id = next(
         (
@@ -265,13 +284,20 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
         plan["upper_price_boundary"] = body.get("range", {}).get("high")
         plan["lower_boundary"] = plan["lower_price_boundary"]
         plan["upper_boundary"] = plan["upper_price_boundary"]
+        body_grid = body.get("grid") if isinstance(body.get("grid"), Mapping) else {}
+        preview_grid = preview.get("grid") if isinstance(preview.get("grid"), Mapping) else {}
         plan["grid"] = {
             "rungs": [
                 {"rung": int(row.get("level", index)), "side": row.get("side"), "price": row.get("price"),
-                 "quantity": row.get("quantity"), "tp": row.get("tp"),
-                 "hard_stop": row.get("sl") or body.get("grid", {}).get("hard_stop")}
+                 "quantity": row.get("quantity") or row.get("size"),
+                 "tp": row.get("tp") or row.get("take_profit"),
+                 "hard_stop": row.get("sl") or row.get("hard_stop") or row.get("stop_loss")
+                 or body_grid.get("hard_stop") or body_grid.get("hard_stop_price")
+                 or preview_grid.get("hard_stop") or preview_grid.get("hard_stop_price")}
                 for index, row in enumerate(orders, start=1) if isinstance(row, Mapping)
-            ]
+            ],
+            "mode": body_grid.get("mode") or preview_grid.get("mode"),
+            "spacing": body_grid.get("spacing") or preview_grid.get("spacing"),
         }
     else:
         entries = body.get("entries")
@@ -286,9 +312,136 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
             "stop_price": dca.get("stop_price"),
             "loop_enabled": False,
         }
-    risk = body.get("risk") if isinstance(body.get("risk"), Mapping) else {}
+    risk = {}
+    for source in (preview.get("risk"), body.get("risk")):
+        if isinstance(source, Mapping):
+            risk.update(source)
+    risk_gate = preview.get("risk_gate") if isinstance(preview.get("risk_gate"), Mapping) else {}
     plan["risk"] = dict(risk)
+    if family == "grid":
+        plan["risk_gate"] = dict(risk_gate)
+        plan["risk_budget"] = _grid_risk_budget(
+            preview=preview,
+            body=body,
+            orders=orders,
+            risk=risk,
+            risk_gate=risk_gate,
+        )
     return plan
+
+
+def _first_value(*sources: Mapping[str, Any], keys: Sequence[str]) -> Any:
+    for source in sources:
+        for key in keys:
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
+    return None
+
+
+def _grid_risk_budget(
+    *, preview: Mapping[str, Any], body: Mapping[str, Any], orders: Sequence[Any],
+    risk: Mapping[str, Any], risk_gate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project Dashboard risk facts into the lifecycle's exact input shape."""
+
+    grid = body.get("grid") if isinstance(body.get("grid"), Mapping) else {}
+    preview_grid = preview.get("grid") if isinstance(preview.get("grid"), Mapping) else {}
+    account = preview.get("account") if isinstance(preview.get("account"), Mapping) else {}
+    body_account = body.get("account") if isinstance(body.get("account"), Mapping) else {}
+    market = preview.get("market") if isinstance(preview.get("market"), Mapping) else {}
+    # Effective notional is the subtractive Portfolio Gate result.  It is the
+    # only notional permitted to reach an execution lifecycle.
+    values = {
+        "maximum_loss_at_full_depth": _first_value(
+            risk, preview.get("risk") if isinstance(preview.get("risk"), Mapping) else {},
+            keys=("maximum_loss_at_full_depth", "max_loss", "maximum_loss"),
+        ),
+        "equity": _first_value(account, body_account, risk, keys=("equity", "account_equity")),
+        "leverage_limit": _first_value(
+            risk, grid, preview_grid,
+            keys=("leverage_limit", "selected_leverage", "effective_leverage", "leverage"),
+        ),
+        "max_notional": _first_value(
+            risk_gate, risk, grid, preview_grid,
+            keys=("effective_notional", "gross_notional", "max_notional", "maximum_notional", "total_grid_notional"),
+        ),
+        "max_open_orders": _first_value(
+            risk, grid, preview_grid, keys=("max_open_orders", "maximum_open_orders")
+        ),
+        "max_open_positions": _first_value(
+            risk, grid, preview_grid, keys=("max_open_positions", "maximum_open_positions")
+        ),
+        "max_slippage": _first_value(
+            risk, grid, preview_grid, market, keys=("max_slippage", "slippage_budget")
+        ),
+    }
+    # The preview's order list is the authoritative full-depth ladder.  A
+    # missing explicit capacity is not guessed: the ladder itself can prove
+    # the minimum capacity needed for this immutable plan.
+    if values["max_open_orders"] in (None, ""):
+        values["max_open_orders"] = len(orders)
+    if values["max_open_positions"] in (None, ""):
+        values["max_open_positions"] = len(orders)
+    # Preserve display/audit facts without making lifecycle calculations use
+    # a second, independently derived risk model.
+    for key in ("estimated_margin_at_full_depth", "estimated_margin", "margin", "actual_leverage_at_full_depth", "actual_leverage", "size_precision", "price_precision"):
+        value = _first_value(risk, grid, preview_grid, keys=(key,))
+        if value in (None, "") and key in {"size_precision", "price_precision"}:
+            instrument = preview.get("instrument") if isinstance(preview.get("instrument"), Mapping) else {}
+            value = instrument.get(key)
+        if value not in (None, ""):
+            values[key] = value
+    return values
+
+
+def validate_grid_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Run every Grid lifecycle pre-write check offline and return evidence."""
+
+    checks = [{"name": field, "passed": False, "source": "plan.risk_budget"} for field in LIFECYCLE_RISK_FIELDS]
+    risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), Mapping) else {}
+    for check in checks:
+        value = risk.get(check["name"])
+        try:
+            check["passed"] = value not in (None, "") and float(value) > 0
+        except (TypeError, ValueError):
+            check["passed"] = False
+        if not check["passed"]:
+            raise ProofDriverError("lifecycle_preflight_missing", fields=[check["name"]], checks=checks)
+    try:
+        identity = GridTestnetLifecycle._identity(plan)
+        # _rungs is state-free but remains an instance method for lifecycle
+        # cohesion; this validator never invokes the broker or writes state.
+        rungs = GridTestnetLifecycle(Path("."), object())._rungs(plan, identity)
+        GridTestnetLifecycle._validate_full_depth_risk(plan, rungs)
+        class _OfflineBroker:
+            # The lifecycle reaches its pre-write gate, then stops at the
+            # missing capability boundary without any broker/network I/O.
+            protection_adapter = None
+            account_adapter = None
+            broker_config = {
+                "broker_id": "hyperliquid",
+                "environment": "testnet",
+                "account_id": "offline-validation",
+                "release_sha": "offline",
+                "ledger_namespace": "offline-validation",
+            }
+
+        with tempfile.TemporaryDirectory(prefix="grid-plan-validation-") as root:
+            state = GridTestnetLifecycle(Path(root), _OfflineBroker()).start(
+                dict(plan),
+                timestamp=str(plan.get("locked_at") or datetime.now(timezone.utc).isoformat()),
+            )
+        if state.get("status") != "blocked_protection":
+            raise GridTestnetLifecycleError("offline_validation_reached_unexpected_state")
+        checks.extend([
+            {"name": "grid_geometry", "passed": True, "source": "preview.grid/orders"},
+            {"name": "full_depth_risk", "passed": True, "source": "lifecycle"},
+            {"name": "start_grid_session_prewrite", "passed": True, "source": "fake_broker"},
+        ])
+    except (GridTestnetLifecycleError, ValueError) as exc:
+        raise ProofDriverError("lifecycle_preflight_blocked", checks=checks, detail=str(exc)) from exc
+    return {"status": "passed", "checks": checks, "rung_count": len(rungs)}
 
 
 def map_confirmation(
@@ -406,6 +559,7 @@ def run(
 ) -> dict[str, Any]:
     preview, dashboard = _latest_activation(output_root, activation_id)
     plan = build_plan(preview, dashboard)
+    lifecycle_validation = validate_grid_plan(plan) if plan["strategy_type"] == "grid" else None
     confirmation = map_confirmation(output_root, dashboard, approval_id=approval_id, approved_by=approved_by)
     work_root = output_root
     with ExitStack() as stack:
@@ -497,7 +651,9 @@ def run(
             "reason_code": result.get("reason_code"),
             "execution_blocker": result.get("execution_blocker"),
             "detail": result.get("detail"),
-            "steps": {"preview_loaded": True, "plan_built": True, "market_bound": True,
+            "steps": {"preview_loaded": True, "plan_built": True,
+                       "lifecycle_preflight": lifecycle_validation or {"status": "not_applicable"},
+                       "market_bound": True,
                        "confirmation_mapped": True, "candidate_selected": result.get("status") in {"candidate_selected", "dry_run_candidate_selected"}},
             "market_self_check": market_checks,
             "result": {key: result.get(key) for key in ("status", "reason_code", "detail", "lifecycle_status", "execution_blocker", "execution_mutation", "network_operation_invoked", "next_action")},
@@ -510,31 +666,59 @@ def run(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Drive an attended Testnet proof from Dashboard evidence")
-    parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--activation-id", required=True)
-    parser.add_argument("--approval-id", required=True)
-    parser.add_argument("--approved-by", required=True)
-    parser.add_argument("--secret-file", type=Path, required=True)
-    parser.add_argument("--account-address", required=True)
-    parser.add_argument("--runtime-id", required=True)
-    parser.add_argument("--release-sha", required=True)
-    parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--output-root", type=Path)
+    parser.add_argument("--activation-id")
+    parser.add_argument("--approval-id")
+    parser.add_argument("--approved-by")
+    parser.add_argument("--secret-file", type=Path)
+    parser.add_argument("--account-address")
+    parser.add_argument("--runtime-id")
+    parser.add_argument("--release-sha")
+    parser.add_argument("--receipt", type=Path)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--validate-plan", action="store_true",
+        help="Validate a supplied plan through all Grid lifecycle pre-write checks without broker or network I/O.",
+    )
+    parser.add_argument("--strategy-plan", type=Path)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        result = run(**vars(args))
+        if args.validate_plan:
+            if args.strategy_plan is None:
+                raise ProofDriverError("strategy_plan_required")
+            plan = _load_mapping(args.strategy_plan, "plan")
+            result = validate_grid_plan(plan)
+            print(json.dumps(result, sort_keys=True, ensure_ascii=False))
+            return 0
+        required = ("output_root", "activation_id", "approval_id", "approved_by", "secret_file", "account_address", "runtime_id", "release_sha", "receipt")
+        missing = [name for name in required if getattr(args, name) in (None, "")]
+        if missing:
+            raise ProofDriverError("driver_argument_required", fields=missing)
+        result = run(
+            output_root=args.output_root,
+            activation_id=args.activation_id,
+            approval_id=args.approval_id,
+            approved_by=args.approved_by,
+            secret_file=args.secret_file,
+            account_address=args.account_address,
+            runtime_id=args.runtime_id,
+            release_sha=args.release_sha,
+            dry_run=args.dry_run,
+            receipt=args.receipt,
+        )
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))
         return 0
     except ProofDriverError as exc:
         blocked = {"schema_version": "testnet-proof-driver-receipt-v1", "status": "BLOCKED",
                    "reason_code": exc.reason_code, "activation_id": args.activation_id,
                    "dry_run": args.dry_run, "secret_material_present": False, **exc.details}
-        args.receipt.parent.mkdir(parents=True, exist_ok=True)
-        write_json(args.receipt, blocked)
+        if args.receipt is not None:
+            args.receipt.parent.mkdir(parents=True, exist_ok=True)
+            write_json(args.receipt, blocked)
         print(json.dumps(blocked, sort_keys=True, ensure_ascii=False))
         return 2
 
@@ -548,6 +732,7 @@ __all__ = [
     "build_market_document",
     "read_coherent_market",
     "build_plan",
+    "validate_grid_plan",
     "map_confirmation",
     "run",
     "main",

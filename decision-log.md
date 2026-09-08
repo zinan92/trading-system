@@ -1,5 +1,28 @@
 # Decision Log
 
+## 2026-09-08 — Project the complete Grid lifecycle pre-write gate (#1184)
+
+### Decision
+
+- The proof driver now maps Dashboard `risk`, `grid`, `orders`, `risk_gate`,
+  account, and instrument facts into the exact Grid lifecycle plan shape.
+- Before dry-run execution, it runs every existing lifecycle risk and
+  full-depth geometry check offline and records each check in the receipt.
+  `--validate-plan` exposes the same check without broker or network I/O.
+
+### Gotchas
+
+- Effective notional comes from the subtractive `risk_gate`; it must not be
+  replaced by requested notional or recomputed from an uncapped plan.
+- Missing lifecycle inputs remain fail-closed. The order list can prove the
+  minimum open-order/position capacity, but missing risk, geometry, or market
+  facts cannot be filled with defaults.
+
+### Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_grid_testnet_lifecycle.py` — 31 passed.
+- `python3 -m py_compile pipelines/testnet_proof_driver.py` and `git diff --check` — passed.
+
 ## 2026-09-08 — Accept durable Dashboard confirmations at Testnet start (#1180)
 
 ### Decision

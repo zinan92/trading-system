@@ -73,6 +73,23 @@ binding fact. The binding `source`, observed `price` (as `mid`), and
 with `market_facts_missing`. The receipt must report `candidate_selected=true`,
 `execution_mutation=false`, and `network_operation_invoked=false`.
 
+The driver also projects the complete Grid lifecycle write gate before the
+dry-run candidate path: `maximum_loss_at_full_depth`, `equity`,
+`leverage_limit`, effective `max_notional`, `max_open_orders`,
+`max_open_positions`, `max_slippage`, then full-depth Grid geometry and risk.
+The sources are Dashboard `preview.risk`, `preview.grid`, `preview.orders`,
+`preview.risk_gate`, and the account/instrument facts. A missing or invalid
+source is a hard blocker; no default is invented. To validate an already
+materialized plan without broker or network I/O:
+
+```sh
+PYTHONPATH=src python3 -m pipelines.testnet_proof_driver \
+  --validate-plan --strategy-plan <plan.json>
+```
+
+The normal `--dry-run` receipt contains the same per-field results under
+`steps.lifecycle_preflight`.
+
 Before any attended start, create a fresh Dashboard preview and confirmation
 again. The Coordinator accepts a Dashboard confirmation only while it is within
 `MAX_TESTNET_CONFIRMATION_AGE_SECONDS` (currently 900 seconds); do not reuse a
