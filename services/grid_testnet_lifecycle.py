@@ -856,6 +856,33 @@ class GridTestnetLifecycle:
     def _rungs(self, plan: Mapping[str, Any], identity: Mapping[str, Any]) -> list[dict[str, Any]]:
         grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
         risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), Mapping) else {}
+        hard_stop_value = plan.get("hard_stop")
+        if hard_stop_value in (None, ""):
+            hard_stop_value = grid.get("hard_stop") or grid.get("hard_stop_price")
+        explicit_hard_stop = hard_stop_value not in (None, "")
+        if isinstance(hard_stop_value, Mapping):
+            hard_stop_by_side = {
+                "buy": float(hard_stop_value.get("long") or 0),
+                "sell": float(hard_stop_value.get("short") or 0),
+            }
+        else:
+            if explicit_hard_stop:
+                default_stop = float(hard_stop_value)
+                hard_stop_by_side = {"buy": default_stop, "sell": default_stop}
+            else:
+                hard_stop_by_side = {
+                    "buy": identity["lower_boundary"],
+                    "sell": identity["upper_boundary"],
+                }
+        if identity["direction"] == "long" and explicit_hard_stop and not hard_stop_by_side["buy"] < identity["lower_boundary"]:
+            raise GridTestnetLifecycleError("grid_hard_stop_boundary_invalid")
+        if identity["direction"] == "short" and explicit_hard_stop and not hard_stop_by_side["sell"] > identity["upper_boundary"]:
+            raise GridTestnetLifecycleError("grid_hard_stop_boundary_invalid")
+        if identity["direction"] == "neutral" and explicit_hard_stop and not (
+            hard_stop_by_side["buy"] < identity["lower_boundary"]
+            and hard_stop_by_side["sell"] > identity["upper_boundary"]
+        ):
+            raise GridTestnetLifecycleError("grid_hard_stop_boundary_invalid")
         raw = grid.get("rungs") or risk.get("grid_rungs") or plan.get("grid_rungs")
         if not isinstance(raw, list) or not raw:
             orders = grid.get("orders") if isinstance(grid.get("orders"), list) else []
@@ -884,11 +911,20 @@ class GridTestnetLifecycle:
             quantity = float(item.get("quantity") or risk.get("per_order_quantity") or 0)
             if side not in {"buy", "sell"} or price <= 0 or tp <= 0 or hard_stop <= 0 or quantity <= 0:
                 raise GridTestnetLifecycleError("grid_geometry_invalid")
-            if not identity["lower_boundary"] < price < identity["upper_boundary"]:
+            if not identity["lower_boundary"] <= price <= identity["upper_boundary"]:
                 raise GridTestnetLifecycleError("grid_rung_outside_boundary")
-            if side == "buy" and (tp <= price or abs(hard_stop - identity["lower_boundary"]) > 1e-9):
+            canonical_stop = hard_stop_by_side[side]
+            if side == "buy" and (
+                tp <= price
+                or hard_stop > identity["lower_boundary"] + 1e-9
+                or hard_stop < canonical_stop - 1e-9
+            ):
                 raise GridTestnetLifecycleError("grid_buy_geometry_invalid")
-            if side == "sell" and (tp >= price or abs(hard_stop - identity["upper_boundary"]) > 1e-9):
+            if side == "sell" and (
+                tp >= price
+                or hard_stop < identity["upper_boundary"] - 1e-9
+                or hard_stop > canonical_stop + 1e-9
+            ):
                 raise GridTestnetLifecycleError("grid_sell_geometry_invalid")
             if identity["direction"] == "long" and side != "buy":
                 raise GridTestnetLifecycleError("long_grid_requires_buy_rungs")
@@ -964,9 +1000,9 @@ class GridTestnetLifecycle:
         equity = float(risk.get("equity") or 0.0)
         if equity <= 0 or total_notional / equity > float(risk.get("leverage_limit") or 0.0) + 1e-9:
             raise GridTestnetLifecycleError("leverage_exceeded_at_full_depth")
-        quantities = [float(rung["quantity"]) for rung in rungs]
-        if any(abs(quantity - quantities[0]) > 1e-9 for quantity in quantities[1:]):
-            raise GridTestnetLifecycleError("grid_quantity_inconsistent")
+        # Canonical execution rounding may produce adjacent quantity steps
+        # (for example .00013 and .00012).  Each rung remains authoritative;
+        # aggregate notional and loss checks below are the risk gate.
         grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
         spacing = grid.get("spacing")
         mode = str(grid.get("mode") or "arithmetic").lower()
@@ -974,7 +1010,10 @@ class GridTestnetLifecycle:
             ordered = sorted(float(rung["price"]) for rung in rungs)
             if any(abs((right - left) - float(spacing)) > max(1e-9, abs(float(spacing)) * 1e-6) for left, right in zip(ordered, ordered[1:])):
                 raise GridTestnetLifecycleError("grid_spacing_inconsistent")
-        if modeled_loss > maximum_loss + 1e-9:
+        # Dashboard/canonical Grid publishes monetary risk to cents. Compare
+        # at that contract precision after using the exact rounded quantities;
+        # all structural risk caps above remain exact and fail closed.
+        if round(modeled_loss, 2) > round(maximum_loss, 2):
             raise GridTestnetLifecycleError("maximum_loss_budget_exceeded_at_full_depth")
 
     @staticmethod

@@ -18032,6 +18032,26 @@ auditable datafeed port; broker execution remains a separate port.
 - `PYTHONPATH=src python3 -m pytest -q tests/test_dashboard_control_plane.py tests/test_dashboard_server.py` — 93 passed.
 - `gitleaks git --no-banner --redact --log-opts='--all'` — no leaks found.
 
+## 2026-09-08 — Align Grid Testnet lifecycle validation with Canonical Grid (#1186)
+
+## Decision
+
+- Treat Grid rung prices as inclusive of the authorised boundary: `lower <= price <= upper`.
+- Keep the strategy-level `hard_stop` independent from rung geometry. For Long, an explicit hard stop must be below the lower boundary; for Short it must be above the upper boundary. Neutral uses the corresponding per-leg values.
+- Validate each buy rung stop as `hard_stop <= lower_boundary` and `hard_stop >= plan.hard_stop`; validate each sell rung stop as `hard_stop >= upper_boundary` and `hard_stop <= plan.hard_stop`. This accepts Canonical Grid's one-spacing adverse rung stop without changing preview values or risk budgets.
+
+## Gotchas
+
+- A missing hard stop retains the established boundary default for backwards-compatible plans; an explicit hard stop is checked separately before rung validation.
+- Canonical quantity rounding can differ by rung; the lifecycle keeps each submitted quantity and continues to enforce aggregate notional, leverage, capacity, and full-depth loss limits.
+- The published monetary risk contract is cents precision, so full-depth loss compares exact rung quantities after rounding both monetary values to cents; structural caps remain exact.
+- DCA lifecycle has no analogous per-rung boundary/stop comparison: it validates one aggregate target and stop for the DCA position, so no same-class change was made.
+
+## Verification
+
+- Focused lifecycle and proof-driver tests cover the online-shaped boundary/one-spacing stop sample and rejection of out-of-range, invalid-stop geometry.
+- The supplied preview sample remains read-only; no launchd, service, preview, solver, live, or Testnet execution path was changed.
+
 # 2026-09-08 — Complete Grid proof plan identity and blocked-stop reconciliation (#1182)
 
 ## Decision

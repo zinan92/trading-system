@@ -286,6 +286,15 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
         plan["upper_boundary"] = plan["upper_price_boundary"]
         body_grid = body.get("grid") if isinstance(body.get("grid"), Mapping) else {}
         preview_grid = preview.get("grid") if isinstance(preview.get("grid"), Mapping) else {}
+        hard_stop = body_grid.get("hard_stop") or body_grid.get("hard_stop_price")
+        if hard_stop not in (None, "") and preview_grid.get("hard_stop_source") != "operator_configured":
+            if str(body.get("direction") or "").lower() == "long" and float(hard_stop) >= float(plan["lower_price_boundary"]):
+                hard_stop = None
+            elif str(body.get("direction") or "").lower() == "short" and float(hard_stop) <= float(plan["upper_price_boundary"]):
+                hard_stop = None
+        if hard_stop in (None, "") and preview_grid.get("hard_stop_source") == "operator_configured":
+            hard_stop = preview_grid.get("hard_stop") or preview_grid.get("hard_stop_price")
+        plan["hard_stop"] = hard_stop
         plan["grid"] = {
             "rungs": [
                 {"rung": int(row.get("level", index)), "side": row.get("side"), "price": row.get("price"),
@@ -298,6 +307,7 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
             ],
             "mode": body_grid.get("mode") or preview_grid.get("mode"),
             "spacing": body_grid.get("spacing") or preview_grid.get("spacing"),
+            "hard_stop": hard_stop,
         }
     else:
         entries = body.get("entries")
