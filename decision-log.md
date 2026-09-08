@@ -17847,3 +17847,25 @@ auditable datafeed port; broker execution remains a separate port.
 - Read-only dry-run against the online root stopped at
   `durable_park_confirmation_missing`; receipt recorded
   `secret_material_present=false` and no online files changed.
+## 2026-09-08 — Add deterministic 48-hour Testnet soak report (#1150)
+
+## Decision
+
+- Add an evidence-only `pipelines.soak_report` reader for the fixed 48-hour
+  window: 2,880 expected 60-second ticks, healthy execution statuses only
+  when a durable receipt is present, and explicit Beijing rollover checks.
+- The report is deterministic from historical JSON and writes only the caller
+  selected evidence directory. It does not contact a venue or scheduler and
+  does not alter any runtime output.
+
+## Gotchas
+
+- A missing tick is measured against the fixed denominator; it is not replaced
+  with a synthetic or fallback observation.
+- Rollover evidence must be a receipt at the exact 08:00 or 21:00 Beijing
+  boundary. A healthy tick alone does not satisfy the boundary check.
+
+## Verification
+
+- Focused tests cover a complete replay, missing tick/boundary, and unknown
+  control result.
