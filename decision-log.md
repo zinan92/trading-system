@@ -17878,6 +17878,39 @@ auditable datafeed port; broker execution remains a separate port.
   `receipts/issue-1163-dry-run.json` and returned
   `dashboard_confirmation_not_acknowledged`; `secret_material_present=false`.
 - `git diff --check` passed; no launchd or online output files were modified.
+
+# 2026-09-08 — Persist and replay Dashboard confirmation acknowledgement (#1163 follow-up)
+
+## Decision
+
+- `DashboardControlPlane.confirm_and_run` now persists `acknowledged: true`
+  together with the existing `operator_id: "park"` on every new confirmed
+  Dashboard record.
+- For historical records that predate the field, the durable Dashboard parser
+  treats `status=confirmed` and `operator_id=park` as acknowledged only when
+  the record has the `dashboard-confirmation-v1` / `operator_confirmed` shape
+  produced by `confirm_and_run`. This preserves the evidence implied by the
+  existing confirmation gate, rather than accepting an arbitrary imported row.
+- Operator identity, digest binding, activation identity, venue, and all
+  existing activation checks remain unchanged.
+
+## Gotchas
+
+- The historical compatibility rule applies only to Dashboard
+  `confirm_and_run` records; it does not waive acknowledgement for other
+  record sources or malformed/imported records.
+- The compatibility rule is read-time only. Historical files are not rewritten
+  or upgraded in the online output root.
+
+## Verification
+
+- New-record persistence, historical replay, non-`confirm_and_run` rejection,
+  and existing identity failures are covered by focused tests.
+- Online `--dry-run` is re-run read-only after this change; acknowledgement
+  passed and the run stopped at `broker_binding` with the new environment
+  blocker `nautilus_runtime_missing` before `candidate_selected`. The receipt
+  records `candidate_selected=false`, `execution_mutation=false`, and
+  `network_operation_invoked=false`; the online evidence files were unchanged.
 ## 2026-09-08 — Add deterministic 48-hour Testnet soak report (#1150)
 
 ## Decision

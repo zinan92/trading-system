@@ -97,6 +97,29 @@ def test_dashboard_confirmation_maps_to_canonical_confirmation(tmp_path: Path) -
     assert result["confirmation_source"] == "dashboard"
 
 
+def test_historical_confirm_and_run_confirmation_without_acknowledged_maps(tmp_path: Path) -> None:
+    _, dashboard = _preview()
+    dashboard.pop("acknowledged")
+    dashboard["schema_version"] = "dashboard-confirmation-v1"
+    dashboard["event"] = "operator_confirmed"
+    _dashboard_root(tmp_path, dashboard)
+
+    result = map_confirmation(tmp_path, dashboard, approval_id="approval", approved_by="park")
+
+    assert result["confirmation_source"] == "dashboard"
+    assert result["operator_id"] == "park"
+
+
+def test_historical_non_confirm_and_run_confirmation_without_acknowledged_is_blocked(tmp_path: Path) -> None:
+    _, dashboard = _preview()
+    dashboard.pop("acknowledged")
+    dashboard["event"] = "operator_confirmed_legacy_import"
+    _dashboard_root(tmp_path, dashboard)
+
+    with pytest.raises(ProofDriverError, match="dashboard_confirmation_not_acknowledged"):
+        map_confirmation(tmp_path, dashboard, approval_id="approval", approved_by="park")
+
+
 @pytest.mark.parametrize(
     ("field", "value", "reason"),
     [

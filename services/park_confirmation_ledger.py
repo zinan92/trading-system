@@ -15,6 +15,15 @@ class DurableParkConfirmationError(ValueError):
         super().__init__(reason_code)
 
 
+def is_dashboard_confirm_and_run_record(row: Mapping[str, Any]) -> bool:
+    """Identify records written by DashboardControlPlane.confirm_and_run."""
+
+    return (
+        row.get("schema_version") == "dashboard-confirmation-v1"
+        and row.get("event") == "operator_confirmed"
+    )
+
+
 def _rows(path: Path) -> list[dict[str, Any]]:
     try:
         if path.suffix == ".jsonl":
@@ -72,7 +81,13 @@ def parse_durable_confirmation(
             raise DurableParkConfirmationError(reason)
         if str(row.get("preview_digest") or row.get("plan_digest") or "") != digest:
             raise DurableParkConfirmationError("dashboard_plan_digest_mismatch")
-        if row.get("acknowledged") is not True:
+        historical_acknowledged = (
+            row.get("acknowledged") is None
+            and is_dashboard_confirm_and_run_record(row)
+            and row.get("status") == "confirmed"
+            and str(row.get("operator_id") or "").strip().lower() == "park"
+        )
+        if row.get("acknowledged") is not True and not historical_acknowledged:
             raise DurableParkConfirmationError("dashboard_confirmation_not_acknowledged")
         if str(row.get("operator_id") or "").strip().lower() != "park":
             raise DurableParkConfirmationError("dashboard_operator_invalid")
@@ -94,4 +109,8 @@ def parse_durable_confirmation(
     return dict(confirmation)
 
 
-__all__ = ["DurableParkConfirmationError", "parse_durable_confirmation"]
+__all__ = [
+    "DurableParkConfirmationError",
+    "is_dashboard_confirm_and_run_record",
+    "parse_durable_confirmation",
+]

@@ -962,6 +962,7 @@ class DashboardControlPlane:
             "confirmation_id": f"dashboard-confirmation:{suffix}",
             "confirmation_digest": _digest({"preview_digest": preview_digest, "operator_id": "park"}),
             "preview_digest": preview_digest,
+            "acknowledged": True,
             "operator_id": "park",
             "confirmed_at": occurred_at,
             "activation_id": activation_id,

@@ -24,6 +24,7 @@ from services.dashboard_control_plane import canonical_preview_digest
 from services.journal_store import load_json, write_json
 from services.park_confirmation_ledger import (
     DurableParkConfirmationError,
+    is_dashboard_confirm_and_run_record,
     parse_durable_confirmation,
 )
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
@@ -148,7 +149,13 @@ def map_confirmation(
     dashboard_path = output_root / DASHBOARD_CONFIRMATIONS
     if dashboard_path.exists() and dashboard.get("status") != "confirmed":
         raise ProofDriverError("dashboard_confirmation_not_confirmed")
-    if dashboard_path.exists() and dashboard.get("acknowledged") is not True:
+    historical_acknowledged = (
+        dashboard.get("acknowledged") is None
+        and is_dashboard_confirm_and_run_record(dashboard)
+        and dashboard.get("status") == "confirmed"
+        and str(dashboard.get("operator_id") or "").strip().lower() == "park"
+    )
+    if dashboard_path.exists() and dashboard.get("acknowledged") is not True and not historical_acknowledged:
         raise ProofDriverError("dashboard_confirmation_not_acknowledged")
     if dashboard_path.exists() and str(dashboard.get("operator_id") or "").strip().lower() != "park":
         raise ProofDriverError("dashboard_operator_invalid")
