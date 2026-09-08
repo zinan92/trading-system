@@ -1,5 +1,31 @@
 # Decision Log
 
+## 2026-09-08 — Bind Dashboard Park AI chat to the runtime Paper config (#1132)
+
+### Decision
+
+- Make Dashboard Park AI chat load `TRADING_ORCHESTRATOR_PARK_CONFIG`, the
+  same explicit environment-selected source used by `pipelines.park_control`,
+  before calling the existing read-only `default_account_reader`.
+- Missing, unreadable, or non-object config fails closed with a typed blocker;
+  the repository's default disabled config is never used by this AI path.
+- Telegram construction and account-reader behavior remain unchanged, and no
+  execution gate, live path, read-model schema, or HTTP contract is widened.
+
+### Gotchas
+
+- The Dashboard process must continue to receive the Paper config path through
+  its launch environment; this change does not modify launchd configuration.
+- The Paper confirm-and-tick acceptance remains an owner verification after
+  merge deployment; local validation only exercises the Dashboard message path.
+
+### Verification
+
+- Focused AI chat and Telegram runtime tests validate explicit config loading,
+  missing-config failure, disabled/enabled state preservation, and the AI
+  reader handoff. Temporary-port HTTP verification is required before PR
+  handoff; Paper confirmation is pending owner verification.
+
 ## Retire Cloud Paper ownership and keep local Park Paper as sole owner (#1126)
 
 Date: 2026-09-08

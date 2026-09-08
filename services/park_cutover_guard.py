@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -27,6 +28,36 @@ class ParkCutoverError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def load_park_config_from_environment(
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Load the explicit Park config selected by the runtime environment.
+
+    Dashboard surfaces must share the same config source as ``park_control``;
+    silently falling back to the repository's disabled sample config would
+    make a Paper runtime appear unavailable for the wrong reason.
+    """
+
+    environment = os.environ if environ is None else environ
+    raw_path = str(environment.get("TRADING_ORCHESTRATOR_PARK_CONFIG") or "").strip()
+    if not raw_path:
+        raise ParkCutoverError(
+            "park_config_missing",
+            "TRADING_ORCHESTRATOR_PARK_CONFIG is required for Park Dashboard AI chat",
+        )
+    path = Path(raw_path).expanduser()
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ParkCutoverError(
+            "park_config_unavailable",
+            f"Park config could not be read from {path}",
+        ) from exc
+    if not isinstance(value, dict):
+        raise ParkCutoverError("park_config_invalid", "Park config must be a JSON object")
+    return dict(value)
 
 
 def load_default_config() -> dict[str, Any]:

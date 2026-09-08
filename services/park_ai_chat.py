@@ -22,6 +22,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from services.park_confirmation import ParkConfirmationLedger
+from services.park_cutover_guard import load_park_config_from_environment
 from services.park_strategy_plan import (
     ParkStrategyPlanError,
     build_deterministic_risk_plan,
@@ -908,6 +909,7 @@ class ParkAiChatService:
                 default_account_reader(
                     self.output_root,
                     cycle,
+                    config=load_park_config_from_environment(),
                     market=market,
                 )
                 or {}

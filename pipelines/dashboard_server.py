@@ -90,6 +90,7 @@ from services.paper_supervisor_read_model import (
 from services.paper_supervisor_recovery import authoritative_paper_equity
 from services.park_public_read_model import build_park_public_read_model
 from services.park_ai_chat import ParkAiChatError, ParkAiChatService
+from services.park_cutover_guard import ParkCutoverError
 from services.supervisor_execution_profile import (
     FAIL_CLOSED,
     PAPER_CONTINUOUS,
@@ -648,6 +649,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             )
         except ParkAiChatError as exc:
             self._write_error(400, exc.code, str(exc))
+        except ParkCutoverError as exc:
+            self._write_error(503, exc.code, str(exc))
         except ValueError as exc:
             self._write_error(400, "invalid_park_ai_chat_request", str(exc))
         except Exception as exc:  # noqa: BLE001 - no provider exception may become an order.

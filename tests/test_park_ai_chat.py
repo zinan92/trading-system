@@ -4,6 +4,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from services.park_ai_chat import (
     DeepSeekIntentProvider,
     ParkAiChatService,
@@ -13,6 +15,7 @@ from services.park_ai_chat import (
 from services.park_confirmation import ParkConfirmationLedger
 from services.park_ai_chat import _safe_context
 from services.park_codex_intent_parser import _candidate as _codex_candidate
+from services.park_cutover_guard import ParkCutoverError, load_park_config_from_environment
 
 
 MARKET = {
@@ -83,6 +86,49 @@ def _service(tmp_path: Path, provider=None, account=None, now=None):
         account_reader=lambda _root, _cycle: dict(account or _account()),
         now=now or (lambda: "2026-08-17T03:00:00+00:00"),
     )
+
+
+def test_park_config_loader_requires_explicit_environment_path(monkeypatch):
+    monkeypatch.delenv("TRADING_ORCHESTRATOR_PARK_CONFIG", raising=False)
+    with pytest.raises(ParkCutoverError, match="TRADING_ORCHESTRATOR_PARK_CONFIG"):
+        load_park_config_from_environment()
+
+
+def test_park_config_loader_preserves_disabled_and_paper_states(tmp_path: Path):
+    config_path = tmp_path / "park.json"
+    config_path.write_text(json.dumps({"feature_enabled": False}), encoding="utf-8")
+    disabled = load_park_config_from_environment({"TRADING_ORCHESTRATOR_PARK_CONFIG": str(config_path)})
+    assert disabled["feature_enabled"] is False
+
+    config_path.write_text(json.dumps({"feature_enabled": True, "runtime_mode": "paper_only"}), encoding="utf-8")
+    paper = load_park_config_from_environment({"TRADING_ORCHESTRATOR_PARK_CONFIG": str(config_path)})
+    assert paper == {"feature_enabled": True, "runtime_mode": "paper_only"}
+
+
+def test_ai_chat_default_account_reader_uses_runtime_park_config(tmp_path: Path, monkeypatch):
+    config = {"feature_enabled": True, "runtime_mode": "paper_only"}
+    captured = {}
+
+    def account_reader(_root, _cycle, *, config=None, market=None):
+        captured["config"] = config
+        captured["market"] = market
+        return _account()
+
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_PARK_CONFIG", str(tmp_path / "park.json"))
+    (tmp_path / "park.json").write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr("services.park_telegram_runtime.default_account_reader", account_reader)
+    service = ParkAiChatService(
+        tmp_path / "outputs",
+        park_user_id="park-dashboard",
+        provider=FakeProvider(),
+        market_reader=lambda: dict(MARKET),
+        now=lambda: "2026-08-17T03:00:00+00:00",
+    )
+
+    result = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")
+
+    assert result["status"] == "draft"
+    assert captured["config"] == config
 
 
 def test_deepseek_provider_extracts_json_without_logging_secret():
