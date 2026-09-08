@@ -43,6 +43,7 @@ from services.park_telegram_runtime import (
 from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.testnet_scheduler import TestnetScheduler
+from services.testnet_plan_builder import build_plan
 from services.telegram_bot_transport import (
     TelegramBotTransport,
     TelegramBotTransportError,
@@ -75,6 +76,29 @@ def _load_testnet_plan(output_root: Path, plan_digest: str) -> dict[str, Any] | 
     )
 
 
+def _load_dashboard_plan(output_root: Path, activation_id: str, plan_digest: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Load and digest-bind the Dashboard preview/confirmation pair."""
+    try:
+        previews = load_json(Path(output_root) / "dashboard_control_plane" / "previews.json")
+        confirmations = load_json(Path(output_root) / "dashboard_control_plane" / "confirmations.json")
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    preview_rows = previews if isinstance(previews, list) else [previews]
+    confirmation_rows = confirmations if isinstance(confirmations, list) else [confirmations]
+    confirmed = [row for row in confirmation_rows if isinstance(row, Mapping)
+                 and str(row.get("activation_id") or "") == activation_id
+                 and row.get("status") == "confirmed"
+                 and str(row.get("preview_digest") or row.get("plan_digest") or "") == plan_digest]
+    if not confirmed:
+        return None
+    confirmation = dict(confirmed[-1])
+    matching = [row for row in preview_rows if isinstance(row, Mapping)
+                and str(row.get("preview_digest") or "") == plan_digest]
+    if not matching:
+        return None
+    return dict(matching[-1]), confirmation
+
+
 def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") -> dict[str, Any]:
     """Run the local Testnet scheduler heartbeat in the Park control pass.
 
@@ -93,27 +117,37 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
     if scheduler.status().get("status") not in {"active", "reconcile_required"}:
         return {"status": "not_applicable", "reason": "testnet_scheduler_not_active", "paper_only": True}
     tick_id = "park-control:" + datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    try:
-        callbacks = _build_testnet_tick_callbacks(output_root, coordinator_status)
-    except Exception as exc:  # noqa: BLE001 - scheduler records the typed blocker.
-        callbacks = (lambda _event: {"status": "blocked", "reason": f"testnet_tick_setup_failed:{type(exc).__name__}"}, None)
-    if callbacks is None and str(coordinator_status.get("status") or "") in {"grid_running", "dca_running"}:
-        return scheduler.tick(tick_id=tick_id, event={"kind": "market_heartbeat"}, advance=lambda _event: {"status": "blocked", "reason": "testnet_external_broker_unavailable"})
+    callbacks = None
+    if str(coordinator_status.get("status") or "") in {"grid_running", "dca_running"}:
+        try:
+            callbacks = _build_testnet_tick_callbacks(output_root, coordinator_status)
+        except Exception as exc:  # noqa: BLE001 - scheduler records the typed blocker.
+            callbacks = (lambda _event: {"status": "blocked", "reason": f"testnet_tick_setup_failed:{type(exc).__name__}"}, None)
     return scheduler.tick(tick_id=tick_id, event={"kind": "market_heartbeat"}, advance=callbacks[0] if callbacks else None, reconcile=callbacks[1] if callbacks else None)
 
 
 def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping[str, Any]) -> tuple[Callable[[Mapping[str, Any]], Mapping[str, Any]], Callable[[], Mapping[str, Any]]] | None:
     """Compose the protected external broker for one running Testnet session."""
     config = HyperliquidTestnetRuntimeConfig.from_environment()
-    if config is None or not config.start_ready:
-        return None
+    if config is None:
+        return (lambda _event: {"status": "blocked", "reason": "config_not_ready:broker_config"}, None)
+    if not config.start_ready:
+        return (lambda _event: {"status": "blocked", "reason": "config_not_ready:start_ready"}, None)
     digest = str(coordinator_status.get("plan_digest") or "")
-    stored = _load_testnet_plan(output_root, digest)
-    if stored is None:
-        return None
+    activation_id = str(coordinator_status.get("activation_id") or "")
+    dashboard = _load_dashboard_plan(output_root, activation_id, digest)
+    if dashboard is not None:
+        preview, confirmation = dashboard
+        plan = build_plan(preview, confirmation)
+    else:
+        stored = _load_testnet_plan(output_root, digest)
+        if stored is None:
+            return (lambda _event: {"status": "blocked", "reason": f"plan_source_missing:{digest}"}, None)
+        plan = None
     instrument_id = str(coordinator_status.get("selected_instrument_id") or coordinator_status.get("instrument_id") or config.instrument_id)
     market = dict(HyperliquidTestnetMarketReader().read(instrument_id))
-    plan = _park_plan_to_lifecycle_plan(stored, config=config, market=market)
+    if plan is None:
+        plan = _park_plan_to_lifecycle_plan(stored, config=config, market=market)
     from services.broker_composition import BrokerBuildContext, build_broker_execution_port
     context = BrokerBuildContext(
         output_root=Path(output_root), execution_mode="live", live_trading_enabled=False,
@@ -122,7 +156,6 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
     broker = build_broker_execution_port(context)
     from services.testnet_execution import ExternalTestnetExecutionPort
     port = ExternalTestnetExecutionPort(broker)
-    activation_id = str(coordinator_status.get("activation_id") or "")
     coordinator = TestnetAutomationCoordinator(output_root)
 
     def facts() -> dict[str, Any]:

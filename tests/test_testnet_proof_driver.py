@@ -16,6 +16,7 @@ from pipelines.testnet_proof_driver import (
 from pipelines.testnet_automation_proof import _MARKET_REQUIRED
 from services.park_confirmation_ledger import DurableParkConfirmationError, parse_durable_confirmation
 from services.grid_testnet_lifecycle import GridTestnetLifecycle
+from services.testnet_plan_builder import build_plan as public_build_plan
 
 
 def _preview() -> tuple[dict, dict]:
@@ -73,6 +74,11 @@ def test_plan_uses_preview_orders_and_keeps_plan_digest() -> None:
     assert plan["execution_context"]["cycle_id"] == plan["cycle_id"]
     identity = GridTestnetLifecycle._identity(plan)
     assert identity["cycle_id"] == "2026-09-08_DAY"
+
+
+def test_public_plan_builder_is_the_same_dashboard_projection() -> None:
+    preview, confirmation = _preview()
+    assert public_build_plan(preview, confirmation) == build_plan(preview, confirmation)
 
 
 def test_plan_projects_all_dashboard_grid_risk_sources_for_lifecycle() -> None:

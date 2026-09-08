@@ -136,7 +136,8 @@ def test_scheduler_can_explicitly_resume_a_blocked_running_session(tmp_path: Pat
         advance=lambda _event: (_ for _ in ()).throw(RuntimeError("boom")),
         timestamp=NOW,
     )
-    assert blocked["status"] == "blocked"
+    assert blocked["status"] == "active"
+    assert blocked["event"] == "scheduler_advance_warning"
 
     resumed = scheduler.resume(activation["activation_id"], timestamp=NOW)
 
@@ -144,6 +145,21 @@ def test_scheduler_can_explicitly_resume_a_blocked_running_session(tmp_path: Pat
     assert resumed["status"] == "active"
     assert resumed["activation_id"] == activation["activation_id"]
     assert coordinator.status()["status"] == "grid_running"
+
+
+def test_scheduler_blocks_only_after_three_consecutive_advance_failures(tmp_path: Path) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current.update({"status": "grid_running", "execution_enabled": True})
+    coordinator._record(current)
+
+    results = [scheduler.tick(tick_id=f"failed-{n}", event={"kind": "market_heartbeat"},
+                             advance=lambda _event: {"status": "blocked", "reason": "temporary"},
+                             timestamp=NOW) for n in range(1, 4)]
+
+    assert [row["status"] for row in results] == ["active", "active", "blocked"]
+    assert [row["advance_failure_count"] for row in results] == [1, 2, 3]
 
 
 def test_restart_reconciles_before_event_progression(tmp_path: Path) -> None:
