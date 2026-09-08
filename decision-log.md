@@ -17816,7 +17816,6 @@ auditable datafeed port; broker execution remains a separate port.
 - Real Playwright runs reached trusted Hyperliquid Testnet BTC Preview with
   `execution_ready=true` and no blockers; Confirm was blocked by the 64,000
   byte server request limit as recorded above.
-
 # 2026-09-08 — Assemble attended Testnet proof inputs from Dashboard activation (#1159)
 
 ## Decision
@@ -17869,3 +17868,38 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused tests cover a complete replay, missing tick/boundary, and unknown
   control result.
+
+# 2026-09-08 — Add read-only local owner Testnet rollout gate (#1147)
+
+## Decision
+
+- Add a pure read-only M5-S4 evaluator that binds trading-system release SHA,
+  standard-broker SHA, protected Hyperliquid Testnet profile, account
+  fingerprint, instrument, capability revision, and local scheduler owner
+  epoch before summarizing evidence.
+- Evaluate DCA and Grid independently. A family with no collected evidence is
+  `incomplete`; once collection has started, missing, stale, malformed,
+  mismatched, or non-passing evidence is `blocked`. Only both families with
+  one M5-S2 attended proof and two M5-S3 12-hour windows can produce `ready`.
+- The gate never authorizes execution or Live/Mainnet behavior. Its CLI reads
+  the supplied output root and writes only the repository evidence report when
+  explicitly requested.
+
+## Gotchas
+
+- The current `~/work/park-paper-output` tree has Coordinator Paper activation
+  records but no recognizable M5-S2/M5-S3 rollout evidence or Testnet owner
+  epoch, so the 2026-09-08 report is honestly `incomplete`; it must not be
+  upgraded from Paper/UI state.
+- A missing owner record is reported as a hard blocker after evidence exists,
+  while an untouched root remains `incomplete` so the gate distinguishes “not
+  started” from “started but failed.”
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_rollout_gate.py` — 5
+  passed; compileall and `git diff --check` passed.
+- Read-only dry-run against `/Users/wendy/work/park-paper-output` returned
+  `incomplete`, with both family counts `0/2`, `live_enabled=false`, and
+  `execution_authorized=false`; no online files were written.
+- `gitleaks git --no-banner --redact --log-opts='--all'` — no leaks found.
