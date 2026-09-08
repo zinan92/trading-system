@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -14,6 +15,17 @@ from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 
 TESTNET_SCHEDULER_SCHEMA = "testnet-scheduler-ownership-v1"
 _TERMINAL_COORDINATOR_STATES = frozenset({"dca_terminal", "grid_terminal"})
+
+
+def _redacted_exception_message(exc: BaseException) -> str:
+    """Return a bounded message safe for the durable scheduler receipt."""
+    message = str(exc).replace("\n", " ").replace("\r", " ").strip()
+    message = re.sub(
+        r"(?i)(secret|private[_-]?key|api[_-]?key|token|password)([=:])[^,; ]+",
+        r"\1\2[REDACTED]",
+        message,
+    )
+    return message[:240] or "no_message"
 
 
 class TestnetSchedulerOwnershipStore(SchedulerOwnershipStore):
@@ -405,7 +417,7 @@ class TestnetScheduler:
             except Exception as exc:  # noqa: BLE001 - preserve safe retry policy.
                 return self._record_advance_failure(
                     current, tick_key, now, coordinator_state, restart_reconciled,
-                    f"scheduler_advance_failed:{type(exc).__name__}",
+                    f"scheduler_advance_failed:{type(exc).__name__}:{_redacted_exception_message(exc)}",
                 )
             if str(advanced.get("status") or "").lower() in {"blocked", "unknown", "fail", "failed"}:
                 return self._record_advance_failure(

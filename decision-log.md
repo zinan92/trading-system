@@ -1,5 +1,29 @@
 # Decision Log
 
+# 2026-09-08 — Bind durable Dashboard approval to Testnet ticks and repair deferred exception handling (#1202)
+
+## Decision
+
+- Project the Dashboard confirmation's `confirmation_id` as `approval_id` and
+  its `operator_id` as `approved_by` when building the external Testnet broker
+  context. If Dashboard evidence is unavailable, only already-bound values on
+  the Coordinator activation may be used; missing values remain fail-closed.
+- Capture setup exception type before creating the deferred scheduler callback,
+  and include a bounded redacted exception message for callback failures in the
+  durable scheduler receipt.
+
+## Gotchas
+
+- Python clears an exception variable after its `except` block; a deferred
+  callback that closes over `exc` raises `NameError` and hides the original
+  blocker. The callback now captures only the exception type.
+- Tests use temporary output roots and fake broker/market objects. No online
+  output root, network, launchd service, or live/real-money path is used.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_testnet_scheduler.py tests/test_standard_broker_external_execution.py` — 25 passed.
+
 # 2026-09-08 — Use Dashboard plans for Testnet ticks and tolerate transient advance failures (#1200)
 
 ## Decision
