@@ -46,3 +46,29 @@ def test_testnet_control_tick_is_independent_and_heartbeat_only(tmp_path) -> Non
     assert result["status"] == "active"
     assert result["heartbeat"]["status"] == "fresh"
     assert result["alerts_authorize_actions"] is False
+
+
+def test_testnet_control_tick_running_session_without_broker_fails_closed(tmp_path) -> None:
+    import pipelines.park_control as module
+    from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+    from services.testnet_scheduler import TestnetScheduler, TestnetSchedulerOwnershipStore
+
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+    coordinator = TestnetAutomationCoordinator(output)
+    activation = {
+        "strategy_family": "grid", "strategy_session_id": "session", "strategy_revision_id": "revision",
+        "plan_digest": "sha256:" + "a" * 64, "account_fingerprint": "sha256:" + "b" * 64,
+        "broker_id": "hyperliquid", "environment": "testnet", "transport_profile": "hyperliquid-testnet-default",
+        "instrument_id": "BTC-USD-PERP", "runtime_id": "runtime", "release_sha": "c" * 40,
+        "capability_revision": "hyperliquid-testnet-runtime-v1",
+    }
+    coordinator.activate(activation, command_id="activate")
+    current = coordinator.status()
+    current.update({"status": "grid_running", "execution_enabled": True})
+    coordinator._record(current)
+
+    result = module.run_testnet_control_tick(output)
+
+    assert result["status"] == "blocked"
+    assert "broker" in result["blocker"]

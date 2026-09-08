@@ -18373,3 +18373,31 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_grid_testnet_lifecycle.py tests/test_standard_broker_external_execution.py` — 48 passed.
 - `git diff --check` — passed.
+# 2026-09-08 — Attach the Testnet scheduler and advance Grid lifecycle per tick (#1196)
+
+## Decision
+
+- Add a local-owner `TestnetScheduler.attach(activation_id)` seam that reads an
+  already-running Coordinator session and never re-activates it.
+- Compose the protected external Testnet broker in the Park control tick from
+  the runtime environment, secret-file path, stored plan digest, and fresh
+  Hyperliquid market facts. Fills advance the canonical lifecycle; absent or
+  unknown broker/facts produce a durable blocked tick receipt.
+- Pin the control template to the nautilus venv and require import checks
+  before starting the control module.
+
+## Gotchas
+
+- The control tick only attaches for `grid_running` or `dca_running`; an
+  activated-but-not-started session remains dormant. No online output root,
+  launchd service, or Testnet process was used during validation.
+- `GridTestnetLifecycle.advance` is only a batch entry point; protection,
+  continuation reconciliation, and re-arm remain owned by the existing
+  lifecycle methods.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_automation_coordinator.py tests/test_testnet_execution_order_port.py tests/test_strategy_control_plane_grid_testnet.py tests/test_park_control.py tests/test_testnet_scheduler.py tests/test_grid_testnet_lifecycle.py` — 74 passed.
+- `PYTHONPATH=src ~/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python -c 'import nautilus_trader; import pipelines.park_control'` — `nautilus_import_gate=pass`.
+- `PYTHONPATH=src python3 -m compileall -q pipelines/park_control.py services/testnet_scheduler.py services/grid_testnet_lifecycle.py` and `git diff --check` — passed.
+- `/opt/homebrew/bin/gitleaks git --no-banner --redact --log-opts='--all'` — 1162 commits scanned; no leaks found.

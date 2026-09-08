@@ -75,6 +75,23 @@ def test_grid_initial_ladder_is_complete_and_geometry_is_locked(tmp_path: Path) 
     assert started["events"][-1]["event"] == "ladder_activated"
 
 
+def test_grid_advance_applies_fill_then_market_event(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    order = started["orders"][0]
+
+    advanced = lifecycle.advance(
+        plan,
+        fills=[_fill(order, price=65000.0, tid=1)],
+        timestamp="2026-08-22T01:01:00+00:00",
+    )
+
+    assert advanced["fills"][0]["order_id"] == order["order_id"]
+    assert advanced["hard_stop_protection"]["status"] == "active"
+
+
 def test_grid_five_rung_ladder_has_unique_canonical_and_client_identities(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     plan = _plan()

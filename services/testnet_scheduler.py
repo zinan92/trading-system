@@ -233,6 +233,45 @@ class TestnetScheduler:
         }
         return self._save_state(state)
 
+    def attach(
+        self,
+        activation_id: str,
+        *,
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Attach the local scheduler to an already-running Coordinator session."""
+        guard = self.guard.verify()
+        if not guard.get("ok"):
+            return self._blocked(guard.get("blocker", "ownership_blocked"), timestamp)
+        requested = str(activation_id or "").strip()
+        if not requested:
+            return self._blocked("testnet_scheduler_activation_id_required", timestamp)
+        coordinator = self.coordinator.status()
+        if str(coordinator.get("activation_id") or "") != requested:
+            return self._blocked("testnet_scheduler_activation_not_found", timestamp)
+        coordinator_state = str(coordinator.get("status") or "")
+        if coordinator_state not in {"grid_running", "dca_running"}:
+            return self._blocked("testnet_scheduler_attach_requires_running_coordinator", timestamp)
+        current = self.status()
+        existing_id = str(current.get("activation_id") or "")
+        if current.get("status") == "active" and existing_id not in {"", requested}:
+            return self._blocked("testnet_scheduler_active_session_conflict", timestamp)
+        return self._save_state({
+            "schema_version": TESTNET_SCHEDULER_SCHEMA,
+            "event": "scheduler_attached",
+            "status": "active",
+            "occurred_at": self._timestamp(timestamp),
+            "owner_id": self.owner_id,
+            "owner_epoch": guard.get("epoch"),
+            "activation_id": requested,
+            "execution_enabled": coordinator.get("execution_enabled") is True,
+            "coordinator": coordinator,
+            "restart_reconcile_required": False,
+            "next_action": "await_event_or_heartbeat",
+            "blocker": None,
+            "alerts_authorize_actions": False,
+        })
+
     def mark_restart(self, *, timestamp: str | datetime | None = None) -> dict[str, Any]:
         guard = self.guard.verify()
         if not guard.get("ok"):
@@ -364,6 +403,17 @@ class TestnetScheduler:
                     "alerts_authorize_actions": False,
                 }
                 return self._record_tick(tick_key, result)
+            if str(advanced.get("status") or "").lower() in {"blocked", "unknown", "fail", "failed"}:
+                return self._record_tick(tick_key, {
+                    **current, "event": "scheduler_advance_blocked", "status": "blocked",
+                    "occurred_at": now, "tick_id": tick_key,
+                    "coordinator_status": coordinator_state,
+                    "restart_reconciled": restart_reconciled,
+                    "restart_reconcile_required": False, "execution_enabled": False,
+                    "next_action": "notify_park_and_wait",
+                    "blocker": str(advanced.get("reason") or "scheduler_advance_blocked"),
+                    "advance_result": advanced, "alerts_authorize_actions": False,
+                })
         result = {
             **current,
             "event": "scheduler_tick",
