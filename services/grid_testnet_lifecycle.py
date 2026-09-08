@@ -403,6 +403,14 @@ class GridTestnetLifecycle:
 
     def on_market_event(self, plan: dict[str, Any], *, price: float, timestamp: str) -> dict[str, Any]:
         state = self._state(plan)
+        if state.get("exchange_exposure_open"):
+            self._retry_exchange_exposure(state, timestamp=timestamp)
+            if not state.get("exchange_exposure_open") and state.get("hard_stop_requested"):
+                state["status"] = "hard_stop_triggered"
+                self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
+            state["updated_at"] = timestamp
+            self._save(state)
+            return self.snapshot(plan)
         if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"}:
             return self.snapshot(plan)
         if not isinstance(price, (int, float)) or float(price) <= 0:
@@ -679,6 +687,7 @@ class GridTestnetLifecycle:
             return
         market_price = market_price if market_price is not None else state.get("last_market_price")
         state["status"] = "hard_stop_triggered"
+        state["hard_stop_requested"] = True
         self._cancel_all_open_orders(state, timestamp=timestamp, reason=reason)
         self._cancel_hard_stop_protection(plan, state, timestamp=timestamp)
         for rung in state["rungs"]:
@@ -720,8 +729,9 @@ class GridTestnetLifecycle:
         reason: str,
         entries_only: bool = False,
     ) -> None:
+        failed_ids: list[str] = []
         for row in state["orders"]:
-            if row.get("state") != "accepted":
+            if row.get("state") not in {"accepted", "cancel_pending"}:
                 continue
             if entries_only and row.get("event") not in {"entry", "entry_rearm"}:
                 continue
@@ -731,8 +741,62 @@ class GridTestnetLifecycle:
                 row["state"] = "cancelled"
                 row["cancel_reason"] = reason
                 row["cancel_receipt_state"] = str(getattr(receipt.state, "value", receipt.state))
+                self._record_event(state, "order_cancel_attempt", timestamp=timestamp, result="accepted", broker_order_id=row.get("broker_order_id"), client_order_id=row.get("client_order_id"), receipt_state=row["cancel_receipt_state"])
             except Exception as exc:  # noqa: BLE001
+                failed_ids.append(str(row.get("broker_order_id") or row.get("client_order_id") or ""))
+                self._record_event(state, "order_cancel_attempt", timestamp=timestamp, result="failed", broker_order_id=row.get("broker_order_id"), client_order_id=row.get("client_order_id"), error=f"{type(exc).__name__}:{exc}")
                 self._block(state, f"order_cancel_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+        if failed_ids:
+            state["exchange_exposure_open"] = {
+                "status": "open",
+                "order_ids": failed_ids,
+                "attempt": int((state.get("exchange_exposure_open") or {}).get("attempt") or 0) + 1,
+                "at": timestamp,
+                "reason": "cancel_failed",
+            }
+
+    def _retry_exchange_exposure(self, state: dict[str, Any], *, timestamp: str) -> None:
+        exposure = state.get("exchange_exposure_open") or {}
+        ids = {str(value) for value in exposure.get("order_ids", ())}
+        if not ids:
+            state.pop("exchange_exposure_open", None)
+            return
+        self._cancel_all_open_orders(state, timestamp=timestamp, reason="exchange_exposure_retry")
+        observed = self._exchange_open_order_ids(state)
+        if observed is None:
+            remaining = ids
+        else:
+            remaining = ids.intersection(observed)
+        for row in state["orders"]:
+            identity = str(row.get("broker_order_id") or row.get("client_order_id") or "")
+            if identity in remaining and row.get("state") == "cancelled":
+                row["state"] = "cancel_pending"
+        if remaining:
+            state["exchange_exposure_open"] = {
+                **exposure,
+                "status": "open",
+                "order_ids": sorted(remaining),
+                "attempt": int(exposure.get("attempt") or 0) + 1,
+                "at": timestamp,
+            }
+            return
+        state.pop("exchange_exposure_open", None)
+        self._record_event(state, "exchange_exposure_closed", timestamp=timestamp, order_ids=sorted(ids))
+
+    def _exchange_open_order_ids(self, state: Mapping[str, Any]) -> set[str] | None:
+        try:
+            rows = self.broker.request("order_execution", "open_orders", str(state["instrument_id"])) or ()
+        except Exception:  # noqa: BLE001 - unknown venue truth must remain open.
+            return None
+        identities: set[str] = set()
+        for row in rows:
+            if isinstance(row, Mapping):
+                value = row.get("broker_order_id") or row.get("oid") or row.get("order_id") or row.get("cloid") or row.get("client_order_id")
+            else:
+                value = getattr(row, "broker_order_id", None) or getattr(row, "order_id", None) or getattr(row, "client_order_id", None)
+            if value not in (None, ""):
+                identities.add(str(value))
+        return identities
 
     def _ensure_hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         net_quantity = self._net_quantity(state)

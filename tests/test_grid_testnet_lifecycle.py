@@ -334,6 +334,36 @@ def test_grid_hard_stop_cancels_tp_and_flattens_before_sealing(tmp_path: Path) -
     assert terminal["park_notification"]["status"] == "queued"
 
 
+def test_grid_hard_stop_retries_failed_cancels_on_next_tick_and_closes_exposure_fact(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    original_cancel = broker.cancel_order
+    failures = {"enabled": True}
+
+    def cancel(request):
+        if failures["enabled"]:
+            raise KeyError(f"unknown Hyperliquid order identity: {request.broker_order_id}")
+        return original_cancel(request)
+
+    broker.cancel_order = cancel
+    blocked = lifecycle.on_market_event(plan, price=63000.0, timestamp="2026-08-22T01:01:00+00:00")
+
+    assert blocked["status"] == "blocked_reconciliation"
+    assert blocked["exchange_exposure_open"]["status"] == "open"
+    assert len(blocked["exchange_exposure_open"]["order_ids"]) == 2
+    assert sum(event["event"] == "order_cancel_attempt" for event in blocked["events"]) == 2
+
+    failures["enabled"] = False
+    recovered = lifecycle.on_market_event(plan, price=63100.0, timestamp="2026-08-22T01:02:00+00:00")
+
+    assert recovered["status"] == "terminal"
+    assert "exchange_exposure_open" not in recovered
+    assert any(event["event"] == "exchange_exposure_closed" for event in recovered["events"])
+    assert sum(event["event"] == "order_cancel_attempt" for event in recovered["events"]) == 4
+
+
 def test_grid_hard_stop_recovery_fill_is_consumable_after_primary_submit_failure(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     original_submit = broker.submit_order

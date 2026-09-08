@@ -430,7 +430,35 @@ class StandardBrokerExternalExecutionAdapter:
         reference = str(request.broker_order_id or request.client_order_id or "").strip()
         if not reference:
             raise StandardBrokerExternalExecutionError("cancel_order_identity_required")
-        return self._binding.cancel(reference)
+        try:
+            return self._binding.cancel(reference)
+        except KeyError:
+            # A restarted public binding has no in-memory identity index. The
+            # submission ledger is the durable source of the broker OID/cloid
+            # pair, so restore that identity before retrying the same cancel.
+            intent = self._intent(
+                BrokerOrderRequest(
+                    run_date=request.run_date,
+                    ticket={
+                        "ticket_id": request.broker_order_id or request.client_order_id,
+                        "instrument_id": request.asset,
+                        "side": "buy",
+                        "quantity": "0.00000001",
+                        "order_type": "limit",
+                        "limit_price": "0.00000001",
+                        "client_order_id": request.client_order_id,
+                    },
+                )
+            )
+            recover = getattr(self._binding, "recover", None)
+            if callable(recover) and request.broker_order_id:
+                recover(intent, broker_order_id=request.broker_order_id, state="resting")
+                return self._binding.cancel(request.broker_order_id)
+            recover_client = getattr(self._binding, "recover_client_order", None)
+            if callable(recover_client) and request.client_order_id:
+                recover_client(intent, client_order_id=request.client_order_id, state="resting")
+                return self._binding.cancel(request.client_order_id)
+            raise
 
     def query_by_idempotency_key(self, idempotency_key: str) -> object:
         query = getattr(self._binding, "query_by_idempotency_key", None)

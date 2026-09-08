@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
-from services.broker_port import BrokerOrderRequest
+from services.broker_port import BrokerCancelRequest, BrokerOrderRequest
 from services.broker_composition import (
     BrokerBuildContext,
     default_broker_plugin_registry,
@@ -325,6 +325,56 @@ def test_external_execution_adapter_exposes_public_unknown_and_restart_recovery(
         "recover",
         "recover_client_order",
     ]
+
+
+def test_external_execution_cancel_recovers_broker_identity_after_key_error() -> None:
+    adapter, binding, _closed = _adapter()
+    request = BrokerCancelRequest(
+        run_date="cycle-1",
+        asset="BTC-USD-PERP",
+        client_order_id="client-1",
+        broker_order_id="broker-1",
+    )
+    original_cancel = binding.cancel
+    attempts = {"count": 0}
+
+    def cancel(reference):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise KeyError("unknown Hyperliquid order identity: broker-1")
+        return original_cancel(reference)
+
+    binding.cancel = cancel
+    receipt = adapter.cancel_order(request)
+
+    assert receipt is binding.receipt
+    assert attempts["count"] == 2
+    assert [name for name, _ in binding.calls[-2:]] == ["recover", "cancel"]
+    assert binding.calls[-1][1] == "broker-1"
+
+
+def test_external_execution_cancel_falls_back_to_cloid_when_oid_is_absent() -> None:
+    adapter, binding, _closed = _adapter()
+    request = BrokerCancelRequest(
+        run_date="cycle-1",
+        asset="BTC-USD-PERP",
+        client_order_id="client-1",
+    )
+    original_cancel = binding.cancel
+    attempts = {"count": 0}
+
+    def cancel(reference):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise KeyError("unknown Hyperliquid order identity: client-1")
+        return original_cancel(reference)
+
+    binding.cancel = cancel
+    adapter.cancel_order(request)
+
+    assert attempts["count"] == 2
+    assert [name for name, _ in binding.calls[-2:]] == ["recover_client_order", "cancel"]
+    assert binding.calls[-2][1][1] == "client-1"
 
 
 def test_registry_resolves_opt_in_protected_testnet_profile() -> None:
