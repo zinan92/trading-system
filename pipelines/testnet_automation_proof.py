@@ -21,6 +21,10 @@ from typing import Any, Mapping, Sequence
 from schemas.portfolio import PortfolioPolicy, PortfolioSnapshot
 from services.broker_composition import BrokerBuildContext, build_broker_execution_port
 from services.journal_store import load_json
+from services.park_confirmation_ledger import (
+    DurableParkConfirmationError,
+    parse_durable_confirmation,
+)
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.standard_broker_external_execution import (
     PROTECTED_CAPABILITY_REVISION,
@@ -209,15 +213,9 @@ def _verify_durable_confirmation(
     """Require the supplied projection to match the current Park ledger."""
 
     try:
-        TestnetAutomationCoordinator(output_root).verify_confirmation(
-            plan,
-            confirmation,
-        )
-    except Exception as exc:  # noqa: BLE001 - normalize to the CLI boundary.
-        if isinstance(exc, TestnetAutomationProofError):
-            raise
-        reason = str(getattr(exc, "code", "") or "durable_confirmation_invalid")
-        raise TestnetAutomationProofError(reason) from exc
+        parse_durable_confirmation(output_root, plan=plan, confirmation=confirmation)
+    except DurableParkConfirmationError as exc:
+        raise TestnetAutomationProofError(exc.reason_code) from exc
 
 
 def _fact_data(reconciliation: object, name: str) -> tuple[object, ...]:

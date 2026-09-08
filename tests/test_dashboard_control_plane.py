@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -844,6 +845,11 @@ def test_confirm_and_run_creates_one_identity_bound_activation(tmp_path: Path) -
     assert activation["effective_max_loss"] == "5.0"
     assert activation["risk_gate_digest"].startswith("sha256:")
     assert "private_key" not in activation
+    persisted = json.loads(
+        (tmp_path / "dashboard_control_plane" / "confirmations.json").read_text(encoding="utf-8")
+    )[-1]
+    assert persisted["acknowledged"] is True
+    assert persisted["operator_id"] == "park"
 
 
 def test_confirm_and_run_rejects_stale_digest_and_duplicate_identity(tmp_path: Path) -> None:

@@ -17846,6 +17846,71 @@ auditable datafeed port; broker execution remains a separate port.
 - Read-only dry-run against the online root stopped at
   `durable_park_confirmation_missing`; receipt recorded
   `secret_material_present=false` and no online files changed.
+
+# 2026-09-08 — Accept Dashboard durable Park confirmation in attended proof (#1163)
+
+## Decision
+
+- Define one shared durable-confirmation parser for the historical Telegram/Jessie
+  ledger and the Dashboard confirmations projection. Dashboard evidence is
+  accepted only when it is confirmed, acknowledged, attributed to `park`, and
+  bound to the same plan and activation identities.
+- Dashboard projections map `proposal_id` to `preview_digest` and
+  `receipt_digest` to `confirmation_digest`; `execution_authorized` is set only
+  after the caller supplies explicit `--approval-id` and `--approved-by park`.
+- Keep the proof path Paper/Testnet-only and dry-run writes isolated to its
+  temporary evidence copy; no launchd, service, order, or secret contents are
+  touched.
+
+## Gotchas
+
+- The current online Dashboard sample is an older confirmed activation without
+  `acknowledged=true`; the strict dry-run therefore stops at
+  `dashboard_confirmation_not_acknowledged`. It must not be upgraded to a pass.
+- Telegram historical confirmations continue through the Coordinator durable
+  ledger checks unchanged. Dashboard confirmations do not manufacture a
+  Telegram proposal.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_testnet_automation_proof.py` — 12 passed.
+- Read-only dry-run against `/Users/wendy/work/park-paper-output` wrote
+  `receipts/issue-1163-dry-run.json` and returned
+  `dashboard_confirmation_not_acknowledged`; `secret_material_present=false`.
+- `git diff --check` passed; no launchd or online output files were modified.
+
+# 2026-09-08 — Persist and replay Dashboard confirmation acknowledgement (#1163 follow-up)
+
+## Decision
+
+- `DashboardControlPlane.confirm_and_run` now persists `acknowledged: true`
+  together with the existing `operator_id: "park"` on every new confirmed
+  Dashboard record.
+- For historical records that predate the field, the durable Dashboard parser
+  treats `status=confirmed` and `operator_id=park` as acknowledged only when
+  the record has the `dashboard-confirmation-v1` / `operator_confirmed` shape
+  produced by `confirm_and_run`. This preserves the evidence implied by the
+  existing confirmation gate, rather than accepting an arbitrary imported row.
+- Operator identity, digest binding, activation identity, venue, and all
+  existing activation checks remain unchanged.
+
+## Gotchas
+
+- The historical compatibility rule applies only to Dashboard
+  `confirm_and_run` records; it does not waive acknowledgement for other
+  record sources or malformed/imported records.
+- The compatibility rule is read-time only. Historical files are not rewritten
+  or upgraded in the online output root.
+
+## Verification
+
+- New-record persistence, historical replay, non-`confirm_and_run` rejection,
+  and existing identity failures are covered by focused tests.
+- Online `--dry-run` is re-run read-only after this change; acknowledgement
+  passed and the run stopped at `broker_binding` with the new environment
+  blocker `nautilus_runtime_missing` before `candidate_selected`. The receipt
+  records `candidate_selected=false`, `execution_mutation=false`, and
+  `network_operation_invoked=false`; the online evidence files were unchanged.
 ## 2026-09-08 — Add deterministic 48-hour Testnet soak report (#1150)
 
 ## Decision
