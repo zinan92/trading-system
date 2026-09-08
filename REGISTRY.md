@@ -9,43 +9,28 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
-## 现在在哪里(2026-08-31, Hyperliquid Testnet host wiring)
+## 现在在哪里(2026-09-08, Park Paper owner and status heartbeat)
 
-- Issue #1113 is merged as PR #1114 at code merge `82724f1` (current
-  `origin/main` also contains the follow-up registry merge). The reviewed
-  `hyperliquid-testnet-position-protection` public standard-broker binding is
-  now composed into the production Jessie Telegram path and Dashboard account
-  / preview seams. Source-bound BTC identity survives into a Testnet plan;
-  Chinese `测试网` input is classified as Testnet.
-- Issues #1117/#1119 are merged as PRs #1118/#1120; the actual launchd
-  Dashboard checkout is synced to `9a5e3c7`, with the
-  standard-broker source path and the explicit BTC Testnet protected profile
-  configured as an opaque signer reference. Dashboard V5 is serving
-  `http://127.0.0.1:8765/dashboard-v5.html`; catalog returns 211 public
-  Hyperliquid perpetuals, market bars include trusted 1m/4h/1d history, and
-  a live BTC DCA Preview returned `execution_ready=true` with the subtractive
-  gate scaling requested notional down to the account cap. Public account
-  admission is `ready=true`, `clean_state=true`, `protection=true`, with
-  equity and zero open positions/orders observed from Hyperliquid Testnet.
-- Issue #1122 is merged as PR #1123. The main `/api/trading-system/read-model`
-  now follows the durable Dashboard broker selection: with Hyperliquid
-  selected it reports `hyperliquid.external_testnet` and the public Testnet
-  equity; with Binance Paper selected it keeps the Paper authoritative
-  snapshot. If Testnet facts fail, the read-model reports a Testnet blocker
-  rather than silently displaying Paper equity.
-- Jessie launchd remains a one-pass 60-second worker. Its latest post-restart
-  receipt is `status=pass`, `updates_received=0`, `orders_created=0`,
-  `positions_created=0`, `execution=idle`, `next_action=await_new_park_strategy`.
-  It will route a newly confirmed Testnet plan through the guarded protected
-  start seam; no order was submitted in this deployment.
-- The default protection-disabled profile, durable Park confirmation, clean
-  state, fresh/coherent facts, Testnet-only and `real_money_eligible=false`
-  gates remain fail-closed. Mainnet/Live, scheduler promotion, blind retry,
-  and automatic next-entry remain out of scope.
+_数据截至 2026-09-08；代码事实取 `origin/main` 自 2026-09-07 以来的合并记录，线上事实取 owner 在 [Issue #1129](https://github.com/zinan92/trading-system/issues/1129) 的实测记录。_
 
-_下一步_: in Telegram, describe a fresh BTC Testnet DCA or Grid plan and wait
-for Jessie to present its immutable proposal; only an explicit `确认当前计划`
-or exact digest confirmation can submit the first guarded Testnet action.
+- [PR #1127](https://github.com/zinan92/trading-system/pull/1127) 已合并到
+  `aef032e`。`/api/ops/status` 的 `runner_liveness` 与 `always_on` 现在以
+  Park Paper 的成对安全证据为只读心跳；缺失、过期、未来时间、格式错误或
+  非 pass 证据仍 fail-closed，不改变接口、控制循环或订单路径。
+- [PR #1128](https://github.com/zinan92/trading-system/pull/1128) 已合并到
+  `7adb5b4`。本机 `local-mac`、owner epoch `1` 是唯一 Paper scheduler
+  owner；Cloud Paper 及 `goldbot-gateway` 已退役，相关代码/plist 保留为
+  参考与回退材料。阿里云实例仍是“待 Park 停机”，不是已完成的停机事实。
+- Owner 线上实测记录为：dashboard 运行 `7adb5b4`，Paper 发布闸为
+  `pass`；Park Paper 当前 `idle`，等待 Park 在 Telegram 给出新策略；阿里云
+  实例状态为“待 Park 停机”。这些状态不代表已发生新的订单或真钱动作。
+- 本轮不改 `NORTH_STAR.md`；其里程碑 2/3 的改写继续等待另一个
+  Park-approved PR。
+
+_下一步_（仅列当前仍 open 的合同 issue）：继续由 Park 处理 [#1050](https://github.com/zinan92/trading-system/issues/1050)
+BTC-DCA 两窗口 Testnet 证据、[#1051](https://github.com/zinan92/trading-system/issues/1051)
+BTC-Grid 两窗口 Testnet 证据，以及 [#1052](https://github.com/zinan92/trading-system/issues/1052)
+最终 Testnet rollout 与 scheduler activation gate。
 
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
