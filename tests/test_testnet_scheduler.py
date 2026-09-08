@@ -179,6 +179,62 @@ def test_scheduler_blocks_only_after_three_consecutive_advance_failures(tmp_path
     assert [row["advance_failure_count"] for row in results] == [1, 2, 3]
 
 
+def test_scheduler_success_tick_clears_previous_warning(tmp_path: Path) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current.update({"status": "grid_running", "execution_enabled": True})
+    coordinator._record(current)
+
+    warning = scheduler.tick(
+        tick_id="warning-1",
+        event={"kind": "market_heartbeat"},
+        advance=lambda _event: {"status": "blocked", "reason": "temporary"},
+        timestamp=NOW,
+    )
+    recovered = scheduler.tick(
+        tick_id="success-1",
+        event={"kind": "market_heartbeat"},
+        advance=lambda _event: {"status": "observed"},
+        timestamp=NOW,
+    )
+
+    assert warning["warning"] == "temporary"
+    assert recovered["warning"] is None
+
+
+def test_scheduler_waits_for_operator_when_advance_reaches_terminal(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+
+    class Coordinator:
+        def __init__(self):
+            self.state = {"status": "grid_running", "execution_enabled": True}
+
+        def status(self):
+            return dict(self.state)
+
+    coordinator = Coordinator()
+    scheduler = TestnetScheduler(output, coordinator, owner_id="local-mac", runtime_mode="local")
+    scheduler._save_state({
+        "status": "active",
+        "activation_id": "activation-1",
+        "execution_enabled": True,
+        "restart_reconcile_required": False,
+        "advance_failure_count": 0,
+    })
+    result = scheduler.tick(
+        tick_id="terminal-1",
+        event={"kind": "market_heartbeat"},
+        advance=lambda _event: coordinator.state.update(status="grid_terminal", execution_enabled=False) or {"status": "grid_terminal"},
+        timestamp=NOW,
+    )
+
+    assert result["status"] == "awaiting_operator"
+    assert result["coordinator_status"] == "grid_terminal"
+    assert result["next_action"] == "notify_park_and_wait"
+
+
 def test_market_assembly_warning_preserves_reason_details_until_third_failure(tmp_path: Path) -> None:
     scheduler, coordinator = _scheduler(tmp_path)
     scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)

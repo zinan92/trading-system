@@ -1,4 +1,6 @@
 from pathlib import Path
+import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -362,6 +364,71 @@ def test_grid_hard_stop_retries_failed_cancels_on_next_tick_and_closes_exposure_
     assert "exchange_exposure_open" not in recovered
     assert any(event["event"] == "exchange_exposure_closed" for event in recovered["events"])
     assert sum(event["event"] == "order_cancel_attempt" for event in recovered["events"]) == 4
+
+
+def test_blocked_dashboard_fixture_discovers_and_retries_all_plan_orders(tmp_path: Path) -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "grid_blocked_exposure_retry.json").read_text()
+    )
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": 64000.0 + index * 100, "side": "buy",
+         "take_profit": 64500.0 + index * 100, "hard_stop": 63000.0, "quantity": 0.1}
+        for index in range(5)
+    ]
+    plan["risk_budget"].update(max_open_orders=5, max_open_positions=5,
+                                max_notional=40000.0, maximum_loss_at_full_depth=3000.0)
+    started = lifecycle.start(plan, timestamp="2026-09-08T13:47:21+00:00")
+    state = lifecycle._state(plan)
+    for row, fixture_order in zip(state["orders"], fixture["orders"]):
+        row["broker_order_id"] = fixture_order["broker_order_id"]
+        row["client_order_id"] = fixture_order["client_order_id"]
+    state["status"] = fixture["status"]
+    state["blocker"] = fixture["blocker"]
+    state.pop("exchange_exposure_open", None)
+    lifecycle._save(state)
+
+    exchange_open = True
+    original_request = broker.request
+    broker.request = lambda port, operation, payload=None: (
+        fixture["open_orders"] if operation == "open_orders" and exchange_open
+        else [] if operation == "open_orders"
+        else original_request(port, operation, payload)
+    )
+
+    def cancel(_request):
+        nonlocal exchange_open
+        exchange_open = False
+        return SimpleNamespace(state="cancelled")
+
+    broker.cancel_order = cancel
+    recovered = lifecycle.on_market_event(plan, price=78488.5, timestamp="2026-09-08T14:51:00+00:00")
+
+    assert recovered["status"] == "terminal"
+    assert recovered["sealed"] is True
+    assert recovered["park_notification_required"] is True
+    assert all(row["state"] == "cancelled" for row in recovered["orders"])
+    assert recovered["reconciliation"]["broker_open_order_count"] == 0
+
+
+def test_blocked_interrupt_still_cancels_resting_entries(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-09-08T13:47:21+00:00")
+    state = lifecycle._state(plan)
+    state["status"] = "blocked_reconciliation"
+    state["blocker"] = "order_cancel_failed:previous_failure"
+    lifecycle._save(state)
+
+    cancelled = []
+    broker.cancel_order = lambda request: cancelled.append(request) or SimpleNamespace(state="cancelled")
+    recovered = lifecycle.interrupt(plan, timestamp="2026-09-08T14:51:00+00:00")
+
+    assert len(cancelled) == len(started["orders"])
+    assert recovered["status"] == "blocked_reconciliation"
 
 
 def test_grid_hard_stop_recovery_fill_is_consumable_after_primary_submit_failure(tmp_path: Path) -> None:

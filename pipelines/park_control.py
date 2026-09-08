@@ -113,13 +113,13 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
     if not guard.get("ok"):
         return {"status": "not_applicable", "reason": guard.get("blocker"), "paper_only": True}
     coordinator_status = coordinator.status()
-    if scheduler.status().get("status") == "idle" and str(coordinator_status.get("status") or "") in {"grid_running", "dca_running"}:
+    if scheduler.status().get("status") == "idle" and str(coordinator_status.get("status") or "") in {"grid_running", "dca_running", "grid_blocked", "dca_blocked"}:
         scheduler.attach(str(coordinator_status.get("activation_id") or ""))
     if scheduler.status().get("status") not in {"active", "reconcile_required"}:
         return {"status": "not_applicable", "reason": "testnet_scheduler_not_active", "paper_only": True}
     tick_id = "park-control:" + datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     callbacks = None
-    if str(coordinator_status.get("status") or "") in {"grid_running", "dca_running"}:
+    if str(coordinator_status.get("status") or "") in {"grid_running", "dca_running", "grid_blocked", "dca_blocked"}:
         try:
             callbacks = _build_testnet_tick_callbacks(output_root, coordinator_status)
         except Exception as exc:  # noqa: BLE001 - scheduler records the typed blocker.

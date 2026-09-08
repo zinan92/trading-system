@@ -103,9 +103,6 @@ class GridTestnetLifecycle:
         if state["status"] in {
             "terminal",
             "sealed",
-            "blocked_reconciliation",
-            "blocked_protection",
-            "blocked_risk",
         }:
             return self.snapshot(plan)
         # A manual interrupt is intentionally minimal-disruption: cancel only
@@ -412,6 +409,23 @@ class GridTestnetLifecycle:
             self._save(state)
             return self.snapshot(plan)
         if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"}:
+            if str(state.get("blocker") or "").startswith("order_cancel_failed"):
+                state["hard_stop_requested"] = True
+            exposure_ids = self._discover_exchange_exposure(state)
+            if exposure_ids:
+                state["exchange_exposure_open"] = {
+                    "status": "open",
+                    "order_ids": sorted(exposure_ids),
+                    "attempt": 0,
+                    "at": timestamp,
+                    "reason": "blocked_state_recovery",
+                }
+                self._retry_exchange_exposure(state, timestamp=timestamp)
+            if state.get("hard_stop_requested") and not state.get("exchange_exposure_open"):
+                state["status"] = "hard_stop_triggered"
+                self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
+            state["updated_at"] = timestamp
+            self._save(state)
             return self.snapshot(plan)
         if not isinstance(price, (int, float)) or float(price) <= 0:
             self._block(state, "market_price_invalid", timestamp=timestamp)
@@ -728,12 +742,15 @@ class GridTestnetLifecycle:
         timestamp: str,
         reason: str,
         entries_only: bool = False,
+        only_ids: set[str] | None = None,
     ) -> None:
         failed_ids: list[str] = []
         for row in state["orders"]:
             if row.get("state") not in {"accepted", "cancel_pending"}:
                 continue
             if entries_only and row.get("event") not in {"entry", "entry_rearm"}:
+                continue
+            if only_ids is not None and not self._order_matches_identities(row, only_ids):
                 continue
             try:
                 receipt = self.broker.cancel_order(BrokerCancelRequest(run_date=state["cycle_id"], asset=row["instrument_id"], client_order_id=row.get("client_order_id") or "", broker_order_id=row.get("broker_order_id") or ""))
@@ -761,15 +778,18 @@ class GridTestnetLifecycle:
         if not ids:
             state.pop("exchange_exposure_open", None)
             return
-        self._cancel_all_open_orders(state, timestamp=timestamp, reason="exchange_exposure_retry")
+        self._cancel_all_open_orders(state, timestamp=timestamp, reason="exchange_exposure_retry", only_ids=ids)
         observed = self._exchange_open_order_ids(state)
         if observed is None:
             remaining = ids
         else:
-            remaining = ids.intersection(observed)
+            remaining = {
+                str(row.get("order_id") or row.get("broker_order_id") or row.get("client_order_id"))
+                for row in state["orders"]
+                if self._order_matches_identities(row, observed)
+            }
         for row in state["orders"]:
-            identity = str(row.get("broker_order_id") or row.get("client_order_id") or "")
-            if identity in remaining and row.get("state") == "cancelled":
+            if self._order_matches_identities(row, remaining) and row.get("state") == "cancelled":
                 row["state"] = "cancel_pending"
         if remaining:
             state["exchange_exposure_open"] = {
@@ -782,6 +802,28 @@ class GridTestnetLifecycle:
             return
         state.pop("exchange_exposure_open", None)
         self._record_event(state, "exchange_exposure_closed", timestamp=timestamp, order_ids=sorted(ids))
+
+    @staticmethod
+    def _order_identities(row: Mapping[str, Any]) -> set[str]:
+        return {
+            str(row.get(field))
+            for field in ("order_id", "broker_order_id", "client_order_id")
+            if row.get(field) not in (None, "")
+        }
+
+    def _order_matches_identities(self, row: Mapping[str, Any], identities: set[str]) -> bool:
+        return bool(self._order_identities(row).intersection({str(value) for value in identities}))
+
+    def _discover_exchange_exposure(self, state: Mapping[str, Any]) -> set[str]:
+        observed = self._exchange_open_order_ids(state)
+        if observed is None:
+            return set()
+        return {
+            str(row.get("order_id") or row.get("broker_order_id") or row.get("client_order_id"))
+            for row in state.get("orders", ())
+            if row.get("state") in {"accepted", "cancel_pending"}
+            and self._order_matches_identities(row, observed)
+        }
 
     def _exchange_open_order_ids(self, state: Mapping[str, Any]) -> set[str] | None:
         try:
