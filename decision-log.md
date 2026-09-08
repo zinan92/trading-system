@@ -18032,6 +18032,34 @@ auditable datafeed port; broker execution remains a separate port.
 - `PYTHONPATH=src python3 -m pytest -q tests/test_dashboard_control_plane.py tests/test_dashboard_server.py` — 93 passed.
 - `gitleaks git --no-banner --redact --log-opts='--all'` — no leaks found.
 
+# 2026-09-08 — Classify local Grid submit validation and enforce venue constraints (#1188)
+
+## Decision
+
+- Treat ValueError, TypeError, BrokerCapabilityError, and equivalent adapter
+  validation failures as local blockers. They do not enter the ambiguous
+  submit-recovery query; the lifecycle records price, quantity, and notional
+  in a `blocked_local_validation` blocker.
+- Keep unknown recovery for failures after a submit may have reached the venue.
+  Identity-query KeyError is reported with its missing key so reconciliation
+  retains an actionable cause.
+- Validate every effective Grid rung, after Portfolio Gate sizing, against the
+  selected Instrument Catalog facts for minimum notional, quantity step, and
+  price tick. The validator suggests reducing Grid count or increasing the
+  Portfolio Gate upper limit when a rung is below venue minimum notional.
+
+## Gotchas
+
+- Venue constraints are facts projected by the selected instrument; the proof
+  driver does not hard-code Hyperliquid limits or infer missing catalog data.
+- This change is local-only. It does not deploy, invoke Testnet execution,
+  modify launchd, or change the 8100 HTTP contract.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_testnet_proof_driver.py tests/test_standard_broker_external_execution.py tests/test_standard_broker_external_canary.py` — 51 passed.
+- `git diff --check` — passed.
+
 ## 2026-09-08 — Align Grid Testnet lifecycle validation with Canonical Grid (#1186)
 
 ## Decision

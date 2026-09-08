@@ -129,6 +129,51 @@ def test_grid_incomplete_initial_ladder_rolls_back_and_never_activates(tmp_path:
     broker.submit_order = original_submit
 
 
+def test_grid_local_submit_validation_is_blocked_without_identity_query(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    calls = []
+
+    def reject_locally(request):
+        calls.append("submit")
+        raise ValueError("quantity 0.00012 is below minimum notional")
+
+    def query(_key):
+        calls.append("query")
+        raise AssertionError("local validation must not query identity")
+
+    broker.submit_order = reject_locally
+    broker.query_by_idempotency_key = query
+
+    state = GridTestnetLifecycle(tmp_path / "outputs", broker).start(
+        _plan(), timestamp="2026-08-22T01:00:00+00:00"
+    )
+
+    assert state["status"] == "blocked_local_validation"
+    assert "blocked_local_validation:ValueError" in state["blocker"]
+    assert "price=65000.0" in state["blocker"]
+    assert "quantity=0.1" in state["blocker"]
+    assert calls == ["submit"]
+
+
+def test_grid_identity_query_key_error_keeps_missing_key_reason(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+
+    def timeout(request):
+        raise TimeoutError("transport timeout")
+
+    def broken_query(_key):
+        raise KeyError("state")
+
+    broker.submit_order = timeout
+    broker.query_by_idempotency_key = broken_query
+    state = GridTestnetLifecycle(tmp_path / "outputs", broker).start(
+        _plan(), timestamp="2026-08-22T01:00:00+00:00"
+    )
+
+    assert state["status"] == "blocked_reconciliation"
+    assert "submit_unknown_query_failed:KeyError:missing_key=state" in state["blocker"]
+
+
 def test_grid_entry_tp_and_original_price_rearm(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)

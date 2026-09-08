@@ -234,10 +234,10 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
         "instrument_id": preview.get("instrument_id"),
         "runtime_id": preview.get("runtime_id"),
         "capability_revision": preview.get("capability_revision"),
-        "price_tick": preview.get("price_tick") or instrument.get("price_increment"),
-        "quantity_step": preview.get("quantity_step") or instrument.get("size_increment"),
-        "minimum_quantity": preview.get("minimum_quantity") or instrument.get("min_quantity"),
-        "minimum_notional": preview.get("minimum_notional") or instrument.get("min_notional"),
+        "price_tick": preview.get("price_tick") or instrument.get("price_tick") or instrument.get("price_increment"),
+        "quantity_step": preview.get("quantity_step") or instrument.get("quantity_step") or instrument.get("size_increment"),
+        "minimum_quantity": preview.get("minimum_quantity") or instrument.get("minimum_quantity") or instrument.get("min_quantity"),
+        "minimum_notional": preview.get("minimum_notional") or instrument.get("minimum_notional") or instrument.get("min_notional"),
     }
     cycle_id = next(
         (
@@ -424,6 +424,7 @@ def validate_grid_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
         # cohesion; this validator never invokes the broker or writes state.
         rungs = GridTestnetLifecycle(Path("."), object())._rungs(plan, identity)
         GridTestnetLifecycle._validate_full_depth_risk(plan, rungs)
+        venue_check = _validate_grid_instrument_constraints(plan, rungs)
         class _OfflineBroker:
             # The lifecycle reaches its pre-write gate, then stops at the
             # missing capability boundary without any broker/network I/O.
@@ -447,11 +448,60 @@ def validate_grid_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
         checks.extend([
             {"name": "grid_geometry", "passed": True, "source": "preview.grid/orders"},
             {"name": "full_depth_risk", "passed": True, "source": "lifecycle"},
+            venue_check,
             {"name": "start_grid_session_prewrite", "passed": True, "source": "fake_broker"},
         ])
+    except ProofDriverError:
+        raise
     except (GridTestnetLifecycleError, ValueError) as exc:
         raise ProofDriverError("lifecycle_preflight_blocked", checks=checks, detail=str(exc)) from exc
     return {"status": "passed", "checks": checks, "rung_count": len(rungs)}
+
+
+def _validate_grid_instrument_constraints(
+    plan: Mapping[str, Any], rungs: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Validate effective rungs against the selected Instrument Catalog facts."""
+
+    context = plan.get("execution_context") if isinstance(plan.get("execution_context"), Mapping) else {}
+    facts = {
+        key: context.get(key)
+        for key in ("minimum_notional", "quantity_step", "price_tick", "minimum_quantity")
+    }
+    missing = [key for key in ("minimum_notional", "quantity_step", "price_tick") if facts[key] in (None, "")]
+    if missing:
+        raise ProofDriverError("instrument_constraints_missing", fields=missing)
+    try:
+        minimum_notional = Decimal(str(facts["minimum_notional"]))
+        quantity_step = Decimal(str(facts["quantity_step"]))
+        price_tick = Decimal(str(facts["price_tick"]))
+        minimum_quantity = Decimal(str(facts["minimum_quantity"])) if facts["minimum_quantity"] not in (None, "") else quantity_step
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ProofDriverError("instrument_constraints_invalid") from exc
+    if min(minimum_notional, quantity_step, price_tick, minimum_quantity) <= 0:
+        raise ProofDriverError("instrument_constraints_invalid")
+
+    violations: list[dict[str, Any]] = []
+    for index, rung in enumerate(rungs, start=1):
+        price = Decimal(str(rung["price"]))
+        quantity = Decimal(str(rung["quantity"]))
+        notional = price * quantity
+        reasons = []
+        if price % price_tick != 0:
+            reasons.append(f"price={price} not_on_tick={price_tick}")
+        if quantity % quantity_step != 0 or quantity < minimum_quantity:
+            reasons.append(f"quantity={quantity} step={quantity_step} minimum={minimum_quantity}")
+        if notional < minimum_notional:
+            reasons.append(f"notional={notional} minimum_notional={minimum_notional}")
+        if reasons:
+            violations.append({"rung": index, "price": str(price), "quantity": str(quantity), "notional": str(notional), "reasons": reasons})
+    if violations:
+        raise ProofDriverError(
+            "instrument_constraints_blocked",
+            violations=violations,
+            suggestion="reduce grid count or increase the Portfolio Gate upper limit",
+        )
+    return {"name": "venue_constraints", "passed": True, "source": "instrument_catalog"}
 
 
 def map_confirmation(
