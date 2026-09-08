@@ -131,12 +131,17 @@ def _normalise_instrument(row: Mapping[str, Any], *, profile_id: str) -> dict[st
     ]
     if eligibility != "eligible" and not blockers:
         blockers = ["market_facts_pending"]
+    size_decimals = row.get("size_decimals", row.get("szDecimals"))
+    price_decimals = row.get("price_decimals", row.get("pxDecimals"))
+    if profile_id == "hyperliquid.testnet" and price_decimals in (None, "") and size_decimals not in (None, ""):
+        price_decimals = 6 - int(size_decimals)
     return {
         "instrument_id": instrument_id,
         "asset": asset,
         "asset_index": row.get("asset_index", row.get("index")),
-        "size_decimals": row.get("size_decimals", row.get("szDecimals")),
-        "price_decimals": row.get("price_decimals", row.get("pxDecimals")),
+        "size_decimals": size_decimals,
+        "price_decimals": price_decimals,
+        "price_significant_digits": row.get("price_significant_digits", 5 if profile_id == "hyperliquid.testnet" else None),
         "max_leverage": row.get("max_leverage", row.get("maxLeverage")),
         "eligibility": eligibility,
         "blockers": sorted(set(blockers)),
@@ -167,6 +172,8 @@ def _default_catalog_loader(profile_id: str) -> Iterable[Mapping[str, Any]]:
                 "asset": "BTC",
                 "asset_index": 0,
                 "size_decimals": 5,
+                "price_decimals": 1,
+                "price_significant_digits": 5,
                 "max_leverage": 50,
                 "eligibility": "unknown",
                 "blockers": ["instrument_catalog_unavailable"],
@@ -508,6 +515,26 @@ class DashboardControlPlane:
 
         normalized_market = self._normalise_market(source_market, instrument)
         normalized_strategy = dict(strategy)
+        effective_config = dict(config or self._default_strategy_config())
+        if catalog_entry is not None and profile_id == "hyperliquid.testnet":
+            size_decimals = int(catalog_entry.get("size_decimals") or 0)
+            raw_price_decimals = catalog_entry.get("price_decimals")
+            max_decimal_places = int(
+                raw_price_decimals if raw_price_decimals not in (None, "") else 6 - size_decimals
+            )
+            latest_price = source_market.get("latest_close") or source_market.get("mid") or source_market.get("price")
+            if latest_price not in (None, ""):
+                from services.grid_sizing import venue_price_increment
+
+                execution = dict(effective_config.get("execution_contract") or {})
+                execution.update({
+                    "price_increment": str(venue_price_increment(latest_price, max_decimal_places=max_decimal_places)),
+                    "quantity_increment": str(10 ** -size_decimals),
+                    "price_max_decimal_places": max_decimal_places,
+                    "price_max_significant_digits": int(catalog_entry.get("price_significant_digits") or 5),
+                    "execution_instrument_id": instrument,
+                })
+                effective_config["execution_contract"] = execution
         preview: dict[str, Any] | None = None
         try:
             if not source_market:
@@ -522,7 +549,7 @@ class DashboardControlPlane:
                     },
                     market=normalized_market,
                     account=source_account,
-                    config=dict(config or self._default_strategy_config()),
+                    config=effective_config,
                     output_root=self.output_root,
                 )
             else:
@@ -531,7 +558,7 @@ class DashboardControlPlane:
                     self._normalise_grid(normalized_strategy),
                     market=normalized_market,
                     account=source_account,
-                    config=dict(config or self._default_strategy_config()),
+                    config=effective_config,
                     allow_unsafe_manual_preview=False,
                     output_root=self.output_root,
                 )

@@ -275,6 +275,8 @@ class HyperliquidTestnetMarketReader:
                     "asset": symbol,
                     "asset_index": row.get("index"),
                     "size_decimals": row.get("szDecimals"),
+                    "price_decimals": 6 - int(row.get("szDecimals") or 0),
+                    "price_significant_digits": 5,
                     "max_leverage": row.get("maxLeverage"),
                     "eligibility": "unknown",
                     "blockers": ["market_facts_pending"],

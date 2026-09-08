@@ -380,6 +380,8 @@ def _catalog_instrument_constraints(
         raise ProofDriverError("instrument_catalog_facts_invalid") from exc
     return {
         "price_tick": str(price_tick),
+        "price_max_decimal_places": facts.price_rule.max_decimal_places,
+        "price_max_significant_digits": facts.price_rule.max_significant_figures,
         "quantity_step": str(facts.quantity_step),
         "minimum_quantity": str(facts.minimum_quantity or facts.quantity_step),
         "minimum_notional": str(facts.minimum_notional),
@@ -534,7 +536,17 @@ def _validate_grid_instrument_constraints(
         quantity = Decimal(str(rung["quantity"]))
         notional = price * quantity
         reasons = []
-        if price % price_tick != 0:
+        max_decimal_places = context.get("price_max_decimal_places")
+        max_significant_digits = context.get("price_max_significant_digits")
+        if max_decimal_places not in (None, ""):
+            normalized_price = price.normalize()
+            decimal_places = max(0, -normalized_price.as_tuple().exponent)
+            digits = "".join(str(digit) for digit in normalized_price.as_tuple().digits).lstrip("0").rstrip("0")
+            if decimal_places > int(max_decimal_places) or len(digits) > int(max_significant_digits or 5):
+                reasons.append(
+                    f"price={price} precision={max_significant_digits or 5}sig/{max_decimal_places}dp"
+                )
+        elif price % price_tick != 0:
             reasons.append(f"price={price} not_on_tick={price_tick}")
         if quantity % quantity_step != 0 or quantity < minimum_quantity:
             reasons.append(f"quantity={quantity} step={quantity_step} minimum={minimum_quantity}")

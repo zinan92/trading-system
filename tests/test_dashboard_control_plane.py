@@ -40,6 +40,9 @@ def test_catalog_exposes_explicit_venue_profiles_without_live_environment() -> N
     assert set(profiles) == {"binance.paper", "hyperliquid.testnet"}
     assert profiles["hyperliquid.testnet"]["broker_id"] == "hyperliquid"
     assert profiles["hyperliquid.testnet"]["environment"] == "testnet"
+    btc = next(row for row in profiles["hyperliquid.testnet"]["instruments"] if row["instrument_id"] == "BTC-USD-PERP")
+    assert btc["price_decimals"] == 1
+    assert btc["price_significant_digits"] == 5
     assert all("live" not in str(row).lower() for row in catalog["venue_profiles"])
     assert catalog["safety"] == {
         "read_only": True,
