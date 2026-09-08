@@ -27,9 +27,12 @@ from services.dca_testnet_lifecycle import DcaTestnetLifecycle
 from services.grid_testnet_lifecycle import GridTestnetLifecycle
 from services.dca_plan import (
     build_dca_entry_commands,
+    dca_preview_id,
+)
+from services.strategy_package_adapter import (
     build_dca_preview,
     build_dca_strategy_plan,
-    dca_preview_id,
+    build_grid_preview,
 )
 from services.dualtrack_clock import parse_utc
 from services.dualtrack_config import dualtrack_config
@@ -46,7 +49,6 @@ from services.grid_sizing import (
     AdaptiveGridInputError,
     GRID_STYLES,
     GridPreviewInfeasibleError,
-    build_grid_preview,
     number_or as _number_or,
     preview_id as _grid_preview_id,
     validate_market as _validate_market,
@@ -1162,6 +1164,7 @@ class StrategyControlPlane:
             ),
             version=version,
             locked_at=_timestamp(now),
+            output_root=self.output_root,
         )
         plan["source_proposal_ids"] = [selected_proposal_id]
         if selected.get("start_facts_digest") is not None:
@@ -1586,12 +1589,13 @@ class StrategyControlPlane:
                 market=market,
                 account=account,
                 config=self.config,
+                output_root=self.output_root,
             )
             preview["manual_confirmation"] = _dca_confirmation_contract(preview)
             return preview
         # Geometry and capital sizing stay pure and shared in grid_sizing;
         # the control plane owns only locking, persistence and runtime state.
-        return build_grid_preview(cycle_id, payload, market=market, account=account, config=self.config)
+        return build_grid_preview(cycle_id, payload, market=market, account=account, config=self.config, output_root=self.output_root)
 
     @staticmethod
     def _frozen_grid_request_from_plan(
@@ -2294,6 +2298,7 @@ class StrategyControlPlane:
                 ),
                 version=future_version,
                 locked_at=prepared_at,
+                output_root=self.output_root,
             )
             if preview.get("start_facts_digest") is not None:
                 future_plan["start_facts_digest"] = str(
@@ -4432,6 +4437,7 @@ class StrategyControlPlane:
             strategy_plan_id=plan_id,
             version=version,
             locked_at=timestamp,
+            output_root=self.output_root,
         )
         if candidate_proposal is not None:
             adjusted["source_proposal_ids"] = [

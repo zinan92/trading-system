@@ -16,8 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-from services.dca_plan import build_dca_preview
-from services.grid_sizing import build_grid_preview
+from services.strategy_package_adapter import build_dca_preview, build_grid_preview
 from services.journal_store import load_json, write_json
 
 
@@ -524,6 +523,7 @@ class DashboardControlPlane:
                     market=normalized_market,
                     account=source_account,
                     config=dict(config or self._default_strategy_config()),
+                    output_root=self.output_root,
                 )
             else:
                 preview = build_grid_preview(
@@ -533,6 +533,7 @@ class DashboardControlPlane:
                     account=source_account,
                     config=dict(config or self._default_strategy_config()),
                     allow_unsafe_manual_preview=False,
+                    output_root=self.output_root,
                 )
         except (TypeError, ValueError, KeyError) as exc:
             code = str(exc).strip() or "strategy_preview_invalid"

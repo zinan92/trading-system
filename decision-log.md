@@ -1,5 +1,33 @@
 # Decision Log
 
+## 2026-09-08 — Opt-in external Strategy adapter shadow mode (#1140)
+
+### Decision
+
+- Keep `internal` as the default implementation selected by
+  `TRADING_ORCHESTRATOR_STRATEGY_IMPL`; `shadow` evaluates the pinned
+  `trading_strategy` package with the same pure Preview/StrategyPlan inputs.
+- Return the internal result in both modes. A package exception or comparison
+  difference is evidence only and is appended to
+  `strategy_adapter/mismatch_receipts.json`; no package result can authorize or
+  submit an order.
+- Keep the adapter independent of risk, lifecycle, and authorization modules;
+  the internal implementation and all execution paths remain intact.
+
+### Gotchas
+
+- A missing external package or a precision/schema difference blocks parity
+  evidence but does not change the authoritative internal result. It is not a
+  Paper execution receipt.
+- A complete Paper Grid Cycle remains an owner post-merge shadow verification;
+  this PR intentionally does not inspect or restart the active Paper checkout.
+
+### Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_strategy_package_adapter.py tests/test_dca_plan.py tests/test_grid_sizing.py tests/test_strategy_diff.py`
+  passed locally; the adapter tests cover default/internal mode, shadow mode,
+  mismatch-only persistence, and import boundaries.
+
 ## 2026-09-08 — Make Dashboard confirmation durable and split catalog freshness (#1131)
 
 ### Decision
