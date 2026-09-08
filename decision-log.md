@@ -18537,3 +18537,19 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_park_control.py tests/test_testnet_scheduler.py` — 42 passed.
+## 2026-09-08 — Retry Grid exposure from a blocked lifecycle (#1208)
+
+## Decision
+
+- Park Testnet ticks now attach and build the advance callback for `grid_blocked` sessions, allowing the existing lifecycle recovery path to run without reactivation.
+- A blocked Grid lifecycle queries current Testnet open orders and intersects each order's broker and client identities with the plan's accepted or cancel-pending rows. Matching rows enter the existing recover-and-cancel retry; `order_cancel_failed:*` also restores the pending hard-stop finalization gate.
+- Scheduler ticks explicitly clear stale `warning` values and observe a coordinator that becomes terminal during the same advance, yielding `awaiting_operator` immediately.
+
+## Gotchas
+
+- Unknown exchange open-order truth remains fail-closed: the lifecycle does not invent exposure or mark the plan terminal. The supplied online state was copied only into a redacted test fixture; no online output, Testnet account, launchd service, or live-money path was touched.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_testnet_grid_coordinator.py tests/test_testnet_scheduler.py tests/test_park_control.py` — 47 passed.
+- `git diff --check` — passed.

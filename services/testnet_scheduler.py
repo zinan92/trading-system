@@ -264,7 +264,7 @@ class TestnetScheduler:
         if str(coordinator.get("activation_id") or "") != requested:
             return self._blocked("testnet_scheduler_activation_not_found", timestamp)
         coordinator_state = str(coordinator.get("status") or "")
-        if coordinator_state not in {"grid_running", "dca_running"}:
+        if coordinator_state not in {"grid_running", "dca_running", "grid_blocked", "dca_blocked"}:
             return self._blocked("testnet_scheduler_attach_requires_running_coordinator", timestamp)
         current = self.status()
         existing_id = str(current.get("activation_id") or "")
@@ -386,6 +386,7 @@ class TestnetScheduler:
                 "execution_enabled": False,
                 "next_action": "notify_park_and_wait",
                 "blocker": None,
+                "warning": None,
                 "alerts_authorize_actions": False,
             }
             return self._record_tick(tick_key, result)
@@ -407,6 +408,7 @@ class TestnetScheduler:
                 "execution_enabled": False,
                 "next_action": "notify_park_and_wait",
                 "blocker": coordinator_status.get("blocker") or "coordinator_blocked",
+                "warning": None,
                 "alerts_authorize_actions": False,
             }
             return self._record_tick(tick_key, result)
@@ -424,19 +426,23 @@ class TestnetScheduler:
                     current, tick_key, now, coordinator_state, restart_reconciled,
                     str(advanced.get("reason") or "scheduler_advance_blocked"), advanced,
                 )
+        updated_coordinator = self.coordinator.status()
+        updated_state = str(updated_coordinator.get("status") or "")
+        became_terminal = updated_state in _TERMINAL_COORDINATOR_STATES
         result = {
             **current,
-            "event": "scheduler_tick",
-            "status": "active",
+            "event": "scheduler_terminal_wait" if became_terminal else "scheduler_tick",
+            "status": "awaiting_operator" if became_terminal else "active",
             "occurred_at": now,
             "tick_id": tick_key,
-            "coordinator_status": coordinator_state,
-            "coordinator": self.coordinator.status(),
+            "coordinator_status": updated_state,
+            "coordinator": updated_coordinator,
             "restart_reconciled": restart_reconciled,
             "restart_reconcile_required": False,
-            "execution_enabled": self.coordinator.status().get("execution_enabled") is True,
-            "next_action": "await_event_or_heartbeat",
+            "execution_enabled": False if became_terminal else updated_coordinator.get("execution_enabled") is True,
+            "next_action": "notify_park_and_wait" if became_terminal else "await_event_or_heartbeat",
             "blocker": None,
+            "warning": None,
             "advance_result": advanced,
             "alerts_authorize_actions": False,
             "heartbeat": {"status": "fresh", "observed_at": now, "tick_id": tick_key},

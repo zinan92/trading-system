@@ -208,3 +208,35 @@ def test_setup_exception_is_recorded_without_deferred_name_error(monkeypatch, tm
     result = module.run_testnet_control_tick(tmp_path / "outputs")
 
     assert result == {"status": "blocked", "reason": "testnet_tick_setup_failed:RuntimeError"}
+
+
+def test_testnet_control_tick_attaches_and_builds_callbacks_for_grid_blocked(monkeypatch, tmp_path) -> None:
+    import pipelines.park_control as module
+
+    class Coordinator:
+        def __init__(self, _root):
+            pass
+
+        def status(self):
+            return {"status": "grid_blocked", "activation_id": "activation-1"}
+
+    class Scheduler:
+        def __init__(self, *_args, **_kwargs):
+            self.guard = self
+
+        def verify(self):
+            return {"ok": True}
+
+        def status(self):
+            return {"status": "active"}
+
+        def tick(self, **kwargs):
+            return {"advance_was_supplied": callable(kwargs["advance"])}
+
+    monkeypatch.setattr(module, "TestnetAutomationCoordinator", Coordinator)
+    monkeypatch.setattr(module, "TestnetScheduler", Scheduler)
+    monkeypatch.setattr(module, "_build_testnet_tick_callbacks", lambda *_args: (lambda _event: {"status": "grid_terminal"}, None))
+
+    result = module.run_testnet_control_tick(tmp_path / "outputs")
+
+    assert result == {"advance_was_supplied": True}
