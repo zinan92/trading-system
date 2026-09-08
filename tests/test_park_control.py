@@ -72,3 +72,19 @@ def test_testnet_control_tick_running_session_without_broker_fails_closed(tmp_pa
 
     assert result["status"] == "blocked"
     assert "broker" in result["blocker"]
+
+
+def test_tick_plan_loader_reads_jsonl_without_treating_it_as_one_json_document(tmp_path) -> None:
+    import pipelines.park_control as module
+
+    plan_path = tmp_path / "outputs" / "park_strategy" / "plans.jsonl"
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_text(
+        '{"event":"plan_proposed","plan_digest":"sha256:old"}\n'
+        '{"event":"plan_proposed","plan_digest":"sha256:current"}\n',
+        encoding="utf-8",
+    )
+
+    result = module._load_testnet_plan(tmp_path / "outputs", "sha256:current")
+
+    assert result == {"event": "plan_proposed", "plan_digest": "sha256:current"}

@@ -54,6 +54,27 @@ def _latest(path: Path) -> dict[str, Any]:
     return dict(rows[-1]) if rows and isinstance(rows[-1], dict) else {}
 
 
+def _load_testnet_plan(output_root: Path, plan_digest: str) -> dict[str, Any] | None:
+    """Read the matching immutable plan event from the JSON Lines journal."""
+    path = Path(output_root) / "park_strategy" / "plans.jsonl"
+    if not path.exists():
+        return None
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            if isinstance(row, Mapping):
+                rows.append(row)
+    return next(
+        (
+            dict(row)
+            for row in reversed(rows)
+            if str(row.get("plan_digest") or "") == str(plan_digest or "")
+        ),
+        None,
+    )
+
+
 def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") -> dict[str, Any]:
     """Run the local Testnet scheduler heartbeat in the Park control pass.
 
@@ -87,8 +108,7 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
     if config is None or not config.start_ready:
         return None
     digest = str(coordinator_status.get("plan_digest") or "")
-    rows = load_json(Path(output_root) / "park_strategy" / "plans.jsonl")
-    stored = next((dict(row) for row in reversed(rows) if isinstance(row, Mapping) and str(row.get("plan_digest") or "") == digest), None)
+    stored = _load_testnet_plan(output_root, digest)
     if stored is None:
         return None
     instrument_id = str(coordinator_status.get("selected_instrument_id") or coordinator_status.get("instrument_id") or config.instrument_id)

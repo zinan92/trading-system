@@ -1,5 +1,30 @@
 # Decision Log
 
+# 2026-09-08 — Repair Testnet tick plan loading and scheduler recovery (#1198)
+
+## Decision
+
+- Read the selected Park Testnet plan from `plans.jsonl` as JSON Lines, so a
+  multi-event journal cannot be parsed as one JSON document during a tick.
+- Add an explicit `TestnetScheduler.resume(activation_id)` re-attach seam for
+  an already-running Coordinator after a scheduler tick has become blocked.
+  Resume preserves the no-reactivation boundary and remains subject to the
+  local ownership and running-session checks.
+
+## Gotchas
+
+- The plan journal is append-only JSON Lines; `services.journal_store.load_json`
+  is for JSON arrays and must not be used for this file.
+- A blocked scheduler is intentionally not auto-resumed by the control pass;
+  the owner must call the explicit resume seam after deployment and inspect its
+  receipt before the next tick.
+
+## Verification
+
+- Isolated JSONL and resume regressions passed: `2 passed`.
+- No online output root, Testnet process, launchd service, or real-money path
+  was used.
+
 ## 2026-09-08 — Tolerate one venue tick in quantized Grid geometry (#1194)
 
 ### Decision

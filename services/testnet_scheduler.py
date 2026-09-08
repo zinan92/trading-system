@@ -272,6 +272,19 @@ class TestnetScheduler:
             "alerts_authorize_actions": False,
         })
 
+    def resume(
+        self,
+        activation_id: str,
+        *,
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Explicitly re-attach a running Coordinator after a scheduler block."""
+        resumed = self.attach(activation_id, timestamp=timestamp)
+        if resumed.get("status") != "active":
+            return resumed
+        resumed["event"] = "scheduler_resumed"
+        return self._save_state(resumed)
+
     def mark_restart(self, *, timestamp: str | datetime | None = None) -> dict[str, Any]:
         guard = self.guard.verify()
         if not guard.get("ok"):
