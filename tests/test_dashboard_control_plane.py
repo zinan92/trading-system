@@ -617,6 +617,7 @@ def _execution_market(**overrides: object) -> dict[str, object]:
         "depth_notional": 500,
         "max_slippage": 2,
         "max_oracle_deviation_bps": 100,
+        "max_oracle_deviation_bps_source": "env",
     }
     value.update(overrides)
     return value
@@ -662,6 +663,8 @@ def test_execution_admission_scales_only_down_to_testnet_caps(tmp_path: Path) ->
     assert result["risk_gate"]["notional_cap"] == 100.0
     assert result["risk_gate"]["effective_notional"] <= result["risk_gate"]["requested_notional"]
     assert result["execution_ready"] is True
+    assert result["market"]["max_oracle_deviation_bps"] == 100
+    assert result["market"]["max_oracle_deviation_bps_source"] == "env"
     assert result["blockers"] == []
 
 

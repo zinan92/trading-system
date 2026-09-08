@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -20,7 +21,11 @@ from typing import Any, Callable, Mapping
 from services.broker_composition import BrokerBuildContext, build_broker_execution_port
 from services.account_identity import account_fingerprint
 from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
-from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+from services.hyperliquid_testnet_market_reader import (
+    DEFAULT_MAX_ORACLE_DEVIATION_BPS,
+    HyperliquidTestnetMarketReader,
+    oracle_deviation_config,
+)
 from services.journal_store import load_json
 from services.strategy_control_plane import StrategyControlPlane
 
@@ -54,6 +59,8 @@ class HyperliquidTestnetRuntimeConfig:
     capability_revision: str = TESTNET_CAPABILITY_REVISION
     approved_by: str = "park"
     max_slippage: float = DEFAULT_MAX_SLIPPAGE
+    max_oracle_deviation_bps: float = DEFAULT_MAX_ORACLE_DEVIATION_BPS
+    max_oracle_deviation_bps_source: str = "default"
 
     def __post_init__(self) -> None:
         address = str(self.account_address or "").strip()
@@ -73,6 +80,17 @@ class HyperliquidTestnetRuntimeConfig:
         if slippage <= 0:
             raise ValueError("testnet_max_slippage_invalid")
         object.__setattr__(self, "max_slippage", slippage)
+        try:
+            oracle_deviation = float(self.max_oracle_deviation_bps)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("testnet_max_oracle_deviation_bps_invalid") from exc
+        if oracle_deviation < 0:
+            raise ValueError("testnet_max_oracle_deviation_bps_invalid")
+        object.__setattr__(self, "max_oracle_deviation_bps", oracle_deviation)
+        source = str(self.max_oracle_deviation_bps_source or "default")
+        if source not in {"default", "env"}:
+            raise ValueError("testnet_max_oracle_deviation_bps_source_invalid")
+        object.__setattr__(self, "max_oracle_deviation_bps_source", source)
 
     @classmethod
     def from_environment(
@@ -97,6 +115,7 @@ class HyperliquidTestnetRuntimeConfig:
             )
         except (TypeError, ValueError):
             max_slippage = DEFAULT_MAX_SLIPPAGE
+        max_oracle_deviation_bps, max_oracle_deviation_bps_source = oracle_deviation_config(env)
         return cls(
             account_address=address,
             instrument_id=str(
@@ -116,6 +135,8 @@ class HyperliquidTestnetRuntimeConfig:
             ).strip(),
             approved_by=str(env.get("HYPERLIQUID_TESTNET_APPROVED_BY") or "park").strip(),
             max_slippage=max_slippage,
+            max_oracle_deviation_bps=max_oracle_deviation_bps,
+            max_oracle_deviation_bps_source=max_oracle_deviation_bps_source,
         )
 
     @property
@@ -289,7 +310,10 @@ def build_testnet_start_handler(
     """
 
     root = Path(output_root)
-    read_market = market_reader or HyperliquidTestnetMarketReader().read
+    read_market = market_reader or HyperliquidTestnetMarketReader(
+        max_oracle_deviation_bps=(config.max_oracle_deviation_bps if config else None),
+        max_oracle_deviation_bps_source=(config.max_oracle_deviation_bps_source if config else None),
+    ).read
 
     def blocked(code: str) -> dict[str, Any]:
         return {

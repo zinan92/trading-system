@@ -14,6 +14,29 @@ ACCOUNT = "0x" + "11" * 20
 RELEASE = "a" * 40
 
 
+def test_runtime_config_reads_testnet_oracle_threshold_and_source() -> None:
+    config = HyperliquidTestnetRuntimeConfig.from_environment(
+        {
+            "HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS": ACCOUNT,
+            "HYPERLIQUID_TESTNET_MAX_ORACLE_DEVIATION_BPS": "100",
+        }
+    )
+
+    assert config is not None
+    assert config.max_oracle_deviation_bps == 100.0
+    assert config.max_oracle_deviation_bps_source == "env"
+
+
+def test_runtime_config_defaults_oracle_threshold_to_50() -> None:
+    config = HyperliquidTestnetRuntimeConfig.from_environment(
+        {"HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS": ACCOUNT}
+    )
+
+    assert config is not None
+    assert config.max_oracle_deviation_bps == 50.0
+    assert config.max_oracle_deviation_bps_source == "default"
+
+
 def _raw_account() -> dict[str, object]:
     return {
         "schema_version": "hyperliquid-testnet-account-facts-v1",

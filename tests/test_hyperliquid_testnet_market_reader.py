@@ -69,6 +69,8 @@ def test_reads_btc_mid_and_l2_from_hyperliquid_testnet_without_credentials() -> 
     assert result["symbol"] == "BTC"
     assert result["asset_index"] == 0
     assert result["execution_ready"] is True
+    assert result["max_oracle_deviation_bps"] == 50.0
+    assert result["max_oracle_deviation_bps_source"] == "default"
     assert result["oracle"] == 79665.0
     assert result["mark"] == 79665.5
     assert result["depth_notional"] > 100
@@ -81,6 +83,23 @@ def test_reads_btc_mid_and_l2_from_hyperliquid_testnet_without_credentials() -> 
     ]
     assert all(call["timeout"] == 5.0 for call in calls)
     assert all("Authorization" not in call["body"] for call in calls)
+
+
+def test_testnet_env_overrides_oracle_deviation_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HYPERLIQUID_TESTNET_MAX_ORACLE_DEVIATION_BPS", "100")
+
+    reader = HyperliquidTestnetMarketReader(opener=lambda *_args, **_kwargs: Response({}))
+
+    assert reader.max_oracle_deviation_bps == 100.0
+    assert reader.max_oracle_deviation_bps_source == "env"
+
+
+def test_non_testnet_environment_ignores_oracle_deviation_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.hyperliquid_testnet_market_reader import oracle_deviation_config
+
+    monkeypatch.setenv("HYPERLIQUID_TESTNET_MAX_ORACLE_DEVIATION_BPS", "100")
+
+    assert oracle_deviation_config(environment="mainnet") == (50.0, "default")
 
 
 def test_rejects_non_btc_instrument_instead_of_silently_aliasing_market() -> None:
