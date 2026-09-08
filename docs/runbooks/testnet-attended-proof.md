@@ -22,6 +22,33 @@ printed, or pasted into a receipt, log, issue, or chat message.
 
 ## Attended execution
 
+When a Dashboard confirmation already exists, use the proof driver to assemble
+the four inputs from the durable Dashboard and Park records. It reads the
+selected `activation_id`, rebuilds the plan from `preview.orders`, obtains the
+market document from the same protected Broker binding, and stops at
+`candidate_selected` in dry-run mode. The receipt path must be outside an
+online output root when that root is read-only:
+
+```sh
+PYTHONPATH=src python3 -m pipelines.testnet_proof_driver \
+  --output-root ~/work/park-paper-output \
+  --activation-id <dashboard-activation-id> \
+  --approval-id <owner-supplied-testnet-approval-id> \
+  --approved-by park \
+  --secret-file <local-testnet-signer-file> \
+  --account-address <testnet-account-address> \
+  --runtime-id <runtime-id> \
+  --release-sha <trading-system-release-sha> \
+  --receipt <local-receipt.json> \
+  --dry-run
+```
+
+`--dry-run` copies the required evidence into a temporary directory before
+running the existing proof gates, so it does not write the online output root
+or submit an order. A real start still requires Park and the exact
+`--execute-testnet` acknowledgement in the underlying proof command; do not
+delegate that step to an unattended process.
+
 Run from this checkout with a separate local output root. Use the existing
 composition root to construct `StandardBrokerExternalExecutionAdapter` from
 the approved build context, passing the secret file path as configuration only.
