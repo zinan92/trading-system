@@ -1,0 +1,122 @@
+"""Shared, fail-closed Testnet market document assembly."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+import time
+from typing import Any, Mapping
+
+
+MARKET_REQUIRED = (
+    "execution_ready", "fresh", "is_synthetic", "fallback_policy", "observed_at",
+    "bid", "ask", "mid", "mark", "oracle", "impact", "depth_notional",
+    "max_slippage", "max_oracle_deviation_bps", "source", "cursor", "broker_id",
+    "environment", "instrument_id", "asset_index", "mapping_revision",
+    "universe_revision", "connection_epoch",
+)
+MARKET_BBO_FIELDS = ("bid", "ask", "mid")
+MARKET_READ_ATTEMPTS = 5
+
+
+class MarketDocumentError(ValueError):
+    def __init__(self, reason_code: str, **details: Any) -> None:
+        self.reason_code = reason_code
+        self.details = details
+        super().__init__(reason_code)
+
+
+def bbo_check(market: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        bid, ask, mid = (Decimal(str(market[field])) for field in MARKET_BBO_FIELDS)
+        passed = bid < ask and bid <= mid <= ask
+    except (KeyError, InvalidOperation, TypeError, ValueError):
+        bid = ask = mid = None
+        passed = False
+    return {
+        "bid": str(bid) if bid is not None else market.get("bid"),
+        "mid": str(mid) if mid is not None else market.get("mid"),
+        "ask": str(ask) if ask is not None else market.get("ask"),
+        "passed": passed,
+    }
+
+
+def build_market_document(
+    preview: Mapping[str, Any], binding_market: Mapping[str, Any], *, instrument_id: str
+) -> dict[str, Any]:
+    dashboard_market = preview.get("market")
+    if not isinstance(dashboard_market, Mapping) or not isinstance(binding_market, Mapping):
+        raise MarketDocumentError("market_fact_invalid")
+    binding = dict(binding_market)
+    source = str(binding.get("source") or "").strip().lower()
+    if not source or binding.get("price") in (None, "") or binding.get("observed_at") in (None, ""):
+        raise MarketDocumentError("market_fact_invalid")
+    market = dict(dashboard_market)
+    market.update({key: value for key, value in binding.items() if value is not None})
+    market["source"] = source
+    market["instrument_id"] = str(binding.get("instrument_id") or instrument_id)
+    market["mid"] = binding["price"]
+    market["observed_at"] = binding["observed_at"]
+    market.setdefault("fallback_policy", "none")
+    if "fresh" not in market and "freshness" in binding:
+        market["fresh"] = str(binding["freshness"]).lower() == "fresh"
+    missing = [field for field in MARKET_REQUIRED if field not in market]
+    if missing:
+        raise MarketDocumentError("market_facts_missing", fields=missing)
+    check = bbo_check(market)
+    if not check["passed"]:
+        raise MarketDocumentError("market_bbo_inconsistent", market_check=check)
+    return market
+
+
+def read_coherent_market(
+    preview: Mapping[str, Any], broker: object, *, instrument_id: str,
+    sleep_fn: Any = time.sleep, market_reader: Any = None,
+    max_attempts: int = MARKET_READ_ATTEMPTS, read_reader_always: bool = False,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Read binding and public facts for one attempt, retrying only BBO failures."""
+    if market_reader is None:
+        from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+        market_reader = HyperliquidTestnetMarketReader()
+    checks: list[dict[str, Any]] = []
+    for attempt in range(1, max_attempts + 1):
+        observed_at = datetime.now(timezone.utc)
+        try:
+            raw_binding = broker.market_fact(instrument_id=instrument_id, now=observed_at)
+        except Exception as exc:  # noqa: BLE001
+            raise MarketDocumentError("market_fact_unavailable") from exc
+        if not isinstance(raw_binding, Mapping):
+            raise MarketDocumentError("market_fact_invalid")
+        try:
+            needs_reader = read_reader_always or not all(field in raw_binding for field in MARKET_REQUIRED)
+            if needs_reader:
+                try:
+                    raw_reader = market_reader.read(instrument_id)
+                except Exception as exc:  # noqa: BLE001
+                    raise MarketDocumentError("market_fact_unavailable") from exc
+                if not isinstance(raw_reader, Mapping):
+                    raise MarketDocumentError("market_fact_invalid")
+                if str(raw_binding.get("price")) != str(raw_reader.get("price")):
+                    raise MarketDocumentError("market_price_mismatch")
+                combined = dict(raw_reader)
+                for field in ("source", "mapping_revision", "observed_at"):
+                    if raw_binding.get(field) not in (None, ""):
+                        combined[field] = raw_binding[field]
+                market = build_market_document(preview, combined, instrument_id=instrument_id)
+            else:
+                market = build_market_document(preview, raw_binding, instrument_id=instrument_id)
+        except MarketDocumentError as exc:
+            if exc.reason_code != "market_bbo_inconsistent":
+                raise
+            check = dict(exc.details.get("market_check") or {})
+            check["attempt"] = attempt
+            checks.append(check)
+            if attempt == max_attempts:
+                raise MarketDocumentError("market_bbo_inconsistent", attempts=checks) from exc
+            sleep_fn(1.0)
+            continue
+        check = bbo_check(market)
+        check["attempt"] = attempt
+        checks.append(check)
+        return market, checks
+    raise MarketDocumentError("market_bbo_inconsistent", attempts=checks)

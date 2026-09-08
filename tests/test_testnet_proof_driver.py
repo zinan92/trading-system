@@ -335,6 +335,22 @@ def test_market_bbo_always_outside_fails_closed_after_five_attempts() -> None:
     assert sleeps == [1.0] * 4
 
 
+def test_market_reader_can_be_required_for_every_coherent_tick_read() -> None:
+    preview, _ = _preview()
+    preview["market"] = {"fallback_policy": "none"}
+    broker = _MarketSequence([{"price": "60000", "source": "binding", "observed_at": "now"}])
+    reader = _MarketSequence([_complete_market("60000")])
+    reader.read = lambda _instrument_id: next(reader.values)  # type: ignore[attr-defined]
+
+    market, checks = read_coherent_market(
+        preview, broker, instrument_id="BTC-USD-PERP", market_reader=reader,
+        read_reader_always=True,
+    )
+
+    assert market["mid"] == "60000"
+    assert checks == [{"bid": "59999", "mid": "60000", "ask": "60001", "passed": True, "attempt": 1}]
+
+
 def test_confirmation_mapping_rejects_dashboard_authorization_forgery(tmp_path: Path) -> None:
     _, dashboard = _preview()
     dashboard["execution_authorized"] = True
