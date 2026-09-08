@@ -335,6 +335,53 @@ def test_market_bbo_always_outside_fails_closed_after_five_attempts() -> None:
     assert sleeps == [1.0] * 4
 
 
+def test_market_price_mismatch_retries_then_succeeds_with_attempt_evidence() -> None:
+    preview, _ = _preview()
+    preview["market"] = {"fallback_policy": "none"}
+    broker = _MarketSequence([
+        {"price": "60000", "source": "binding", "observed_at": "now"},
+        {"price": "60001", "source": "binding", "observed_at": "now"},
+        {"price": "60000", "source": "binding", "observed_at": "now"},
+    ])
+    reader = _MarketSequence([
+        _complete_market("60001"), _complete_market("60000"), _complete_market("60000"),
+    ])
+    reader.read = lambda _instrument_id: next(reader.values)  # type: ignore[attr-defined]
+    sleeps: list[float] = []
+
+    market, checks = read_coherent_market(
+        preview, broker, instrument_id="BTC-USD-PERP", sleep_fn=sleeps.append,
+        market_reader=reader, read_reader_always=True,
+    )
+
+    assert market["mid"] == "60000"
+    assert len(checks) == 3
+    assert [(check["binding_price"], check["reader_price"]) for check in checks] == [
+        ("60000", "60001"), ("60001", "60000"), ("60000", "60000"),
+    ]
+    assert sleeps == [1.0, 1.0]
+
+
+def test_market_price_mismatch_fails_closed_after_attempt_limit() -> None:
+    preview, _ = _preview()
+    preview["market"] = {"fallback_policy": "none"}
+    broker = _MarketSequence([
+        {"price": "60000", "source": "binding", "observed_at": "now"},
+    ] * 3)
+    reader = _MarketSequence([_complete_market("60001")] * 3)
+    reader.read = lambda _instrument_id: next(reader.values)  # type: ignore[attr-defined]
+    sleeps: list[float] = []
+
+    with pytest.raises(ProofDriverError, match="market_price_mismatch") as error:
+        read_coherent_market(
+            preview, broker, instrument_id="BTC-USD-PERP", sleep_fn=sleeps.append,
+            market_reader=reader, max_attempts=3, read_reader_always=True,
+        )
+
+    assert len(error.value.details["attempts"]) == 3
+    assert sleeps == [1.0, 1.0]
+
+
 def test_market_reader_can_be_required_for_every_coherent_tick_read() -> None:
     preview, _ = _preview()
     preview["market"] = {"fallback_policy": "none"}
@@ -348,7 +395,8 @@ def test_market_reader_can_be_required_for_every_coherent_tick_read() -> None:
     )
 
     assert market["mid"] == "60000"
-    assert checks == [{"bid": "59999", "mid": "60000", "ask": "60001", "passed": True, "attempt": 1}]
+    assert checks == [{"bid": "59999", "mid": "60000", "ask": "60001", "passed": True,
+                      "binding_price": "60000", "reader_price": "60000", "attempt": 1}]
 
 
 def test_confirmation_mapping_rejects_dashboard_authorization_forgery(tmp_path: Path) -> None:

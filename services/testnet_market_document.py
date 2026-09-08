@@ -74,7 +74,7 @@ def read_coherent_market(
     sleep_fn: Any = time.sleep, market_reader: Any = None,
     max_attempts: int = MARKET_READ_ATTEMPTS, read_reader_always: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Read binding and public facts for one attempt, retrying only BBO failures."""
+    """Read binding and public facts, retrying bounded sampling races and BBO failures."""
     if market_reader is None:
         from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
         market_reader = HyperliquidTestnetMarketReader()
@@ -96,8 +96,22 @@ def read_coherent_market(
                     raise MarketDocumentError("market_fact_unavailable") from exc
                 if not isinstance(raw_reader, Mapping):
                     raise MarketDocumentError("market_fact_invalid")
-                if str(raw_binding.get("price")) != str(raw_reader.get("price")):
-                    raise MarketDocumentError("market_price_mismatch")
+                binding_price = raw_binding.get("price")
+                reader_price = raw_reader.get("price")
+                if str(binding_price) != str(reader_price):
+                    check = {
+                        "attempt": attempt,
+                        "binding_price": str(binding_price),
+                        "reader_price": str(reader_price),
+                        "passed": False,
+                    }
+                    checks.append(check)
+                    if attempt == max_attempts:
+                        raise MarketDocumentError(
+                            "market_price_mismatch", attempts=checks
+                        )
+                    sleep_fn(1.0)
+                    continue
                 combined = dict(raw_reader)
                 for field in ("source", "mapping_revision", "observed_at"):
                     if raw_binding.get(field) not in (None, ""):
@@ -109,6 +123,9 @@ def read_coherent_market(
             if exc.reason_code != "market_bbo_inconsistent":
                 raise
             check = dict(exc.details.get("market_check") or {})
+            if needs_reader:
+                check["binding_price"] = str(raw_binding.get("price"))
+                check["reader_price"] = str(raw_reader.get("price"))
             check["attempt"] = attempt
             checks.append(check)
             if attempt == max_attempts:
@@ -116,6 +133,9 @@ def read_coherent_market(
             sleep_fn(1.0)
             continue
         check = bbo_check(market)
+        if needs_reader:
+            check["binding_price"] = str(raw_binding.get("price"))
+            check["reader_price"] = str(raw_reader.get("price"))
         check["attempt"] = attempt
         checks.append(check)
         return market, checks
