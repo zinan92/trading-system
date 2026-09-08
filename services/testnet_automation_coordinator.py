@@ -790,7 +790,7 @@ class TestnetAutomationCoordinator:
         replay = self._replay(normalized_command_id)
         if replay is not None:
             return replay
-        if current.get("status") not in {"stop_requested", "candidate_selected"}:
+        if current.get("status") not in {"stop_requested", "candidate_selected", "grid_blocked"}:
             raise TestnetCoordinatorError("stop_reconciliation_required")
         if current.get("execution_mutation") is True or current.get("network_operation_invoked") is True:
             raise TestnetCoordinatorError("submitted_orders_require_reconciliation")

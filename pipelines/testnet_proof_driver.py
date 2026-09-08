@@ -210,17 +210,50 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
     family = str(preview.get("strategy_family") or body.get("strategy_type") or "").lower()
     if family not in {"dca", "grid"}:
         raise ProofDriverError("strategy_family_invalid")
+    preview_market = preview.get("market") if isinstance(preview.get("market"), Mapping) else {}
+    execution_context = {
+        "venue_profile_id": preview.get("venue_profile_id"),
+        "broker_id": preview.get("broker_id") or body.get("broker_id") or preview_market.get("broker_id") or (body.get("market") or {}).get("broker_id"),
+        "environment": preview.get("environment") or body.get("environment") or preview_market.get("environment") or (body.get("market") or {}).get("environment"),
+        "transport_profile": preview.get("transport_profile"),
+        "instrument_id": preview.get("instrument_id"),
+        "runtime_id": preview.get("runtime_id"),
+        "capability_revision": preview.get("capability_revision"),
+    }
+    cycle_id = next(
+        (
+            value
+            for value in (
+                preview.get("cycle_id"),
+                body.get("cycle_id"),
+                confirmation.get("cycle_id"),
+                (preview.get("recording_window") or {}).get("cycle_id")
+                if isinstance(preview.get("recording_window"), Mapping)
+                else None,
+                (confirmation.get("recording_window") or {}).get("cycle_id")
+                if isinstance(confirmation.get("recording_window"), Mapping)
+                else None,
+            )
+            if str(value or "").strip()
+        ),
+        "",
+    )
+    if not cycle_id:
+        raise ProofDriverError("dashboard_cycle_id_missing")
+    execution_context["cycle_id"] = cycle_id
     plan: dict[str, Any] = {
         "schema_version": "strategy-plan-v1",
         "strategy_type": family,
         "strategy_plan_id": f"dashboard-plan:{str(preview['preview_digest']).replace('sha256:', '')[:16]}",
-        "version": 1,
+        "version": int(preview.get("version") or body.get("version") or body.get("plan_version") or 1),
+        "cycle_id": cycle_id,
         "locked_at": str(body.get("market", {}).get("timestamp") or datetime.now(timezone.utc).isoformat()),
         "strategy_session_id": confirmation.get("strategy_session_id"),
         "strategy_revision_id": confirmation.get("strategy_revision_id"),
         "plan_digest": preview.get("preview_digest"),
         "instrument_id": preview.get("instrument_id"),
         "direction": body.get("direction"),
+        "execution_context": execution_context,
     }
     if not plan["strategy_session_id"] or not plan["strategy_revision_id"]:
         raise ProofDriverError("dashboard_strategy_identity_missing")
@@ -228,12 +261,15 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
         orders = body.get("orders")
         if not isinstance(orders, list) or not orders:
             raise ProofDriverError("dashboard_grid_orders_missing")
-        plan["lower_boundary"] = body.get("range", {}).get("low")
-        plan["upper_boundary"] = body.get("range", {}).get("high")
+        plan["lower_price_boundary"] = body.get("range", {}).get("low")
+        plan["upper_price_boundary"] = body.get("range", {}).get("high")
+        plan["lower_boundary"] = plan["lower_price_boundary"]
+        plan["upper_boundary"] = plan["upper_price_boundary"]
         plan["grid"] = {
             "rungs": [
                 {"rung": int(row.get("level", index)), "side": row.get("side"), "price": row.get("price"),
-                 "quantity": row.get("quantity"), "tp": row.get("tp"), "hard_stop": body.get("grid", {}).get("hard_stop")}
+                 "quantity": row.get("quantity"), "tp": row.get("tp"),
+                 "hard_stop": row.get("sl") or body.get("grid", {}).get("hard_stop")}
                 for index, row in enumerate(orders, start=1) if isinstance(row, Mapping)
             ]
         }
@@ -448,17 +484,23 @@ def run(
                     "next_action": "notify_park_and_wait",
                 }
             except proof.TestnetAutomationProofError as exc:
-                raise ProofDriverError(exc.reason_code) from exc
+                details = dict(exc.result)
+                details.setdefault(
+                    "execution_blocker",
+                    TestnetAutomationCoordinator(work_root).status().get("execution_blocker"),
+                )
+                raise ProofDriverError(exc.reason_code, **details) from exc
         output = {
             "schema_version": "testnet-proof-driver-receipt-v1", "status": result.get("status"),
             "dry_run": dry_run, "activation_id": activation_id, "plan_digest": plan["plan_digest"],
             "preview_digest": preview["preview_digest"], "confirmation_id": confirmation["confirmation_id"],
             "reason_code": result.get("reason_code"),
+            "execution_blocker": result.get("execution_blocker"),
             "detail": result.get("detail"),
             "steps": {"preview_loaded": True, "plan_built": True, "market_bound": True,
                        "confirmation_mapped": True, "candidate_selected": result.get("status") in {"candidate_selected", "dry_run_candidate_selected"}},
             "market_self_check": market_checks,
-            "result": {key: result.get(key) for key in ("status", "reason_code", "detail", "lifecycle_status", "execution_mutation", "network_operation_invoked", "next_action")},
+            "result": {key: result.get(key) for key in ("status", "reason_code", "detail", "lifecycle_status", "execution_blocker", "execution_mutation", "network_operation_invoked", "next_action")},
             "secret_material_present": False,
         }
     receipt.parent.mkdir(parents=True, exist_ok=True)

@@ -18008,6 +18008,37 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_dashboard_control_plane.py tests/test_dashboard_server.py` — 93 passed.
 - `gitleaks git --no-banner --redact --log-opts='--all'` — no leaks found.
+
+# 2026-09-08 — Complete Grid proof plan identity and blocked-stop reconciliation (#1182)
+
+## Decision
+
+- Reconstruct the canonical Grid `StrategyPlan` with its persisted `cycle_id`,
+  strategy session/revision identity, version, and execution context while
+  retaining the Dashboard `plan_digest` byte-for-byte.
+- Permit `reconcile_stop` for a `grid_blocked` activation only when it remains
+  unenabled, has no execution mutation, no network operation, no canonical
+  orders, and no execution receipts.
+- Preserve the Coordinator's exact `execution_blocker` in the proof driver
+  receipt when lifecycle start is blocked.
+
+## Gotchas
+
+- A previously failed online activation remains `grid_blocked` until an
+  explicit zero-order `reconcile_stop`; the driver does not silently close or
+  retry that activation.
+- Dry-run evidence is copied to a temporary root and the receipt is written to
+  a caller-selected local path. No launchd plist, service, online output root,
+  or testnet execution path is modified.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_testnet_automation_coordinator.py tests/test_testnet_grid_coordinator.py` — 49 passed.
+- The online sample was read-only inspected: `grid_blocked`, 0 canonical
+  orders, `execution_enabled=false`, `execution_mutation=false`, and
+  `network_operation_invoked=false`; the original driver dry-run stopped at
+  the existing blocked activation before retry, as expected until
+  `reconcile_stop` is applied.
 - Real Playwright runs reached trusted Hyperliquid Testnet BTC Preview with
   `execution_ready=true` and no blockers; Confirm was blocked by the 64,000
   byte server request limit as recorded above.

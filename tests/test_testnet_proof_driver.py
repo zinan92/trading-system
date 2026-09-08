@@ -14,6 +14,7 @@ from pipelines.testnet_proof_driver import (
 )
 from pipelines.testnet_automation_proof import _MARKET_REQUIRED
 from services.park_confirmation_ledger import DurableParkConfirmationError, parse_durable_confirmation
+from services.grid_testnet_lifecycle import GridTestnetLifecycle
 
 
 def _preview() -> tuple[dict, dict]:
@@ -38,6 +39,7 @@ def _preview() -> tuple[dict, dict]:
         "strategy_family": "grid",
         "instrument_id": "BTC-USD-PERP",
         "preview": {
+            "cycle_id": "2026-09-08_DAY",
             "direction": "long",
             "market": {"timestamp": "2026-09-08T01:00:00+00:00"},
             "range": {"low": 90, "high": 110},
@@ -62,6 +64,18 @@ def test_plan_uses_preview_orders_and_keeps_plan_digest() -> None:
         {"rung": 0, "side": "buy", "price": 90, "quantity": "1", "tp": 95, "hard_stop": 80},
         {"rung": 1, "side": "buy", "price": 95, "quantity": "1", "tp": 100, "hard_stop": 80},
     ]
+    assert plan["cycle_id"] == "2026-09-08_DAY"
+    assert plan["execution_context"]["cycle_id"] == plan["cycle_id"]
+    identity = GridTestnetLifecycle._identity(plan)
+    assert identity["cycle_id"] == "2026-09-08_DAY"
+
+
+def test_plan_requires_canonical_cycle_identity() -> None:
+    preview, confirmation = _preview()
+    del preview["preview"]["cycle_id"]
+
+    with pytest.raises(ProofDriverError, match="dashboard_cycle_id_missing"):
+        build_plan(preview, confirmation)
 
 
 def test_market_document_combines_preview_facts_with_binding_price_and_identity() -> None:
