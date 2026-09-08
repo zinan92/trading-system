@@ -20,7 +20,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from schemas.portfolio import ExecutionSlice
-from services.account_identity import account_fingerprint, LEGACY_ACCOUNT_FINGERPRINT_SCHEME
+from services.account_identity import (
+    LEGACY_ACCOUNT_FINGERPRINT_SCHEME,
+    account_fingerprint,
+    legacy_account_fingerprint,
+)
 from services.journal_store import load_json, write_json
 
 
@@ -2027,6 +2031,32 @@ class TestnetAutomationCoordinator:
                 "account_fingerprint",
             ):
                 if str(actual.get(field) or "") != str(current.get(field) or ""):
+                    if (
+                        field == "account_fingerprint"
+                        and all(
+                            str(actual.get(identity_field) or "")
+                            == str(current.get(identity_field) or "")
+                            for identity_field in (
+                                "broker_id",
+                                "environment",
+                                "transport_profile",
+                                "runtime_id",
+                                "release_sha",
+                                "capability_revision",
+                            )
+                        )
+                        and config.get("account_id")
+                        and str(current.get(field) or "")
+                        == legacy_account_fingerprint(config["account_id"])
+                    ):
+                        raise StrategyControlMachineError(
+                            "testnet_preflight_identity_mismatch",
+                            {
+                                "field": field,
+                                "diagnostic": "legacy_activation_fingerprint_requires_reconfirm",
+                                "fingerprint_scheme": LEGACY_ACCOUNT_FINGERPRINT_SCHEME,
+                            },
+                        )
                     raise StrategyControlMachineError(
                         "testnet_preflight_identity_mismatch",
                         {"field": field},

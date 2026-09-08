@@ -59,7 +59,7 @@ def test_reads_public_account_state_and_projects_non_secret_facts() -> None:
     assert result["broker_id"] == "hyperliquid"
     assert result["environment"] == "testnet"
     assert result["account_fingerprint"].startswith("sha256:")
-    assert result["account_fingerprint"] == account_fingerprint(ACCOUNT.upper())
+    assert result["account_fingerprint"] == account_fingerprint(ACCOUNT)
     assert result["fingerprint_scheme"] == ACCOUNT_FINGERPRINT_SCHEME
     assert result["equity"] == 995.46
     assert result["positions"][0]["instrument_id"] == "BTC-USD-PERP"
