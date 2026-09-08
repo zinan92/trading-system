@@ -266,6 +266,30 @@ def test_stop_and_flatten_intents_are_durable_and_fail_closed(
     assert flattened["execution_mutation"] is False
 
 
+def test_reconcile_stop_closes_zero_order_local_paper_activation(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    coordinator.activate(_activation(), command_id="activate-reconcile-stop")
+    coordinator._record({
+        **coordinator.status(),
+        "status": "paper_execution_ready",
+        "execution_profile": "standard-broker-paper",
+        "execution_enabled": True,
+        "execution_ready": True,
+        "execution_mutation": False,
+        "network_operation_invoked": False,
+        "canonical_order_count": 0,
+        "execution_receipts": [],
+    })
+    coordinator.command("stop", {"reason": "operator_stop"}, command_id="stop-reconcile")
+
+    result = coordinator.command("reconcile_stop", {"reason": "zero_orders"}, command_id="reconcile-stop")
+
+    assert result["status"] == "idle"
+    assert result["receipt"]["submitted_order_count"] == 0
+    assert result["receipt"]["execution_mutation"] is False
+    assert result["fingerprint_scheme"] == "account-address-json-v0"
+
+
 def test_candidate_selection_locks_after_activation_owns_a_slice(tmp_path: Path) -> None:
     from tests.test_testnet_candidate_selection import _candidate, _policy, _snapshot
 

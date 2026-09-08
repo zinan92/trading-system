@@ -8,8 +8,8 @@ Testnet confirmation remain required before any exposure-changing call.
 
 from __future__ import annotations
 
-import hashlib
 import json
+import hashlib
 import re
 import time
 from copy import deepcopy
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from schemas.portfolio import ExecutionSlice
+from services.account_identity import account_fingerprint, LEGACY_ACCOUNT_FINGERPRINT_SCHEME
 from services.journal_store import load_json, write_json
 
 
@@ -48,6 +49,7 @@ _ACTIONS = frozenset(
         "interrupt",
         "resume",
         "select_candidate",
+        "reconcile_stop",
     }
 )
 _APPROVED_MARKET_SOURCES = frozenset(
@@ -331,6 +333,8 @@ class TestnetAutomationCoordinator:
                 command_id=command_id,
                 now=now,
             )
+        if normalized_action == "reconcile_stop":
+            return self._reconcile_stop(payload, command_id=command_id, now=now)
         return self._operator_intent(
             normalized_action,
             payload if isinstance(payload, Mapping) else {},
@@ -762,6 +766,60 @@ class TestnetAutomationCoordinator:
             "network_operation_invoked": False,
             "execution_mutation": False,
             "secret_material_present": False,
+        }
+        return self._record(state)
+
+    def _reconcile_stop(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        command_id: str | None,
+        now: str | datetime | None,
+    ) -> dict[str, Any]:
+        """Close a zero-order local Paper stop without invoking a Broker."""
+
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        activation_id = str(current.get("activation_id") or "")
+        normalized_command_id = self._command_id(command_id, "reconcile_stop", activation_id)
+        replay = self._replay(normalized_command_id)
+        if replay is not None:
+            return replay
+        if current.get("status") != "stop_requested":
+            raise TestnetCoordinatorError("stop_reconciliation_required")
+        if current.get("execution_profile") != "standard-broker-paper":
+            raise TestnetCoordinatorError("paper_stop_reconciliation_required")
+        if current.get("execution_mutation") is True or current.get("network_operation_invoked") is True:
+            raise TestnetCoordinatorError("submitted_orders_require_reconciliation")
+        if int(current.get("canonical_order_count") or 0) != 0 or current.get("execution_receipts"):
+            raise TestnetCoordinatorError("submitted_orders_require_reconciliation")
+        timestamp = self._timestamp(now)
+        receipt = {
+            "schema_version": "testnet-stop-reconciliation-receipt-v1",
+            "event": "reconcile_stop",
+            "status": "reconciled",
+            "activation_id": activation_id,
+            "account_fingerprint": current.get("account_fingerprint"),
+            "fingerprint_scheme": LEGACY_ACCOUNT_FINGERPRINT_SCHEME,
+            "execution_profile": current.get("execution_profile"),
+            "submitted_order_count": 0,
+            "broker_operation_invoked": False,
+            "network_operation_invoked": False,
+            "execution_mutation": False,
+            "occurred_at": timestamp,
+            "reason": str(payload.get("reason") or "") or None,
+        }
+        state = {
+            **self._idle_state(),
+            "event": "reconcile_stop",
+            "action": "reconcile_stop",
+            "command_id": normalized_command_id,
+            "occurred_at": timestamp,
+            "previous_activation_id": activation_id,
+            "status": "idle",
+            "receipt": receipt,
+            "fingerprint_scheme": receipt["fingerprint_scheme"],
         }
         return self._record(state)
 
@@ -1958,9 +2016,7 @@ class TestnetAutomationCoordinator:
                 "account_fingerprint": preflight.get("account_fingerprint") or config.get("account_fingerprint"),
             }
             if not actual["account_fingerprint"] and config.get("account_id"):
-                actual["account_fingerprint"] = "sha256:" + hashlib.sha256(
-                    str(config["account_id"]).encode("utf-8")
-                ).hexdigest()
+                actual["account_fingerprint"] = account_fingerprint(config["account_id"])
             for field in (
                 "broker_id",
                 "environment",

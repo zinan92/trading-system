@@ -1029,6 +1029,20 @@ def test_runtime_control_preserves_pause_stop_and_flatten_semantics(tmp_path: Pa
     assert [row[0] for row in coordinator.calls] == ["pause", "stop", "flatten"]
 
 
+def test_runtime_control_exposes_reconcile_stop(tmp_path: Path) -> None:
+    class Coordinator:
+        def command(self, action, payload=None, *, command_id=None, now=None):
+            return {"status": "idle", "action": action, "next_action": "await_activation"}
+
+    result = DashboardControlPlane(tmp_path).control(
+        "reconcile_stop", coordinator=Coordinator(), reason="zero_orders", now="2026-09-08T03:00:00+00:00"
+    )
+
+    assert result["status"] == "idle"
+    assert result["action"] == "reconcile_stop"
+    assert result["next_action"] == "await_activation"
+
+
 def test_runtime_terminal_notification_waits_for_operator_and_never_opens_next_plan(tmp_path: Path) -> None:
     plane = DashboardControlPlane(tmp_path)
 

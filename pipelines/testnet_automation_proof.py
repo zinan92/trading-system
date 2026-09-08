@@ -13,13 +13,13 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from schemas.portfolio import PortfolioPolicy, PortfolioSnapshot
 from services.broker_composition import BrokerBuildContext, build_broker_execution_port
+from services.account_identity import account_fingerprint
 from services.journal_store import load_json
 from services.park_confirmation_ledger import (
     DurableParkConfirmationError,
@@ -97,7 +97,7 @@ def _load_mapping(path: Path, field: str) -> dict[str, Any]:
 
 
 def _fingerprint(account_address: str) -> str:
-    return "sha256:" + hashlib.sha256(account_address.encode("utf-8")).hexdigest()
+    return account_fingerprint(account_address)
 
 
 def _timestamp() -> str:

@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 from urllib.request import Request, urlopen
 
+from services.account_identity import ACCOUNT_FINGERPRINT_SCHEME, account_fingerprint
+
 
 HYPERLIQUID_TESTNET_INFO_URL = "https://api.hyperliquid-testnet.xyz/info"
 _ACCOUNT_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
@@ -85,7 +87,8 @@ class HyperliquidTestnetAccountReader:
             "schema_version": "hyperliquid-testnet-account-facts-v1",
             "broker_id": "hyperliquid",
             "environment": "testnet",
-            "account_fingerprint": self._fingerprint(self.account_address),
+            "account_fingerprint": account_fingerprint(self.account_address),
+            "fingerprint_scheme": ACCOUNT_FINGERPRINT_SCHEME,
             "equity": self._equity(state),
             "positions": positions,
             "open_orders": normalized_open_orders,
