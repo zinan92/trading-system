@@ -80,6 +80,16 @@ def canonical_risk_gate_digest(value: Mapping[str, Any]) -> str:
     return _digest(_public(dict(value)))
 
 
+def _catalog_revision_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Project only stable instrument facts into the catalog revision."""
+
+    return {
+        str(key): row[key]
+        for key in sorted(row)
+        if str(key) not in {"market_fresh", "market_quality"}
+    }
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -251,14 +261,22 @@ class DashboardControlPlane:
             profile_payload = {
                 **dict(profile),
                 "instruments": rows,
-                "catalog_revision": _digest(rows),
+                "catalog_revision": _digest([_catalog_revision_row(row) for row in rows]),
                 "catalog_status": "blocked" if blockers else "ready",
                 "blockers": sorted(set(blockers)),
             }
             profiles.append(profile_payload)
         return {
             "schema_version": DASHBOARD_CONTROL_SCHEMA,
-            "catalog_revision": _digest(profiles),
+            "catalog_revision": _digest(
+                [
+                    {
+                        "id": profile["id"],
+                        "catalog_revision": profile["catalog_revision"],
+                    }
+                    for profile in profiles
+                ]
+            ),
             "venue_profiles": profiles,
             "selection": self.status(),
             "safety": {
@@ -872,6 +890,8 @@ class DashboardControlPlane:
                 blockers.append("instrument_not_eligible")
             if str(preview.get("catalog_revision") or "") != catalog_revision:
                 blockers.append("catalog_revision_mismatch")
+            if catalog_entry.get("market_fresh") is not True:
+                blockers.append("market_freshness_unavailable")
         runtime_id = str(preview.get("runtime_id") or "").strip()
         release_sha = str(preview.get("release_sha") or "").strip().lower()
         capability_revision = str(preview.get("capability_revision") or "").strip()

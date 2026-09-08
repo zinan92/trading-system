@@ -1,5 +1,38 @@
 # Decision Log
 
+## 2026-09-08 — Make Dashboard confirmation durable and split catalog freshness (#1131)
+
+### Decision
+
+- Choose option A: the Dashboard confirm HTTP body contains only
+  `preview_digest` and operator `confirmation`; the server loads the matching
+  persisted preview and recomputes its full digest before any confirmation.
+- Keep the 64 KB request limit. This preserves tamper rejection for every
+  preview field, including the market summary and embedded bars, without
+  requiring the browser to upload the large preview again.
+- Define `catalog_revision` from stable instrument identity, precision,
+  eligibility, and blockers only. `market_quality` and `market_fresh` are
+  excluded from that revision and are checked separately as current freshness
+  gates during confirmation.
+
+### Gotchas
+
+- A digest without a matching durable preview is fail-closed as
+  `preview_not_durable`; the compact request is not a new source of preview
+  authority.
+- A catalog refresh may change bid/ask/mid without causing
+  `catalog_revision_mismatch`, but a non-fresh market still blocks
+  confirmation.
+
+### Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_dashboard_control_plane.py`
+  passed: 34 tests.
+- Isolated temporary-port HTTP verification with a 150-byte compact request
+  returned HTTP 200 and `confirmation.status=confirmed`; the fake coordinator
+  reported `execution_mutation=false`. Owner browser Preview → Confirm remains
+  the post-merge acceptance gate.
+
 ## 2026-09-08 — Bind Dashboard Park AI chat to the runtime Paper config (#1132)
 
 ### Decision
