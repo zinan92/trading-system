@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -870,6 +871,7 @@ class GridTestnetLifecycle:
             "execution_semantics": "aggressive_ioc_market" if order_type == "market" else "resting_limit",
             "quantity": quantity,
             "idempotency_key": ticket_id,
+            "client_order_id": "0x" + hashlib.sha256(ticket_id.encode("utf-8")).hexdigest()[:32],
             "reduce_only": reduce_only,
             "close_position": reduce_only,
             "event": event,

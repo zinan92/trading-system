@@ -663,6 +663,7 @@ class StandardBrokerExternalExecutionAdapter:
             limit_price=Decimal(str(price)),
             time_in_force=TimeInForce(tif),
             idempotency_key=str(ticket.get("idempotency_key") or ticket.get("ticket_id") or "").strip(),
+            client_order_id=str(ticket.get("client_order_id") or "").strip() or None,
             reduce_only=bool(ticket.get("reduce_only", False)),
             close_position=bool(ticket.get("close_position", ticket.get("reduce_only", False))),
         )

@@ -99,6 +99,40 @@ def test_plan_projects_all_dashboard_grid_risk_sources_for_lifecycle() -> None:
     }
 
 
+def test_plan_projects_catalog_and_standard_broker_instrument_constraints() -> None:
+    preview, confirmation = _preview()
+    for key in ("minimum_notional", "quantity_step", "price_tick", "minimum_quantity"):
+        preview.pop(key, None)
+    preview["instrument"] = {
+        "instrument_id": "BTC-USD-PERP",
+        "asset": "BTC",
+        "size_decimals": 5,
+        "max_leverage": 40,
+    }
+
+    plan = build_plan(
+        preview,
+        confirmation,
+        catalog_rows=[preview["instrument"]],
+    )
+
+    assert plan["execution_context"] == {
+        "venue_profile_id": None,
+        "broker_id": None,
+        "environment": None,
+        "transport_profile": None,
+        "instrument_id": "BTC-USD-PERP",
+        "runtime_id": None,
+        "capability_revision": None,
+        "price_tick": "0.1",
+        "quantity_step": "0.00001",
+        "minimum_quantity": "0.00001",
+        "minimum_notional": "10",
+        "cycle_id": "2026-09-08_DAY",
+        "max_leverage": 40,
+    }
+
+
 def test_validate_grid_plan_reports_every_lifecycle_prewrite_check() -> None:
     preview, confirmation = _preview()
     preview["preview"]["range"]["low"] = 80

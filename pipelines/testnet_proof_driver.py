@@ -32,6 +32,7 @@ from services.park_confirmation_ledger import (
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.strategy_control_plane import StrategyControlMachineError
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+from services.dashboard_control_plane import public_catalog_loader
 from services.grid_testnet_lifecycle import GridTestnetLifecycle, GridTestnetLifecycleError
 
 
@@ -216,7 +217,12 @@ def _latest_activation(output_root: Path, activation_id: str) -> tuple[dict[str,
     return preview, confirmation
 
 
-def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> dict[str, Any]:
+def build_plan(
+    preview: Mapping[str, Any],
+    confirmation: Mapping[str, Any],
+    *,
+    catalog_rows: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Project the immutable Dashboard preview into the proof plan shape."""
     body = preview.get("preview")
     if not isinstance(body, Mapping):
@@ -239,6 +245,10 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
         "minimum_quantity": preview.get("minimum_quantity") or instrument.get("minimum_quantity") or instrument.get("min_quantity"),
         "minimum_notional": preview.get("minimum_notional") or instrument.get("minimum_notional") or instrument.get("min_notional"),
     }
+    if catalog_rows is not None:
+        execution_context.update(_catalog_instrument_constraints(
+            catalog_rows, instrument_id=str(preview.get("instrument_id") or "").strip()
+        ))
     cycle_id = next(
         (
             value
@@ -338,6 +348,43 @@ def build_plan(preview: Mapping[str, Any], confirmation: Mapping[str, Any]) -> d
             risk_gate=risk_gate,
         )
     return plan
+
+
+def _catalog_instrument_constraints(
+    rows: Sequence[Mapping[str, Any]], *, instrument_id: str
+) -> dict[str, Any]:
+    """Project Dashboard catalog identity through standard-broker facts."""
+
+    row = next(
+        (item for item in rows if str(item.get("instrument_id") or item.get("symbol") or "").strip() == instrument_id),
+        None,
+    )
+    if row is None:
+        raise ProofDriverError("instrument_catalog_instrument_missing", instrument_id=instrument_id)
+    size_decimals = row.get("size_decimals", row.get("szDecimals"))
+    if size_decimals in (None, ""):
+        raise ProofDriverError("instrument_catalog_facts_missing", fields=["size_decimals"])
+    try:
+        # This is the public standard-broker Hyperliquid mapping: quantity step,
+        # minimum notional, minimum quantity, and price rule are canonical facts.
+        from standard_broker.adapters.hyperliquid import HyperliquidInstrumentAdapter
+
+        asset = str(row.get("asset") or instrument_id.split("-", 1)[0]).strip()
+        facts = HyperliquidInstrumentAdapter.from_meta(
+            {"universe": [{"name": asset, "szDecimals": int(size_decimals),
+                            "maxLeverage": row.get("max_leverage", row.get("maxLeverage"))}]},
+            revision="dashboard-catalog",
+        ).get(instrument_id)
+        price_tick = Decimal(1).scaleb(-facts.price_rule.max_decimal_places)
+    except (ImportError, KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise ProofDriverError("instrument_catalog_facts_invalid") from exc
+    return {
+        "price_tick": str(price_tick),
+        "quantity_step": str(facts.quantity_step),
+        "minimum_quantity": str(facts.minimum_quantity or facts.quantity_step),
+        "minimum_notional": str(facts.minimum_notional),
+        "max_leverage": row.get("max_leverage", row.get("maxLeverage")),
+    }
 
 
 def _first_value(*sources: Mapping[str, Any], keys: Sequence[str]) -> Any:
@@ -618,7 +665,13 @@ def run(
     dry_run: bool, receipt: Path,
 ) -> dict[str, Any]:
     preview, dashboard = _latest_activation(output_root, activation_id)
-    plan = build_plan(preview, dashboard)
+    try:
+        catalog_rows = tuple(public_catalog_loader(
+            str(preview.get("venue_profile_id") or "hyperliquid.testnet")
+        ))
+    except Exception as exc:  # noqa: BLE001 - catalog is a fail-closed input.
+        raise ProofDriverError("instrument_catalog_unavailable") from exc
+    plan = build_plan(preview, dashboard, catalog_rows=catalog_rows)
     lifecycle_validation = validate_grid_plan(plan) if plan["strategy_type"] == "grid" else None
     confirmation = map_confirmation(output_root, dashboard, approval_id=approval_id, approved_by=approved_by)
     work_root = output_root
