@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from services.strategy_control_plane import StrategyControlMachineError
+from services.account_identity import account_fingerprint
 from services.testnet_automation_coordinator import (
     COORDINATOR_SCHEMA,
     TestnetAutomationCoordinator,
@@ -384,6 +385,48 @@ def test_dca_capability_exception_does_not_mask_another_gap() -> None:
             Broker(),
             strategy_family="dca",
         )
+
+
+def test_preflight_reports_legacy_activation_fingerprint_for_reconfirmation() -> None:
+    from services.account_identity import legacy_account_fingerprint
+
+    address = "0x7b9d494f79217246b0C80576c26ceDdf2c315f04"
+
+    class Broker:
+        broker_config = {
+            "account_id": address,
+            "broker_id": "hyperliquid",
+            "environment": "testnet",
+            "transport_profile": "hyperliquid-testnet-default",
+            "runtime_id": "runtime-1",
+            "release_sha": "a" * 40,
+            "capability_revision": "capability-1",
+        }
+
+        def preflight(self, *, strategy_family: str):
+            return {
+                "ready": False,
+                **self.broker_config,
+                "account_fingerprint": account_fingerprint(address),
+                "capability_gaps": ["account.read"],
+            }
+
+    current = {
+        **Broker.broker_config,
+        "account_fingerprint": legacy_account_fingerprint(address),
+    }
+
+    with pytest.raises(StrategyControlMachineError) as error:
+        TestnetAutomationCoordinator._validate_lifecycle_preflight(
+            Broker(), strategy_family="dca", current=current
+        )
+
+    assert error.value.code == "testnet_preflight_identity_mismatch"
+    assert error.value.evidence == {
+        "field": "account_fingerprint",
+        "diagnostic": "legacy_activation_fingerprint_requires_reconfirm",
+        "fingerprint_scheme": "account-address-json-v0",
+    }
 
 
 def test_soak_evidence_cannot_be_replayed_for_another_strategy_family(tmp_path: Path) -> None:

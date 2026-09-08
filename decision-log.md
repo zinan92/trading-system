@@ -1,5 +1,29 @@
 # Decision Log
 
+## 2026-09-08 — Align account fingerprint with standard-broker preflight (#1173)
+
+### Decision
+
+- Use the standard-broker external contract as the sole account fingerprint
+  definition: `sha256(address.encode("utf-8"))`, preserving the supplied
+  address bytes and excluding JSON encoding or case normalization.
+- Keep the pre-1173 JSON/lowercase scheme only as a diagnostic reference. A
+  pre-existing activation with that fingerprint is blocked and reports that
+  the owner must confirm a new activation; no historical record is rewritten.
+
+### Gotchas
+
+- Address case is part of the broker-defined input. The reader, runtime,
+  Dashboard, and proof entrypoint must receive the same original address text.
+- The compatibility diagnostic is intentionally not a bypass: the six other
+  identity fields may match, but the stale fingerprint still blocks preflight.
+
+### Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_account_identity.py tests/test_hyperliquid_testnet_account_reader.py tests/test_testnet_automation_coordinator.py tests/test_dashboard_control_plane.py tests/test_testnet_proof_driver.py` — 82 passed.
+- No online output roots, launchd services, or live/Testnet order paths were
+  accessed or changed.
+
 ## 2026-09-08 — Dashboard confirmation plan-closed ledger (#1171)
 
 ### Decision
