@@ -12,13 +12,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import hashlib
 import os
 from pathlib import Path
 import re
 from typing import Any, Callable, Mapping
 
 from services.broker_composition import BrokerBuildContext, build_broker_execution_port
+from services.account_identity import account_fingerprint
 from services.hyperliquid_testnet_account_reader import HyperliquidTestnetAccountReader
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.journal_store import load_json
@@ -120,7 +120,7 @@ class HyperliquidTestnetRuntimeConfig:
 
     @property
     def account_fingerprint(self) -> str:
-        return "sha256:" + hashlib.sha256(self.account_address.encode("utf-8")).hexdigest()
+        return account_fingerprint(self.account_address)
 
     @property
     def start_ready(self) -> bool:

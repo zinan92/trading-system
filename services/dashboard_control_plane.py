@@ -1051,7 +1051,7 @@ class DashboardControlPlane:
         """Issue one explicit operator intent through the Coordinator."""
 
         normalized = str(action or "").strip().lower()
-        if normalized not in {"pause", "stop", "flatten", "interrupt", "resume"}:
+        if normalized not in {"pause", "stop", "flatten", "interrupt", "resume", "reconcile_stop"}:
             return {
                 "schema_version": "dashboard-runtime-control-v1",
                 "status": "blocked",

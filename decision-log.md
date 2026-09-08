@@ -1,5 +1,29 @@
 # Decision Log
 
+## 2026-09-08 — Canonical account fingerprint and zero-order stop reconciliation (#1167)
+
+### Decision
+
+- Define `account-address-json-lower-v1`: strip and lowercase the validated
+  account address, JSON-encode that string with the reader's compact settings,
+  then SHA-256 it. Broker and environment remain separate identity fields.
+- Keep existing activation records read-only. `reconcile_stop` may close only a
+  `stop_requested` activation using the local `standard-broker-paper` profile
+  when no order receipt or execution mutation exists; it persists an idle
+  state and a receipt with the legacy fingerprint scheme marker.
+
+### Gotchas
+
+- The old public reader hashed the JSON-encoded address, not the address bytes;
+  hashing raw, lower, or upper address text therefore produced different values.
+- `reconcile_stop` is a durable local state transition and never calls a
+  Broker, launchd service, network transport, or testnet execution path.
+
+### Verification
+
+- Focused issue suites and the Nautilus-venv dry-run remain required before PR
+  handoff; owner-only online activation cleanup is not performed by this PR.
+
 ## 2026-09-08 — Assemble complete protected market facts in proof driver (#1165)
 
 ### Decision
