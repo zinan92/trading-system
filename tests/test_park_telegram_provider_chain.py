@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from services.park_ai_provider_gateway import ParkAiProviderGateway
 from services.park_telegram_runtime import ParkTelegramRouter
 
@@ -86,6 +88,7 @@ def test_codex_is_called_only_after_deepseek_failure_and_records_fallback() -> N
     assert result["metadata"]["fallback_elapsed_ms"] == 12000
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_telegram_router_uses_gateway_candidate_but_keeps_confirmation_gate(tmp_path: Path) -> None:
     class DeepSeek:
         def parse(self, text: str, *, context=None) -> dict:
@@ -148,6 +151,7 @@ def test_gateway_honors_cloud_codex_override(monkeypatch) -> None:
     assert gateway.codex.model == "gpt-5.6-sol"
 
 
+@pytest.mark.xfail(strict=True, reason="Telegram strategy entry is disabled by issue #1148")
 def test_both_provider_failures_leave_only_deterministic_neutral_grid_fallback(tmp_path: Path) -> None:
     class Unavailable:
         def __init__(self, provider: str) -> None:

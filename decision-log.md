@@ -17640,7 +17640,6 @@ auditable datafeed port; broker execution remains a separate port.
 - `git diff --check` and scoped `compileall` passed. Live read-only probes
   confirmed XAU and Hyperliquid BTC endpoint keys and confirmed unsupported
   `BTCUSDT` keys fail closed.
-
 # 2026-09-08 — Add Paper OrderPort execution seam (#1144)
 
 ## Decision
@@ -17668,6 +17667,31 @@ auditable datafeed port; broker execution remains a separate port.
 
 ## Verification
 
-- Focused Paper execution and Coordinator tests cover ten-rung mapping,
-  identity/idempotency, one-query unknown handling, public port selection, and
-  local Paper enablement.
+
+# 2026-09-08 — Disable Telegram strategy entry and confirmation (#1148)
+# 2026-09-08 — Disable Telegram strategy entry and confirmation (#1148)
+
+## Decision
+
+- Telegram is now a notification and read-only Q&A surface. Strategy intent,
+  clean-slate mutation, and confirmation text is rejected before any parser,
+  market/account read, draft, plan, or confirmation proposal can be created.
+- The rejection is durably recorded as `entry_disabled` and sends a fixed
+  Dashboard link. Existing blocker, terminal, and dead-man outbox delivery is
+  unchanged and remains owned by the Telegram ledger/worker.
+- Dashboard strategy authoring and confirmation routes are named by an exact
+  `STRATEGY_MUTATION_ENDPOINT_ALLOWLIST`; new routes must update that contract
+  and its focused test.
+
+## Gotchas
+
+- `inbound_received` is retained for the cursor/audit trail; the separate
+  `inbound_rejected` receipt is the authorization result. Neither is a draft.
+- Do not treat the Telegram rejection receipt or an HTTP response as evidence
+  of execution; the only mutation surface is Dashboard Confirm & Run.
+
+## Verification
+
+- Focused Telegram and Dashboard suites run with `PYTHONPATH=src`.
+- No deployment, launchd operation, live path, data source, or port 8100 API
+  change is included.
