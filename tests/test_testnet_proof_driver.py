@@ -10,6 +10,7 @@ from pipelines.testnet_proof_driver import (
     build_market_document,
     build_plan,
     map_confirmation,
+    read_coherent_market,
 )
 from pipelines.testnet_automation_proof import _MARKET_REQUIRED
 from services.park_confirmation_ledger import DurableParkConfirmationError, parse_durable_confirmation
@@ -102,6 +103,56 @@ def test_market_document_missing_dashboard_fact_fails_closed() -> None:
         build_market_document(preview, binding, instrument_id="BTC-USD-PERP")
 
     assert "bid" in error.value.details["fields"]
+
+
+class _MarketSequence:
+    def __init__(self, values: list[dict]) -> None:
+        self.values = iter(values)
+
+    def market_fact(self, *, instrument_id: str, now: object) -> dict:
+        return next(self.values)
+
+
+def _complete_market(mid: str) -> dict:
+    value = {
+        "instrument_id": "BTC-USD-PERP", "price": mid, "freshness": "fresh",
+        "observed_at": "2026-09-08T01:00:03+00:00", "source": "nautilus-hyperliquid.testnet",
+        "broker_id": "hyperliquid", "environment": "testnet", "asset_index": 0,
+        "mapping_revision": "mapping-v1", "universe_revision": "universe-v1",
+        "connection_epoch": "epoch-1", "cursor": "cursor-1", "execution_ready": True,
+        "fresh": True, "is_synthetic": False, "fallback_policy": "none",
+        "bid": "59999", "ask": "60001", "mark": "60000", "oracle": "60000",
+        "impact": "60000", "depth_notional": "100000", "max_slippage": "10",
+        "max_oracle_deviation_bps": "5",
+    }
+    value["mid"] = mid
+    return value
+
+
+def test_market_bbo_outside_retries_then_succeeds() -> None:
+    preview, _ = _preview()
+    preview["market"] = {"fallback_policy": "none"}
+    broker = _MarketSequence([_complete_market("59998"), _complete_market("60000")])
+    sleeps: list[float] = []
+
+    market, checks = read_coherent_market(preview, broker, instrument_id="BTC-USD-PERP", sleep_fn=sleeps.append)
+
+    assert market["mid"] == "60000"
+    assert [check["passed"] for check in checks] == [False, True]
+    assert sleeps == [1.0]
+
+
+def test_market_bbo_always_outside_fails_closed_after_five_attempts() -> None:
+    preview, _ = _preview()
+    preview["market"] = {"fallback_policy": "none"}
+    broker = _MarketSequence([_complete_market("59998")] * 5)
+    sleeps: list[float] = []
+
+    with pytest.raises(ProofDriverError, match="market_bbo_inconsistent") as error:
+        read_coherent_market(preview, broker, instrument_id="BTC-USD-PERP", sleep_fn=sleeps.append)
+
+    assert len(error.value.details["attempts"]) == 5
+    assert sleeps == [1.0] * 4
 
 
 def test_confirmation_mapping_rejects_dashboard_authorization_forgery(tmp_path: Path) -> None:
