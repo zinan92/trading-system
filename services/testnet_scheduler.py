@@ -29,6 +29,43 @@ def _redacted_exception_message(exc: BaseException) -> str:
     return message[:240] or "no_message"
 
 
+def _redacted_exception_evidence(value: Any, *, depth: int = 0) -> Any:
+    """Copy typed exception evidence without persisting credential-shaped data."""
+    if depth > 5:
+        return "[TRUNCATED]"
+    if isinstance(value, Mapping):
+        redacted = {}
+        for key, item in value.items():
+            name = str(key)
+            if re.search(r"(?i)(secret|private[_-]?key|api[_-]?key|token|password)", name):
+                redacted[name] = "[REDACTED]"
+            else:
+                redacted[name] = _redacted_exception_evidence(item, depth=depth + 1)
+        return redacted
+    if isinstance(value, (list, tuple)):
+        return [_redacted_exception_evidence(item, depth=depth + 1) for item in value]
+    if isinstance(value, str):
+        return _redacted_exception_message(ValueError(value))
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _redacted_exception_message(ValueError(str(value)))
+
+
+def _exception_advance_result(exc: BaseException) -> dict[str, Any]:
+    """Project typed control errors into the scheduler's durable result shape."""
+    evidence = getattr(exc, "evidence", None)
+    code = getattr(exc, "code", None)
+    if not isinstance(evidence, Mapping) or not code:
+        return {}
+    return {
+        "error": {
+            "type": type(exc).__name__,
+            "code": str(code),
+            "evidence": _redacted_exception_evidence(evidence),
+        }
+    }
+
+
 class TestnetSchedulerOwnershipStore(SchedulerOwnershipStore):
     """Reuse the file-lock/epoch implementation in a Testnet-only namespace."""
 
@@ -418,9 +455,11 @@ class TestnetScheduler:
             try:
                 advanced = dict(advance(dict(event)))
             except Exception as exc:  # noqa: BLE001 - preserve safe retry policy.
+                advance_result = _exception_advance_result(exc)
                 return self._record_advance_failure(
                     current, tick_key, now, coordinator_state, restart_reconciled,
                     f"scheduler_advance_failed:{type(exc).__name__}:{_redacted_exception_message(exc)}",
+                    advance_result,
                 )
             if str(advanced.get("status") or "").lower() in {"blocked", "unknown", "fail", "failed"}:
                 if self._is_sampling_race_failure(advanced):

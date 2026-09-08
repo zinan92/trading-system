@@ -196,7 +196,6 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         fills = evidence.get("fills") or []
         if not isinstance(fills, (list, tuple)):
             raise ValueError("testnet_fill_facts_unknown")
-        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         # Every tick gets one binding market_fact and one same-attempt public
         # reader snapshot.  Keep this read outside the lifecycle so a quality
         # failure becomes a scheduler warning before the coordinator gate.
@@ -214,6 +213,10 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
                 "reason": f"testnet_market_not_authoritative:{exc.reason_code}",
                 "market_failure": {"reason": exc.reason_code, **exc.details},
             }
+        # The Coordinator compares this execution time with market.observed_at.
+        # Sample it only after the coherent market read so a slow read cannot
+        # make a fresh market appear to come from the future.
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         family = str(coordinator_status.get("strategy_family") or "").lower()
         if family == "grid":
             result = coordinator.status()

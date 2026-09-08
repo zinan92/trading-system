@@ -1,5 +1,30 @@
 # Decision Log
 
+# 2026-09-08 — Sample Testnet tick time after coherent market read (#1214)
+
+## Decision
+
+- Capture a Testnet tick's lifecycle timestamp only after the coherent market
+  document is assembled, so both fill and price advancement use an execution
+  time that cannot precede `market.observed_at` merely because the read was
+  slow.
+- Preserve typed `StrategyControlMachineError` code and recursively redacted
+  evidence in the scheduler's `advance_result` when an advance raises.
+
+## Gotchas
+
+- `_validate_authoritative_market` remains unchanged and is still the source
+  of truth for market freshness; this fixes timestamp ordering at the caller.
+- Exception evidence is bounded and credential-shaped keys/values are
+  redacted before it is written to the durable scheduler receipt.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_testnet_scheduler.py` — 23 passed.
+- `python3 -m py_compile pipelines/park_control.py services/testnet_scheduler.py` — passed.
+- `gitleaks detect --source . --no-banner --redact=100` — no leaks found (1,175 commits scanned).
+- No launchd service, online output root, HTTP 8100 interface, data source, or live-money path was changed or invoked.
+
 # 2026-09-08 — Retry Testnet market sampling races without scheduler strikes (#1212)
 
 ## Decision
