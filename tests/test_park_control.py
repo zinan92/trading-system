@@ -70,8 +70,8 @@ def test_testnet_control_tick_running_session_without_broker_fails_closed(tmp_pa
 
     result = module.run_testnet_control_tick(output)
 
-    assert result["status"] == "blocked"
-    assert "broker" in result["blocker"]
+    assert result["status"] == "active"
+    assert result["warning"] == "config_not_ready:broker_config"
 
 
 def test_tick_plan_loader_reads_jsonl_without_treating_it_as_one_json_document(tmp_path) -> None:
@@ -88,3 +88,69 @@ def test_tick_plan_loader_reads_jsonl_without_treating_it_as_one_json_document(t
     result = module._load_testnet_plan(tmp_path / "outputs", "sha256:current")
 
     assert result == {"event": "plan_proposed", "plan_digest": "sha256:current"}
+
+
+def test_dashboard_plan_loader_binds_confirmation_to_preview(tmp_path) -> None:
+    import pipelines.park_control as module
+
+    root = tmp_path / "outputs" / "dashboard_control_plane"
+    root.mkdir(parents=True)
+    digest = "sha256:" + "a" * 64
+    (root / "previews.json").write_text(json.dumps([{"preview_digest": digest, "preview": {}}]), encoding="utf-8")
+    (root / "confirmations.json").write_text(json.dumps([{"activation_id": "activation-1", "status": "confirmed", "preview_digest": digest}]), encoding="utf-8")
+
+    result = module._load_dashboard_plan(tmp_path / "outputs", "activation-1", digest)
+
+    assert result == ({"preview_digest": digest, "preview": {}}, {"activation_id": "activation-1", "status": "confirmed", "preview_digest": digest})
+
+
+def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(monkeypatch, tmp_path) -> None:
+    import pipelines.park_control as module
+
+    digest = "sha256:" + "a" * 64
+    activation_id = "activation-1"
+    root = tmp_path / "outputs" / "dashboard_control_plane"
+    root.mkdir(parents=True)
+    (root / "previews.json").write_text(json.dumps([{"preview_digest": digest, "preview": {}}]), encoding="utf-8")
+    (root / "confirmations.json").write_text(json.dumps([{"activation_id": activation_id, "status": "confirmed", "preview_digest": digest}]), encoding="utf-8")
+
+    class Config:
+        start_ready = True
+        instrument_id = "BTC-USD-PERP"
+        account_address = "0x" + "1" * 40
+        runtime_id = "runtime"
+        release_sha = "a" * 40
+        standard_broker_release_sha = "b" * 40
+        capability_revision = "capability"
+        secret_file = tmp_path / "fake-secret"
+
+    class Market:
+        def read(self, instrument_id):
+            return {"source": "fake", "price": "100", "instrument_id": instrument_id, "observed_at": "2026-09-08T01:00:00+00:00"}
+
+    class Broker:
+        transport_state = "external_testnet"
+        broker_config = {"transport_profile": "hyperliquid-testnet-position-protection", "environment": "testnet", "real_money_eligible": False, "live_trading_enabled": False}
+        fills = []
+
+        def read_facts(self, **_kwargs):
+            return {"status": "pass", "cursor": "fake-cursor", "fills": list(self.fills), "positions": [], "open_orders": []}
+
+    broker = Broker()
+    built = []
+    monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", staticmethod(lambda: Config()))
+    monkeypatch.setattr(module, "HyperliquidTestnetMarketReader", Market)
+    monkeypatch.setattr(module, "build_plan", lambda preview, confirmation: built.append((preview, confirmation)) or {"strategy_type": "grid"})
+    import services.broker_composition as composition
+    monkeypatch.setattr(composition, "build_broker_execution_port", lambda _context: broker)
+    monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda self, plan, **kwargs: {"status": "grid_running", "fill": kwargs.get("fill")})
+    status = {"activation_id": activation_id, "plan_digest": digest, "strategy_family": "grid", "instrument_id": "BTC-USD-PERP"}
+
+    advance, _reconcile = module._build_testnet_tick_callbacks(tmp_path / "outputs", status)
+    empty = advance({"kind": "market_heartbeat"})
+    broker.fills = [{"order_id": "fake-order", "price": "99", "quantity": "1"}]
+    filled = advance({"kind": "market_heartbeat"})
+
+    assert len(built) == 1
+    assert empty["status"] == filled["status"] == "grid_running"
+    assert filled["fill"]["order_id"] == "fake-order"

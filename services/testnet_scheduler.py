@@ -159,12 +159,14 @@ class TestnetScheduler:
         owner_id: str,
         runtime_mode: str = "local",
         clock: Callable[[], str | datetime] | None = None,
+        advance_failure_threshold: int = 3,
     ) -> None:
         self.output_root = Path(output_root)
         self.coordinator = coordinator
         self.owner_id = str(owner_id or "").strip()
         self.runtime_mode = str(runtime_mode or "").strip().lower()
         self.clock = clock
+        self.advance_failure_threshold = max(1, int(advance_failure_threshold))
         root = self.output_root / "testnet_automation" / "scheduler"
         self.current_path = root / "current.json"
         self.ticks_path = root / "ticks.json"
@@ -400,33 +402,16 @@ class TestnetScheduler:
         if event is not None and callable(advance):
             try:
                 advanced = dict(advance(dict(event)))
-            except Exception:  # noqa: BLE001 - a failed tick never retries itself.
-                result = {
-                    **current,
-                    "event": "scheduler_advance_blocked",
-                    "status": "blocked",
-                    "occurred_at": now,
-                    "tick_id": tick_key,
-                    "coordinator_status": coordinator_state,
-                    "restart_reconciled": restart_reconciled,
-                    "restart_reconcile_required": False,
-                    "execution_enabled": False,
-                    "next_action": "notify_park_and_wait",
-                    "blocker": "scheduler_advance_failed",
-                    "alerts_authorize_actions": False,
-                }
-                return self._record_tick(tick_key, result)
+            except Exception as exc:  # noqa: BLE001 - preserve safe retry policy.
+                return self._record_advance_failure(
+                    current, tick_key, now, coordinator_state, restart_reconciled,
+                    f"scheduler_advance_failed:{type(exc).__name__}",
+                )
             if str(advanced.get("status") or "").lower() in {"blocked", "unknown", "fail", "failed"}:
-                return self._record_tick(tick_key, {
-                    **current, "event": "scheduler_advance_blocked", "status": "blocked",
-                    "occurred_at": now, "tick_id": tick_key,
-                    "coordinator_status": coordinator_state,
-                    "restart_reconciled": restart_reconciled,
-                    "restart_reconcile_required": False, "execution_enabled": False,
-                    "next_action": "notify_park_and_wait",
-                    "blocker": str(advanced.get("reason") or "scheduler_advance_blocked"),
-                    "advance_result": advanced, "alerts_authorize_actions": False,
-                })
+                return self._record_advance_failure(
+                    current, tick_key, now, coordinator_state, restart_reconciled,
+                    str(advanced.get("reason") or "scheduler_advance_blocked"), advanced,
+                )
         result = {
             **current,
             "event": "scheduler_tick",
@@ -443,8 +428,36 @@ class TestnetScheduler:
             "advance_result": advanced,
             "alerts_authorize_actions": False,
             "heartbeat": {"status": "fresh", "observed_at": now, "tick_id": tick_key},
+            "advance_failure_count": 0,
         }
         return self._record_tick(tick_key, result)
+
+    def _record_advance_failure(
+        self, current: Mapping[str, Any], tick_id: str, now: str,
+        coordinator_state: str, restart_reconciled: bool, reason: str,
+        advance_result: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        count = int(current.get("advance_failure_count") or 0) + 1
+        blocked = count >= self.advance_failure_threshold
+        result = {
+            **current,
+            "event": "scheduler_advance_blocked" if blocked else "scheduler_advance_warning",
+            "status": "blocked" if blocked else "active",
+            "occurred_at": now,
+            "tick_id": tick_id,
+            "coordinator_status": coordinator_state,
+            "restart_reconciled": restart_reconciled,
+            "restart_reconcile_required": False,
+            "execution_enabled": False if blocked else current.get("execution_enabled", True),
+            "next_action": "notify_park_and_wait" if blocked else "await_event_or_heartbeat",
+            "blocker": reason if blocked else None,
+            "warning": reason if not blocked else None,
+            "advance_failure_count": count,
+            "advance_failure_threshold": self.advance_failure_threshold,
+            "advance_result": dict(advance_result or {}),
+            "alerts_authorize_actions": False,
+        }
+        return self._record_tick(tick_id, result)
 
     def dead_man(
         self,

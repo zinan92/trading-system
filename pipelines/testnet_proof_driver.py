@@ -218,7 +218,7 @@ def _latest_activation(output_root: Path, activation_id: str) -> tuple[dict[str,
     return preview, confirmation
 
 
-def build_plan(
+def _build_plan_from_dashboard(
     preview: Mapping[str, Any],
     confirmation: Mapping[str, Any],
     *,
@@ -388,6 +388,19 @@ def _catalog_instrument_constraints(
         "minimum_notional": str(facts.minimum_notional),
         "max_leverage": row.get("max_leverage", row.get("maxLeverage")),
     }
+
+
+# Public compatibility export. New runtime callers should import the service
+# seam so Dashboard and proof execution cannot grow separate plan builders.
+def build_plan(
+    preview: Mapping[str, Any],
+    confirmation: Mapping[str, Any],
+    *,
+    catalog_rows: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    from services.testnet_plan_builder import build_plan as public_build_plan
+
+    return public_build_plan(preview, confirmation, {"catalog_rows": catalog_rows})
 
 
 def _first_value(*sources: Mapping[str, Any], keys: Sequence[str]) -> Any:

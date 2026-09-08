@@ -1,5 +1,33 @@
 # Decision Log
 
+# 2026-09-08 — Use Dashboard plans for Testnet ticks and tolerate transient advance failures (#1200)
+
+## Decision
+
+- Expose the Dashboard preview-to-lifecycle projection through
+  `services.testnet_plan_builder.build_plan`; the proof driver keeps the
+  compatibility export and both proof/runtime paths share that seam.
+- Testnet ticks resolve a confirmed Dashboard preview by activation and
+  `plan_digest`, then fall back to the append-only Park plan journal only when
+  the Dashboard pair is unavailable. Missing source and configuration now
+  produce typed receipt reasons.
+- Consecutive advance failures remain active with a warning for the first two
+  occurrences and become blocked on the third by default; a successful tick
+  resets the counter.
+
+## Gotchas
+
+- Dashboard `previews.json` and `confirmations.json` are read-only evidence;
+  this change does not read the live output root or alter broker/launchd state.
+- The requested Nautilus venv has no pytest module, so local pytest evidence
+  uses the host `python3` with `PYTHONPATH=src`; the venv import boundary was
+  still kept unchanged.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_testnet_proof_driver.py tests/test_testnet_scheduler.py` — 38 passed, including Dashboard activation fake-broker ticks with empty and filled facts.
+- `python3 -m compileall -q pipelines services` and `git diff --check` — passed.
+
 # 2026-09-08 — Repair Testnet tick plan loading and scheduler recovery (#1198)
 
 ## Decision
