@@ -106,6 +106,7 @@ def test_dashboard_plan_loader_binds_confirmation_to_preview(tmp_path) -> None:
 
 def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(monkeypatch, tmp_path) -> None:
     import pipelines.park_control as module
+    from datetime import datetime as real_datetime
 
     digest = "sha256:" + "a" * 64
     activation_id = "activation-1"
@@ -155,12 +156,21 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     broker = Broker()
     built = []
     contexts = []
+    timestamps = []
     monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", staticmethod(lambda: Config()))
     monkeypatch.setattr(module, "HyperliquidTestnetMarketReader", Market)
     monkeypatch.setattr(module, "build_plan", lambda preview, confirmation: built.append((preview, confirmation)) or {"strategy_type": "grid"})
+    monkeypatch.setattr(module, "read_coherent_market", lambda *_args, **_kwargs: (
+        {**Market().read("BTC-USD-PERP"), "observed_at": "2026-09-08T01:00:02+00:00"}, []
+    ))
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return real_datetime(2026, 9, 8, 1, 0, 3, tzinfo=tz)
+    monkeypatch.setattr(module, "datetime", Clock)
     import services.broker_composition as composition
     monkeypatch.setattr(composition, "build_broker_execution_port", lambda context: contexts.append(context) or broker)
-    monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda self, plan, **kwargs: {"status": "grid_running", "fill": kwargs.get("fill")})
+    monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda self, plan, **kwargs: timestamps.append(kwargs["timestamp"]) or {"status": "grid_running", "fill": kwargs.get("fill")})
     status = {"activation_id": activation_id, "plan_digest": digest, "strategy_family": "grid", "instrument_id": "BTC-USD-PERP"}
 
     advance, _reconcile = module._build_testnet_tick_callbacks(tmp_path / "outputs", status)
@@ -174,6 +184,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     assert contexts[0].broker_config["approval_id"] == "dashboard-confirmation:unused"
     assert contexts[0].broker_config["approved_by"] == "park"
     assert [row["status"] for row in (empty, empty_2, empty_3, filled)] == ["grid_running"] * 4
+    assert timestamps == ["2026-09-08T01:00:03+00:00"] * 4
     assert all("warning" not in row for row in (empty, empty_2, empty_3, filled))
     assert filled["fill"]["order_id"] == "fake-order"
 

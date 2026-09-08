@@ -164,6 +164,49 @@ def test_scheduler_failure_receipt_contains_redacted_exception_message(tmp_path:
     assert result["warning"] == "scheduler_advance_failed:RuntimeError:secret=[REDACTED] token=[REDACTED]"
 
 
+def test_scheduler_failure_receipt_preserves_redacted_typed_error_evidence(tmp_path: Path) -> None:
+    from services.strategy_control_plane import StrategyControlMachineError
+
+    scheduler, coordinator = _scheduler(tmp_path)
+    scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current.update({"status": "grid_running", "execution_enabled": True})
+    coordinator._record(current)
+
+    def failed(_event):
+        raise StrategyControlMachineError(
+            "testnet_market_not_authoritative",
+            {
+                "reason": "market_stale",
+                "age_seconds": -2.1,
+                "api_key": "do-not-persist",
+            },
+        )
+
+    result = scheduler.tick(
+        tick_id="tick-typed-error",
+        event={"kind": "market_heartbeat"},
+        advance=failed,
+        timestamp=NOW,
+    )
+
+    assert result["warning"] == (
+        "scheduler_advance_failed:StrategyControlMachineError:"
+        "testnet_market_not_authoritative"
+    )
+    assert result["advance_result"] == {
+        "error": {
+            "type": "StrategyControlMachineError",
+            "code": "testnet_market_not_authoritative",
+            "evidence": {
+                "reason": "market_stale",
+                "age_seconds": -2.1,
+                "api_key": "[REDACTED]",
+            },
+        }
+    }
+
+
 def test_scheduler_blocks_only_after_three_consecutive_advance_failures(tmp_path: Path) -> None:
     scheduler, coordinator = _scheduler(tmp_path)
     activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
