@@ -123,6 +123,29 @@ def test_scheduler_attaches_to_running_coordinator_without_reactivation(tmp_path
     assert coordinator.status()["status"] == "grid_running"
 
 
+def test_scheduler_can_explicitly_resume_a_blocked_running_session(tmp_path: Path) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current["status"] = "grid_running"
+    current["execution_enabled"] = True
+    coordinator._record(current)
+    blocked = scheduler.tick(
+        tick_id="tick-failed",
+        event={"kind": "market_heartbeat"},
+        advance=lambda _event: (_ for _ in ()).throw(RuntimeError("boom")),
+        timestamp=NOW,
+    )
+    assert blocked["status"] == "blocked"
+
+    resumed = scheduler.resume(activation["activation_id"], timestamp=NOW)
+
+    assert resumed["event"] == "scheduler_resumed"
+    assert resumed["status"] == "active"
+    assert resumed["activation_id"] == activation["activation_id"]
+    assert coordinator.status()["status"] == "grid_running"
+
+
 def test_restart_reconciles_before_event_progression(tmp_path: Path) -> None:
     scheduler, coordinator = _scheduler(tmp_path)
     activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
