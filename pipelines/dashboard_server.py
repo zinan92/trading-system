@@ -32,7 +32,11 @@ from services.cycle_decision import CycleDecisionLedger
 from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
-from services.dashboard_control_plane import DashboardControlPlane, public_catalog_loader
+from services.dashboard_control_plane import (
+    PREVIEW_PATH,
+    DashboardControlPlane,
+    public_catalog_loader,
+)
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.dashboard_control_evidence import DashboardControlEvidenceStore
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
@@ -4232,19 +4236,42 @@ def build_dashboard_control_confirmation_response(
 
     if not isinstance(payload, Mapping):
         raise ValueError("dashboard_confirmation_payload_invalid")
-    preview = payload.get("preview")
+    preview_digest = str(payload.get("preview_digest") or "").strip().lower()
     confirmation = payload.get("confirmation")
-    if not isinstance(preview, Mapping) or not isinstance(confirmation, Mapping):
-        raise ValueError("dashboard_confirmation_preview_required")
+    if not preview_digest or not isinstance(confirmation, Mapping):
+        raise ValueError("dashboard_confirmation_digest_required")
     output = _dualtrack_output_root(output_root)
     runtime_coordinator = coordinator or TestnetAutomationCoordinator(output)
     plane = DashboardControlPlane(
         output,
         catalog_loader=catalog_loader or public_catalog_loader,
     )
+    persisted = load_json(output / PREVIEW_PATH)
+    preview = next(
+        (
+            dict(row)
+            for row in reversed(persisted)
+            if isinstance(row, Mapping)
+            and str(row.get("preview_digest") or "").strip().lower() == preview_digest
+        ),
+        None,
+    )
+    if preview is None:
+        return {
+            "schema_version": "dashboard-confirmation-response-v1",
+            "confirmation": plane._blocked_confirmation(preview_digest, ["preview_not_durable"]),
+            "safety": {
+                "authorizing": False,
+                "orders_submitted": False,
+                "credentials_exposed": False,
+                "environment": "testnet",
+            },
+        }
+    confirmation_payload = dict(confirmation)
+    confirmation_payload.setdefault("preview_digest", preview_digest)
     result = plane.confirm_and_run(
         preview,
-        confirmation=confirmation,
+        confirmation=confirmation_payload,
         coordinator=runtime_coordinator,
         now=now,
     )

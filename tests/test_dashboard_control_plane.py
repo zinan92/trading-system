@@ -755,7 +755,12 @@ def test_execution_admission_blocks_stale_or_incoherent_account_facts(tmp_path: 
 
 def _eligible_catalog_loader(profile_id: str):
     if profile_id == "hyperliquid.testnet":
-        return [{"instrument_id": "BTC-USD-PERP", "asset": "BTC", "eligibility": "eligible"}]
+        return [{
+            "instrument_id": "BTC-USD-PERP",
+            "asset": "BTC",
+            "eligibility": "eligible",
+            "market_fresh": True,
+        }]
     return []
 
 
@@ -892,7 +897,7 @@ def test_confirm_and_run_rejects_tampered_payload_with_old_digest(tmp_path: Path
     plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
     preview = _confirmable_preview()
     plane.persist_preview(preview)
-    tampered = {**preview, "requested": {"direction": "short"}}
+    tampered = {**preview, "market": {"latest_close": 999}}
 
     result = plane.confirm_and_run(
         tampered,
@@ -902,6 +907,29 @@ def test_confirm_and_run_rejects_tampered_payload_with_old_digest(tmp_path: Path
 
     assert result["status"] == "blocked"
     assert "preview_digest_invalid" in result["blockers"]
+
+
+def test_confirm_and_run_blocks_when_current_market_is_not_fresh(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(
+        tmp_path,
+        catalog_loader=lambda profile_id: [{
+            "instrument_id": "BTC-USD-PERP",
+            "asset": "BTC",
+            "eligibility": "eligible",
+            "market_fresh": False,
+        }] if profile_id == "hyperliquid.testnet" else [],
+    )
+    preview = _confirmable_preview()
+    plane.persist_preview(preview)
+
+    result = plane.confirm_and_run(
+        preview,
+        confirmation={"preview_digest": preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+
+    assert result["status"] == "blocked"
+    assert "market_freshness_unavailable" in result["blockers"]
 
 
 def test_confirm_and_run_rejects_catalog_revision_or_eligibility_drift(tmp_path: Path) -> None:
@@ -917,6 +945,20 @@ def test_confirm_and_run_rejects_catalog_revision_or_eligibility_drift(tmp_path:
 
     assert result["status"] == "blocked"
     assert "instrument_not_in_catalog" in result["blockers"]
+
+
+def test_catalog_revision_ignores_market_quality_and_freshness(tmp_path: Path) -> None:
+    rows = [{
+        "instrument_id": "BTC-USD-PERP",
+        "asset": "BTC",
+        "eligibility": "eligible",
+        "market_fresh": True,
+        "market_quality": {"bid": 100, "ask": 101, "mid": 100.5},
+    }]
+    changed = [{**rows[0], "market_fresh": False, "market_quality": {"bid": 200, "ask": 201, "mid": 200.5}}]
+    first = DashboardControlPlane(tmp_path, catalog_loader=lambda _: rows).catalog()
+    second = DashboardControlPlane(tmp_path, catalog_loader=lambda _: changed).catalog()
+    assert first["venue_profiles"][1]["catalog_revision"] == second["venue_profiles"][1]["catalog_revision"]
 
 
 def test_dashboard_confirmation_builder_keeps_coordinator_activation_non_mutating(tmp_path: Path) -> None:
@@ -939,9 +981,8 @@ def test_dashboard_confirmation_builder_keeps_coordinator_activation_non_mutatin
     DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader).persist_preview(preview)
     result = dashboard_server.build_dashboard_control_confirmation_response(
         {
-            "preview": preview,
+            "preview_digest": preview["preview_digest"],
             "confirmation": {
-                "preview_digest": preview["preview_digest"],
                 "operator_id": "park",
                 "acknowledged": True,
             },
