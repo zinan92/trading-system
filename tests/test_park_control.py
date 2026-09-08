@@ -112,7 +112,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     root = tmp_path / "outputs" / "dashboard_control_plane"
     root.mkdir(parents=True)
     (root / "previews.json").write_text(json.dumps([{"preview_digest": digest, "preview": {}}]), encoding="utf-8")
-    (root / "confirmations.json").write_text(json.dumps([{"activation_id": activation_id, "status": "confirmed", "preview_digest": digest}]), encoding="utf-8")
+    (root / "confirmations.json").write_text(json.dumps([{"activation_id": activation_id, "status": "confirmed", "preview_digest": digest, "confirmation_id": "dashboard-confirmation:unused", "operator_id": "park"}]), encoding="utf-8")
 
     class Config:
         start_ready = True
@@ -138,19 +138,57 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
 
     broker = Broker()
     built = []
+    contexts = []
     monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", staticmethod(lambda: Config()))
     monkeypatch.setattr(module, "HyperliquidTestnetMarketReader", Market)
     monkeypatch.setattr(module, "build_plan", lambda preview, confirmation: built.append((preview, confirmation)) or {"strategy_type": "grid"})
     import services.broker_composition as composition
-    monkeypatch.setattr(composition, "build_broker_execution_port", lambda _context: broker)
+    monkeypatch.setattr(composition, "build_broker_execution_port", lambda context: contexts.append(context) or broker)
     monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda self, plan, **kwargs: {"status": "grid_running", "fill": kwargs.get("fill")})
     status = {"activation_id": activation_id, "plan_digest": digest, "strategy_family": "grid", "instrument_id": "BTC-USD-PERP"}
 
     advance, _reconcile = module._build_testnet_tick_callbacks(tmp_path / "outputs", status)
     empty = advance({"kind": "market_heartbeat"})
+    empty_2 = advance({"kind": "market_heartbeat"})
+    empty_3 = advance({"kind": "market_heartbeat"})
     broker.fills = [{"order_id": "fake-order", "price": "99", "quantity": "1"}]
     filled = advance({"kind": "market_heartbeat"})
 
     assert len(built) == 1
-    assert empty["status"] == filled["status"] == "grid_running"
+    assert contexts[0].broker_config["approval_id"] == "dashboard-confirmation:unused"
+    assert contexts[0].broker_config["approved_by"] == "park"
+    assert [row["status"] for row in (empty, empty_2, empty_3, filled)] == ["grid_running"] * 4
+    assert all("warning" not in row for row in (empty, empty_2, empty_3, filled))
     assert filled["fill"]["order_id"] == "fake-order"
+
+
+def test_setup_exception_is_recorded_without_deferred_name_error(monkeypatch, tmp_path) -> None:
+    import pipelines.park_control as module
+
+    class Coordinator:
+        def __init__(self, _root):
+            pass
+
+        def status(self):
+            return {"status": "grid_running"}
+
+    class Scheduler:
+        def __init__(self, *_args, **_kwargs):
+            self.guard = self
+
+        def verify(self):
+            return {"ok": True}
+
+        def status(self):
+            return {"status": "active"}
+
+        def tick(self, **kwargs):
+            return kwargs["advance"]({"kind": "market_heartbeat"})
+
+    monkeypatch.setattr(module, "TestnetAutomationCoordinator", Coordinator)
+    monkeypatch.setattr(module, "TestnetScheduler", Scheduler)
+    monkeypatch.setattr(module, "_build_testnet_tick_callbacks", lambda *_args: (_ for _ in ()).throw(RuntimeError("secret=should-not-appear")))
+
+    result = module.run_testnet_control_tick(tmp_path / "outputs")
+
+    assert result == {"status": "blocked", "reason": "testnet_tick_setup_failed:RuntimeError"}

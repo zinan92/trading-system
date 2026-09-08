@@ -147,6 +147,23 @@ def test_scheduler_can_explicitly_resume_a_blocked_running_session(tmp_path: Pat
     assert coordinator.status()["status"] == "grid_running"
 
 
+def test_scheduler_failure_receipt_contains_redacted_exception_message(tmp_path: Path) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current.update({"status": "grid_running", "execution_enabled": True})
+    coordinator._record(current)
+
+    result = scheduler.tick(
+        tick_id="tick-secret-error",
+        event={"kind": "market_heartbeat"},
+        advance=lambda _event: (_ for _ in ()).throw(RuntimeError("secret=super-secret token=abc")),
+        timestamp=NOW,
+    )
+
+    assert result["warning"] == "scheduler_advance_failed:RuntimeError:secret=[REDACTED] token=[REDACTED]"
+
+
 def test_scheduler_blocks_only_after_three_consecutive_advance_failures(tmp_path: Path) -> None:
     scheduler, coordinator = _scheduler(tmp_path)
     activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)

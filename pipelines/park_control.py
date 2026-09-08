@@ -122,7 +122,17 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
         try:
             callbacks = _build_testnet_tick_callbacks(output_root, coordinator_status)
         except Exception as exc:  # noqa: BLE001 - scheduler records the typed blocker.
-            callbacks = (lambda _event: {"status": "blocked", "reason": f"testnet_tick_setup_failed:{type(exc).__name__}"}, None)
+            # Exception variables are cleared when an ``except`` block ends;
+            # bind the redacted type now so the deferred callback cannot raise
+            # a secondary NameError on the scheduler tick.
+            error_type = type(exc).__name__
+            callbacks = (
+                lambda _event, error_type=error_type: {
+                    "status": "blocked",
+                    "reason": f"testnet_tick_setup_failed:{error_type}",
+                },
+                None,
+            )
     return scheduler.tick(tick_id=tick_id, event={"kind": "market_heartbeat"}, advance=callbacks[0] if callbacks else None, reconcile=callbacks[1] if callbacks else None)
 
 
@@ -149,9 +159,19 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
     if plan is None:
         plan = _park_plan_to_lifecycle_plan(stored, config=config, market=market)
     from services.broker_composition import BrokerBuildContext, build_broker_execution_port
+    approval_id = str(
+        (confirmation.get("confirmation_id") if dashboard is not None else None)
+        or coordinator_status.get("approval_id")
+        or ""
+    ).strip()
+    approved_by = str(
+        (confirmation.get("operator_id") if dashboard is not None else None)
+        or coordinator_status.get("approved_by")
+        or ""
+    ).strip()
     context = BrokerBuildContext(
         output_root=Path(output_root), execution_mode="live", live_trading_enabled=False,
-        broker_config={"provider": "standard_broker", "broker_id": "hyperliquid", "environment": "testnet", "transport_profile": TESTNET_PROFILE, "account_id": config.account_address, "runtime_id": config.runtime_id, "release_sha": config.release_sha, "standard_broker_release_sha": config.standard_broker_release_sha, "capability_revision": config.capability_revision, "secret_file": str(config.secret_file), "instrument_id": instrument_id, "instrument_binding": {"instrument_id": instrument_id}, "market_source": {"source_id": str(market.get("source") or "hyperliquid.external_testnet"), "broker_id": "hyperliquid", "environment": "testnet", "instrument_id": instrument_id}, "execution_scope": "hypercore:default"},
+        broker_config={"provider": "standard_broker", "broker_id": "hyperliquid", "environment": "testnet", "transport_profile": TESTNET_PROFILE, "account_id": config.account_address, "runtime_id": config.runtime_id, "release_sha": config.release_sha, "standard_broker_release_sha": config.standard_broker_release_sha, "capability_revision": config.capability_revision, "approval_id": approval_id, "approved_by": approved_by, "secret_file": str(config.secret_file), "instrument_id": instrument_id, "instrument_binding": {"instrument_id": instrument_id}, "market_source": {"source_id": str(market.get("source") or "hyperliquid.external_testnet"), "broker_id": "hyperliquid", "environment": "testnet", "instrument_id": instrument_id}, "execution_scope": "hypercore:default"},
     )
     broker = build_broker_execution_port(context)
     from services.testnet_execution import ExternalTestnetExecutionPort
