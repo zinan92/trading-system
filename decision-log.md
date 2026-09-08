@@ -1,5 +1,32 @@
 # Decision Log
 
+## 2026-09-08 — Keep proof-driver market facts at one observation (#1177)
+
+### Decision
+
+- Assemble the proof market from one complete protected-binding snapshot when
+  available. When the public binding exposes only a ticker, use the
+  credential-free `HyperliquidTestnetMarketReader.read()` snapshot and require
+  its price to match the protected binding before admission.
+- Validate `bid < ask` and `bid <= mid <= ask` before proof preflight. Retry an
+  inconsistent BBO at most five times with a one-second delay, then fail closed
+  as `market_bbo_inconsistent` without changing any market value.
+- Persist every BBO check, including attempt, values, and pass/fail, in the
+  driver receipt.
+
+### Gotchas
+
+- The Dashboard preview remains non-authorizing evidence and is never used to
+  fill a missing or inconsistent executable BBO.
+- The reader and protected binding are both read-only market paths; no order,
+  launchd, or live-money path is involved.
+
+### Verification
+
+- Focused proof-driver tests cover retry-then-success and five-attempt
+  fail-closed behavior. Owner online dry-run remains required for the live
+  Dashboard evidence and must show `candidate_selected=true`.
+
 ## 2026-09-08 — Reconcile never-executed activations (#1175)
 
 ### Decision

@@ -11,11 +11,13 @@ from __future__ import annotations
 import argparse
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any, Mapping, Sequence
 from unittest.mock import patch
 
@@ -28,6 +30,7 @@ from services.park_confirmation_ledger import (
     parse_durable_confirmation,
 )
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 
 
 PREVIEWS = Path("dashboard_control_plane/previews.json")
@@ -40,6 +43,27 @@ class ProofDriverError(ValueError):
         self.reason_code = reason_code
         self.details = details
         super().__init__(reason_code)
+
+
+_MARKET_BBO_FIELDS = ("bid", "ask", "mid")
+_MARKET_READ_ATTEMPTS = 5
+
+
+def _bbo_check(market: Mapping[str, Any]) -> dict[str, Any]:
+    """Return an auditable BBO check without normalising or changing facts."""
+
+    try:
+        bid, ask, mid = (Decimal(str(market[field])) for field in _MARKET_BBO_FIELDS)
+        passed = bid < ask and bid <= mid <= ask
+    except (KeyError, InvalidOperation, TypeError, ValueError):
+        bid = ask = mid = None
+        passed = False
+    return {
+        "bid": str(bid) if bid is not None else market.get("bid"),
+        "mid": str(mid) if mid is not None else market.get("mid"),
+        "ask": str(ask) if ask is not None else market.get("ask"),
+        "passed": passed,
+    }
 
 
 def build_market_document(
@@ -76,7 +100,71 @@ def build_market_document(
     missing = [field for field in proof._MARKET_REQUIRED if field not in market]
     if missing:
         raise ProofDriverError("market_facts_missing", fields=missing)
+    if not _bbo_check(market)["passed"]:
+        raise ProofDriverError("market_bbo_inconsistent", market_check=_bbo_check(market))
     return market
+
+
+def read_coherent_market(
+    preview: Mapping[str, Any],
+    broker: object,
+    *,
+    instrument_id: str,
+    sleep_fn: Any = time.sleep,
+    market_reader: Any = None,
+    max_attempts: int = _MARKET_READ_ATTEMPTS,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Read a complete market snapshot and retry only an inconsistent BBO.
+
+    Some protected bindings expose only the executable ticker. In that case
+    the credential-free Hyperliquid reader supplies the complete single-read
+    market snapshot; the binding price and identity are still checked against
+    it before it is admitted to the proof inputs.
+    """
+
+    checks: list[dict[str, Any]] = []
+    reader = market_reader or HyperliquidTestnetMarketReader()
+    for attempt in range(1, max_attempts + 1):
+        observed_at = datetime.now(timezone.utc)
+        try:
+            raw_binding = broker.market_fact(instrument_id=instrument_id, now=observed_at)
+        except Exception as exc:  # noqa: BLE001 - redact provider details.
+            raise ProofDriverError("market_fact_unavailable") from exc
+        if not isinstance(raw_binding, Mapping):
+            raise ProofDriverError("market_fact_invalid")
+        try:
+            if all(field in raw_binding for field in proof._MARKET_REQUIRED):
+                market = build_market_document(preview, raw_binding, instrument_id=instrument_id)
+            else:
+                try:
+                    raw_reader = reader.read(instrument_id)
+                except Exception as exc:  # noqa: BLE001 - redact provider details.
+                    raise ProofDriverError("market_fact_unavailable") from exc
+                if not isinstance(raw_reader, Mapping):
+                    raise ProofDriverError("market_fact_invalid")
+                if str(raw_binding.get("price")) != str(raw_reader.get("price")):
+                    raise ProofDriverError("market_price_mismatch")
+                combined = dict(raw_reader)
+                # Binding identity is authoritative for the later proof gate.
+                for field in ("source", "mapping_revision"):
+                    if raw_binding.get(field) not in (None, ""):
+                        combined[field] = raw_binding[field]
+                market = build_market_document(preview, combined, instrument_id=instrument_id)
+        except ProofDriverError as exc:
+            if exc.reason_code != "market_bbo_inconsistent":
+                raise
+            check = dict(exc.details.get("market_check") or {})
+            check.update({"attempt": attempt})
+            checks.append(check)
+            if attempt == max_attempts:
+                raise ProofDriverError("market_bbo_inconsistent", attempts=checks) from exc
+            sleep_fn(1.0)
+            continue
+        check = _bbo_check(market)
+        check.update({"attempt": attempt})
+        checks.append(check)
+        return market, checks
+    raise ProofDriverError("market_bbo_inconsistent", attempts=checks)
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:
@@ -302,15 +390,12 @@ def run(
             approved_by=approved_by, secret_file=secret_file, credential_reference="file-secret://hyperliquid-testnet",
             execute_testnet=not dry_run, acknowledge=proof.ACKNOWLEDGEMENT if not dry_run else "",
         )
-        # The market document is the only input obtained from the bound Broker.
+        # The market document is obtained from the bound Broker and, when its
+        # public ticker is sparse, one coherent credential-free source read.
         broker = proof.build_broker_execution_port(proof._context(args, family=plan["strategy_type"]))
         try:
-            observed_at = datetime.now(timezone.utc)
-            market = broker.market_fact(instrument_id=plan["instrument_id"], now=observed_at)
-            if not isinstance(market, Mapping):
-                raise ProofDriverError("market_fact_invalid")
-            market = build_market_document(
-                preview, market, instrument_id=plan["instrument_id"]
+            market, market_checks = read_coherent_market(
+                preview, broker, instrument_id=plan["instrument_id"]
             )
             _write_input(market_path, market)
         finally:
@@ -326,15 +411,31 @@ def run(
                            "network_operation_invoked": False, "next_action": "dry_run_stop_before_start"}
             with patch.object(TestnetAutomationCoordinator, "start_dca_session", return_value=safe_result), \
                  patch.object(TestnetAutomationCoordinator, "start_grid_session", return_value=safe_result):
-                result = proof._start(args)
+                for proof_attempt in range(1, _MARKET_READ_ATTEMPTS + 1):
+                    try:
+                        result = proof._start(args)
+                        break
+                    except proof.TestnetAutomationProofError as exc:
+                        if exc.reason_code != "market_price_mismatch" or proof_attempt == _MARKET_READ_ATTEMPTS:
+                            raise ProofDriverError(exc.reason_code) from exc
+                        time.sleep(1.0)
+                        market, retry_checks = read_coherent_market(
+                            preview, broker, instrument_id=plan["instrument_id"]
+                        )
+                        market_checks.extend(retry_checks)
+                        _write_input(market_path, market)
         else:
-            result = proof._start(args)
+            try:
+                result = proof._start(args)
+            except proof.TestnetAutomationProofError as exc:
+                raise ProofDriverError(exc.reason_code) from exc
         output = {
             "schema_version": "testnet-proof-driver-receipt-v1", "status": result.get("status"),
             "dry_run": dry_run, "activation_id": activation_id, "plan_digest": plan["plan_digest"],
             "preview_digest": preview["preview_digest"], "confirmation_id": confirmation["confirmation_id"],
             "steps": {"preview_loaded": True, "plan_built": True, "market_bound": True,
                        "confirmation_mapped": True, "candidate_selected": result.get("status") in {"candidate_selected", "dry_run_candidate_selected"}},
+            "market_self_check": market_checks,
             "result": {key: result.get(key) for key in ("status", "lifecycle_status", "execution_mutation", "network_operation_invoked", "next_action")},
             "secret_material_present": False,
         }
@@ -381,6 +482,7 @@ if __name__ == "__main__":
 __all__ = [
     "ProofDriverError",
     "build_market_document",
+    "read_coherent_market",
     "build_plan",
     "map_confirmation",
     "run",
