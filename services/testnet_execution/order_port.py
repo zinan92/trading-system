@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Mapping, Sequence
 
+from services.broker_port import BrokerOrderRequest
+
 
 class TestnetExecutionError(RuntimeError):
     """A durable, fail-closed execution seam error."""
@@ -189,4 +191,184 @@ class PaperExecutionPort:
         return self._call(request, "query")
 
 
-__all__ = ["CanonicalOrderRequest", "PaperExecutionPort", "TestnetExecutionError", "map_grid_orders"]
+class ExternalTestnetExecutionPort:
+    """Fail-closed facade for the exact protected external Testnet profile.
+
+    The object passed here is the already-constructed public trading-system
+    adapter.  This module deliberately does not import venue types or read a
+    signer file; the adapter owns those concerns.
+    """
+
+    port_name = "order_execution"
+    profile_id = "hyperliquid-testnet-position-protection"
+
+    def __init__(self, broker: object) -> None:
+        self.broker = broker
+        if getattr(broker, "transport_state", "") != "external_testnet":
+            raise TestnetExecutionError("external_testnet_transport_required")
+        config = getattr(broker, "broker_config", {})
+        if not isinstance(config, Mapping) or config.get("transport_profile") != self.profile_id:
+            raise TestnetExecutionError("external_protection_profile_required")
+        if config.get("environment") != "testnet":
+            raise TestnetExecutionError("external_testnet_environment_required")
+        if config.get("real_money_eligible") is not False or config.get("live_trading_enabled") is True:
+            raise TestnetExecutionError("external_testnet_real_money_forbidden")
+        self._receipts: dict[str, dict[str, Any]] = {}
+
+    def preflight(self) -> dict[str, Any]:
+        result = self.broker.preflight(strategy_family="grid")
+        if not isinstance(result, Mapping) or result.get("ready") is not True:
+            raise TestnetExecutionError("external_testnet_preflight_blocked")
+        return self._safe_mapping(result)
+
+    def submit(self, request: CanonicalOrderRequest) -> dict[str, Any]:
+        return self._order(request, "submit")
+
+    def cancel(self, request: CanonicalOrderRequest) -> dict[str, Any]:
+        return self._order(request, "cancel")
+
+    def replace(self, request: CanonicalOrderRequest) -> dict[str, Any]:
+        return self._order(request, "replace")
+
+    def query(self, request: CanonicalOrderRequest) -> dict[str, Any]:
+        try:
+            raw = self.broker.request(self.port_name, "query", {"order_id": request.order_id})
+        except Exception as exc:
+            return self._unknown(request, "query", exc)
+        return self._receipt(request, "query", raw)
+
+    def reconcile_unknown(self, request: CanonicalOrderRequest) -> dict[str, Any]:
+        return self.query(request)
+
+    def read_facts(self, *, instrument_id: str, order_id: str = "") -> dict[str, Any]:
+        try:
+            raw = self.broker.read_facts(instrument_id=instrument_id, order_id=order_id)
+        except Exception as exc:
+            return {
+                "state": "unknown",
+                "unknown": True,
+                "error_type": type(exc).__name__,
+                "instrument_id": instrument_id,
+                "order_id": order_id,
+            }
+        return self._safe_object(raw)
+
+    def submit_protection(self, group: object) -> dict[str, Any]:
+        return self._protection(group, "submit")
+
+    def query_protection(self, group: object) -> dict[str, Any]:
+        return self._protection(group, "query")
+
+    def cancel_protection(self, group: object) -> dict[str, Any]:
+        return self._protection(group, "cancel")
+
+    def _order(self, request: CanonicalOrderRequest, operation: str) -> dict[str, Any]:
+        key = request.idempotency_key
+        if operation != "query" and key in self._receipts:
+            return dict(self._receipts[key])
+        ticket = {
+            **request.to_dict(),
+            "ticket_id": request.order_id,
+            "idempotency_key": key,
+            "order_type": "limit" if request.limit_price is not None else "market",
+            "price": str(request.limit_price) if request.limit_price is not None else None,
+        }
+        try:
+            raw = self.broker.submit_order(BrokerOrderRequest(
+                run_date=request.command_id,
+                ticket=ticket,
+                latest_price=float(request.limit_price) if request.limit_price is not None else None,
+                actual_size=float(request.quantity),
+            )) if operation == "submit" else self.broker.request(self.port_name, operation, ticket)
+        except Exception as exc:
+            receipt = self._unknown(request, operation, exc)
+            self._receipts[key] = receipt
+            return receipt
+        receipt = self._receipt(request, operation, raw)
+        self._receipts[key] = receipt
+        return receipt
+
+    def _protection(self, group: object, operation: str) -> dict[str, Any]:
+        try:
+            raw = self.broker.request("protection_order", operation, group)
+        except Exception as exc:
+            return {
+                "operation": operation,
+                "state": "unknown",
+                "accepted": False,
+                "unknown": True,
+                "error_type": type(exc).__name__,
+                "protection_id": str(getattr(group, "protection_id", "")),
+            }
+        return self._safe_object(raw)
+
+    @staticmethod
+    def _safe_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+        return {str(key): ExternalTestnetExecutionPort._safe_value(item) for key, item in value.items()}
+
+    @classmethod
+    def _safe_object(cls, value: object) -> dict[str, Any]:
+        if isinstance(value, Mapping):
+            return cls._safe_mapping(value)
+        fields = getattr(value, "__dataclass_fields__", {})
+        if fields:
+            return {name: cls._safe_value(getattr(value, name)) for name in fields}
+        return {"state": str(getattr(value, "state", "unknown")), "accepted": bool(getattr(value, "accepted", False))}
+
+    @classmethod
+    def _safe_value(cls, value: object) -> Any:
+        if isinstance(value, Mapping):
+            return cls._safe_mapping(value)
+        if isinstance(value, (list, tuple)):
+            return [cls._safe_value(item) for item in value]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if hasattr(value, "value"):
+            return cls._safe_value(value.value)
+        if getattr(value, "__dataclass_fields__", None):
+            return cls._safe_object(value)
+        return str(value)
+
+    @classmethod
+    def _receipt(cls, request: CanonicalOrderRequest, operation: str, raw: object) -> dict[str, Any]:
+        result = cls._safe_object(raw)
+        accepted = result.get("accepted") is True or str(result.get("state", "")).lower() in {"resting", "accepted", "active", "submitted"}
+        return {
+            "receipt_id": str(result.get("receipt_id") or f"external:{request.idempotency_key}"),
+            "operation": operation,
+            "port": cls.port_name,
+            "state": str(result.get("state") or ("accepted" if accepted else "rejected")),
+            "accepted": accepted,
+            "unknown": False,
+            "network_io": True,
+            "real_money_eligible": False,
+            "request": request.to_dict(),
+            "broker": result,
+        }
+
+    @staticmethod
+    def _unknown(request: CanonicalOrderRequest, operation: str, exc: Exception) -> dict[str, Any]:
+        return {
+            "receipt_id": f"external-unknown:{request.order_id}",
+            "operation": operation,
+            "port": ExternalTestnetExecutionPort.port_name,
+            "state": "unknown",
+            "accepted": False,
+            "unknown": True,
+            "error_type": type(exc).__name__,
+            "network_io": True,
+            "real_money_eligible": False,
+            "request": request.to_dict(),
+        }
+
+
+TestnetExecutionPort = ExternalTestnetExecutionPort
+
+__all__ = [
+    "CanonicalOrderRequest",
+    "ExternalTestnetExecutionPort",
+    "PaperExecutionPort",
+    "TestnetExecutionError",
+    "TestnetExecutionPort",
+    "map_grid_orders",
+]

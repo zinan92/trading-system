@@ -468,6 +468,54 @@ class TestnetAutomationCoordinator:
         }
         return self._record(state)
 
+    def enable_testnet_execution(self, broker: object, *, now: str | datetime | None = None) -> dict[str, Any]:
+        """Bind the explicit attended Hyperliquid Testnet protection profile."""
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        if current.get("transport_profile") != TESTNET_PROTECTED_TRANSPORT_PROFILE:
+            raise TestnetCoordinatorError("protected_testnet_profile_required")
+        from services.testnet_execution import ExternalTestnetExecutionPort
+
+        try:
+            port = ExternalTestnetExecutionPort(broker)
+            preflight = port.preflight()
+        except Exception as exc:
+            code = str(getattr(exc, "code", "") or "testnet_execution_blocked")
+            return self._record({
+                **current,
+                "event": "testnet_execution_blocked",
+                "action": "enable_testnet_execution",
+                "status": "testnet_execution_blocked",
+                "occurred_at": self._timestamp(now),
+                "execution_enabled": False,
+                "execution_ready": False,
+                "execution_blocker": code,
+                "next_action": "notify_park_and_wait",
+                "broker_operation_invoked": False,
+                "network_operation_invoked": False,
+                "execution_mutation": False,
+                "secret_material_present": False,
+            })
+        state = {
+            **current,
+            "event": "testnet_execution_enabled",
+            "action": "enable_testnet_execution",
+            "status": "testnet_execution_ready",
+            "occurred_at": self._timestamp(now),
+            "execution_enabled": True,
+            "execution_ready": True,
+            "execution_blocker": None,
+            "execution_profile": TESTNET_PROTECTED_TRANSPORT_PROFILE,
+            "broker_preflight": preflight,
+            "paper_network_io": False,
+            "network_operation_invoked": False,
+            "execution_mutation": False,
+            "secret_material_present": False,
+            "next_action": "await_attended_execution_command",
+        }
+        return self._record(state)
+
     def submit_grid_orders(
         self,
         plan: Mapping[str, Any],
@@ -476,10 +524,12 @@ class TestnetAutomationCoordinator:
         command_id: str,
         now: str | datetime | None = None,
     ) -> dict[str, Any]:
-        """Submit one canonical request per Grid rung through the Paper port."""
+        """Submit one canonical request per Grid rung through the selected port."""
         current = self._read_current_or_raise()
-        if current is None or current.get("status") not in {"paper_execution_ready", "paper_execution_active"}:
-            raise TestnetCoordinatorError("paper_execution_not_enabled")
+        if current is None or current.get("status") not in {
+            "paper_execution_ready", "paper_execution_active", "testnet_execution_ready", "testnet_execution_active",
+        }:
+            raise TestnetCoordinatorError("execution_not_enabled")
         normalized_command_id = self._command_id(
             command_id,
             "submit_grid_orders",
@@ -494,7 +544,7 @@ class TestnetAutomationCoordinator:
         slice_id = execution_slice.get("execution_slice_id") if isinstance(execution_slice, Mapping) else None
         if not slice_id:
             raise TestnetCoordinatorError("execution_slice_required")
-        from services.testnet_execution import PaperExecutionPort, map_grid_orders
+        from services.testnet_execution import ExternalTestnetExecutionPort, PaperExecutionPort, map_grid_orders
 
         try:
             requests = map_grid_orders(
@@ -503,19 +553,24 @@ class TestnetAutomationCoordinator:
                 slice_id=str(slice_id),
                 command_id=normalized_command_id,
             )
-            port = PaperExecutionPort(broker)
+            port = (
+                ExternalTestnetExecutionPort(broker)
+                if current.get("status", "").startswith("testnet_")
+                else PaperExecutionPort(broker)
+            )
             receipts = [port.submit(request) for request in requests]
         except Exception as exc:
             if isinstance(exc, TestnetCoordinatorError):
                 raise
-            raise TestnetCoordinatorError("paper_execution_blocked", {"error": type(exc).__name__}) from exc
+            raise TestnetCoordinatorError("execution_blocked", {"error": type(exc).__name__}) from exc
         unknown = [receipt for receipt in receipts if receipt.get("unknown")]
+        external = current.get("status", "").startswith("testnet_")
         state = {
             **current,
-            "event": "paper_orders_submitted",
+            "event": "testnet_orders_submitted" if external else "paper_orders_submitted",
             "action": "submit_grid_orders",
             "command_id": normalized_command_id,
-            "status": "paper_execution_active" if not unknown else "paper_execution_blocked",
+            "status": ("testnet_execution_active" if external else "paper_execution_active") if not unknown else ("testnet_execution_blocked" if external else "paper_execution_blocked"),
             "occurred_at": self._timestamp(now),
             "execution_receipts": receipts,
             "canonical_order_count": len(requests),
@@ -524,7 +579,7 @@ class TestnetAutomationCoordinator:
             "execution_blocker": "execution_unknown" if unknown else None,
             "next_action": "await_fill_or_cancel" if not unknown else "notify_park_and_wait",
             "broker_operation_invoked": bool(receipts),
-            "network_operation_invoked": False,
+            "network_operation_invoked": external and bool(receipts),
             "execution_mutation": bool(receipts) and not unknown,
         }
         return self._record(state)
