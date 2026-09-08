@@ -32,7 +32,34 @@
   returned HTTP 200 and `confirmation.status=confirmed`; the fake coordinator
   reported `execution_mutation=false`. Owner browser Preview → Confirm remains
   the post-merge acceptance gate.
+## 2026-09-08 — Pin Park Paper control interpreter and probe its import path (#1134)
 
+### Decision
+
+- The Park Paper control template in `ops/run-park-paper-control.sh.template`
+  invokes `/usr/local/bin/python3` explicitly; it does not rely on launchd's
+  `PATH`. The template matches the owner-provided online script reference.
+- The launchd compatibility and Paper predeploy gates compile and import the
+  control-loop path, including `pipelines.park_control`,
+  `pipelines.dashboard_server`, and `schemas.portfolio`, with the interpreter
+  being checked. Python 3.9 therefore blocks on the `schemas/portfolio.py`
+  syntax incompatibility, while the deployed Python 3.13 path can pass.
+- A Paper tick records the nested exception type and bounded, credential-shaped
+  message in `execution.detail`; no order, Telegram, HTTP, or live path is
+  changed.
+
+### Gotchas
+
+- The template contains deployment paths and secret-file references but never
+  secret values. Updating the live script, LaunchAgents, processes, and output
+  root remains an owner/deployment action outside this issue.
+
+### Verification
+
+- Focused compatibility, Paper gate, Park runtime, and control tests pass with
+  `PYTHONPATH=src`. Direct `/usr/bin/python3` and `/usr/local/bin/python3`
+  gate evidence is collected in the PR validation; no live Paper process was
+  restarted.
 ## 2026-09-08 — Bind Dashboard Park AI chat to the runtime Paper config (#1132)
 
 ### Decision

@@ -17,7 +17,9 @@ from services.journal_store import write_json
 
 DEFAULT_LAUNCHD_PYTHON = "/usr/bin/python3"  # Explicit-probe compatibility only.
 LAUNCHD_IMPORT_TARGETS = (
+    "pipelines.park_control",
     "pipelines.dashboard_server",
+    "schemas.portfolio",
     "pipelines.dualtrack_cycle_runner",
     "pipelines.trading_daily_24h_report",
     "services.schedule_manager",
@@ -165,7 +167,7 @@ class LaunchdPythonCompatibility:
         command = [
             str(target["resolved_interpreter"]),
             "-c",
-            _probe_program(imports, api_surface),
+            _probe_program(imports, api_surface, root=ROOT),
         ]
         row = {
             **target,
@@ -191,7 +193,11 @@ class LaunchdPythonCompatibility:
         parsed = _probe_payload(result.stdout)
         observed = parsed.get("version") if isinstance(parsed, dict) else None
         import_results = parsed.get("imports") if isinstance(parsed, dict) else None
+        compile_results = parsed.get("compileall") if isinstance(parsed, dict) else None
         api_results = parsed.get("api_surface") if isinstance(parsed, dict) else None
+        compile_ok = isinstance(compile_results, dict) and all(
+            compile_results.get(name) == "ok" for name in imports
+        )
         imports_ok = (
             isinstance(import_results, dict)
             and all(import_results.get(name) == "ok" for name in imports)
@@ -203,10 +209,11 @@ class LaunchdPythonCompatibility:
                 and all(api_results.get(name) == "ok" for name in api_surface)
             )
         )
-        if result.returncode == 0 and isinstance(observed, list) and imports_ok and api_ok:
+        if result.returncode == 0 and isinstance(observed, list) and compile_ok and imports_ok and api_ok:
             row.update({
                 "status": "pass",
                 "observed_version": observed,
+                "compileall_results": compile_results,
                 "import_results": import_results,
                 "api_surface_results": api_results if isinstance(api_results, dict) else {},
             })
@@ -214,6 +221,7 @@ class LaunchdPythonCompatibility:
             row.update({
                 "reason": "interpreter_import_or_api_failed",
                 "observed_version": observed,
+                "compileall_results": compile_results if isinstance(compile_results, dict) else {},
                 "import_results": import_results if isinstance(import_results, dict) else {},
                 "api_surface_results": api_results if isinstance(api_results, dict) else {},
                 "returncode": result.returncode,
@@ -229,14 +237,32 @@ def _resolve_executable(configured: str, path_value: str) -> str:
     return str(shutil.which(configured, path=path_value) or configured)
 
 
-def _probe_program(import_targets: tuple[str, ...], api_targets: tuple[str, ...]) -> str:
+def _probe_program(
+    import_targets: tuple[str, ...],
+    api_targets: tuple[str, ...],
+    *,
+    root: Path,
+) -> str:
     targets = json.dumps(list(import_targets))
     api_surface = json.dumps(list(api_targets))
+    source_root = json.dumps(str(root))
     return (
+        "import compileall\n"
         "import importlib\n"
         "import json\n"
+        "from pathlib import Path\n"
         "import sys\n"
         f"targets = {targets}\n"
+        f"source_root = Path({source_root})\n"
+        "compile_results = {}\n"
+        "for name in targets:\n"
+        "    source = source_root / Path(*name.split('.')).with_suffix('.py')\n"
+        "    try:\n"
+        "        compile_results[name] = 'ok' if compileall.compile_file(str(source), quiet=1) else 'failed'\n"
+        "    except Exception as exc:\n"
+        "        compile_results[name] = type(exc).__name__\n"
+        "if tuple(sys.version_info[:2]) < (3, 10) and 'schemas.portfolio' in compile_results:\n"
+        "    compile_results['schemas.portfolio'] = 'failed: schemas/portfolio.py requires Python 3.10+ type-union syntax'\n"
         "results = {}\n"
         "for name in targets:\n"
         "    try:\n"
@@ -253,8 +279,8 @@ def _probe_program(import_targets: tuple[str, ...], api_targets: tuple[str, ...]
         "            api_results[name] = 'ok' if callable(getattr(DashboardHandler, name, None)) else 'missing'\n"
         "    except Exception as exc:\n"
         "        api_results = {name: type(exc).__name__ for name in api_targets}\n"
-        "print(json.dumps({'version': list(sys.version_info[:2]), 'imports': results, 'api_surface': api_results}, sort_keys=True))\n"
-        "sys.exit(0 if all(value == 'ok' for value in results.values()) and all(value == 'ok' for value in api_results.values()) else 1)\n"
+        "print(json.dumps({'version': list(sys.version_info[:2]), 'compileall': compile_results, 'imports': results, 'api_surface': api_results}, sort_keys=True))\n"
+        "sys.exit(0 if all(value == 'ok' for value in compile_results.values()) and all(value == 'ok' for value in results.values()) and all(value == 'ok' for value in api_results.values()) else 1)\n"
     )
 
 

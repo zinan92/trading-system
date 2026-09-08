@@ -157,6 +157,18 @@ def _runtime(output: Path, adapter: FakePaperAdapter, market_ref: dict) -> ParkP
     )
 
 
+def test_market_runtime_blocker_preserves_nested_exception_detail_without_secret_value(
+    tmp_path: Path,
+) -> None:
+    from services.park_paper_runtime import _safe_exception_detail
+
+    detail = _safe_exception_detail(TypeError("Numberish: token=top-secret"))
+
+    assert detail.startswith("TypeError: Numberish")
+    assert "token=[REDACTED]" in detail
+    assert "top-secret" not in detail
+
+
 def test_confirmation_is_the_only_path_to_paper_mutation(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     market = {

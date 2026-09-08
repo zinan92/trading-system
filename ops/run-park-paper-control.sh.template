@@ -1,0 +1,51 @@
+#!/bin/zsh
+set -euo pipefail
+
+ROOT="/Users/wendy/work/trading-system-park-paper-main"
+OUTPUT_ROOT="/Users/wendy/work/park-paper-output"
+PARK_CONFIG="/Users/wendy/.config/trading-system/park_strategy_track.paper.json"
+TOKEN_FILE="/Users/wendy/.config/trading-system/park-paper-bot-token"
+IDENTITY_FILE="/Users/wendy/.config/trading-system/park-paper-telegram.env"
+
+if [[ ! -r "$TOKEN_FILE" ]]; then
+  print -u2 "park_control_blocked: telegram_token_file_missing"
+  exit 2
+fi
+if [[ ! -r "$IDENTITY_FILE" ]]; then
+  print -u2 "park_control_blocked: telegram_identity_file_missing"
+  exit 2
+fi
+
+IFS= read -r TRADING_ORCHESTRATOR_TELEGRAM_BOT_TOKEN < "$TOKEN_FILE"
+if [[ -z "$TRADING_ORCHESTRATOR_TELEGRAM_BOT_TOKEN" ]]; then
+  print -u2 "park_control_blocked: telegram_token_empty"
+  exit 2
+fi
+
+set -a
+source "$IDENTITY_FILE"
+set +a
+export TRADING_ORCHESTRATOR_TELEGRAM_BOT_TOKEN
+export TRADING_ORCHESTRATOR_OUTPUT_ROOT="$OUTPUT_ROOT"
+export TRADING_ORCHESTRATOR_PARK_CONFIG="$PARK_CONFIG"
+export TRADING_ORCHESTRATOR_NAUTILUS_PYTHON="/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python"
+export TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED=1
+export TRADING_ORCHESTRATOR_CODEX_CLI="/opt/homebrew/bin/codex"
+export TRADING_ORCHESTRATOR_CODEX_MODEL="gpt-5.6-luna"
+export TRADING_ORCHESTRATOR_CODEX_TIMEOUT_SECONDS=30
+export HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS="0x7b9d494f79217246b0C80576c26ceDdf2c315f04"
+export HYPERLIQUID_TESTNET_INSTRUMENT_ID="BTC-USD-PERP"
+export HYPERLIQUID_TESTNET_PROTECTION_PROFILE="hyperliquid-testnet-position-protection"
+export HYPERLIQUID_TESTNET_SECRET_FILE="/Users/wendy/park-hands/_secrets/hyperliquid-privatekey"
+export HYPERLIQUID_TESTNET_RUNTIME_ID="park-paper-testnet-f80fa54"
+export TRADING_ORCHESTRATOR_RELEASE_SHA="f80fa54b1e03a5d5dd7493a3f63a9f04e3f3dd22"
+export STANDARD_BROKER_RELEASE_SHA="2d3a5cc26538b24fb31ab81201facd5ee46476ba"
+export CODEX_HOME="/Users/wendy/.codex"
+export PYTHONPATH="$ROOT:/Users/wendy/work/standard-broker/src"
+
+exec /usr/local/bin/python3 -m pipelines.park_control \
+  --output-root "$OUTPUT_ROOT" \
+  --park-config "$PARK_CONFIG" \
+  --chat-id "$TRADING_ORCHESTRATOR_TELEGRAM_CHAT_ID" \
+  --park-user-id "$TRADING_ORCHESTRATOR_TELEGRAM_PARK_USER_ID" \
+  --timeout-seconds 5

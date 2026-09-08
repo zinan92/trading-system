@@ -53,6 +53,17 @@ class ParkPaperRuntimeError(RuntimeError):
         self.code = code
 
 
+def _safe_exception_detail(exc: BaseException) -> str:
+    """Keep nested failure context while masking credential-shaped values."""
+
+    detail = f"{type(exc).__name__}: {exc}"
+    return re.sub(
+        r"(?i)\b(api[_-]?key|authorization|password|private[_-]?key|secret|token)\b\s*[:=]\s*[^\s,;]+",
+        r"\1=[REDACTED]",
+        detail,
+    )[:500]
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -318,7 +329,7 @@ class ParkPaperRuntime:
         except Exception as exc:  # noqa: BLE001 - runtime must fail closed.
             return self._blocked(
                 "market_unavailable",
-                type(exc).__name__,
+                _safe_exception_detail(exc),
                 session=session,
                 revision=revision,
                 digest=digest,

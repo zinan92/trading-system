@@ -16,6 +16,7 @@ def _probe(*, import_name: str = "", returncode: int = 0):
         returncode,
         json.dumps({
             "version": [3, 9],
+            "compileall": {name: "ok" for name in LAUNCHD_IMPORT_TARGETS},
             "imports": imports,
             "api_surface": {name: "ok" for name in LAUNCHD_API_SURFACE},
         }),
