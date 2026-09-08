@@ -426,6 +426,109 @@ class TestnetAutomationCoordinator:
             "next_action": "await_candidate_selection",
         }
 
+    def enable_paper_execution(self, broker: object, *, now: str | datetime | None = None) -> dict[str, Any]:
+        """Bind the public standard-broker local Paper profile to this activation.
+
+        The activation remains Testnet-labelled for the future external seam;
+        this capability is explicitly local Paper and can never invoke network
+        transport or credentials.
+        """
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        try:
+            paper = broker.preflight()
+            environment = getattr(paper.get("environment"), "value", paper.get("environment")) if isinstance(paper, Mapping) else getattr(paper.environment, "value", paper.environment)
+            network_io = paper.get("network_io") if isinstance(paper, Mapping) else paper.network_io
+            real_money = paper.get("real_money_eligible") if isinstance(paper, Mapping) else paper.real_money_eligible
+            ports = paper.get("ports") if isinstance(paper, Mapping) else paper.ports
+            if str(environment).lower() != "paper" or network_io is not False or real_money is not False or "order_execution" not in tuple(ports or ()):
+                raise TestnetCoordinatorError("paper_profile_invalid")
+            if getattr(getattr(broker, "transport", None), "local_only", False) is not True:
+                raise TestnetCoordinatorError("paper_transport_not_local")
+        except TestnetCoordinatorError:
+            raise
+        except Exception as exc:
+            raise TestnetCoordinatorError("paper_profile_invalid", {"error": type(exc).__name__}) from exc
+        state = {
+            **current,
+            "event": "paper_execution_enabled",
+            "action": "enable_paper_execution",
+            "status": "paper_execution_ready",
+            "occurred_at": self._timestamp(now),
+            "execution_enabled": True,
+            "execution_ready": True,
+            "execution_blocker": None,
+            "execution_profile": "standard-broker-paper",
+            "paper_network_io": False,
+            "broker_operation_invoked": False,
+            "network_operation_invoked": False,
+            "execution_mutation": False,
+            "next_action": "await_execution_command",
+        }
+        return self._record(state)
+
+    def submit_grid_orders(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        broker: object,
+        command_id: str,
+        now: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Submit one canonical request per Grid rung through the Paper port."""
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") not in {"paper_execution_ready", "paper_execution_active"}:
+            raise TestnetCoordinatorError("paper_execution_not_enabled")
+        normalized_command_id = self._command_id(
+            command_id,
+            "submit_grid_orders",
+            str(current.get("activation_id") or ""),
+        )
+        replay = self._replay(normalized_command_id)
+        if replay is not None:
+            return replay
+        if str(plan.get("plan_digest") or "") != str(current.get("plan_digest") or ""):
+            raise TestnetCoordinatorError("plan_digest_mismatch")
+        execution_slice = current.get("execution_slice")
+        slice_id = execution_slice.get("execution_slice_id") if isinstance(execution_slice, Mapping) else None
+        if not slice_id:
+            raise TestnetCoordinatorError("execution_slice_required")
+        from services.testnet_execution import PaperExecutionPort, map_grid_orders
+
+        try:
+            requests = map_grid_orders(
+                plan,
+                activation_id=str(current["activation_id"]),
+                slice_id=str(slice_id),
+                command_id=normalized_command_id,
+            )
+            port = PaperExecutionPort(broker)
+            receipts = [port.submit(request) for request in requests]
+        except Exception as exc:
+            if isinstance(exc, TestnetCoordinatorError):
+                raise
+            raise TestnetCoordinatorError("paper_execution_blocked", {"error": type(exc).__name__}) from exc
+        unknown = [receipt for receipt in receipts if receipt.get("unknown")]
+        state = {
+            **current,
+            "event": "paper_orders_submitted",
+            "action": "submit_grid_orders",
+            "command_id": normalized_command_id,
+            "status": "paper_execution_active" if not unknown else "paper_execution_blocked",
+            "occurred_at": self._timestamp(now),
+            "execution_receipts": receipts,
+            "canonical_order_count": len(requests),
+            "execution_enabled": not unknown,
+            "execution_ready": not unknown,
+            "execution_blocker": "execution_unknown" if unknown else None,
+            "next_action": "await_fill_or_cancel" if not unknown else "notify_park_and_wait",
+            "broker_operation_invoked": bool(receipts),
+            "network_operation_invoked": False,
+            "execution_mutation": bool(receipts) and not unknown,
+        }
+        return self._record(state)
+
     def _activate(
         self,
         payload: Mapping[str, Any] | TestnetActivation | None,

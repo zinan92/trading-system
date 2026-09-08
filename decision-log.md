@@ -17640,3 +17640,34 @@ auditable datafeed port; broker execution remains a separate port.
 - `git diff --check` and scoped `compileall` passed. Live read-only probes
   confirmed XAU and Hyperliquid BTC endpoint keys and confirmed unsupported
   `BTCUSDT` keys fail closed.
+
+# 2026-09-08 — Add Paper OrderPort execution seam (#1144)
+
+## Decision
+
+- Keep the Testnet Automation Coordinator as the composition root and add a
+  local-only `standard-broker` Paper execution profile behind its public
+  `order_execution` port. Grid plans map one canonical request per rung before
+  the first side effect; every request carries activation, plan, and execution
+  slice identity plus a stable idempotency key.
+- Persist normalized Paper receipts at the Coordinator boundary. Replays of a
+  request return the original receipt. An unknown side effect permits one
+  identity-bound query and then remains stopped; no blind retry is allowed.
+- The seam does not alter Nautilus/Park Paper lifecycle code, the 8100 HTTP
+  contract, live/Testnet transport, scheduler, or runtime output roots.
+
+## Gotchas
+
+- The activation remains `environment=testnet` because it is the future
+  external execution identity; the enabled execution profile is explicitly
+  `standard-broker-paper` and must report `network_io=false` and
+  `real_money_eligible=false`.
+- `standard-broker` public Paper receipts are transport-level receipts, so
+  this issue does not claim external order/fill evidence or enable the online
+  activation. Owner deployment and runtime acceptance remain separate.
+
+## Verification
+
+- Focused Paper execution and Coordinator tests cover ten-rung mapping,
+  identity/idempotency, one-query unknown handling, public port selection, and
+  local Paper enablement.
