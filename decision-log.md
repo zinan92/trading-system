@@ -1,5 +1,37 @@
 # Decision Log
 
+## 2026-09-08 — Dashboard confirmation plan-closed ledger (#1171)
+
+### Decision
+
+- Persist `plan_closed` events in the Dashboard confirmation ledger for stop,
+  stop reconciliation, interrupt, and terminal DCA/Grid outcomes. Each event
+  keeps the activation and plan identity, close reason, timestamp, and a digest
+  of the Coordinator's final state.
+- Treat a confirmed plan as conflicting only while its activation remains the
+  Coordinator's current non-idle activation and no matching `plan_closed`
+  event exists. An idle Coordinator migrates an old unclosed confirmation with
+  `reason=reconciled_idle` before accepting a new plan.
+- Reconcile-to-idle permits the next immutable activation. The Dashboard uses
+  the Coordinator-returned activation identity when activation is delegated,
+  keeping `confirmations.json` and `testnet_automation/current.json` aligned.
+
+### Gotchas
+
+- Existing confirmed rows can predate `plan_closed`; they are migrated only
+  when the current Coordinator state is explicitly idle. An unavailable
+  Coordinator status remains fail-closed as an active-plan conflict.
+- Stop and reconciliation are recorded as separate close events so each digest
+  represents the state observed at that boundary; duplicate same-reason events
+  remain idempotent.
+
+### Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_dashboard_control*.py tests/test_testnet_automation_coordinator*.py`
+  — 66 passed.
+- Online output roots and launchd/service state were not modified or restarted;
+  owner online preview/confirm acceptance remains required.
+
 ## 2026-09-08 — Canonical account fingerprint and zero-order stop reconciliation (#1167)
 
 ### Decision

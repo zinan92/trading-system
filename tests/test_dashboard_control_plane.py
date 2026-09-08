@@ -880,6 +880,119 @@ def test_confirm_and_run_rejects_stale_digest_and_duplicate_identity(tmp_path: P
     assert "confirmation_digest_mismatch" in blocked["blockers"]
 
 
+def test_confirm_stop_reconcile_then_confirm_new_plan_closes_ledger(tmp_path: Path) -> None:
+    from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+
+    plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
+    coordinator = TestnetAutomationCoordinator(tmp_path, clock=lambda: "2026-09-08T03:00:00+00:00")
+    first_preview = _confirmable_preview()
+    plane.persist_preview(first_preview)
+    first = plane.confirm_and_run(
+        first_preview,
+        confirmation={"preview_digest": first_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=coordinator,
+    )
+
+    coordinator._record({
+        **coordinator.status(),
+        "status": "paper_execution_ready",
+        "execution_profile": "standard-broker-paper",
+        "execution_enabled": True,
+        "execution_ready": True,
+        "execution_mutation": False,
+        "network_operation_invoked": False,
+        "canonical_order_count": 0,
+        "execution_receipts": [],
+    })
+    coordinator.command("stop", {"reason": "operator_stop"}, command_id="stop-1171")
+    stopped = json.loads(
+        (tmp_path / "dashboard_control_plane" / "confirmations.json").read_text()
+    )[-1]
+    assert stopped["event"] == "plan_closed"
+    assert stopped["reason"] == "stop"
+    reconciled = coordinator.command(
+        "reconcile_stop", {"reason": "zero_orders"}, command_id="reconcile-1171"
+    )
+    assert reconciled["status"] == "idle"
+
+    closed = json.loads(
+        (tmp_path / "dashboard_control_plane" / "confirmations.json").read_text()
+    )[-1]
+    assert closed["event"] == "plan_closed"
+    assert closed["reason"] == "reconcile_stop"
+    assert closed["activation_id"] == first["activation_id"]
+
+    second_preview = {**first_preview, "requested": {**first_preview["requested"], "direction": "short"}}
+    second_preview["preview_digest"] = canonical_preview_digest(second_preview)
+    plane.persist_preview(second_preview)
+    second = plane.confirm_and_run(
+        second_preview,
+        confirmation={"preview_digest": second_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=coordinator,
+    )
+    assert second["status"] == "confirmed"
+    assert second["activation_id"] != first["activation_id"]
+
+
+def test_two_unclosed_confirmed_plans_remain_in_conflict(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
+    first_preview = _confirmable_preview()
+    plane.persist_preview(first_preview)
+    first = plane.confirm_and_run(
+        first_preview,
+        confirmation={"preview_digest": first_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+    second_preview = {**first_preview, "requested": {**first_preview["requested"], "direction": "short"}}
+    second_preview["preview_digest"] = canonical_preview_digest(second_preview)
+    plane.persist_preview(second_preview)
+
+    class ActiveCoordinator:
+        def status(self):
+            return {"status": "activated", "activation_id": first["activation_id"]}
+
+    blocked = plane.confirm_and_run(
+        second_preview,
+        confirmation={"preview_digest": second_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=ActiveCoordinator(),
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["blockers"] == ["active_plan_conflict"]
+
+
+def test_idle_coordinator_migrates_historical_confirmation_before_new_plan(tmp_path: Path) -> None:
+    plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
+    first_preview = _confirmable_preview()
+    plane.persist_preview(first_preview)
+    first = plane.confirm_and_run(
+        first_preview,
+        confirmation={"preview_digest": first_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=None,
+    )
+    second_preview = {**first_preview, "requested": {**first_preview["requested"], "direction": "short"}}
+    second_preview["preview_digest"] = canonical_preview_digest(second_preview)
+    plane.persist_preview(second_preview)
+
+    class IdleCoordinator:
+        def status(self):
+            return {"status": "idle", "activation_id": None}
+
+        def activate(self, activation, *, command_id=None, now=None):
+            return {"status": "activated", "activation_id": "new-activation"}
+
+    result = plane.confirm_and_run(
+        second_preview,
+        confirmation={"preview_digest": second_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=IdleCoordinator(),
+        now="2026-09-08T03:30:00+00:00",
+    )
+    rows = json.loads((tmp_path / "dashboard_control_plane" / "confirmations.json").read_text())
+    migration = rows[1]
+    assert migration["reason"] == "reconciled_idle"
+    assert migration["activation_id"] == first["activation_id"]
+    assert result["status"] == "confirmed"
+
+
 def test_confirm_and_run_rejects_mainnet_and_secret_fields(tmp_path: Path) -> None:
     plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
     preview = _confirmable_preview()

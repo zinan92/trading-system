@@ -268,7 +268,21 @@ def test_stop_and_flatten_intents_are_durable_and_fail_closed(
 
 def test_reconcile_stop_closes_zero_order_local_paper_activation(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
-    coordinator.activate(_activation(), command_id="activate-reconcile-stop")
+    activation = _activation()
+    coordinator.activate(activation, command_id="activate-reconcile-stop")
+    confirmation_path = tmp_path / "outputs" / "dashboard_control_plane" / "confirmations.json"
+    confirmation_path.parent.mkdir(parents=True, exist_ok=True)
+    confirmation_path.write_text(
+        json.dumps([
+            {
+                "status": "confirmed",
+                "event": "operator_confirmed",
+                "activation_id": activation_digest(activation),
+                "preview_digest": activation["plan_digest"],
+            }
+        ]),
+        encoding="utf-8",
+    )
     coordinator._record({
         **coordinator.status(),
         "status": "paper_execution_ready",
@@ -288,6 +302,44 @@ def test_reconcile_stop_closes_zero_order_local_paper_activation(tmp_path: Path)
     assert result["receipt"]["submitted_order_count"] == 0
     assert result["receipt"]["execution_mutation"] is False
     assert result["fingerprint_scheme"] == "account-address-json-v0"
+    closed = json.loads(confirmation_path.read_text())[-1]
+    assert closed["event"] == "plan_closed"
+    assert closed["reason"] == "reconcile_stop"
+    assert closed["activation_id"] == activation_digest(activation)
+
+
+@pytest.mark.parametrize(
+    ("terminal_reason", "expected_reason"),
+    [("take_profit", "terminal_tp"), ("stop_loss", "terminal_sl"), ("hard_stop", "hard_stop")],
+)
+def test_terminal_lifecycle_writes_plan_closed_event(
+    tmp_path: Path, terminal_reason: str, expected_reason: str
+) -> None:
+    coordinator = _coordinator(tmp_path)
+    activation = _activation()
+    coordinator.activate(activation, command_id=f"activate-{terminal_reason}")
+    confirmation_path = tmp_path / "outputs" / "dashboard_control_plane" / "confirmations.json"
+    confirmation_path.parent.mkdir(parents=True, exist_ok=True)
+    confirmation_path.write_text(
+        json.dumps([{
+            "status": "confirmed",
+            "event": "operator_confirmed",
+            "activation_id": activation_digest(activation),
+            "preview_digest": activation["plan_digest"],
+        }]),
+        encoding="utf-8",
+    )
+    coordinator._record({
+        **coordinator.status(),
+        "status": "dca_terminal",
+        "event": "dca_lifecycle_observed",
+        "lifecycle": {"terminal_reason": terminal_reason},
+        "occurred_at": "2026-09-08T01:02:03+00:00",
+    })
+    closed = json.loads(confirmation_path.read_text())[-1]
+    assert closed["event"] == "plan_closed"
+    assert closed["reason"] == expected_reason
+    assert closed["coordinator_final_state_digest"].startswith("sha256:")
 
 
 def test_candidate_selection_locks_after_activation_owns_a_slice(tmp_path: Path) -> None:
