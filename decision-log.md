@@ -18552,4 +18552,29 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_testnet_grid_coordinator.py tests/test_testnet_scheduler.py tests/test_park_control.py` — 47 passed.
+
+# 2026-09-08 — Project cursor-bound external facts for scheduled ticks (#1210)
+
+## Decision
+
+- Keep the standard-broker typed bundle as the source of truth, but project its
+  reconciliation `passed`/`cursor` and account, position, fill, and open-order
+  facts at the trading-system `read_facts` boundary used by Park ticks.
+- Return restart-safe open-order mappings with both broker/native and client
+  identities (`oid`/`broker_order_id`, `cloid`/`client_order_id`) plus `price`
+  and `size`, so exposure reconciliation does not depend on an in-memory
+  identity index.
+
+## Gotchas
+
+- The typed bundle stores `status` and `cursor` under `reconciliation`; a
+  shallow dataclass conversion made a healthy exchange snapshot appear
+  `unknown` to `pipelines/park_control.py`.
+- The standard-broker source repository remains read-only. This change only
+  adapts its public typed facts in trading-system; no launchd, live path, HTTP
+  8100 contract, or online output root was touched.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_standard_broker_external_execution.py tests/test_park_control.py` — 18 passed.
 - `git diff --check` — passed.

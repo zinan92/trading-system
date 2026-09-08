@@ -125,6 +125,29 @@ class _Binding:
             release_sha=RELEASE,
             provenance=provenance,
         )
+        self.open_orders = (
+            SimpleNamespace(
+                order_id="local-entry-1",
+                broker_order_id="oid-101",
+                client_order_id="cloid-101",
+                price=Decimal("60000"),
+                quantity=Decimal("0.001"),
+            ),
+            SimpleNamespace(
+                order_id="local-entry-2",
+                broker_order_id="oid-102",
+                client_order_id="cloid-102",
+                price=Decimal("59900"),
+                quantity=Decimal("0.002"),
+            ),
+        )
+        self.fills = (
+            SimpleNamespace(
+                fill_id="fill-1", broker_order_id="oid-099", quantity=Decimal("0.001")
+            ),
+        )
+        self.reconciliation.passed = True
+        self.reconciliation.cursor.value = "facts-cursor-1"
 
     def preflight(self):
         return {
@@ -186,8 +209,8 @@ class _Binding:
         return SimpleNamespace(
             account=self.account,
             positions=(),
-            open_orders=(),
-            fills=(),
+            open_orders=self.open_orders,
+            fills=self.fills,
             fees=(),
             reconciliation=self.reconciliation,
         )
@@ -259,7 +282,10 @@ def test_external_execution_adapter_maps_canonical_ticket_and_reads_public_facts
     assert intent.quantity == Decimal("0.001")
     assert intent.order_type.value == "limit"
 
-    assert adapter.request("order_execution", "open_orders", "BTC-USD-PERP") == ()
+    open_orders = adapter.request("order_execution", "open_orders", "BTC-USD-PERP")
+    assert [row["broker_order_id"] for row in open_orders] == ["oid-101", "oid-102"]
+    assert [row["client_order_id"] for row in open_orders] == ["cloid-101", "cloid-102"]
+    assert [row["size"] for row in open_orders] == ["0.001", "0.002"]
     account = adapter.request("account", "read", ACCOUNT)
     assert account.account_address == ACCOUNT
     adapter.request(
@@ -275,6 +301,17 @@ def test_external_execution_adapter_maps_canonical_ticket_and_reads_public_facts
     assert binding.calls[-1][1][0:2] == ("order-1", "BTC-USD-PERP")
     assert binding.calls[-1][1][3] == "client-1"
     assert adapter.canonical_order_adapter.apply_fill({"order_id": "order-1"}).order_id == "order-1"
+
+
+def test_external_execution_adapter_projects_cursor_bound_facts_for_tick_process() -> None:
+    adapter, _binding, _closed = _adapter()
+
+    facts = adapter.read_facts(instrument_id="BTC-USD-PERP")
+
+    assert facts["status"] == "pass"
+    assert facts["cursor"] == "facts-cursor-1"
+    assert len(facts["open_orders"]) == 2
+    assert len(facts["fills"]) == 1
 
 
 def test_external_execution_adapter_closes_owned_runtime() -> None:
