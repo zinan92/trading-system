@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -49,6 +50,47 @@ class HyperliquidTestnetMarketReader:
         symbol = SUPPORTED_TESTNET_INSTRUMENTS.get(instrument)
         if symbol is None:
             raise HyperliquidTestnetMarketError("unsupported_testnet_instrument")
+        from services.datafeed_execution_market_client import (
+            DatafeedExecutionMarketClient,
+            ExecutionMarketUnavailable,
+            execution_market_payload,
+            market_source_mode,
+            write_compare_receipt,
+        )
+
+        mode = market_source_mode()
+        if mode in {"dual", "datafeed"}:
+            try:
+                payload = DatafeedExecutionMarketClient().read(
+                    venue="hyperliquid", instrument_id="BTC-USD-PERP.HYPERLIQUID"
+                )
+                datafeed = execution_market_payload(
+                    payload,
+                    source="hyperliquid.external_testnet",
+                    provider="hyperliquid",
+                    environment="testnet",
+                    instrument_id=instrument,
+                    symbol=symbol,
+                )
+            except ExecutionMarketUnavailable as exc:
+                if mode == "datafeed":
+                    raise HyperliquidTestnetMarketError("testnet_market_unavailable") from exc
+                datafeed = {"price": None, "observed_at": None, "fresh": False, "age_seconds": None, "reason": str(exc)}
+            if mode == "datafeed":
+                if datafeed.get("trusted") is not True or datafeed.get("fresh") is not True:
+                    raise HyperliquidTestnetMarketError("testnet_market_not_authoritative")
+                return datafeed
+        direct = self._read_direct(instrument, symbol)
+        if mode == "dual":
+            write_compare_receipt(
+                os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", "outputs"),
+                mode=mode,
+                direct=direct,
+                datafeed=datafeed,
+            )
+        return direct
+
+    def _read_direct(self, instrument: str, symbol: str) -> dict[str, Any]:
         mids = self._post({"type": "allMids"})
         book = self._post({"type": "l2Book", "coin": symbol})
         meta_and_contexts = self._request({"type": "metaAndAssetCtxs"})
