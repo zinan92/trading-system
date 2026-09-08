@@ -43,7 +43,17 @@ export STANDARD_BROKER_RELEASE_SHA="2d3a5cc26538b24fb31ab81201facd5ee46476ba"
 export CODEX_HOME="/Users/wendy/.codex"
 export PYTHONPATH="$ROOT:/Users/wendy/work/standard-broker/src"
 
-exec /usr/local/bin/python3 -m pipelines.park_control \
+NAUTILUS_PYTHON="/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python"
+if [[ ! -x "$NAUTILUS_PYTHON" ]]; then
+  print -u2 "park_control_blocked: nautilus_python_missing"
+  exit 2
+fi
+if ! "$NAUTILUS_PYTHON" -c 'import nautilus_trader; import pipelines.park_control' >/dev/null 2>&1; then
+  print -u2 "park_control_blocked: nautilus_import_gate_failed"
+  exit 2
+fi
+
+exec "$NAUTILUS_PYTHON" -m pipelines.park_control \
   --output-root "$OUTPUT_ROOT" \
   --park-config "$PARK_CONFIG" \
   --chat-id "$TRADING_ORCHESTRATOR_TELEGRAM_CHAT_ID" \

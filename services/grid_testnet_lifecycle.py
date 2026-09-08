@@ -421,6 +421,24 @@ class GridTestnetLifecycle:
         self._save(state)
         return self.snapshot(plan)
 
+    def advance(
+        self,
+        plan: dict[str, Any],
+        *,
+        fills: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+        price: float | None = None,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        """Apply one cursor-bound batch of fills, then the market heartbeat."""
+        state = self.snapshot(plan)
+        for fill in fills:
+            if not isinstance(fill, Mapping):
+                raise GridTestnetLifecycleError("unknown_fill_fact")
+            state = self.on_fill(plan, dict(fill), timestamp=timestamp)
+        if price is not None:
+            state = self.on_market_event(plan, price=float(price), timestamp=timestamp)
+        return state
+
     def _submit_initial_ladder(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         accepted: list[str] = []
         for rung in state["rungs"]:

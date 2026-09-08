@@ -106,6 +106,23 @@ def test_scheduler_activation_and_duplicate_tick_are_idempotent(tmp_path: Path) 
     assert replay == first
 
 
+def test_scheduler_attaches_to_running_coordinator_without_reactivation(tmp_path: Path) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    activation = _activation()
+    coordinator.activate(activation, command_id="activation-1", now=NOW)
+    current = coordinator.status()
+    current["status"] = "grid_running"
+    current["execution_enabled"] = True
+    coordinator._record(current)
+
+    attached = scheduler.attach(current["activation_id"], timestamp=NOW)
+
+    assert attached["event"] == "scheduler_attached"
+    assert attached["status"] == "active"
+    assert attached["activation_id"] == current["activation_id"]
+    assert coordinator.status()["status"] == "grid_running"
+
+
 def test_restart_reconciles_before_event_progression(tmp_path: Path) -> None:
     scheduler, coordinator = _scheduler(tmp_path)
     activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)

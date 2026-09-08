@@ -14,7 +14,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from services.journal_store import load_json
 from services.park_ai_provider_gateway import ParkAiProviderGateway
@@ -30,6 +30,8 @@ from services.park_safety_evidence import build_park_safety_evidence
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.hyperliquid_testnet_runtime import (
     HyperliquidTestnetRuntimeConfig,
+    TESTNET_PROFILE,
+    _park_plan_to_lifecycle_plan,
     build_park_account_reader,
     build_testnet_start_handler,
 )
@@ -64,10 +66,74 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
     guard = scheduler.guard.verify()
     if not guard.get("ok"):
         return {"status": "not_applicable", "reason": guard.get("blocker"), "paper_only": True}
+    coordinator_status = coordinator.status()
+    if scheduler.status().get("status") == "idle" and str(coordinator_status.get("status") or "") in {"grid_running", "dca_running"}:
+        scheduler.attach(str(coordinator_status.get("activation_id") or ""))
     if scheduler.status().get("status") not in {"active", "reconcile_required"}:
         return {"status": "not_applicable", "reason": "testnet_scheduler_not_active", "paper_only": True}
     tick_id = "park-control:" + datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    return scheduler.tick(tick_id=tick_id, event={"kind": "market_heartbeat"})
+    try:
+        callbacks = _build_testnet_tick_callbacks(output_root, coordinator_status)
+    except Exception as exc:  # noqa: BLE001 - scheduler records the typed blocker.
+        callbacks = (lambda _event: {"status": "blocked", "reason": f"testnet_tick_setup_failed:{type(exc).__name__}"}, None)
+    if callbacks is None and str(coordinator_status.get("status") or "") in {"grid_running", "dca_running"}:
+        return scheduler.tick(tick_id=tick_id, event={"kind": "market_heartbeat"}, advance=lambda _event: {"status": "blocked", "reason": "testnet_external_broker_unavailable"})
+    return scheduler.tick(tick_id=tick_id, event={"kind": "market_heartbeat"}, advance=callbacks[0] if callbacks else None, reconcile=callbacks[1] if callbacks else None)
+
+
+def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping[str, Any]) -> tuple[Callable[[Mapping[str, Any]], Mapping[str, Any]], Callable[[], Mapping[str, Any]]] | None:
+    """Compose the protected external broker for one running Testnet session."""
+    config = HyperliquidTestnetRuntimeConfig.from_environment()
+    if config is None or not config.start_ready:
+        return None
+    digest = str(coordinator_status.get("plan_digest") or "")
+    rows = load_json(Path(output_root) / "park_strategy" / "plans.jsonl")
+    stored = next((dict(row) for row in reversed(rows) if isinstance(row, Mapping) and str(row.get("plan_digest") or "") == digest), None)
+    if stored is None:
+        return None
+    instrument_id = str(coordinator_status.get("selected_instrument_id") or coordinator_status.get("instrument_id") or config.instrument_id)
+    market = dict(HyperliquidTestnetMarketReader().read(instrument_id))
+    plan = _park_plan_to_lifecycle_plan(stored, config=config, market=market)
+    from services.broker_composition import BrokerBuildContext, build_broker_execution_port
+    context = BrokerBuildContext(
+        output_root=Path(output_root), execution_mode="live", live_trading_enabled=False,
+        broker_config={"provider": "standard_broker", "broker_id": "hyperliquid", "environment": "testnet", "transport_profile": TESTNET_PROFILE, "account_id": config.account_address, "runtime_id": config.runtime_id, "release_sha": config.release_sha, "standard_broker_release_sha": config.standard_broker_release_sha, "capability_revision": config.capability_revision, "secret_file": str(config.secret_file), "instrument_id": instrument_id, "instrument_binding": {"instrument_id": instrument_id}, "market_source": {"source_id": str(market.get("source") or "hyperliquid.external_testnet"), "broker_id": "hyperliquid", "environment": "testnet", "instrument_id": instrument_id}, "execution_scope": "hypercore:default"},
+    )
+    broker = build_broker_execution_port(context)
+    from services.testnet_execution import ExternalTestnetExecutionPort
+    port = ExternalTestnetExecutionPort(broker)
+    activation_id = str(coordinator_status.get("activation_id") or "")
+    coordinator = TestnetAutomationCoordinator(output_root)
+
+    def facts() -> dict[str, Any]:
+        raw = port.read_facts(instrument_id=instrument_id)
+        if isinstance(raw, Mapping):
+            return dict(raw)
+        return {key: getattr(raw, key, None) for key in ("status", "cursor", "fills", "positions", "open_orders")}
+
+    def reconcile() -> Mapping[str, Any]:
+        evidence = facts()
+        evidence.update({"status": evidence.get("status") if evidence.get("status") in {"pass", "ok"} else ("pass" if evidence.get("cursor") else "unknown"), "activation_id": activation_id, "environment": "testnet", "account_fingerprint": coordinator_status.get("account_fingerprint"), "release_sha": coordinator_status.get("release_sha")})
+        return evidence
+
+    def advance(_event: Mapping[str, Any]) -> Mapping[str, Any]:
+        evidence = facts()
+        fills = evidence.get("fills") or []
+        if not isinstance(fills, (list, tuple)):
+            raise ValueError("testnet_fill_facts_unknown")
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        family = str(coordinator_status.get("strategy_family") or "").lower()
+        if family == "grid":
+            result = coordinator.status()
+            for fill in fills:
+                result = coordinator.advance_grid_session(plan, broker=broker, fill=dict(fill), market=market, timestamp=timestamp)
+            return result if fills else coordinator.advance_grid_session(plan, broker=broker, price=float(market.get("price") or 0), market=market, timestamp=timestamp)
+        result = coordinator.status()
+        for fill in fills:
+            result = coordinator.advance_dca_session(plan, broker=broker, fill=dict(fill), market=market, timestamp=timestamp)
+        return result if fills else coordinator.advance_dca_session(plan, broker=broker, price=float(market.get("price") or 0), market=market, timestamp=timestamp)
+
+    return advance, reconcile
 
 
 def main(argv: list[str] | None = None) -> int:
