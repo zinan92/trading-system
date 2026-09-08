@@ -75,6 +75,43 @@ def test_grid_initial_ladder_is_complete_and_geometry_is_locked(tmp_path: Path) 
     assert started["events"][-1]["event"] == "ladder_activated"
 
 
+def test_grid_canonical_boundary_and_external_hard_stop_are_accepted(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=False)
+    plan = _plan(lower=75000.0, upper=78531.5)
+    plan["hard_stop"] = 72000.0
+    plan["grid"]["rungs"] = [
+        {"rung": 1, "price": 75000.0, "side": "buy", "take_profit": 75353.15, "hard_stop": 74646.85, "quantity": 0.1},
+        {"rung": 2, "price": 75353.15, "side": "buy", "take_profit": 75706.3, "hard_stop": 74646.85, "quantity": 0.1},
+    ]
+
+    started = GridTestnetLifecycle(tmp_path / "outputs", broker).start(
+        plan, timestamp="2026-09-08T13:00:00+00:00"
+    )
+
+    assert started["status"] == "blocked_protection"
+    assert started["rungs"][0]["price"] == 75000.0
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        (lambda plan: plan["grid"]["rungs"][0].update(price=75001.0, hard_stop=75001.0), "grid_buy_geometry_invalid"),
+        (lambda plan: plan["grid"]["rungs"][0].update(price=74999.0), "grid_rung_outside_boundary"),
+    ],
+)
+def test_grid_canonical_geometry_still_rejects_invalid_rungs(tmp_path: Path, mutation, error: str) -> None:
+    broker, _ = _broker(tmp_path)
+    plan = _plan(lower=75000.0, upper=78531.5)
+    plan["hard_stop"] = 72000.0
+    plan["grid"]["rungs"][0]["hard_stop"] = 74646.85
+    mutation(plan)
+
+    with pytest.raises(GridTestnetLifecycleError, match=error):
+        GridTestnetLifecycle(tmp_path / "outputs", broker).start(
+            plan, timestamp="2026-09-08T13:00:00+00:00"
+        )
+
+
 def test_grid_incomplete_initial_ladder_rolls_back_and_never_activates(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     original_submit = broker.submit_order
