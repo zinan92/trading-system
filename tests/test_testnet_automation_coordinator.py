@@ -62,6 +62,8 @@ def test_activation_persists_exact_testnet_identity_and_stays_execution_blocked(
     assert result["activation_id"] == activation_digest(_activation())
     assert result["network_operation_invoked"] is False
     assert result["secret_material_present"] is False
+    assert result["execution_slice"]["execution_slice_id"].startswith("execution-activation:")
+    assert result["execution_slice"]["broker_binding"]["instrument_id"] == "BTC-USD-PERP"
 
     current = json.loads(
         (tmp_path / "outputs" / "testnet_automation" / "current.json").read_text()

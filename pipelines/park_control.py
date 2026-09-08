@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,8 @@ from services.park_telegram_runtime import (
     ParkTelegramWorker,
 )
 from services.scheduler_ownership import SchedulerOwnershipGuard
+from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+from services.testnet_scheduler import TestnetScheduler
 from services.telegram_bot_transport import (
     TelegramBotTransport,
     TelegramBotTransportError,
@@ -47,6 +50,24 @@ from services.telegram_bot_transport import (
 def _latest(path: Path) -> dict[str, Any]:
     rows = load_json(path)
     return dict(rows[-1]) if rows and isinstance(rows[-1], dict) else {}
+
+
+def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") -> dict[str, Any]:
+    """Run the local Testnet scheduler heartbeat in the Park control pass.
+
+    The scheduler is deliberately dormant until its local ownership receipt
+    and activation already exist. A missing/blocked Testnet session therefore
+    cannot block the independent Paper pass.
+    """
+    coordinator = TestnetAutomationCoordinator(output_root)
+    scheduler = TestnetScheduler(output_root, coordinator, owner_id=owner_id, runtime_mode="local")
+    guard = scheduler.guard.verify()
+    if not guard.get("ok"):
+        return {"status": "not_applicable", "reason": guard.get("blocker"), "paper_only": True}
+    if scheduler.status().get("status") not in {"active", "reconcile_required"}:
+        return {"status": "not_applicable", "reason": "testnet_scheduler_not_active", "paper_only": True}
+    tick_id = "park-control:" + datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return scheduler.tick(tick_id=tick_id, event={"kind": "market_heartbeat"})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -103,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
         )
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
+        testnet_control = run_testnet_control_tick(output_root)
         legacy_cutover = run_legacy_cutover_once(
             output_root,
             config=config,
@@ -146,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             "schema_version": "park-control-v1",
             "status": "pass" if execution.get("status") != "blocked" else "blocked",
             "telegram": telegram,
+            "testnet_control": testnet_control,
             "legacy_cutover": legacy_cutover,
             "execution": execution,
             "delivery": delivery,

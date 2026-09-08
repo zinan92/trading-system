@@ -1,4 +1,4 @@
-"""Cloud-owned Testnet scheduler boundary for the Automation Coordinator."""
+"""Local-owner Testnet scheduler boundary for the Automation Coordinator."""
 
 from __future__ import annotations
 
@@ -30,6 +30,10 @@ class TestnetSchedulerOwnershipStore(SchedulerOwnershipStore):
         super().__init__(output_root, now=clock, scope="testnet_only")
 
     def initialize_cloud(self, *, owner_id: str) -> dict[str, Any]:
+        del owner_id
+        raise ValueError("testnet_scheduler_local_only")
+
+    def initialize_local(self, *, owner_id: str = "local-mac") -> dict[str, Any]:
         with self._lock():
             if self.current():
                 raise ValueError("testnet_scheduler_ownership_already_initialized")
@@ -38,16 +42,12 @@ class TestnetSchedulerOwnershipStore(SchedulerOwnershipStore):
                 active_owner_id=self._owner(owner_id),
                 previous_owner_id=None,
                 epoch=1,
-                action="initialize_cloud",
+                action="initialize_local",
             )
-
-    def initialize_local(self, *, owner_id: str = "local-mac") -> dict[str, Any]:
-        del owner_id
-        raise ValueError("testnet_scheduler_cloud_only")
 
 
 class TestnetSchedulerGuard:
-    """Fail-closed guard that permits only the configured Cloud owner."""
+    """Fail-closed guard that permits only the configured local owner."""
 
     __test__ = False
 
@@ -68,9 +68,9 @@ class TestnetSchedulerGuard:
     def verify(self) -> dict[str, Any]:
         checked_at = _timestamp(self.clock)
         current = self.store.current()
-        if self.runtime_mode != "cloud":
+        if self.runtime_mode != "local":
             return self._blocked(
-                "testnet_scheduler_cloud_only",
+                "testnet_scheduler_local_only",
                 current,
                 checked_at,
                 self.runtime_mode,
@@ -379,8 +379,50 @@ class TestnetScheduler:
             "blocker": None,
             "advance_result": advanced,
             "alerts_authorize_actions": False,
+            "heartbeat": {"status": "fresh", "observed_at": now, "tick_id": tick_key},
         }
         return self._record_tick(tick_key, result)
+
+    def dead_man(
+        self,
+        *,
+        timestamp: str | datetime | None = None,
+        timeout_seconds: int = 300,
+    ) -> dict[str, Any]:
+        """Persist a stale-heartbeat result without issuing a control action."""
+        now = self._clock_datetime() if timestamp is None else (
+            datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+            if isinstance(timestamp, str) else timestamp
+        )
+        if now.tzinfo is None:
+            raise ValueError("scheduler timestamp timezone missing")
+        rows = load_json(self.ticks_path)
+        latest = next((row for row in reversed(rows) if isinstance(row, Mapping)), None)
+        observed = latest.get("occurred_at") if isinstance(latest, Mapping) else None
+        age = None
+        if observed:
+            age = max(
+                0.0,
+                (
+                    now.astimezone(timezone.utc)
+                    - datetime.fromisoformat(str(observed).replace("Z", "+00:00")).astimezone(timezone.utc)
+                ).total_seconds(),
+            )
+        stale = age is None or age > int(timeout_seconds)
+        current = self.status()
+        return self._save_state(
+            {
+                **current,
+                "event": "scheduler_dead_man",
+                "occurred_at": now.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+                "dead_man": {
+                    "status": "execution_tick_scheduler_down" if stale else "fresh",
+                    "age_seconds": age,
+                    "timeout_seconds": int(timeout_seconds),
+                },
+                "next_action": "notify_park_and_wait" if stale else current.get("next_action"),
+            }
+        )
 
     def _record_tick(self, tick_id: str, value: Mapping[str, Any]) -> dict[str, Any]:
         row = {**dict(value), "tick_id": tick_id}

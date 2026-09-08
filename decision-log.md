@@ -17726,3 +17726,33 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused Telegram and Dashboard suites run with `PYTHONPATH=src`.
 - No deployment, launchd operation, live path, data source, or port 8100 API
   change is included.
+
+# 2026-09-08 — Local Testnet control tick and activation slice binding (#1146)
+
+## Decision
+
+- `pipelines.park_control` invokes the local Testnet scheduler only when a
+  local ownership receipt and active session already exist. The Testnet tick
+  is therefore independent from the Park Paper pass and records a fresh
+  heartbeat without authorizing an order.
+- Coordinator activation materializes one pending, identity-bound execution
+  slice for the explicitly confirmed instrument when no selector result is
+  present. A later `select_candidate` with fresh market/account facts replaces
+  this envelope with the Portfolio Gate result before lifecycle execution.
+- Testnet scheduler ownership is local-only. `initialize_cloud` and cloud
+  runtime guards fail closed; no launchd files or running output roots are
+  changed by this Issue.
+
+## Gotchas
+
+- The activation slice is a pending allocation envelope, not execution proof;
+  Paper/Testnet order receipts and external 12h unattended evidence remain
+  separate owner-deployed verification gates.
+- `dead_man()` is an observer/persistence seam only. It never retries,
+  cancels, flattens, or authorizes a command after a stale heartbeat.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_testnet_scheduler.py tests/test_dashboard_control_plane.py tests/test_testnet_automation_coordinator.py tests/test_testnet_execution_order_port.py` — 71 passed.
+- `git diff --check` passed. No deployment, launchd operation, data source,
+  HTTP 8100 contract, or live-money path was changed.
