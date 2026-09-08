@@ -23,6 +23,30 @@ SUPPORTED_CANDLE_INTERVALS = {
     "4h": 4 * 60 * 60,
     "1d": 24 * 60 * 60,
 }
+DEFAULT_MAX_ORACLE_DEVIATION_BPS = 50.0
+MAX_ORACLE_DEVIATION_ENV = "HYPERLIQUID_TESTNET_MAX_ORACLE_DEVIATION_BPS"
+
+
+def oracle_deviation_config(
+    environ: Mapping[str, str] | None = None,
+    *,
+    environment: str = "testnet",
+) -> tuple[float, str]:
+    """Resolve the oracle gate without allowing non-Testnet overrides."""
+
+    if str(environment).strip().lower() != "testnet":
+        return DEFAULT_MAX_ORACLE_DEVIATION_BPS, "default"
+    env = environ if environ is not None else os.environ
+    raw = str(env.get(MAX_ORACLE_DEVIATION_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_MAX_ORACLE_DEVIATION_BPS, "default"
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_ORACLE_DEVIATION_BPS, "default"
+    if value < 0:
+        return DEFAULT_MAX_ORACLE_DEVIATION_BPS, "default"
+    return value, "env"
 
 
 class HyperliquidTestnetMarketError(ValueError):
@@ -39,11 +63,22 @@ class HyperliquidTestnetMarketReader:
         endpoint: str = HYPERLIQUID_TESTNET_INFO_URL,
         timeout_seconds: float = 5.0,
         clock: Callable[[], float] = time.time,
+        max_oracle_deviation_bps: float | None = None,
+        max_oracle_deviation_bps_source: str | None = None,
     ) -> None:
         self.opener = opener
         self.endpoint = str(endpoint)
         self.timeout_seconds = max(0.5, float(timeout_seconds))
         self.clock = clock
+        if max_oracle_deviation_bps is None:
+            configured, source = oracle_deviation_config()
+        else:
+            configured = float(max_oracle_deviation_bps)
+            source = str(max_oracle_deviation_bps_source or "env")
+        if configured < 0:
+            raise ValueError("testnet_max_oracle_deviation_bps_invalid")
+        self.max_oracle_deviation_bps = configured
+        self.max_oracle_deviation_bps_source = source
 
     def read(self, instrument_id: str = "BTC-USD-PERP") -> dict[str, Any]:
         instrument = str(instrument_id or "").strip()
@@ -140,7 +175,8 @@ class HyperliquidTestnetMarketReader:
             "impact": impact,
             "depth_notional": depth_notional,
             "max_slippage": max(50.0, ask - bid),
-            "max_oracle_deviation_bps": 50.0,
+            "max_oracle_deviation_bps": self.max_oracle_deviation_bps,
+            "max_oracle_deviation_bps_source": self.max_oracle_deviation_bps_source,
             "mapping_revision": mapping_revision,
             "universe_revision": universe_revision,
             "connection_epoch": "epoch:" + source_cursor[7:23],

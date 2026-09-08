@@ -8,6 +8,19 @@ Mainnet/live trading.
 
 ## Before Park confirms
 
+For the attended Testnet proof only, the owner may explicitly configure the
+oracle deviation gate in the Dashboard/control-plane environment:
+
+```sh
+export HYPERLIQUID_TESTNET_MAX_ORACLE_DEVIATION_BPS=100
+```
+
+The default remains 50 bps. This variable is read only by the Testnet market
+path; Mainnet/live paths remain fixed at 50 bps. The resulting market document,
+Dashboard preview, and receipt record both the threshold and whether it came
+from `default` or `env`. The owner applies this setting in the already-approved
+Dashboard/control process; this runbook does not modify launchd or any plist.
+
 Prepare a fresh immutable activation and Grid plan for `BTC-USD-PERP`. The
 activation must contain the same `plan_digest`, account fingerprint, release
 SHA, runtime ID, and capability revision

@@ -17992,6 +17992,34 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused tests cover a complete replay, missing tick/boundary, and unknown
   control result.
 
+# 2026-09-08 — Make Testnet oracle deviation threshold configurable (#1169)
+
+## Decision
+
+- Keep the Hyperliquid Testnet oracle deviation default at 50 bps, while
+  allowing `HYPERLIQUID_TESTNET_MAX_ORACLE_DEVIATION_BPS` to override it for
+  the explicit Testnet attended-proof environment.
+- Record `max_oracle_deviation_bps` and
+  `max_oracle_deviation_bps_source` (`default` or `env`) in the market
+  document and every Dashboard preview/receipt that carries those market
+  facts. Mainnet/live paths remain fixed at 50 bps and do not read this env.
+
+## Gotchas
+
+- The 100 bps setting is a Testnet data-quality accommodation only; it does
+  not change any live path or authorize an order. The owner must set it in the
+  Dashboard/control process for attended proof; this change does not modify
+  launchd or a plist.
+- Invalid or negative values fall back to the safe 50 bps default and are
+  recorded as `default`.
+
+## Verification
+
+- Focused market-reader and runtime tests cover default 50 bps, Testnet env
+  override to 100 bps, and non-Testnet env rejection. Dashboard preview and
+  lifecycle receipt propagation remain covered by the existing market-fact
+  projection path.
+
 # 2026-09-08 — Add read-only local owner Testnet rollout gate (#1147)
 
 ## Decision
