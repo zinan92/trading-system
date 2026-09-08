@@ -82,6 +82,29 @@
 - `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_standard_broker_external_execution.py` — 32 passed.
 - `git diff --check` — passed.
 
+# 2026-09-09 — Reconcile broker-absent Grid rows at hard-stop terminal (#1216)
+
+## Decision
+
+- When terminal broker truth confirms zero open orders and zero positions, a
+  local `accepted` or `cancel_pending` row is reconciled as `cancelled` only
+  when it has no linked fills and its Grid line is flat. Each row records
+  `cancel_reason=broker_absent_reconciled` and a durable event.
+- Any account position, linked fill, malformed local line, or failed broker
+  truth query remains blocked; the reconciliation reason is
+  `local_row_missing_but_position_open` where local exposure cannot be proved
+  absent.
+
+## Gotchas
+
+- The supplied dashboard state was copied into a redacted fixture only. No
+  online output root, Testnet service, LaunchAgent, HTTP 8100 contract, or
+  live-money path was changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py` — 28 passed.
+
 # 2026-09-08 — Bind durable Dashboard approval to Testnet ticks and repair deferred exception handling (#1202)
 
 ## Decision
