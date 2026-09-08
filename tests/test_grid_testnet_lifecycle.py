@@ -478,6 +478,27 @@ def test_broker_absent_row_with_position_or_fill_remains_blocked(
     assert any(row["state"] == "accepted" for row in blocked["orders"])
 
 
+def test_broker_truth_query_failure_remains_blocked(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    lifecycle.start(plan, timestamp="2026-09-08T13:47:21+00:00")
+    state = lifecycle._state(plan)
+    state.update(status="blocked_reconciliation", blocker="hard_stop_reconciliation_blocked", hard_stop_requested=True)
+    lifecycle._save(state)
+
+    def unavailable(*_args, **_kwargs):
+        raise TimeoutError("broker unavailable")
+
+    broker.request = unavailable
+    blocked = lifecycle.on_market_event(plan, price=78488.5, timestamp="2026-09-08T16:05:00+00:00")
+
+    assert blocked["status"] == "blocked_reconciliation"
+    assert blocked["blocker"] == "hard_stop_reconciliation_blocked"
+    assert blocked["reconciliation"]["reason"] == "broker_truth_query_failed:TimeoutError:broker unavailable"
+    assert all(row["state"] == "accepted" for row in blocked["orders"])
+
+
 def test_blocked_interrupt_still_cancels_resting_entries(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
