@@ -18478,3 +18478,31 @@ auditable datafeed port; broker execution remains a separate port.
 - `PYTHONPATH=src ~/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python -c 'import nautilus_trader; import pipelines.park_control'` — `nautilus_import_gate=pass`.
 - `PYTHONPATH=src python3 -m compileall -q pipelines/park_control.py services/testnet_scheduler.py services/grid_testnet_lifecycle.py` and `git diff --check` — passed.
 - `/opt/homebrew/bin/gitleaks git --no-banner --redact --log-opts='--all'` — 1162 commits scanned; no leaks found.
+
+# 2026-09-08 — Reuse the coherent Testnet market document for scheduled ticks (#1204)
+
+## Decision
+
+- Extract the proof driver's market document assembler into
+  `services/testnet_market_document.py`; it remains the single source for the
+  23 required facts, BBO self-check, and bounded five-attempt retry.
+- Each Park Testnet tick now reads the bound broker `market_fact` and a
+  same-attempt Hyperliquid reader snapshot before calling the Coordinator.
+  Reader quality and the configured `HYPERLIQUID_TESTNET_MAX_ORACLE_DEVIATION_BPS`
+  therefore remain aligned with the proof path.
+- Market assembly failures return a typed scheduler failure with the concrete
+  reason and details; the existing scheduler warning policy keeps the first two
+  failures as warnings and blocks only on the third consecutive failure.
+
+## Gotchas
+
+- The tick market read is intentionally refreshed per tick; the earlier
+  callback-construction market read is retained only for legacy stored-plan
+  projection and is not passed to lifecycle advancement.
+- Validation used temporary test output only. No online output root, Testnet
+  service, LaunchAgent, risk gate, HTTP 8100 interface, or live-money path was
+  changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_park_control.py tests/test_testnet_scheduler.py` — 42 passed.

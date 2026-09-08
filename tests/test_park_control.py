@@ -126,12 +126,28 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
 
     class Market:
         def read(self, instrument_id):
-            return {"source": "fake", "price": "100", "instrument_id": instrument_id, "observed_at": "2026-09-08T01:00:00+00:00"}
+            return {
+                "source": "fake", "price": "100", "instrument_id": instrument_id,
+                "observed_at": "2026-09-08T01:00:00+00:00", "execution_ready": True,
+                "fresh": True, "is_synthetic": False, "fallback_policy": "none",
+                "bid": "99", "ask": "101", "mid": "100", "mark": "100",
+                "oracle": "100", "impact": "100", "depth_notional": "1000",
+                "max_slippage": "10", "max_oracle_deviation_bps": "5",
+                "cursor": "cursor", "broker_id": "hyperliquid", "environment": "testnet",
+                "asset_index": 0, "mapping_revision": "mapping", "universe_revision": "universe",
+                "connection_epoch": "epoch", "freshness": "fresh",
+            }
 
     class Broker:
         transport_state = "external_testnet"
         broker_config = {"transport_profile": "hyperliquid-testnet-position-protection", "environment": "testnet", "real_money_eligible": False, "live_trading_enabled": False}
         fills = []
+
+        def market_fact(self, *, instrument_id, now):
+            return {
+                "instrument_id": instrument_id, "price": "100", "source": "fake",
+                "mapping_revision": "mapping", "observed_at": now.isoformat(),
+            }
 
         def read_facts(self, **_kwargs):
             return {"status": "pass", "cursor": "fake-cursor", "fills": list(self.fills), "positions": [], "open_orders": []}

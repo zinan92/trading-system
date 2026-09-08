@@ -179,6 +179,27 @@ def test_scheduler_blocks_only_after_three_consecutive_advance_failures(tmp_path
     assert [row["advance_failure_count"] for row in results] == [1, 2, 3]
 
 
+def test_market_assembly_warning_preserves_reason_details_until_third_failure(tmp_path: Path) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current.update({"status": "grid_running", "execution_enabled": True})
+    coordinator._record(current)
+
+    def failed(_event):
+        return {
+            "status": "failed",
+            "reason": "testnet_market_not_authoritative:market_identity_missing",
+            "market_failure": {"reason": "market_identity_missing", "fields": ["cursor"]},
+        }
+
+    results = [scheduler.tick(tick_id=f"market-{n}", event={"kind": "market_heartbeat"}, advance=failed, timestamp=NOW) for n in range(1, 4)]
+
+    assert [row["event"] for row in results] == ["scheduler_advance_warning", "scheduler_advance_warning", "scheduler_advance_blocked"]
+    assert results[0]["warning"] == "testnet_market_not_authoritative:market_identity_missing"
+    assert results[0]["advance_result"]["market_failure"] == {"reason": "market_identity_missing", "fields": ["cursor"]}
+
+
 def test_restart_reconciles_before_event_progression(tmp_path: Path) -> None:
     scheduler, coordinator = _scheduler(tmp_path)
     activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)

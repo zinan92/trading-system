@@ -35,6 +35,13 @@ from services.strategy_control_plane import StrategyControlMachineError
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.dashboard_control_plane import public_catalog_loader
 from services.grid_testnet_lifecycle import GridTestnetLifecycle, GridTestnetLifecycleError
+from services.testnet_market_document import (
+    MARKET_BBO_FIELDS as _MARKET_BBO_FIELDS,
+    MARKET_READ_ATTEMPTS as _MARKET_READ_ATTEMPTS,
+    build_market_document as _build_shared_market_document,
+    read_coherent_market as _read_shared_coherent_market,
+    MarketDocumentError,
+)
 
 
 PREVIEWS = Path("dashboard_control_plane/previews.json")
@@ -48,9 +55,6 @@ class ProofDriverError(ValueError):
         self.details = details
         super().__init__(reason_code)
 
-
-_MARKET_BBO_FIELDS = ("bid", "ask", "mid")
-_MARKET_READ_ATTEMPTS = 5
 
 # These are the fields consumed immediately before GridTestnetLifecycle can
 # submit its first order.  Keep this list explicit: adding a lifecycle gate
@@ -66,60 +70,13 @@ LIFECYCLE_RISK_FIELDS = (
 )
 
 
-def _bbo_check(market: Mapping[str, Any]) -> dict[str, Any]:
-    """Return an auditable BBO check without normalising or changing facts."""
-
-    try:
-        bid, ask, mid = (Decimal(str(market[field])) for field in _MARKET_BBO_FIELDS)
-        passed = bid < ask and bid <= mid <= ask
-    except (KeyError, InvalidOperation, TypeError, ValueError):
-        bid = ask = mid = None
-        passed = False
-    return {
-        "bid": str(bid) if bid is not None else market.get("bid"),
-        "mid": str(mid) if mid is not None else market.get("mid"),
-        "ask": str(ask) if ask is not None else market.get("ask"),
-        "passed": passed,
-    }
-
-
 def build_market_document(
     preview: Mapping[str, Any], binding_market: Mapping[str, Any], *, instrument_id: str
 ) -> dict[str, Any]:
-    """Combine Dashboard quality with the protected binding fact.
-
-    Missing fields remain missing, except for the protected profile's explicit
-    no-fallback invariant, so proof validation stays fail-closed.
-    """
-    dashboard_market = preview.get("market")
-    if not isinstance(dashboard_market, Mapping) or not isinstance(binding_market, Mapping):
-        raise ProofDriverError("market_fact_invalid")
-    binding = dict(binding_market)
-    source = str(binding.get("source") or "").strip().lower()
-    price = binding.get("price")
-    observed_at = binding.get("observed_at")
-    if not source or price in (None, "") or observed_at in (None, ""):
-        raise ProofDriverError("market_fact_invalid")
-
-    market = dict(dashboard_market)
-    # Keep Dashboard's richer quality fields when the adapter exposes only its
-    # sparse contract, while binding metadata remains authoritative when set.
-    market.update({key: value for key, value in binding.items() if value is not None})
-    market["source"] = source
-    market["instrument_id"] = str(binding.get("instrument_id") or instrument_id)
-    market["mid"] = price
-    market["observed_at"] = observed_at
-    # The protected exact-source Testnet profile has no fallback by contract.
-    market.setdefault("fallback_policy", "none")
-    if "fresh" not in market and "freshness" in binding:
-        market["fresh"] = str(binding["freshness"]).lower() == "fresh"
-
-    missing = [field for field in proof._MARKET_REQUIRED if field not in market]
-    if missing:
-        raise ProofDriverError("market_facts_missing", fields=missing)
-    if not _bbo_check(market)["passed"]:
-        raise ProofDriverError("market_bbo_inconsistent", market_check=_bbo_check(market))
-    return market
+    try:
+        return _build_shared_market_document(preview, binding_market, instrument_id=instrument_id)
+    except MarketDocumentError as exc:
+        raise ProofDriverError(exc.reason_code, **exc.details) from exc
 
 
 def read_coherent_market(
@@ -130,58 +87,16 @@ def read_coherent_market(
     sleep_fn: Any = time.sleep,
     market_reader: Any = None,
     max_attempts: int = _MARKET_READ_ATTEMPTS,
+    read_reader_always: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Read a complete market snapshot and retry only an inconsistent BBO.
-
-    Some protected bindings expose only the executable ticker. In that case
-    the credential-free Hyperliquid reader supplies the complete single-read
-    market snapshot; the binding price and identity are still checked against
-    it before it is admitted to the proof inputs.
-    """
-
-    checks: list[dict[str, Any]] = []
-    reader = market_reader or HyperliquidTestnetMarketReader()
-    for attempt in range(1, max_attempts + 1):
-        observed_at = datetime.now(timezone.utc)
-        try:
-            raw_binding = broker.market_fact(instrument_id=instrument_id, now=observed_at)
-        except Exception as exc:  # noqa: BLE001 - redact provider details.
-            raise ProofDriverError("market_fact_unavailable") from exc
-        if not isinstance(raw_binding, Mapping):
-            raise ProofDriverError("market_fact_invalid")
-        try:
-            if all(field in raw_binding for field in proof._MARKET_REQUIRED):
-                market = build_market_document(preview, raw_binding, instrument_id=instrument_id)
-            else:
-                try:
-                    raw_reader = reader.read(instrument_id)
-                except Exception as exc:  # noqa: BLE001 - redact provider details.
-                    raise ProofDriverError("market_fact_unavailable") from exc
-                if not isinstance(raw_reader, Mapping):
-                    raise ProofDriverError("market_fact_invalid")
-                if str(raw_binding.get("price")) != str(raw_reader.get("price")):
-                    raise ProofDriverError("market_price_mismatch")
-                combined = dict(raw_reader)
-                # Binding identity is authoritative for the later proof gate.
-                for field in ("source", "mapping_revision"):
-                    if raw_binding.get(field) not in (None, ""):
-                        combined[field] = raw_binding[field]
-                market = build_market_document(preview, combined, instrument_id=instrument_id)
-        except ProofDriverError as exc:
-            if exc.reason_code != "market_bbo_inconsistent":
-                raise
-            check = dict(exc.details.get("market_check") or {})
-            check.update({"attempt": attempt})
-            checks.append(check)
-            if attempt == max_attempts:
-                raise ProofDriverError("market_bbo_inconsistent", attempts=checks) from exc
-            sleep_fn(1.0)
-            continue
-        check = _bbo_check(market)
-        check.update({"attempt": attempt})
-        checks.append(check)
-        return market, checks
-    raise ProofDriverError("market_bbo_inconsistent", attempts=checks)
+    try:
+        return _read_shared_coherent_market(
+            preview, broker, instrument_id=instrument_id, sleep_fn=sleep_fn,
+            market_reader=market_reader, max_attempts=max_attempts,
+            read_reader_always=read_reader_always,
+        )
+    except MarketDocumentError as exc:
+        raise ProofDriverError(exc.reason_code, **exc.details) from exc
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:

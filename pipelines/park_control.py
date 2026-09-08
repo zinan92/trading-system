@@ -44,6 +44,7 @@ from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.testnet_scheduler import TestnetScheduler
 from services.testnet_plan_builder import build_plan
+from pipelines.testnet_proof_driver import ProofDriverError, read_coherent_market
 from services.telegram_bot_transport import (
     TelegramBotTransport,
     TelegramBotTransportError,
@@ -155,7 +156,8 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
             return (lambda _event: {"status": "blocked", "reason": f"plan_source_missing:{digest}"}, None)
         plan = None
     instrument_id = str(coordinator_status.get("selected_instrument_id") or coordinator_status.get("instrument_id") or config.instrument_id)
-    market = dict(HyperliquidTestnetMarketReader().read(instrument_id))
+    market_reader = HyperliquidTestnetMarketReader()
+    market = dict(market_reader.read(instrument_id))
     if plan is None:
         plan = _park_plan_to_lifecycle_plan(stored, config=config, market=market)
     from services.broker_composition import BrokerBuildContext, build_broker_execution_port
@@ -195,16 +197,35 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         if not isinstance(fills, (list, tuple)):
             raise ValueError("testnet_fill_facts_unknown")
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        # Every tick gets one binding market_fact and one same-attempt public
+        # reader snapshot.  Keep this read outside the lifecycle so a quality
+        # failure becomes a scheduler warning before the coordinator gate.
+        try:
+            tick_market, market_checks = read_coherent_market(
+                preview if isinstance(preview.get("market"), Mapping) else {"market": {}},
+                broker,
+                instrument_id=instrument_id,
+                market_reader=market_reader,
+                read_reader_always=True,
+            )
+        except ProofDriverError as exc:
+            return {
+                "status": "failed",
+                "reason": f"testnet_market_not_authoritative:{exc.reason_code}",
+                "market_failure": {"reason": exc.reason_code, **exc.details},
+            }
         family = str(coordinator_status.get("strategy_family") or "").lower()
         if family == "grid":
             result = coordinator.status()
             for fill in fills:
-                result = coordinator.advance_grid_session(plan, broker=broker, fill=dict(fill), market=market, timestamp=timestamp)
-            return result if fills else coordinator.advance_grid_session(plan, broker=broker, price=float(market.get("price") or 0), market=market, timestamp=timestamp)
+                result = coordinator.advance_grid_session(plan, broker=broker, fill=dict(fill), market=tick_market, timestamp=timestamp)
+            result = result if fills else coordinator.advance_grid_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
+            return {**result, "market_checks": market_checks}
         result = coordinator.status()
         for fill in fills:
-            result = coordinator.advance_dca_session(plan, broker=broker, fill=dict(fill), market=market, timestamp=timestamp)
-        return result if fills else coordinator.advance_dca_session(plan, broker=broker, price=float(market.get("price") or 0), market=market, timestamp=timestamp)
+            result = coordinator.advance_dca_session(plan, broker=broker, fill=dict(fill), market=tick_market, timestamp=timestamp)
+        result = result if fills else coordinator.advance_dca_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
+        return {**result, "market_checks": market_checks}
 
     return advance, reconcile
 
