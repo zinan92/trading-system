@@ -1,5 +1,36 @@
 # Decision Log
 
+## 2026-09-08 — Deliver attended Hyperliquid Testnet Grid execution seam (#1145)
+
+### Decision
+
+- Bind only the exact `hyperliquid-testnet-position-protection` profile for
+  external Testnet execution. The coordinator rejects other profiles,
+  Mainnet, Paper fallback, and any real-money eligibility.
+- Keep venue translation, signer resolution, protection semantics, canonical
+  fills/fees/positions, and reconciliation in the public `standard-broker`
+  binding. The new execution port only carries immutable request identity and
+  redacted receipts.
+- An unknown submit/cancel/replace/query is durable and fail-closed; there is
+  no blind retry. Protection is submitted and query-confirmed only for the
+  observed filled quantity. Owner-attended execution remains a runbook step.
+
+### Gotchas
+
+- `secret_file` is passed as an opaque reference to standard-broker. This
+  repository never opens, logs, or embeds its content; all automated tests use
+  fixture bindings.
+- Fixture receipts and local tests prove adapter behavior only. They do not
+  satisfy the attended Testnet acceptance until the owner runs the runbook and
+  preserves machine receipts for a real fill and confirmed protection.
+
+### Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_execution*.py`
+  covers exact profile binding, unknown submit, partial-fill facts, protection
+  confirmation, cancel race, and Mainnet rejection.
+- `gitleaks` and the full issue-focused command are run before PR handoff.
+
 ## 2026-09-08 — Opt-in external Strategy adapter shadow mode (#1140)
 
 ### Decision
