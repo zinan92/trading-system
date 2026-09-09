@@ -123,6 +123,30 @@ def test_scheduler_attaches_to_running_coordinator_without_reactivation(tmp_path
     assert coordinator.status()["status"] == "grid_running"
 
 
+def test_scheduler_awaiting_operator_ends_when_coordinator_returns_idle(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+
+    class Coordinator:
+        def status(self):
+            return {"status": "idle", "activation_id": None}
+
+    scheduler = TestnetScheduler(output, Coordinator(), owner_id="local-mac", runtime_mode="local")
+    scheduler._save_state({
+        "status": "awaiting_operator",
+        "activation_id": "activation-terminal",
+        "execution_enabled": False,
+        "next_action": "notify_park_and_wait",
+    })
+
+    result = scheduler.tick(tick_id="terminal-closed", timestamp=NOW)
+
+    assert result["status"] == "idle"
+    assert result["event"] == "scheduler_idle"
+    assert result["activation_id"] is None
+    assert result["next_action"] == "await_activation"
+
+
 def test_scheduler_can_explicitly_resume_a_blocked_running_session(tmp_path: Path) -> None:
     scheduler, coordinator = _scheduler(tmp_path)
     activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)

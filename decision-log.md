@@ -18652,3 +18652,34 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_standard_broker_external_execution.py tests/test_park_control.py` — 18 passed.
 - `git diff --check` — passed.
+
+# 2026-09-09 — Close sealed Testnet terminal before the next Dashboard plan (#1220)
+
+## Decision
+
+- Add the local-only Coordinator `close_terminal` action. It requires a sealed
+  `grid_terminal` or `dca_terminal` lifecycle with `lifecycle.reconciliation.status`
+  equal to `ok` and zero reported open orders and positions, then writes a
+  `testnet-terminal-close-receipt-v1` and returns the Coordinator to `idle`.
+- Dashboard confirmation closes that terminal evidence first and records the
+  prior confirmation as `plan_closed` with `reason=terminal_closed` before
+  activating the new immutable plan.
+- A scheduler session in `awaiting_operator` becomes `idle` once it observes
+  the Coordinator's idle state, allowing the existing activation/attach flow
+  to handle the next session.
+
+## Gotchas
+
+- `reconcile_stop` remains restricted to its existing zero-order pre-execution
+  paths; terminal closure is a separate action and never calls a Broker or
+  network transport.
+- A terminal lifecycle with blocked, missing, or non-zero reconciliation stays
+  fail-closed as `terminal_close_requires_reconciliation`. Validation used
+  temporary output only; no online output, launchd service, HTTP 8100 contract,
+  or live-money path was changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_automation_coordinator.py tests/test_dashboard_control_plane.py tests/test_testnet_scheduler.py` — 87 passed.
+- `git diff --check` — passed.
+- `/opt/homebrew/bin/gitleaks git --no-banner --redact --log-opts='--all'` — 1183 commits scanned; no leaks found.

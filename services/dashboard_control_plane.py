@@ -954,7 +954,13 @@ class DashboardControlPlane:
             return self._blocked_confirmation(preview_digest, sorted(set(blockers)))
 
         rows = load_json(self.output_root / CONFIRMATION_PATH)
-        previous = rows[-1] if rows and isinstance(rows[-1], Mapping) else None
+        previous = next(
+            (
+                row for row in reversed(rows)
+                if isinstance(row, Mapping) and row.get("status") == "confirmed"
+            ),
+            None,
+        )
         if previous and previous.get("status") == "confirmed":
             if str(previous.get("preview_digest") or "") == preview_digest:
                 return dict(previous)
@@ -966,6 +972,35 @@ class DashboardControlPlane:
                     previous,
                     reason="reconciled_idle",
                     coordinator_state=coordinator_status,
+                    closed_at=str(now or self.clock()),
+                )
+                write_json(self.output_root / CONFIRMATION_PATH, [*rows, migration])
+                rows = [*rows, migration]
+            elif coordinator_status.get("status") in {"grid_terminal", "dca_terminal"}:
+                close_terminal = getattr(coordinator, "command", None)
+                if not callable(close_terminal):
+                    return self._blocked_confirmation(
+                        preview_digest, ["terminal_close_requires_reconciliation"]
+                    )
+                try:
+                    close_result = close_terminal(
+                        "close_terminal",
+                        {},
+                        command_id=f"dashboard-close-terminal:{previous_activation_id}",
+                        now=str(now or self.clock()),
+                    )
+                except Exception as exc:  # noqa: BLE001 - close remains fail-closed.
+                    code = str(getattr(exc, "code", "")).strip() or "terminal_close_requires_reconciliation"
+                    return self._blocked_confirmation(preview_digest, [code])
+                closed_status = self._coordinator_status(coordinator)
+                if closed_status.get("status") != "idle":
+                    return self._blocked_confirmation(
+                        preview_digest, ["terminal_close_requires_reconciliation"]
+                    )
+                migration = self._plan_closed(
+                    previous,
+                    reason="terminal_closed",
+                    coordinator_state=closed_status,
                     closed_at=str(now or self.clock()),
                 )
                 write_json(self.output_root / CONFIRMATION_PATH, [*rows, migration])

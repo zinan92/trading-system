@@ -996,6 +996,55 @@ def test_idle_coordinator_migrates_historical_confirmation_before_new_plan(tmp_p
     assert result["status"] == "confirmed"
 
 
+def test_confirm_and_run_closes_sealed_terminal_before_new_plan(tmp_path: Path) -> None:
+    from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+
+    output = tmp_path / "outputs"
+    plane = DashboardControlPlane(output, catalog_loader=_eligible_catalog_loader)
+    coordinator = TestnetAutomationCoordinator(output)
+    first_preview = _confirmable_preview()
+    plane.persist_preview(first_preview)
+    first = plane.confirm_and_run(
+        first_preview,
+        confirmation={"preview_digest": first_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=coordinator,
+    )
+    coordinator._record({
+        **coordinator.status(),
+        "status": "grid_terminal",
+        "lifecycle": {
+            "sealed": True,
+            "terminal_reason": "hard_stop",
+            "reconciliation": {
+                "status": "ok",
+                "broker_open_order_count": 0,
+                "local_open_order_count": 0,
+                "broker_position_count": 0,
+            },
+        },
+    })
+    second_preview = {**first_preview, "requested": {**first_preview["requested"], "direction": "short"}}
+    second_preview["preview_digest"] = canonical_preview_digest(second_preview)
+    plane.persist_preview(second_preview)
+
+    result = plane.confirm_and_run(
+        second_preview,
+        confirmation={"preview_digest": second_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
+        coordinator=coordinator,
+        now="2026-09-09T01:00:00+00:00",
+    )
+
+    assert result["status"] == "confirmed"
+    assert result["activation_id"] != first["activation_id"]
+    rows = json.loads((output / "dashboard_control_plane" / "confirmations.json").read_text())
+    terminal_migration = next(row for row in rows if row.get("reason") == "terminal_closed")
+    assert terminal_migration["activation_id"] == first["activation_id"]
+    assert coordinator.status()["status"] == "activated"
+    close_events = [row for row in json.loads((output / "testnet_automation" / "events.json").read_text()) if row.get("action") == "close_terminal"]
+    assert len(close_events) == 1
+    assert close_events[0]["receipt"]["network_operation_invoked"] is False
+
+
 def test_confirm_and_run_rejects_mainnet_and_secret_fields(tmp_path: Path) -> None:
     plane = DashboardControlPlane(tmp_path, catalog_loader=_eligible_catalog_loader)
     preview = _confirmable_preview()
