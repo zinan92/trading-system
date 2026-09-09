@@ -189,8 +189,10 @@ class _Binding:
         self.calls.append(("query_by_idempotency_key", idempotency_key))
         return self.receipt
 
-    def recover(self, intent, *, broker_order_id, state):
-        self.calls.append(("recover", (intent, broker_order_id, state)))
+    def recover(self, intent, *, broker_order_id, state, native_client_order_id=None):
+        self.calls.append(
+            ("recover", (intent, broker_order_id, state, native_client_order_id))
+        )
 
     def recover_client_order(self, intent, *, client_order_id, state):
         self.calls.append(("recover_client_order", (intent, client_order_id, state)))
@@ -371,6 +373,70 @@ def test_external_execution_adapter_exposes_public_unknown_and_restart_recovery(
         "recover",
         "recover_client_order",
     ]
+
+
+def test_external_execution_adapter_passes_native_client_order_id_to_binding() -> None:
+    adapter, binding, _closed = _adapter()
+    request = BrokerOrderRequest(
+        run_date="cycle-1",
+        ticket={
+            "ticket_id": "entry-recovery-native",
+            "instrument_id": "BTC-USD-PERP",
+            "side": "buy",
+            "quantity": "0.001",
+            "order_type": "limit",
+            "limit_price": "60000",
+            "idempotency_key": "entry-recovery-native-key",
+            "client_order_id": "canonical-cloid",
+        },
+    )
+
+    adapter.recover(
+        request,
+        broker_order_id="broker-1",
+        state="resting",
+        native_client_order_id="0x" + "8" * 32,
+    )
+
+    _intent, broker_order_id, state, native_cloid = binding.calls[-1][1]
+    assert (broker_order_id, state, native_cloid) == (
+        "broker-1",
+        "resting",
+        "0x" + "8" * 32,
+    )
+
+
+def test_external_execution_adapter_falls_back_for_legacy_recover_binding() -> None:
+    adapter, binding, _closed = _adapter()
+    recovered = []
+
+    def legacy_recover(intent, *, broker_order_id, state):
+        recovered.append((intent, broker_order_id, state))
+
+    binding.recover = legacy_recover
+    request = BrokerOrderRequest(
+        run_date="cycle-1",
+        ticket={
+            "ticket_id": "entry-recovery-legacy",
+            "instrument_id": "BTC-USD-PERP",
+            "side": "buy",
+            "quantity": "0.001",
+            "order_type": "limit",
+            "limit_price": "60000",
+            "idempotency_key": "entry-recovery-legacy-key",
+            "client_order_id": "canonical-cloid",
+        },
+    )
+
+    adapter.recover(
+        request,
+        broker_order_id="broker-1",
+        state="resting",
+        native_client_order_id="0x" + "9" * 32,
+    )
+
+    assert len(recovered) == 1
+    assert recovered[0][1:] == ("broker-1", "resting")
 
 
 def test_external_execution_cancel_recovers_broker_identity_after_key_error() -> None:

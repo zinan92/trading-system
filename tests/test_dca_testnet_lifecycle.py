@@ -243,6 +243,33 @@ def test_dca_testnet_is_sequential_and_confirms_aggregate_protection(tmp_path: P
     assert second["protection"]["confirmed_operation"] == "query"
 
 
+def test_dca_order_row_persists_native_client_order_id_when_receipt_exposes_it(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", object())
+    receipt = SimpleNamespace(
+        state="resting",
+        order_id="canonical-order-1",
+        client_order_id="canonical-cloid-1",
+        native_client_order_id="0x" + "6" * 32,
+        broker_order_id="2001",
+        account_address="testnet-account",
+        release_sha="a" * 40,
+        provenance=SimpleNamespace(
+            source="fixture",
+            execution_scope="hypercore:default",
+            transport_state="local_fixture",
+            mapping_revision="test",
+        ),
+    )
+
+    row = lifecycle._order_row({"ticket_id": "dca-entry-1"}, receipt)
+
+    assert row["native_client_order_id"] == "0x" + "6" * 32
+
+
 def test_dca_testnet_freezes_before_next_entry_when_protection_capability_missing(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path, protection=False)
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)

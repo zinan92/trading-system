@@ -16,6 +16,8 @@ from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 TESTNET_SCHEDULER_SCHEMA = "testnet-scheduler-ownership-v1"
 _TERMINAL_COORDINATOR_STATES = frozenset({"dca_terminal", "grid_terminal"})
 _SAMPLING_RACE_REASONS = frozenset({"market_price_mismatch", "market_bbo_inconsistent"})
+_FACTS_UNAVAILABLE_PREFIX = "testnet_facts_unavailable:"
+_FACTS_UNAVAILABLE_BLOCK_SECONDS = 600
 
 
 def close_scheduler_session(
@@ -474,10 +476,21 @@ class TestnetScheduler:
                 )
             try:
                 evidence = reconcile()
-            except Exception:  # noqa: BLE001 - no resume after unknown account state.
-                return self._record_tick(
-                    tick_key,
-                    self._blocked("restart_reconciliation_failed", timestamp),
+            except Exception as exc:  # noqa: BLE001 - preserve typed read-side outage evidence.
+                reason = (
+                    f"{_FACTS_UNAVAILABLE_PREFIX}{type(exc).__name__}:"
+                    f"{_redacted_exception_message(exc)}"
+                )
+                return self._record_facts_unavailable(
+                    current, tick_key, now, str(coordinator_status.get("status") or ""),
+                    False, reason, {"status": "failed", "reason": reason},
+                    during_reconcile=True,
+                )
+            if isinstance(evidence, Mapping) and self._is_facts_unavailable(evidence):
+                return self._record_facts_unavailable(
+                    current, tick_key, now, str(coordinator_status.get("status") or ""),
+                    False, str(evidence.get("reason")), evidence,
+                    during_reconcile=True,
                 )
             if not self._valid_reconcile(evidence, current):
                 return self._record_tick(
@@ -538,6 +551,11 @@ class TestnetScheduler:
                     advance_result,
                 )
             if str(advanced.get("status") or "").lower() in {"blocked", "unknown", "fail", "failed"}:
+                if self._is_facts_unavailable(advanced):
+                    return self._record_facts_unavailable(
+                        current, tick_key, now, coordinator_state,
+                        restart_reconciled, str(advanced.get("reason")), advanced,
+                    )
                 if self._is_sampling_race_failure(advanced):
                     return self._record_sampling_race_warning(
                         current, tick_key, now, coordinator_state,
@@ -568,6 +586,8 @@ class TestnetScheduler:
             "alerts_authorize_actions": False,
             "heartbeat": {"status": "fresh", "observed_at": now, "tick_id": tick_key},
             "advance_failure_count": 0,
+            "facts_unavailable_since": None,
+            "facts_unavailable_seconds": 0,
         }
         return self._record_tick(tick_key, result)
 
@@ -594,6 +614,44 @@ class TestnetScheduler:
             "advance_failure_count": count,
             "advance_failure_threshold": self.advance_failure_threshold,
             "advance_result": dict(advance_result or {}),
+            "facts_unavailable_since": None,
+            "facts_unavailable_seconds": 0,
+            "alerts_authorize_actions": False,
+        }
+        return self._record_tick(tick_id, result)
+
+    @staticmethod
+    def _is_facts_unavailable(result: Mapping[str, Any]) -> bool:
+        return str(result.get("reason") or "").startswith(_FACTS_UNAVAILABLE_PREFIX)
+
+    def _record_facts_unavailable(
+        self, current: Mapping[str, Any], tick_id: str, now: str,
+        coordinator_state: str, restart_reconciled: bool, reason: str,
+        advance_result: Mapping[str, Any], *, during_reconcile: bool = False,
+    ) -> dict[str, Any]:
+        since = str(current.get("facts_unavailable_since") or now)
+        since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+        unavailable_seconds = max(0, int((now_dt - since_dt).total_seconds()))
+        blocked = unavailable_seconds >= _FACTS_UNAVAILABLE_BLOCK_SECONDS
+        result = {
+            **current,
+            "event": "scheduler_advance_blocked" if blocked else "scheduler_advance_warning",
+            "status": "blocked" if blocked else ("reconcile_required" if during_reconcile else "active"),
+            "occurred_at": now,
+            "tick_id": tick_id,
+            "coordinator_status": coordinator_state,
+            "restart_reconciled": restart_reconciled,
+            "restart_reconcile_required": during_reconcile,
+            "execution_enabled": False if blocked or during_reconcile else current.get("execution_enabled", True),
+            "next_action": "notify_park_and_wait" if blocked else ("reconcile_before_resume" if during_reconcile else "await_event_or_heartbeat"),
+            "blocker": reason if blocked else None,
+            "warning": None if blocked else reason,
+            "advance_failure_count": int(current.get("advance_failure_count") or 0),
+            "advance_failure_threshold": self.advance_failure_threshold,
+            "facts_unavailable_since": since,
+            "facts_unavailable_seconds": unavailable_seconds,
+            "advance_result": dict(advance_result),
             "alerts_authorize_actions": False,
         }
         return self._record_tick(tick_id, result)
@@ -628,6 +686,8 @@ class TestnetScheduler:
             "advance_failure_count": int(current.get("advance_failure_count") or 0),
             "advance_failure_threshold": self.advance_failure_threshold,
             "advance_result": dict(advance_result),
+            "facts_unavailable_since": None,
+            "facts_unavailable_seconds": 0,
             "alerts_authorize_actions": False,
         }
         return self._record_tick(tick_id, result)

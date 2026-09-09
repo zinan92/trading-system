@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,15 +131,49 @@ def hydrate_order_identities(broker: object, state: Mapping[str, Any]) -> None:
         if not str(row.get("ticket_id") or "").strip():
             raise OrderIdentityHydrationError(f"order[{index}]:ticket_id_missing")
         try:
-            broker.recover(
-                BrokerOrderRequest(run_date=cycle_id, ticket=dict(row)),
-                broker_order_id=broker_order_id,
-                state=recovered_state,
-            )
+            recovery_args = {
+                "broker_order_id": broker_order_id,
+                "state": recovered_state,
+            }
+            native_client_order_id = str(
+                row.get("native_client_order_id") or ""
+            ).strip()
+            if native_client_order_id:
+                recovery_args["native_client_order_id"] = native_client_order_id
+            request = BrokerOrderRequest(run_date=cycle_id, ticket=dict(row))
+            try:
+                broker.recover(request, **recovery_args)
+            except TypeError as exc:
+                if (
+                    not native_client_order_id
+                    or "native_client_order_id" not in str(exc)
+                ):
+                    raise
+                recovery_args.pop("native_client_order_id")
+                broker.recover(request, **recovery_args)
         except Exception as exc:  # noqa: BLE001 - caller converts this to a typed tick blocker.
             raise OrderIdentityHydrationError(
                 f"order[{index}]:recover_{type(exc).__name__}"
             ) from exc
+
+
+def _read_testnet_facts(broker: object, instrument_id: str) -> dict[str, Any]:
+    try:
+        raw = broker.read_public_facts(instrument_id=instrument_id)
+    except Exception as exc:  # noqa: BLE001 - scheduler persists a redacted read-side warning.
+        return {
+            "status": "failed",
+            "reason": (
+                f"testnet_facts_unavailable:{type(exc).__name__}:"
+                f"{_redacted_testnet_facts_message(exc)}"
+            ),
+        }
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {
+        key: getattr(raw, key, None)
+        for key in ("status", "cursor", "fills", "positions", "open_orders")
+    }
 
 
 def _load_testnet_lifecycle_state(
@@ -282,18 +317,19 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         )
 
     def facts() -> dict[str, Any]:
-        raw = broker.read_public_facts(instrument_id=instrument_id)
-        if isinstance(raw, Mapping):
-            return dict(raw)
-        return {key: getattr(raw, key, None) for key in ("status", "cursor", "fills", "positions", "open_orders")}
+        return _read_testnet_facts(broker, instrument_id)
 
     def reconcile() -> Mapping[str, Any]:
         evidence = facts()
+        if str(evidence.get("reason") or "").startswith("testnet_facts_unavailable:"):
+            return evidence
         evidence.update({"status": evidence.get("status") if evidence.get("status") in {"pass", "ok"} else ("pass" if evidence.get("cursor") else "unknown"), "activation_id": activation_id, "environment": "testnet", "account_fingerprint": coordinator_status.get("account_fingerprint"), "release_sha": coordinator_status.get("release_sha")})
         return evidence
 
     def advance(_event: Mapping[str, Any]) -> Mapping[str, Any]:
         evidence = facts()
+        if str(evidence.get("reason") or "").startswith("testnet_facts_unavailable:"):
+            return evidence
         fills = evidence.get("fills") or []
         if not isinstance(fills, (list, tuple)):
             raise ValueError("testnet_fill_facts_unknown")
@@ -331,6 +367,16 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         return {**result, "market_checks": market_checks}
 
     return advance, reconcile
+
+
+def _redacted_testnet_facts_message(exc: BaseException) -> str:
+    message = str(exc).replace("\n", " ").replace("\r", " ").strip()
+    message = re.sub(
+        r"(?i)(secret|private[_-]?key|api[_-]?key|token|password)([=:])[^,; ]+",
+        r"\1\2[REDACTED]",
+        message,
+    )
+    return message[:240] or "no_message"
 
 
 def main(argv: list[str] | None = None) -> int:
