@@ -18,6 +18,53 @@ _TERMINAL_COORDINATOR_STATES = frozenset({"dca_terminal", "grid_terminal"})
 _SAMPLING_RACE_REASONS = frozenset({"market_price_mismatch", "market_bbo_inconsistent"})
 
 
+def close_scheduler_session(
+    output_root: Path,
+    activation_id: str,
+    *,
+    timestamp: str | datetime | None = None,
+) -> dict[str, Any]:
+    """Close the scheduler projection for one terminal Coordinator session."""
+
+    requested = str(activation_id or "").strip()
+    if not requested:
+        raise ValueError("testnet_scheduler_activation_id_required")
+    path = Path(output_root) / "testnet_automation" / "scheduler" / "current.json"
+    rows = load_json(path)
+    current = dict(rows[-1]) if rows and isinstance(rows[-1], Mapping) else {}
+    existing = str(current.get("activation_id") or "").strip()
+    if existing and existing != requested:
+        return current
+    if isinstance(timestamp, datetime):
+        parsed = timestamp
+    elif timestamp is not None:
+        parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    else:
+        parsed = datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        raise ValueError("scheduler timestamp timezone missing")
+    occurred_at = parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+    state = {
+        **current,
+        "schema_version": TESTNET_SCHEDULER_SCHEMA,
+        "event": "scheduler_session_closed",
+        "status": "idle",
+        "occurred_at": occurred_at,
+        "activation_id": None,
+        "previous_activation_id": requested,
+        "coordinator_status": "idle",
+        "coordinator": {"status": "idle", "previous_activation_id": requested},
+        "execution_enabled": False,
+        "restart_reconcile_required": False,
+        "next_action": "await_activation",
+        "blocker": None,
+        "warning": None,
+        "alerts_authorize_actions": False,
+    }
+    write_json(path, [state])
+    return state
+
+
 def _redacted_exception_message(exc: BaseException) -> str:
     """Return a bounded message safe for the durable scheduler receipt."""
     message = str(exc).replace("\n", " ").replace("\r", " ").strip()
@@ -306,8 +353,13 @@ class TestnetScheduler:
             return self._blocked("testnet_scheduler_attach_requires_running_coordinator", timestamp)
         current = self.status()
         existing_id = str(current.get("activation_id") or "")
-        if current.get("status") == "active" and existing_id not in {"", requested}:
+        if existing_id not in {"", requested} and not self._replaceable_session(current):
             return self._blocked("testnet_scheduler_active_session_conflict", timestamp)
+        previous_activation_id = (
+            existing_id
+            if existing_id and existing_id != requested
+            else current.get("previous_activation_id")
+        )
         return self._save_state({
             "schema_version": TESTNET_SCHEDULER_SCHEMA,
             "event": "scheduler_attached",
@@ -316,6 +368,7 @@ class TestnetScheduler:
             "owner_id": self.owner_id,
             "owner_epoch": guard.get("epoch"),
             "activation_id": requested,
+            "previous_activation_id": previous_activation_id,
             "execution_enabled": coordinator.get("execution_enabled") is True,
             "coordinator": coordinator,
             "restart_reconcile_required": False,
@@ -323,6 +376,16 @@ class TestnetScheduler:
             "blocker": None,
             "alerts_authorize_actions": False,
         })
+
+    def can_reattach(self, activation_id: str) -> bool:
+        """Return whether a new running activation may replace durable stale state."""
+
+        requested = str(activation_id or "").strip()
+        current = self.status()
+        existing_id = str(current.get("activation_id") or "").strip()
+        if not requested or requested == existing_id:
+            return False
+        return self._replaceable_session(current)
 
     def resume(
         self,
@@ -669,6 +732,20 @@ class TestnetScheduler:
         return str(value.get("environment") or "").lower() == "testnet"
 
     @staticmethod
+    def _replaceable_session(current: Mapping[str, Any]) -> bool:
+        status = str(current.get("status") or "").strip().lower()
+        if status in {"idle", "awaiting_operator"}:
+            return True
+        if status != "blocked":
+            return False
+        coordinator = current.get("coordinator")
+        coordinator = coordinator if isinstance(coordinator, Mapping) else {}
+        previous_status = str(
+            current.get("coordinator_status") or coordinator.get("status") or ""
+        ).strip().lower()
+        return previous_status == "idle" or previous_status in _TERMINAL_COORDINATOR_STATES
+
+    @staticmethod
     def _idle() -> dict[str, Any]:
         return {
             "schema_version": TESTNET_SCHEDULER_SCHEMA,
@@ -692,4 +769,5 @@ __all__ = [
     "TestnetScheduler",
     "TestnetSchedulerGuard",
     "TestnetSchedulerOwnershipStore",
+    "close_scheduler_session",
 ]

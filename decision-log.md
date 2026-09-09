@@ -1,5 +1,37 @@
 # Decision Log
 
+# 2026-09-09 — Reattach the Testnet scheduler after terminal session close (#1224)
+
+## Decision
+
+- A Park control tick may attach a different running Coordinator activation
+  when the scheduler is `idle`, `awaiting_operator`, or blocked with durable
+  evidence that its previous Coordinator activation was terminal or idle.
+- Scheduler attach/resume receipts retain `previous_activation_id`. A different
+  active or reconcile-required session remains an
+  `testnet_scheduler_active_session_conflict` and is never advanced under the
+  new Coordinator identity.
+- Coordinator `close_terminal` writes the matching scheduler projection to
+  `idle` with event `scheduler_session_closed` before recording the Coordinator
+  close. Dashboard automatic terminal close inherits the same behavior.
+
+## Gotchas
+
+- A generic `blocked` scheduler state is not enough to permit replacement: its
+  recorded `coordinator_status` (or nested Coordinator status) must be terminal
+  or idle. A blocked-but-running previous activation remains fail-closed.
+- Terminal close does not overwrite a scheduler projection already bound to a
+  different activation. The close remains local state reconciliation only and
+  invokes no Broker or network operation.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_testnet_scheduler.py tests/test_testnet_automation_coordinator.py tests/test_dashboard_control_plane.py` — 99 passed.
+- `python3 -m py_compile pipelines/park_control.py services/testnet_scheduler.py services/testnet_automation_coordinator.py services/dashboard_control_plane.py` and `git diff --check` — passed.
+- `gitleaks dir --no-banner --redact=100 .` with gitleaks 8.30.1 — no leaks found (25.82 MB scanned).
+- No launchd service, online runtime directory, HTTP 8100 interface, data
+  source, Testnet network, or live-money path was changed or invoked.
+
 # 2026-09-09 — Separate typed Broker facts from public tick facts (#1222)
 
 ## Decision

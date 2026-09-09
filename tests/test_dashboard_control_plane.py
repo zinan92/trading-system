@@ -998,6 +998,7 @@ def test_idle_coordinator_migrates_historical_confirmation_before_new_plan(tmp_p
 
 def test_confirm_and_run_closes_sealed_terminal_before_new_plan(tmp_path: Path) -> None:
     from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+    from services.testnet_scheduler import TestnetScheduler, TestnetSchedulerOwnershipStore
 
     output = tmp_path / "outputs"
     plane = DashboardControlPlane(output, catalog_loader=_eligible_catalog_loader)
@@ -1009,6 +1010,14 @@ def test_confirm_and_run_closes_sealed_terminal_before_new_plan(tmp_path: Path) 
         confirmation={"preview_digest": first_preview["preview_digest"], "operator_id": "park", "acknowledged": True},
         coordinator=coordinator,
     )
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+    scheduler = TestnetScheduler(output, coordinator, owner_id="local-mac", runtime_mode="local")
+    scheduler._save_state({
+        "status": "awaiting_operator",
+        "event": "scheduler_terminal_wait",
+        "activation_id": first["activation_id"],
+        "coordinator_status": "grid_terminal",
+    })
     coordinator._record({
         **coordinator.status(),
         "status": "grid_terminal",
@@ -1043,6 +1052,10 @@ def test_confirm_and_run_closes_sealed_terminal_before_new_plan(tmp_path: Path) 
     close_events = [row for row in json.loads((output / "testnet_automation" / "events.json").read_text()) if row.get("action") == "close_terminal"]
     assert len(close_events) == 1
     assert close_events[0]["receipt"]["network_operation_invoked"] is False
+    scheduler_state = scheduler.status()
+    assert scheduler_state["status"] == "idle"
+    assert scheduler_state["event"] == "scheduler_session_closed"
+    assert scheduler_state["previous_activation_id"] == first["activation_id"]
 
 
 def test_confirm_and_run_rejects_mainnet_and_secret_fields(tmp_path: Path) -> None:

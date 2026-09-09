@@ -401,9 +401,20 @@ def test_reconcile_stop_keeps_enabled_testnet_activation_blocked(tmp_path: Path)
 
 
 def test_close_terminal_returns_idle_with_local_receipt(tmp_path: Path) -> None:
+    from services.testnet_scheduler import TestnetScheduler, TestnetSchedulerOwnershipStore
+
     coordinator = _coordinator(tmp_path)
     activation = _activation()
     coordinator.activate(activation, command_id="activate-terminal-close")
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+    scheduler = TestnetScheduler(output, coordinator, owner_id="local-mac", runtime_mode="local")
+    scheduler._save_state({
+        "status": "awaiting_operator",
+        "event": "scheduler_terminal_wait",
+        "activation_id": activation_digest(activation),
+        "coordinator_status": "grid_terminal",
+    })
     coordinator._record({
         **coordinator.status(),
         "status": "grid_terminal",
@@ -429,6 +440,11 @@ def test_close_terminal_returns_idle_with_local_receipt(tmp_path: Path) -> None:
     assert result["receipt"]["schema_version"] == "testnet-terminal-close-receipt-v1"
     assert result["receipt"]["terminal_reason"] == "hard_stop"
     assert result["receipt"]["network_operation_invoked"] is False
+    scheduler_state = scheduler.status()
+    assert scheduler_state["status"] == "idle"
+    assert scheduler_state["event"] == "scheduler_session_closed"
+    assert scheduler_state["activation_id"] is None
+    assert scheduler_state["previous_activation_id"] == activation_digest(activation)
 
 
 def test_close_terminal_requires_healthy_reconciliation(tmp_path: Path) -> None:

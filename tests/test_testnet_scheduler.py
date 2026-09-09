@@ -133,6 +133,48 @@ def test_scheduler_attaches_to_running_coordinator_without_reactivation(tmp_path
     assert tick["warning"] is None
 
 
+def test_scheduler_attach_keeps_active_session_conflict_for_new_activation(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+
+    class Coordinator:
+        def status(self):
+            return {"status": "grid_running", "activation_id": "activation-new"}
+
+    scheduler = TestnetScheduler(output, Coordinator(), owner_id="local-mac", runtime_mode="local")
+    scheduler._save_state({"status": "active", "activation_id": "activation-old"})
+
+    result = scheduler.attach("activation-new", timestamp=NOW)
+
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "testnet_scheduler_active_session_conflict"
+
+
+def test_scheduler_only_replaces_blocked_session_after_terminal_or_idle(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+
+    class Coordinator:
+        def status(self):
+            return {"status": "grid_running", "activation_id": "activation-new"}
+
+    scheduler = TestnetScheduler(output, Coordinator(), owner_id="local-mac", runtime_mode="local")
+    for replaceable_status in ("grid_terminal", "dca_terminal", "idle"):
+        scheduler._save_state({
+            "status": "blocked",
+            "activation_id": "activation-old",
+            "coordinator_status": replaceable_status,
+        })
+        assert scheduler.can_reattach("activation-new") is True
+
+    scheduler._save_state({
+        "status": "blocked",
+        "activation_id": "activation-old",
+        "coordinator_status": "grid_running",
+    })
+    assert scheduler.can_reattach("activation-new") is False
+
+
 def test_scheduler_awaiting_operator_ends_when_coordinator_returns_idle(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
