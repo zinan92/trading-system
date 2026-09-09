@@ -256,9 +256,13 @@ class ExternalReconciliationSnapshot:
                 self.funding,
             )
             if self.open_orders is not None and any(
-                receipt.state is OrderState.UNKNOWN for receipt in self.open_orders.fact.data
+                receipt.state is OrderState.UNKNOWN
+                and not receipt.is_unregistered_broker_order
+                for receipt in self.open_orders.fact.data
             ):
                 computed_failures.append("unknown_order_state")
+            if self.unregistered_open_orders:
+                computed_failures.append("unregistered_open_orders")
             if not set(_unique(computed_failures)).issubset(self.failure_reasons):
                 raise ValueError("snapshot failure reasons are not bound to its facts")
         expected = _snapshot_projection(self)
@@ -288,6 +292,22 @@ class ExternalReconciliationSnapshot:
     @property
     def passed(self) -> bool:
         return self.outcome is ExternalReconciliationOutcome.COHERENT
+
+    @property
+    def unregistered_open_orders(self) -> tuple[OrderReceipt, ...]:
+        """Open Broker orders that are not owned by the recovered local registry."""
+
+        if self.open_orders is None:
+            return ()
+        return tuple(
+            receipt
+            for receipt in self.open_orders.fact.data
+            if receipt.is_unregistered_broker_order
+        )
+
+    @property
+    def unregistered_open_order_count(self) -> int:
+        return len(self.unregistered_open_orders)
 
     def verify_integrity(self) -> None:
         """Re-run the immutable contract checks for an evidence consumer."""
@@ -381,9 +401,15 @@ class ExternalReconciliationSnapshot:
             funding,
         )
         if open_orders is not None and any(
-            receipt.state is OrderState.UNKNOWN for receipt in open_orders.fact.data
+            receipt.state is OrderState.UNKNOWN
+            and not receipt.is_unregistered_broker_order
+            for receipt in open_orders.fact.data
         ):
             failures.append("unknown_order_state")
+        if open_orders is not None and any(
+            receipt.is_unregistered_broker_order for receipt in open_orders.fact.data
+        ):
+            failures.append("unregistered_open_orders")
 
         failure_reasons = _unique(failures)
         outcome = _outcome(failure_reasons)
@@ -637,7 +663,7 @@ def _outcome(failures: tuple[str, ...]) -> ExternalReconciliationOutcome:
         return ExternalReconciliationOutcome.DRIFT
     if any(reason.startswith("missing_") or reason.startswith("incomplete_") for reason in failures):
         return ExternalReconciliationOutcome.INCOMPLETE
-    if any(reason == "unknown_order_state" for reason in failures):
+    if any(reason in {"unknown_order_state", "unregistered_open_orders"} for reason in failures):
         return ExternalReconciliationOutcome.UNKNOWN
     if any(reason == "stale_observation" for reason in failures):
         return ExternalReconciliationOutcome.STALE

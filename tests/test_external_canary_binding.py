@@ -37,6 +37,7 @@ from standard_broker.orders import OrderFill
 from test_external_order_lifecycle import ExternalOrderBackend, LifecycleStub, META, NOW, _intent
 from test_external_host import RELEASE_SHA
 from test_external_profile import _profile_context, _profile_runtime, _profile_session
+from test_external_reconciliation import _observations
 
 
 class FakeFacts:
@@ -169,7 +170,99 @@ def test_binding_read_facts_is_typed_and_does_not_accept_raw_mapping() -> None:
     assert facts.calls == [("order-1", "SOL-USD-PERP")]
 
 
-def test_account_wide_snapshot_does_not_query_fills_for_blank_order_id(
+def test_binding_read_facts_returns_complete_bundle_with_unregistered_open_orders() -> None:
+    session = _profile_session()
+    provenance = Provenance(
+        source="nautilus-hyperliquid.testnet",
+        execution_scope=session.execution_scope,
+        transport_state="external_testnet",
+        mapping_revision=session.capabilities.revision,
+        received_at=NOW,
+    )
+
+    class UnregisteredOrderBackend(ExternalOrderBackend):
+        def invoke(self, port: str, operation: str, request: object) -> object:
+            if port == "account" and operation == "read":
+                self.calls.append((port, operation, request))
+                return {
+                    "data": {
+                        "accountAddress": session.account.address,
+                        "assetPositions": [],
+                        "snapshotId": "unregistered-orders-snapshot",
+                        "marginSummary": {
+                            "accountValue": "100",
+                            "totalMarginUsed": "0",
+                            "totalNtlPos": "0",
+                            "totalRawUsd": "100",
+                        },
+                        "withdrawable": "100",
+                    },
+                    "provenance": provenance,
+                }
+            if port == "account" and operation == "positions":
+                self.calls.append((port, operation, request))
+                return {"data": {"positions": []}, "provenance": provenance}
+            return super().invoke(port, operation, request)
+
+    backend = UnregisteredOrderBackend(session.capabilities)
+    backend.responses["open_orders"] = {
+        "orders": [
+            {
+                "status": "open",
+                "oid": oid,
+                "cloid": f"0xunregistered-{oid}",
+                "sz": "0.1",
+                "origSz": "0.1",
+                "timestamp": 1787313661000 + oid,
+            }
+            for oid in (201, 202)
+        ]
+    }
+    runtime = NautilusHyperliquidRuntime(
+        session=session,
+        backend=backend,
+        config=NautilusRuntimeConfig(
+            expected_version=NAUTILUS_HYPERLIQUID_VERSION,
+            expected_commit=NAUTILUS_HYPERLIQUID_COMMIT,
+            policy=RuntimeActivationPolicy(
+                testnet_approval=ExternalEnvironmentApproval(
+                    environment=BrokerEnvironment.TESTNET,
+                    approval_id="unregistered-orders-approval",
+                    release_sha=RELEASE_SHA,
+                    approved_by="park",
+                    approved_at=NOW,
+                    account_address=session.account.address,
+                    lifecycle_id=session.lifecycle_id,
+                )
+            ),
+            expected_release_sha=RELEASE_SHA,
+        ),
+    )
+    runtime.start()
+    binding = build_hyperliquid_testnet_canary_binding(
+        context=_profile_context(session),
+        runtime=runtime,
+        instruments=HyperliquidInstrumentAdapter.from_meta(
+            META,
+            revision=session.capabilities.revision,
+        ),
+        ledger=RuntimeFactLedger(),
+    )
+
+    bundle = binding.read_facts(
+        order_id="",
+        instrument_id="SOL-USD-PERP",
+        now=NOW,
+    )
+
+    assert tuple(receipt.order_id for receipt in bundle.open_orders) == ("external:201", "external:202")
+    assert all(receipt.is_unregistered_broker_order for receipt in bundle.open_orders)
+    assert bundle.reconciliation.unregistered_open_order_count == 2
+    assert bundle.reconciliation.unregistered_open_orders == bundle.open_orders
+    assert bundle.reconciliation.passed is False
+
+
+def test_account_wide_snapshot_does_not_query_fills_and_retains_unregistered_open_orders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _profile_session()
@@ -180,6 +273,18 @@ def test_account_wide_snapshot_does_not_query_fills_for_blank_order_id(
         transport_state="external_testnet",
         mapping_revision=session.capabilities.revision,
         received_at=NOW,
+    )
+    template = _observations()["open_orders"].fact.data[0]
+    unregistered = replace(
+        template,
+        order_id="external:201",
+        client_order_id="0xunregistered-201",
+        state=OrderState.UNKNOWN,
+        broker_order_id="201",
+        reason="unregistered_exchange_order",
+        provenance=replace(template.provenance, received_at=datetime(2026, 8, 23, 4, 59, tzinfo=UTC)),
+        broker_order_lineage=("201",),
+        client_order_lineage=("0xunregistered-201",),
     )
 
     class FakeHost:
@@ -215,7 +320,7 @@ def test_account_wide_snapshot_does_not_query_fills_for_blank_order_id(
 
         def open_orders(self, instrument_id: str):
             assert instrument_id == "PAXG-USD-PERP"
-            return ()
+            return (unregistered,)
 
     class FakeInstruments:
         def get(self, instrument_id: str):
@@ -248,7 +353,8 @@ def test_account_wide_snapshot_does_not_query_fills_for_blank_order_id(
 
     assert captured["fills"].fact.data == ()
     assert captured["fees"].fact.data == ()
-    assert captured["open_orders"].fact.data == ()
+    assert captured["open_orders"].fact.data[0].is_unregistered_broker_order
+    assert captured["open_orders"].fact.data[0].provenance == provenance
 
 
 def test_order_snapshot_falls_back_to_instrument_fills_and_filters_identity(

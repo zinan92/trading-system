@@ -7,7 +7,7 @@ and exposes only the typed lifecycle needed by one attended canary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
@@ -160,6 +160,12 @@ class HyperliquidExternalSnapshotReader:
             fills = tuple(fill for fill in instrument_fills if fill.order_id == order_id)
         open_orders = tuple(self._order.open_orders(instrument_id))
         provenance = account_envelope.provenance
+        open_orders = tuple(
+            replace(receipt, provenance=provenance)
+            if receipt.is_unregistered_broker_order
+            else receipt
+            for receipt in open_orders
+        )
         fill_envelope = self._envelope(
             fact_type="canary.fills",
             data=fills,

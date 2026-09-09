@@ -262,6 +262,36 @@ def test_mixed_cursor_fails_closed_as_explicit_non_pass() -> None:
         snapshot.require_coherent()
 
 
+def test_unregistered_open_orders_remain_visible_in_a_non_coherent_snapshot() -> None:
+    observations = _observations()
+    known = observations["open_orders"].fact.data[0]
+    external = replace(
+        known,
+        order_id="external:202",
+        client_order_id="0xunregistered-2",
+        state=OrderState.UNKNOWN,
+        broker_order_id="202",
+        reason="unregistered_exchange_order",
+        broker_order_lineage=("202",),
+        client_order_lineage=("0xunregistered-2",),
+    )
+    fact = _replace_fact(observations["open_orders"].fact, data=(known, external))
+    observations["open_orders"] = replace(
+        observations["open_orders"],
+        fact=fact,
+        receipt_digest=fact.fact_digest,
+    )
+
+    snapshot = _assemble(**observations)
+
+    assert snapshot.passed is False
+    assert snapshot.failure_reasons == ("unregistered_open_orders",)
+    assert snapshot.unregistered_open_order_count == 1
+    assert snapshot.unregistered_open_orders == (external,)
+    with pytest.raises(RuntimeBoundaryError, match="unregistered_open_orders"):
+        snapshot.require_coherent()
+
+
 def test_mismatched_account_identity_fails_closed() -> None:
     observations = _observations()
     wrong = _replace_fact(observations["positions"].fact, account_address="0x" + "22" * 20)

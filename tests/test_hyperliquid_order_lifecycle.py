@@ -18,7 +18,13 @@ from standard_broker.orders import (
 class HyperliquidOrderLifecycleTests(unittest.TestCase):
     NOW = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 
-    def intent(self, *, order_id: str = "o-1", key: str = "cycle:o-1") -> OrderIntent:
+    def intent(
+        self,
+        *,
+        order_id: str = "o-1",
+        key: str = "cycle:o-1",
+        client_order_id: str | None = None,
+    ) -> OrderIntent:
         return OrderIntent(
             order_id=order_id,
             instrument_id="BTC-USD-PERP",
@@ -28,6 +34,7 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
             limit_price=Decimal(65000),
             time_in_force=TimeInForce.GTC,
             idempotency_key=key,
+            client_order_id=client_order_id,
         )
 
     def resting_response(self, oid: int = 101) -> dict:
@@ -195,6 +202,150 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(unknown.state, OrderState.UNKNOWN)
         self.assertEqual(unknown.reason, "unrecognized_order_status:broker_added_state")
         self.assertEqual(reconciled.state, OrderState.RESTING)
+
+    def test_open_orders_projects_unregistered_exchange_orders_without_mutating_registry(self) -> None:
+        transport = InMemoryOrderTransport(
+            submit_response=self.resting_response(),
+            open_orders_response={
+                "orders": [
+                    {
+                        "status": "open",
+                        "oid": 201,
+                        "cloid": "0xunregistered-1",
+                        "sz": "0.2",
+                        "origSz": "0.2",
+                        "timestamp": 1787313661000,
+                    },
+                    {
+                        "status": "open",
+                        "oid": 202,
+                        "cloid": "0xunregistered-2",
+                        "sz": "0.3",
+                        "origSz": "0.3",
+                        "timestamp": 1787313662000,
+                    },
+                ]
+            },
+        )
+        adapter = HyperliquidOrderAdapter(transport=transport)
+
+        open_orders = adapter.open_orders("BTC-USD-PERP")
+
+        self.assertEqual([receipt.order_id for receipt in open_orders], ["external:201", "external:202"])
+        self.assertTrue(all(receipt.state is OrderState.UNKNOWN for receipt in open_orders))
+        self.assertTrue(all(receipt.reason == "unregistered_exchange_order" for receipt in open_orders))
+        with self.assertRaises(KeyError):
+            adapter.get("external:201")
+
+    def test_open_orders_keeps_known_identity_and_projects_only_unregistered_order(self) -> None:
+        transport = InMemoryOrderTransport(submit_response=self.resting_response())
+        adapter = HyperliquidOrderAdapter(transport=transport)
+        submitted = adapter.submit(self.intent())
+        transport.open_orders_response = {
+            "orders": [
+                {
+                    "status": "open",
+                    "oid": 101,
+                    "cloid": submitted.client_order_id,
+                    "sz": "0.1",
+                    "origSz": "0.1",
+                    "timestamp": 1787313661000,
+                },
+                {
+                    "status": "open",
+                    "oid": 202,
+                    "cloid": "0xunregistered-2",
+                    "sz": "0.3",
+                    "origSz": "0.3",
+                    "timestamp": 1787313662000,
+                },
+            ]
+        }
+
+        known, external = adapter.open_orders("BTC-USD-PERP")
+
+        self.assertEqual(known.order_id, submitted.order_id)
+        self.assertEqual(known.state, OrderState.RESTING)
+        self.assertEqual(external.order_id, "external:202")
+        self.assertTrue(external.is_unregistered_broker_order)
+
+    def test_recover_then_open_orders_resolves_all_orders_to_canonical_identity(self) -> None:
+        rows = [
+            {
+                "status": "open",
+                "oid": 300 + index,
+                "cloid": f"0xrecovered-{index}",
+                "sz": "0.1",
+                "origSz": "0.1",
+                "timestamp": 1787313661000 + index,
+            }
+            for index in range(5)
+        ]
+        transport = InMemoryOrderTransport(
+            submit_response=self.resting_response(),
+            open_orders_response={"orders": rows},
+        )
+        adapter = HyperliquidOrderAdapter(transport=transport)
+        for index, row in enumerate(rows):
+            adapter.recover(
+                self.intent(
+                    order_id=f"recovered-{index}",
+                    key=f"cycle:recovered-{index}",
+                    client_order_id=str(row["cloid"]),
+                ),
+                broker_order_id=str(row["oid"]),
+                state=OrderState.RESTING,
+            )
+
+        open_orders = adapter.open_orders("BTC-USD-PERP")
+
+        self.assertEqual(
+            [receipt.order_id for receipt in open_orders],
+            [f"recovered-{index}" for index in range(5)],
+        )
+        self.assertFalse(any(receipt.is_unregistered_broker_order for receipt in open_orders))
+
+    def test_strict_reconcile_rejects_unregistered_client_identity(self) -> None:
+        adapter = HyperliquidOrderAdapter(
+            transport=InMemoryOrderTransport(submit_response=self.resting_response())
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "unknown client order identity cannot fall back to Broker order identity",
+        ):
+            adapter.reconcile(
+                {
+                    "status": "open",
+                    "oid": 201,
+                    "cloid": "0xunregistered-1",
+                    "sz": "0.2",
+                    "origSz": "0.2",
+                    "timestamp": 1787313661000,
+                }
+            )
+
+    def test_strict_fill_path_rejects_unregistered_client_identity(self) -> None:
+        adapter = HyperliquidOrderAdapter(
+            transport=InMemoryOrderTransport(submit_response=self.resting_response())
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "unknown client order identity cannot fall back to Broker order identity",
+        ):
+            adapter.apply_fill(
+                {
+                    "coin": "BTC",
+                    "side": "B",
+                    "px": "65000",
+                    "sz": "0.1",
+                    "time": 1787313661000,
+                    "tid": 501,
+                    "oid": 201,
+                    "cloid": "0xunregistered-1",
+                }
+            )
 
     def test_terminal_order_ignores_late_non_terminal_event(self) -> None:
         transport = InMemoryOrderTransport(submit_response=self.resting_response())

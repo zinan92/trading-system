@@ -748,6 +748,27 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         client_only_open_orders = adapter.open_orders("BTC-USD-PERP")
         self.assertEqual(client_only_open_orders[0].order_id, submitted.order_id)
 
+    def test_open_orders_binds_unregistered_receipt_to_runtime_identity(self) -> None:
+        adapter, backend = self.adapter()
+        backend.responses["open_orders"] = {
+            "orders": [
+                {
+                    "status": "open",
+                    "oid": 901,
+                    "cloid": "0xunregistered-runtime",
+                    "sz": "0.2",
+                    "origSz": "0.2",
+                    "timestamp": 1787313661000,
+                }
+            ]
+        }
+
+        receipt = adapter.open_orders("BTC-USD-PERP")[0]
+
+        self.assertTrue(receipt.is_unregistered_broker_order)
+        self.assertEqual(receipt.account_address, "0xmaster")
+        self.assertEqual(receipt.lifecycle_id, "order-runtime-1")
+
     def test_runtime_fee_fill_fact_query_forwards_canonical_instrument(self) -> None:
         profile = CapabilityDescriptor(
             broker_id="hyperliquid",

@@ -125,6 +125,10 @@ class OrderReceipt:
     lifecycle_id: str | None = None
     release_sha: str | None = None
 
+    @property
+    def is_unregistered_broker_order(self) -> bool:
+        return self.state is OrderState.UNKNOWN and self.reason == "unregistered_exchange_order"
+
 
 @dataclass(frozen=True)
 class OrderTransportCall:

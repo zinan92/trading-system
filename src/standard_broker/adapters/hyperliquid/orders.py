@@ -324,13 +324,71 @@ class HyperliquidOrderAdapter:
         return self.reconcile(response)
 
     def open_orders(self, instrument_id: str | None = None) -> tuple[OrderReceipt, ...]:
-        """Query open orders and reconcile every returned canonical order observation."""
+        """Query open orders without assigning unregistered Broker orders locally."""
 
         response = self._transport.open_orders(instrument_id)
         rows = response.get("orders", []) if isinstance(response, Mapping) else response
         if not isinstance(rows, list):
             raise ValueError("Hyperliquid open-orders response must contain a list")
-        return tuple(self.reconcile(row) for row in rows if isinstance(row, Mapping))
+        receipts: list[OrderReceipt] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            event = self.normalize_reconcile_event(row)
+            if self._registered_receipt_for_open_order(event) is None:
+                receipts.append(self._external_open_order(event))
+            else:
+                receipts.append(self.apply_order_update(event))
+        return tuple(receipts)
+
+    def _registered_receipt_for_open_order(
+        self,
+        raw: Mapping[str, object],
+    ) -> OrderReceipt | None:
+        client_order_id = raw.get("cloid") or raw.get("client_order_id")
+        if client_order_id is not None:
+            order_id = self._by_client.get(str(client_order_id))
+            return self._orders.get(order_id) if order_id is not None else None
+        broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else None
+        return self._receipt_for_broker_id(broker_order_id)
+
+    def _external_open_order(self, raw: Mapping[str, object]) -> OrderReceipt:
+        broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else ""
+        if not broker_order_id:
+            raise ValueError("unregistered Hyperliquid open order requires a Broker order identity")
+        client_order_id = str(raw.get("cloid") or raw.get("client_order_id") or "")
+        try:
+            remaining_quantity = _decimal(raw["sz"])
+            original_quantity = _decimal(raw.get("origSz", remaining_quantity))
+        except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("unregistered Hyperliquid open order quantity is invalid") from exc
+        if (
+            not remaining_quantity.is_finite()
+            or not original_quantity.is_finite()
+            or remaining_quantity < 0
+            or original_quantity <= 0
+            or remaining_quantity > original_quantity
+        ):
+            raise ValueError("unregistered Hyperliquid open order quantity is invalid")
+        broker_updated_at = self._event_timestamp(raw)
+        return OrderReceipt(
+            order_id=f"external:{broker_order_id}",
+            broker_id="hyperliquid",
+            environment=self._environment,
+            client_order_id=client_order_id,
+            state=OrderState.UNKNOWN,
+            original_quantity=original_quantity,
+            filled_quantity=original_quantity - remaining_quantity,
+            remaining_quantity=remaining_quantity,
+            broker_order_id=broker_order_id,
+            average_fill_price=None,
+            reason="unregistered_exchange_order",
+            provenance=self._provenance(),
+            updated_at=broker_updated_at or datetime.now(UTC),
+            broker_updated_at=broker_updated_at,
+            broker_order_lineage=(broker_order_id,),
+            client_order_lineage=(client_order_id,) if client_order_id else (),
+        )
 
     @staticmethod
     def _canonical_trade_id(raw_tid: object) -> str | None:
