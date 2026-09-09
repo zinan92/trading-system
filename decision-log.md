@@ -1,5 +1,39 @@
 # Decision Log
 
+# 2026-09-10 — Keep paused Grid callbacks attached and make missing callbacks visible (#1230)
+
+## Decision
+
+- Export one `TICK_CALLBACK_COORDINATOR_STATES` contract from the Testnet
+  Automation Coordinator and use it for both Park control callback creation
+  and scheduler attachment. The contract includes `grid_paused_range`, so a
+  range-paused Grid continues to receive market and fill events.
+- Allow `advance_grid_session` to advance `grid_paused_range`; a market tick
+  back inside the boundary can therefore publish `range_reenter`, and a TP
+  fill during the pause still updates the lifecycle without submitting a new
+  entry until re-entry.
+- When a non-idle, non-terminal Coordinator has no tick callback, persist
+  `advance_result={"status":"not_applicable","reason":"no_tick_callbacks:<status>"}`
+  and the same reason as a scheduler warning instead of an empty result.
+
+## Gotchas
+
+- `grid_paused_range` pauses new Grid entry behavior outside the configured
+  range; it is not an operator pause or a terminal state. Existing orders,
+  protection, fills, and market re-entry still require callback processing.
+- There is currently no DCA range-pause Coordinator state. No new DCA state was
+  invented; any future tickable state must be added to the shared callback
+  contract.
+- Validation used temporary test output only. No launchd service, online
+  runtime directory, data source, HTTP 8100 interface, Testnet network, or
+  live-money path was changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_testnet_scheduler.py tests/test_testnet_grid_coordinator.py tests/test_grid_testnet_lifecycle.py tests/test_testnet_automation_coordinator.py` — 113 passed.
+- `python3 -m ruff check pipelines/park_control.py services/testnet_scheduler.py services/testnet_automation_coordinator.py tests/test_testnet_grid_coordinator.py`, focused `compileall`, and `git diff --check` — passed.
+- `gitleaks dir . --no-banner --redact` with gitleaks 8.30.1 — 24.09 MB scanned; no leaks found.
+
 # 2026-09-09 — Reattach the Testnet scheduler after terminal session close (#1224)
 
 ## Decision

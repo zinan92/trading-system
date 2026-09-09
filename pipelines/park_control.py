@@ -43,7 +43,10 @@ from services.park_telegram_runtime import (
     ParkTelegramWorker,
 )
 from services.scheduler_ownership import SchedulerOwnershipGuard
-from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+from services.testnet_automation_coordinator import (
+    TICK_CALLBACK_COORDINATOR_STATES,
+    TestnetAutomationCoordinator,
+)
 from services.testnet_scheduler import TestnetScheduler
 from services.testnet_plan_builder import build_plan
 from pipelines.testnet_proof_driver import ProofDriverError, read_coherent_market
@@ -218,9 +221,10 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
         return {"status": "not_applicable", "reason": guard.get("blocker"), "paper_only": True}
     coordinator_status = coordinator.status()
     coordinator_activation_id = str(coordinator_status.get("activation_id") or "")
-    coordinator_running = str(coordinator_status.get("status") or "") in {
-        "grid_running", "dca_running", "grid_blocked", "dca_blocked",
-    }
+    coordinator_running = (
+        str(coordinator_status.get("status") or "")
+        in TICK_CALLBACK_COORDINATOR_STATES
+    )
     if coordinator_running and scheduler.can_reattach(coordinator_activation_id):
         scheduler.attach(coordinator_activation_id)
     scheduler_status = scheduler.status()
@@ -243,7 +247,7 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
         return {"status": "not_applicable", "reason": "testnet_scheduler_not_active", "paper_only": True}
     tick_id = "park-control:" + datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     callbacks = None
-    if str(coordinator_status.get("status") or "") in {"grid_running", "dca_running", "grid_blocked", "dca_blocked"}:
+    if str(coordinator_status.get("status") or "") in TICK_CALLBACK_COORDINATOR_STATES:
         try:
             callbacks = _build_testnet_tick_callbacks(output_root, coordinator_status)
         except Exception as exc:  # noqa: BLE001 - scheduler records the typed blocker.

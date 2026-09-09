@@ -166,7 +166,7 @@ def test_grid_hard_stop_is_terminal_and_not_rearmed(tmp_path: Path) -> None:
 
 def test_grid_upper_boundary_is_published_as_pause_with_execution_enabled(tmp_path: Path) -> None:
     coordinator, plan, confirmation, broker, _backend, market, _fill = _setup(tmp_path)
-    started = coordinator.start_grid_session(
+    coordinator.start_grid_session(
         plan, confirmation=confirmation, market=_market_at(market, NOW), broker=broker, timestamp=NOW
     )
 
@@ -181,6 +181,53 @@ def test_grid_upper_boundary_is_published_as_pause_with_execution_enabled(tmp_pa
     assert paused["grid_lifecycle_status"] == "paused_above_range"
     assert paused["execution_enabled"] is True
     assert paused["next_action"] == "await_fill_or_grid_event"
+
+    reentered = coordinator.advance_grid_session(
+        plan,
+        broker=broker,
+        price=65999.0,
+        market=_market_at(market, "2026-08-26T01:02:00+00:00"),
+        timestamp="2026-08-26T01:02:00+00:00",
+    )
+
+    assert reentered["status"] == "grid_running"
+    assert reentered["lifecycle"]["status"] == "active"
+    assert reentered["lifecycle"]["events"][-1]["event"] == "range_reenter"
+
+
+def test_grid_pause_keeps_processing_tp_fills(tmp_path: Path) -> None:
+    coordinator, plan, confirmation, broker, _backend, market, fill = _setup(tmp_path)
+    started = coordinator.start_grid_session(
+        plan, confirmation=confirmation, market=_market_at(market, NOW), broker=broker, timestamp=NOW
+    )
+    coordinator.advance_grid_session(
+        plan,
+        broker=broker,
+        fill=fill(started["lifecycle"]["orders"][0], price=65000.0, tid=20),
+        market=_market_at(market, "2026-08-26T01:01:00+00:00"),
+        timestamp="2026-08-26T01:01:00+00:00",
+    )
+    paused = coordinator.advance_grid_session(
+        plan,
+        broker=broker,
+        price=66001.0,
+        market=_market_at(market, "2026-08-26T01:02:00+00:00"),
+        timestamp="2026-08-26T01:02:00+00:00",
+    )
+    tp = next(row for row in paused["lifecycle"]["orders"] if row["event"] == "tp")
+
+    closed = coordinator.advance_grid_session(
+        plan,
+        broker=broker,
+        fill=fill(tp, price=65500.0, tid=21),
+        market=_market_at(market, "2026-08-26T01:03:00+00:00"),
+        timestamp="2026-08-26T01:03:00+00:00",
+    )
+
+    assert closed["status"] == "grid_paused_range"
+    assert closed["lifecycle"]["status"] == "paused_above_range"
+    assert closed["lifecycle"]["rungs"][0]["line"]["state"] == "rearmed"
+    assert not any(row["event"] == "entry_rearm" for row in closed["lifecycle"]["orders"])
 
 
 def test_manual_grid_interrupt_preserves_position_and_resume_revalidates(tmp_path: Path) -> None:
