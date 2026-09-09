@@ -296,8 +296,8 @@ function strategyPayload({useInputs=true}={}){
     const step=count===1?0:(high-low)/(count-1),entryLevels=Array.from({length:count},(_,index)=>state.direction==="long"?high-index*step:low+index*step);
     return{strategy_type:"dca",direction:state.direction,dca:{entry_levels:entryLevels,target_price:target,stop_price:stop,notional_per_addition:notional,max_additions:count,loop_enabled:false},risk_budget:{leverage}};
   }
-  const payload={direction:state.direction,style:state.style,out_of_range:"wait"};
-  const locked=[...state.parameterLocks].sort(),grid={mode:state.gridMode,notional_mode:"auto",out_of_range:payload.out_of_range};
+  const payload={direction:state.direction,style:state.style,out_of_range:"pause_keep_orders"};
+  const locked=[...state.parameterLocks].sort(),grid={mode:state.gridMode,notional_mode:"auto",out_of_range:payload.out_of_range,trailing_up:false};
   if(state.parameterLocks.has("range")){const low=Number($("#rangeLow").value),high=Number($("#rangeHigh").value);if(!Number.isFinite(low)||!Number.isFinite(high)||high<=low)throw Error("下边界必须小于上边界。");payload.range={low,high}}
   if(state.parameterLocks.has("grid_count")){const value=Number($("#gridCount").value);if(!Number.isInteger(value))throw Error("网格数量必须是整数。");grid.count=value}
   if(state.parameterLocks.has("profit_target")){const value=Number($("#gridProfitTarget").value);if(!(value>0))throw Error("每格净利目标必须大于 0。");grid.target_net_profit_per_grid_usd=value}

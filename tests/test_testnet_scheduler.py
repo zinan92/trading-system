@@ -111,7 +111,7 @@ def test_scheduler_attaches_to_running_coordinator_without_reactivation(tmp_path
     activation = _activation()
     coordinator.activate(activation, command_id="activation-1", now=NOW)
     current = coordinator.status()
-    current["status"] = "grid_running"
+    current["status"] = "grid_paused_range"
     current["execution_enabled"] = True
     coordinator._record(current)
 
@@ -120,7 +120,7 @@ def test_scheduler_attaches_to_running_coordinator_without_reactivation(tmp_path
     assert attached["event"] == "scheduler_attached"
     assert attached["status"] == "active"
     assert attached["activation_id"] == current["activation_id"]
-    assert coordinator.status()["status"] == "grid_running"
+    assert coordinator.status()["status"] == "grid_paused_range"
 
 
 def test_scheduler_can_explicitly_resume_a_blocked_running_session(tmp_path: Path) -> None:

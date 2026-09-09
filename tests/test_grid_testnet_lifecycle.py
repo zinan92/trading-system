@@ -155,6 +155,17 @@ def test_quantized_grid_spacing_two_tick_deviation_is_rejected(tmp_path: Path) -
         )
 
 
+def test_grid_trailing_up_is_optional_boolean_only(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    plan = _plan()
+    plan["grid"]["trailing_up"] = "true"
+
+    with pytest.raises(GridTestnetLifecycleError, match="grid_trailing_up_must_be_boolean"):
+        GridTestnetLifecycle(tmp_path / "outputs", broker).start(
+            plan, timestamp="2026-09-08T13:00:00+00:00"
+        )
+
+
 def test_grid_canonical_boundary_and_external_hard_stop_are_accepted(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path, protection=False)
     plan = _plan(lower=75000.0, upper=78531.5)
@@ -314,6 +325,42 @@ def test_grid_crossed_unfilled_rung_is_cancelled_and_skipped(tmp_path: Path) -> 
     assert rung["missed"] is True
     assert rung["line"]["state"] == "cancelled"
     assert any(event["event"] == "rung_missed_skipped" for event in skipped["events"])
+
+
+def test_long_grid_upper_boundary_pauses_and_reenters_without_changing_orders(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    before = [(row["order_id"], row["state"]) for row in started["orders"]]
+
+    paused = lifecycle.on_market_event(plan, price=66001.0, timestamp="2026-08-22T01:01:00+00:00")
+    assert paused["status"] == "paused_above_range"
+    assert [(row["order_id"], row["state"]) for row in paused["orders"]] == before
+    assert paused["events"][-1]["event"] == "range_exit_upper"
+
+    reentered = lifecycle.on_market_event(plan, price=65999.0, timestamp="2026-08-22T01:02:00+00:00")
+    assert reentered["status"] == "active"
+    assert reentered["events"][-1]["event"] == "range_reenter"
+
+
+def test_paused_long_grid_records_tp_and_defers_rearm_until_reentry(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=101), timestamp="2026-08-22T01:01:00+00:00")
+    paused = lifecycle.on_market_event(plan, price=66001.0, timestamp="2026-08-22T01:02:00+00:00")
+    tp = next(row for row in paused["orders"] if row["event"] == "tp")
+
+    closed = lifecycle.on_fill(plan, _fill(tp, price=65500.0, tid=102), timestamp="2026-08-22T01:03:00+00:00")
+    assert closed["status"] == "paused_above_range"
+    assert closed["rungs"][0]["line"]["state"] == "rearmed"
+    assert not any(row["event"] == "entry_rearm" for row in closed["orders"])
+
+    resumed = lifecycle.on_market_event(plan, price=65999.0, timestamp="2026-08-22T01:04:00+00:00")
+    assert resumed["status"] == "active"
+    assert any(row["event"] == "entry_rearm" for row in resumed["orders"])
 
 
 def test_grid_hard_stop_cancels_tp_and_flattens_before_sealing(tmp_path: Path) -> None:

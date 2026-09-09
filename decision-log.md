@@ -18627,6 +18627,37 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_testnet_grid_coordinator.py tests/test_testnet_scheduler.py tests/test_park_control.py` — 47 passed.
 
+# 2026-09-09 — Pause long/short Grid when the non-risk boundary is crossed (#1218)
+
+## Decision
+
+- A Long Grid crossing above its upper boundary enters `paused_above_range`; it
+  keeps resting entries and protection, accepts only exits, and returns to
+  `active` at or below the upper boundary. A Short Grid uses the mirrored lower
+  boundary behavior. The opposite boundary remains the direction's hard stop;
+  Neutral Grid keeps the existing two-sided hard-stop semantics.
+- Coordinator state is `grid_paused_range` with `execution_enabled: true`, so
+  the Testnet scheduler continues heartbeats and does not enter operator wait.
+- `grid.trailing_up` is an optional boolean, defaulting false. The field is
+  validated now; trailing-range movement is intentionally deferred to a
+  separate issue. Dashboard Grid previews default `out_of_range` to
+  `pause_keep_orders`.
+
+## Gotchas
+
+- A TP during the range pause re-arms its line in lifecycle state but defers
+  submitting the replacement entry until the market re-enters the range. This
+  preserves the pause contract while retaining existing re-arm semantics.
+- The exact boundary remains in-range for the pause rule; the existing hard
+  stop compatibility at the opposite boundary is retained.
+
+## Verification
+
+- Focused Grid lifecycle, Coordinator, Scheduler, and sizing tests pass; see
+  the PR validation output for the exact command and count.
+- No launchd, live/real-money, HTTP 8100, or online runtime path was changed or
+  invoked.
+
 # 2026-09-08 — Project cursor-bound external facts for scheduled ticks (#1210)
 
 ## Decision

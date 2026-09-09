@@ -432,7 +432,7 @@ def build_grid_recovery_candidate(
             "count": count,
             "mode": str(source_grid.get("mode") or "arithmetic"),
             "out_of_range": str(
-                source_grid.get("out_of_range") or "exit_only"
+                source_grid.get("out_of_range") or "pause_keep_orders"
             ),
             "notional_mode": "auto",
         },
