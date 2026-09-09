@@ -1,5 +1,36 @@
 # Decision Log
 
+# 2026-09-09 — Separate typed Broker facts from public tick facts (#1222)
+
+## Decision
+
+- Restore `StandardBrokerExternalExecutionAdapter.read_facts()` as the typed
+  Broker bundle contract used by lifecycle, proof, and reconciliation callers.
+- Add `read_public_facts()` as the explicit cursor-bound dict projection for
+  Park Testnet tick observation. Keep `order_execution.open_orders` on its
+  restart-safe public projection with both OID and cloid identities.
+
+## Gotchas
+
+- A public dict can preserve displayed values while still breaking typed
+  consumers that require `.account`, `.reconciliation`, and
+  `require_coherent()`; the two contracts must not share an ambiguous method.
+- Park ticks intentionally consume only the public projection. Proof and DCA
+  lifecycle paths intentionally retain the typed bundle and fail closed when
+  coherent account facts are unavailable.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_standard_broker_external_execution.py tests/test_testnet_automation_proof.py tests/test_park_control.py tests/test_standard_broker_external_dca.py tests/test_standard_broker_external_dca_cli.py` — 82 passed.
+- `git diff --check` — passed.
+- `rg` audit of production `read_facts(` / `read_public_facts(` callers — typed
+  lifecycle/proof callers remain on `read_facts`; Park tick alone uses
+  `read_public_facts`.
+- `gitleaks detect --source . --no-banner --redact=100` — no leaks found
+  (1,185 commits scanned).
+- No launchd service, online runtime directory, HTTP 8100 interface, data
+  source, Testnet network, or live-money path was changed or invoked.
+
 # 2026-09-08 — Sample Testnet tick time after coherent market read (#1214)
 
 ## Decision

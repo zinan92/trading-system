@@ -303,10 +303,19 @@ def test_external_execution_adapter_maps_canonical_ticket_and_reads_public_facts
     assert adapter.canonical_order_adapter.apply_fill({"order_id": "order-1"}).order_id == "order-1"
 
 
-def test_external_execution_adapter_projects_cursor_bound_facts_for_tick_process() -> None:
+def test_external_execution_adapter_preserves_typed_facts_for_lifecycle_consumers() -> None:
     adapter, _binding, _closed = _adapter()
 
     facts = adapter.read_facts(instrument_id="BTC-USD-PERP")
+
+    assert facts.account is _binding.account
+    assert facts.reconciliation is _binding.reconciliation
+
+
+def test_external_execution_adapter_projects_cursor_bound_public_facts_for_tick() -> None:
+    adapter, _binding, _closed = _adapter()
+
+    facts = adapter.read_public_facts(instrument_id="BTC-USD-PERP")
 
     assert facts["status"] == "pass"
     assert facts["cursor"] == "facts-cursor-1"

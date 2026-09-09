@@ -124,6 +124,29 @@ def test_preflight_rejects_unreviewed_protection_revision_before_building_runtim
     assert result["reason_code"] == "protected_capability_revision_required"
 
 
+def test_authoritative_account_snapshot_accepts_typed_stub_broker_facts() -> None:
+    binding = _Binding()
+
+    class StubBroker:
+        runtime_session = binding.runtime_session
+        broker_config = {
+            "release_sha": RELEASE,
+            "capability_revision": cli.PROTECTED_CAPABILITY_REVISION,
+        }
+
+        def read_facts(self, *, instrument_id, now):
+            return binding.read_facts(order_id="", instrument_id=instrument_id, now=now)
+
+    account, reconciliation = cli._authoritative_account_snapshot(
+        StubBroker(),
+        plan={"instrument_id": "BTC-USD-PERP"},
+        account_address=ACCOUNT,
+    )
+
+    assert account is binding.account
+    assert reconciliation is binding.reconciliation
+
+
 @pytest.mark.parametrize(
     ("family", "plan_factory", "expected_submits"),
     [("dca", dca_plan, 1), ("grid", grid_plan, 2)],
