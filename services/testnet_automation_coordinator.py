@@ -901,6 +901,9 @@ class TestnetAutomationCoordinator:
             "status": "idle",
             "receipt": receipt,
         }
+        from services.testnet_scheduler import close_scheduler_session
+
+        close_scheduler_session(self.output_root, activation_id, timestamp=timestamp)
         return self._record(state)
 
     def _never_executed_activation(self, current: Mapping[str, Any]) -> bool:

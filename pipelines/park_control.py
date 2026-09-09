@@ -113,9 +113,29 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
     if not guard.get("ok"):
         return {"status": "not_applicable", "reason": guard.get("blocker"), "paper_only": True}
     coordinator_status = coordinator.status()
-    if scheduler.status().get("status") == "idle" and str(coordinator_status.get("status") or "") in {"grid_running", "dca_running", "grid_blocked", "dca_blocked"}:
-        scheduler.attach(str(coordinator_status.get("activation_id") or ""))
-    if scheduler.status().get("status") not in {"active", "reconcile_required"}:
+    coordinator_activation_id = str(coordinator_status.get("activation_id") or "")
+    coordinator_running = str(coordinator_status.get("status") or "") in {
+        "grid_running", "dca_running", "grid_blocked", "dca_blocked",
+    }
+    if coordinator_running and scheduler.can_reattach(coordinator_activation_id):
+        scheduler.attach(coordinator_activation_id)
+    scheduler_status = scheduler.status()
+    scheduler_activation_id = str(scheduler_status.get("activation_id") or "")
+    if (
+        coordinator_running
+        and coordinator_activation_id
+        and scheduler_activation_id
+        and coordinator_activation_id != scheduler_activation_id
+    ):
+        return {
+            "status": "blocked",
+            "reason": "testnet_scheduler_active_session_conflict",
+            "blocker": "testnet_scheduler_active_session_conflict",
+            "scheduler_activation_id": scheduler_activation_id,
+            "coordinator_activation_id": coordinator_activation_id,
+            "paper_only": True,
+        }
+    if scheduler_status.get("status") not in {"active", "reconcile_required"}:
         return {"status": "not_applicable", "reason": "testnet_scheduler_not_active", "paper_only": True}
     tick_id = "park-control:" + datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     callbacks = None

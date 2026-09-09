@@ -74,6 +74,100 @@ def test_testnet_control_tick_running_session_without_broker_fails_closed(tmp_pa
     assert result["warning"] == "config_not_ready:broker_config"
 
 
+def test_testnet_control_tick_reattaches_new_running_activation_from_stale_terminal_wait(
+    monkeypatch, tmp_path
+) -> None:
+    import pipelines.park_control as module
+    from services.testnet_automation_coordinator import (
+        TestnetAutomationCoordinator,
+        activation_digest,
+    )
+    from services.testnet_scheduler import TestnetScheduler, TestnetSchedulerOwnershipStore
+
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+    coordinator = TestnetAutomationCoordinator(output)
+    scheduler = TestnetScheduler(output, coordinator, owner_id="local-mac", runtime_mode="local")
+    old_activation = {
+        "strategy_family": "grid", "strategy_session_id": "old-session", "strategy_revision_id": "old-revision",
+        "plan_digest": "sha256:" + "a" * 64, "account_fingerprint": "sha256:" + "b" * 64,
+        "broker_id": "hyperliquid", "environment": "testnet", "transport_profile": "hyperliquid-testnet-default",
+        "instrument_id": "BTC-USD-PERP", "runtime_id": "runtime", "release_sha": "c" * 40,
+        "capability_revision": "hyperliquid-testnet-runtime-v1",
+    }
+    old_activation_id = activation_digest(old_activation)
+    scheduler._save_state({
+        "status": "awaiting_operator",
+        "event": "scheduler_terminal_wait",
+        "activation_id": old_activation_id,
+        "coordinator_status": "grid_terminal",
+        "coordinator": {"status": "grid_terminal", "activation_id": old_activation_id},
+    })
+    new_activation = {
+        **old_activation,
+        "strategy_session_id": "new-session",
+        "strategy_revision_id": "new-revision",
+        "plan_digest": "sha256:" + "d" * 64,
+    }
+    coordinator.activate(new_activation, command_id="activate-new")
+    coordinator._record({
+        **coordinator.status(),
+        "status": "grid_running",
+        "execution_enabled": True,
+    })
+    monkeypatch.setattr(
+        module,
+        "_build_testnet_tick_callbacks",
+        lambda *_args: (lambda _event: {"status": "observed"}, None),
+    )
+
+    result = module.run_testnet_control_tick(output)
+    current = scheduler.status()
+
+    assert result["status"] == "active"
+    assert current["activation_id"] == activation_digest(new_activation)
+    assert current["previous_activation_id"] == old_activation_id
+
+
+def test_testnet_control_tick_fails_closed_on_active_activation_conflict(
+    monkeypatch, tmp_path
+) -> None:
+    import pipelines.park_control as module
+
+    class Coordinator:
+        def __init__(self, _root):
+            pass
+
+        def status(self):
+            return {"status": "grid_running", "activation_id": "activation-new"}
+
+    class Scheduler:
+        def __init__(self, *_args, **_kwargs):
+            self.guard = self
+
+        def verify(self):
+            return {"ok": True}
+
+        def status(self):
+            return {"status": "active", "activation_id": "activation-old"}
+
+        def can_reattach(self, _activation_id):
+            return False
+
+        def tick(self, **_kwargs):
+            raise AssertionError("conflicting activation must not be advanced")
+
+    monkeypatch.setattr(module, "TestnetAutomationCoordinator", Coordinator)
+    monkeypatch.setattr(module, "TestnetScheduler", Scheduler)
+
+    result = module.run_testnet_control_tick(tmp_path / "outputs")
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "testnet_scheduler_active_session_conflict"
+    assert result["scheduler_activation_id"] == "activation-old"
+    assert result["coordinator_activation_id"] == "activation-new"
+
+
 def test_tick_plan_loader_reads_jsonl_without_treating_it_as_one_json_document(tmp_path) -> None:
     import pipelines.park_control as module
 
@@ -236,6 +330,9 @@ def test_setup_exception_is_recorded_without_deferred_name_error(monkeypatch, tm
         def status(self):
             return {"status": "active"}
 
+        def can_reattach(self, _activation_id):
+            return False
+
         def tick(self, **kwargs):
             return kwargs["advance"]({"kind": "market_heartbeat"})
 
@@ -267,6 +364,9 @@ def test_testnet_control_tick_attaches_and_builds_callbacks_for_grid_blocked(mon
 
         def status(self):
             return {"status": "active"}
+
+        def can_reattach(self, _activation_id):
+            return False
 
         def tick(self, **kwargs):
             return {"advance_was_supplied": callable(kwargs["advance"])}
