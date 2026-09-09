@@ -598,17 +598,35 @@ class StandardBrokerExternalExecutionAdapter:
         order_id: str = "",
         client_order_id: str | None = None,
     ) -> object:
-        """Read one public, cursor-bound fact bundle for the selected instrument."""
+        """Read one typed Broker fact bundle for lifecycle consumers."""
 
         if not str(instrument_id or "").strip():
             raise StandardBrokerExternalExecutionError("external_facts_instrument_required")
-        bundle = self._read_raw_facts(
+        return self._read_raw_facts(
             instrument_id=instrument_id,
             now=now,
             order_id=order_id,
             client_order_id=client_order_id,
         )
-        return self._public_facts(bundle)
+
+    def read_public_facts(
+        self,
+        *,
+        instrument_id: str,
+        now: datetime | None = None,
+        order_id: str = "",
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Project typed Broker facts into the tick/read-model contract."""
+
+        return self._public_facts(
+            self.read_facts(
+                instrument_id=instrument_id,
+                now=now,
+                order_id=order_id,
+                client_order_id=client_order_id,
+            )
+        )
 
     def _read_raw_facts(
         self,

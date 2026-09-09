@@ -176,12 +176,10 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         broker_config={"provider": "standard_broker", "broker_id": "hyperliquid", "environment": "testnet", "transport_profile": TESTNET_PROFILE, "account_id": config.account_address, "runtime_id": config.runtime_id, "release_sha": config.release_sha, "standard_broker_release_sha": config.standard_broker_release_sha, "capability_revision": config.capability_revision, "approval_id": approval_id, "approved_by": approved_by, "secret_file": str(config.secret_file), "instrument_id": instrument_id, "instrument_binding": {"instrument_id": instrument_id}, "market_source": {"source_id": str(market.get("source") or "hyperliquid.external_testnet"), "broker_id": "hyperliquid", "environment": "testnet", "instrument_id": instrument_id}, "execution_scope": "hypercore:default"},
     )
     broker = build_broker_execution_port(context)
-    from services.testnet_execution import ExternalTestnetExecutionPort
-    port = ExternalTestnetExecutionPort(broker)
     coordinator = TestnetAutomationCoordinator(output_root)
 
     def facts() -> dict[str, Any]:
-        raw = port.read_facts(instrument_id=instrument_id)
+        raw = broker.read_public_facts(instrument_id=instrument_id)
         if isinstance(raw, Mapping):
             return dict(raw)
         return {key: getattr(raw, key, None) for key in ("status", "cursor", "fills", "positions", "open_orders")}

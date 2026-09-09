@@ -151,7 +151,23 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
             }
 
         def read_facts(self, **_kwargs):
-            return {"status": "pass", "cursor": "fake-cursor", "fills": list(self.fills), "positions": [], "open_orders": []}
+            raise AssertionError("tick must use the public facts contract")
+
+        def read_public_facts(self, **_kwargs):
+            return {
+                "status": "pass",
+                "cursor": "fake-cursor",
+                "fills": list(self.fills),
+                "positions": [],
+                "open_orders": [
+                    {
+                        "oid": "oid-1",
+                        "broker_order_id": "oid-1",
+                        "cloid": "cloid-1",
+                        "client_order_id": "cloid-1",
+                    }
+                ],
+            }
 
     broker = Broker()
     built = []
@@ -173,7 +189,8 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda self, plan, **kwargs: timestamps.append(kwargs["timestamp"]) or {"status": "grid_running", "fill": kwargs.get("fill")})
     status = {"activation_id": activation_id, "plan_digest": digest, "strategy_family": "grid", "instrument_id": "BTC-USD-PERP"}
 
-    advance, _reconcile = module._build_testnet_tick_callbacks(tmp_path / "outputs", status)
+    advance, reconcile = module._build_testnet_tick_callbacks(tmp_path / "outputs", status)
+    reconciled = reconcile()
     empty = advance({"kind": "market_heartbeat"})
     empty_2 = advance({"kind": "market_heartbeat"})
     empty_3 = advance({"kind": "market_heartbeat"})
@@ -183,6 +200,16 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     assert len(built) == 1
     assert contexts[0].broker_config["approval_id"] == "dashboard-confirmation:unused"
     assert contexts[0].broker_config["approved_by"] == "park"
+    assert reconciled["status"] == "pass"
+    assert reconciled["cursor"] == "fake-cursor"
+    assert reconciled["open_orders"] == [
+        {
+            "oid": "oid-1",
+            "broker_order_id": "oid-1",
+            "cloid": "cloid-1",
+            "client_order_id": "cloid-1",
+        }
+    ]
     assert [row["status"] for row in (empty, empty_2, empty_3, filled)] == ["grid_running"] * 4
     assert timestamps == ["2026-09-08T01:00:03+00:00"] * 4
     assert all("warning" not in row for row in (empty, empty_2, empty_3, filled))
