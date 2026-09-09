@@ -18808,3 +18808,24 @@ auditable datafeed port; broker execution remains a separate port.
 - `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_standard_broker_external_execution.py tests/test_grid_testnet_lifecycle.py tests/test_dca_testnet_lifecycle.py tests/test_testnet_automation_coordinator.py` — 107 passed.
 - `python3 -m ruff check pipelines/park_control.py`, `python3 -m compileall -q pipelines/park_control.py tests/test_park_control.py`, and `git diff --check` — passed.
 - `gitleaks dir . --no-banner --redact` — 23.94 MB scanned; no leaks found.
+
+# 2026-09-09 — Preserve native Testnet order identity and isolate facts outages (#1228)
+
+## Decision
+
+- Persist `native_client_order_id` on new Grid and DCA lifecycle order rows when the standard-broker receipt exposes it, while leaving legacy rows unchanged when that field is absent.
+- Hydrate active orders with broker oid, canonical client identity, and the optional native client identity. Both the trading-system broker seam and the standard-broker binding call fall back to the legacy recover signature when that optional keyword is unsupported.
+- Project public facts read exceptions as `testnet_facts_unavailable:<exception type>:<redacted message>`. Scheduler ticks keep this read-side outage outside the normal three-strike counter and only block with `notify_park_and_wait` after 600 continuous seconds.
+
+## Gotchas
+
+- Canonical `client_order_id` remains the lifecycle intent identity; the native cloid is an additional transport identity and must not replace it.
+- A successful facts/advance result, a normal advance failure, or a sampling-race warning clears the continuous facts-outage timer. Restart reconciliation stays `reconcile_required` during the warning window and does not advance the lifecycle.
+- The standard-broker source repository was read only. No launchd, online runtime, HTTP 8100 contract, data source, or live-money path was changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_dca_testnet_lifecycle.py tests/test_park_control.py tests/test_standard_broker_external_execution.py tests/test_testnet_scheduler.py tests/test_testnet_automation_coordinator.py` — 137 passed.
+- `python3 -m ruff check services/grid_testnet_lifecycle.py services/dca_testnet_lifecycle.py pipelines/park_control.py services/standard_broker_external_execution.py services/testnet_scheduler.py` — passed.
+- `python3 -m compileall -q services/grid_testnet_lifecycle.py services/dca_testnet_lifecycle.py pipelines/park_control.py services/standard_broker_external_execution.py services/testnet_scheduler.py tests/test_grid_testnet_lifecycle.py tests/test_dca_testnet_lifecycle.py tests/test_park_control.py tests/test_standard_broker_external_execution.py tests/test_testnet_scheduler.py` and `git diff --check` — passed.
+- `gitleaks dir . --no-banner --redact` with gitleaks 8.30.1 — 24.20 MB scanned; no leaks found.

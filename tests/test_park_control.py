@@ -239,6 +239,80 @@ def test_hydrate_order_identities_recovers_five_active_orders() -> None:
     assert [row[0].ticket for row in broker.recovered] == orders
 
 
+def test_hydrate_order_identities_passes_native_client_order_id() -> None:
+    import pipelines.park_control as module
+
+    recovered = []
+
+    class Broker:
+        def recover(self, request, *, broker_order_id, state, native_client_order_id):
+            recovered.append((request, broker_order_id, state, native_client_order_id))
+
+    order = {
+        "ticket_id": "grid:rung-0:entry",
+        "instrument_id": "BTC-USD-PERP",
+        "side": "buy",
+        "quantity": "0.001",
+        "order_type": "limit",
+        "limit_price": "60000",
+        "client_order_id": "canonical-cloid",
+        "native_client_order_id": "0x" + "7" * 32,
+        "broker_order_id": "1000",
+        "state": "accepted",
+    }
+
+    module.hydrate_order_identities(
+        Broker(), {"cycle_id": "dashboard-preview", "orders": [order]}
+    )
+
+    assert recovered[0][1:] == ("1000", "resting", "0x" + "7" * 32)
+
+
+def test_hydrate_order_identities_falls_back_for_legacy_recover_binding() -> None:
+    import pipelines.park_control as module
+
+    recovered = []
+
+    class LegacyBroker:
+        def recover(self, request, *, broker_order_id, state):
+            recovered.append((request.ticket, broker_order_id, state))
+
+    order = {
+        "ticket_id": "grid:rung-0:entry",
+        "instrument_id": "BTC-USD-PERP",
+        "side": "buy",
+        "quantity": "0.001",
+        "order_type": "limit",
+        "limit_price": "60000",
+        "client_order_id": "canonical-cloid",
+        "native_client_order_id": "0x" + "9" * 32,
+        "broker_order_id": "1000",
+        "state": "accepted",
+    }
+
+    module.hydrate_order_identities(
+        LegacyBroker(), {"cycle_id": "dashboard-preview", "orders": [order]}
+    )
+
+    assert recovered == [(order, "1000", "resting")]
+
+
+def test_testnet_facts_failure_returns_typed_redacted_reason() -> None:
+    import pipelines.park_control as module
+
+    class Broker:
+        def read_public_facts(self, *, instrument_id):
+            assert instrument_id == "BTC-USD-PERP"
+            raise RuntimeError("provider token=do-not-persist unavailable")
+
+    result = module._read_testnet_facts(Broker(), "BTC-USD-PERP")
+
+    assert result == {
+        "status": "failed",
+        "reason": "testnet_facts_unavailable:RuntimeError:provider token=[REDACTED] unavailable",
+    }
+
+
 def test_hydrate_order_identities_rejects_active_order_without_oid() -> None:
     import pipelines.park_control as module
 

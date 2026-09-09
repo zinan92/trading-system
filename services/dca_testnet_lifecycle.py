@@ -1127,7 +1127,7 @@ class DcaTestnetLifecycle:
             raise DcaTestnetLifecycleError(
                 f"order_submit_{receipt_state}:{receipt.order_id}"
             )
-        return {
+        row = {
             **command,
             "order_id": str(receipt.order_id),
             "client_order_id": str(receipt.client_order_id),
@@ -1142,6 +1142,12 @@ class DcaTestnetLifecycle:
                 else receipt_state
             ),
         }
+        native_client_order_id = str(
+            getattr(receipt, "native_client_order_id", None) or ""
+        ).strip()
+        if native_client_order_id:
+            row["native_client_order_id"] = native_client_order_id
+        return row
 
     def _apply_fill_receipt(
         self,

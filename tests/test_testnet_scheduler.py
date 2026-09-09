@@ -401,6 +401,75 @@ def test_scheduler_sampling_race_warning_does_not_consume_strike(tmp_path: Path)
     assert results[-1]["advance_result"]["market_failure"]["attempts"]
 
 
+def test_facts_unavailable_warns_without_strike_then_blocks_after_ten_minutes(
+    tmp_path: Path,
+) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current.update({"status": "grid_running", "execution_enabled": True})
+    coordinator._record(current)
+
+    def failed(_event):
+        return {
+            "status": "failed",
+            "reason": "testnet_facts_unavailable:RuntimeError:provider unavailable",
+        }
+
+    first = scheduler.tick(
+        tick_id="facts-1",
+        event={"kind": "market_heartbeat"},
+        advance=failed,
+        timestamp="2026-08-26T01:00:00+00:00",
+    )
+    before_threshold = scheduler.tick(
+        tick_id="facts-2",
+        event={"kind": "market_heartbeat"},
+        advance=failed,
+        timestamp="2026-08-26T01:09:59+00:00",
+    )
+    blocked = scheduler.tick(
+        tick_id="facts-3",
+        event={"kind": "market_heartbeat"},
+        advance=failed,
+        timestamp="2026-08-26T01:10:00+00:00",
+    )
+
+    assert [first["status"], before_threshold["status"], blocked["status"]] == [
+        "active",
+        "active",
+        "blocked",
+    ]
+    assert first["advance_failure_count"] == 0
+    assert before_threshold["advance_failure_count"] == 0
+    assert first["facts_unavailable_since"] == "2026-08-26T01:00:00+00:00"
+    assert blocked["blocker"] == failed({})["reason"]
+    assert blocked["next_action"] == "notify_park_and_wait"
+
+
+def test_restart_reconcile_facts_unavailable_retries_without_strike(
+    tmp_path: Path,
+) -> None:
+    scheduler, _coordinator = _scheduler(tmp_path)
+    scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    scheduler.mark_restart(timestamp=NOW)
+
+    result = scheduler.tick(
+        tick_id="restart-facts-1",
+        reconcile=lambda: {
+            "status": "failed",
+            "reason": "testnet_facts_unavailable:TimeoutError:timed out",
+        },
+        timestamp=NOW,
+    )
+
+    assert result["status"] == "reconcile_required"
+    assert result["warning"] == "testnet_facts_unavailable:TimeoutError:timed out"
+    assert result["advance_failure_count"] == 0
+    assert result["restart_reconcile_required"] is True
+    assert result["next_action"] == "reconcile_before_resume"
+
+
 def test_restart_reconciles_before_event_progression(tmp_path: Path) -> None:
     scheduler, coordinator = _scheduler(tmp_path)
     activation = scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)

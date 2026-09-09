@@ -1116,7 +1116,13 @@ class GridTestnetLifecycle:
         receipt_state = str(getattr(receipt.state, "value", receipt.state) or "").lower()
         if receipt_state in {"unknown", "rejected"}:
             raise GridTestnetLifecycleError(f"order_submit_{receipt_state}:{receipt.order_id}")
-        return {**command, "order_id": str(receipt.order_id), "client_order_id": str(receipt.client_order_id), "broker_order_id": str(receipt.broker_order_id or ""), "environment": "testnet", "account_id": receipt.account_address, "release_sha": receipt.release_sha, "state": "accepted" if receipt_state in {"submitting", "resting", "waiting_for_fill", "waiting_for_trigger"} else receipt_state}
+        row = {**command, "order_id": str(receipt.order_id), "client_order_id": str(receipt.client_order_id), "broker_order_id": str(receipt.broker_order_id or ""), "environment": "testnet", "account_id": receipt.account_address, "release_sha": receipt.release_sha, "state": "accepted" if receipt_state in {"submitting", "resting", "waiting_for_fill", "waiting_for_trigger"} else receipt_state}
+        native_client_order_id = str(
+            getattr(receipt, "native_client_order_id", None) or ""
+        ).strip()
+        if native_client_order_id:
+            row["native_client_order_id"] = native_client_order_id
+        return row
 
     def _rungs(self, plan: Mapping[str, Any], identity: Mapping[str, Any]) -> list[dict[str, Any]]:
         grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}

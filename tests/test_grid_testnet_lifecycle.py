@@ -77,6 +77,43 @@ def test_grid_initial_ladder_is_complete_and_geometry_is_locked(tmp_path: Path) 
     assert started["events"][-1]["event"] == "ladder_activated"
 
 
+def test_grid_order_row_persists_native_client_order_id_when_receipt_exposes_it(
+    tmp_path: Path,
+) -> None:
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", object())
+    receipt = SimpleNamespace(
+        state="resting",
+        order_id="canonical-order-1",
+        client_order_id="canonical-cloid-1",
+        native_client_order_id="0x" + "5" * 32,
+        broker_order_id="1001",
+        account_address="testnet-account",
+        release_sha="a" * 40,
+    )
+
+    row = lifecycle._order_row({"ticket_id": "grid-entry-1"}, receipt)
+
+    assert row["native_client_order_id"] == "0x" + "5" * 32
+
+
+def test_grid_order_row_accepts_legacy_receipt_without_native_client_order_id(
+    tmp_path: Path,
+) -> None:
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", object())
+    receipt = SimpleNamespace(
+        state="resting",
+        order_id="canonical-order-1",
+        client_order_id="canonical-cloid-1",
+        broker_order_id="1001",
+        account_address="testnet-account",
+        release_sha="a" * 40,
+    )
+
+    row = lifecycle._order_row({"ticket_id": "grid-entry-1"}, receipt)
+
+    assert "native_client_order_id" not in row
+
+
 def test_grid_advance_applies_fill_then_market_event(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)

@@ -477,6 +477,7 @@ class StandardBrokerExternalExecutionAdapter:
         *,
         broker_order_id: str,
         state: str,
+        native_client_order_id: str | None = None,
     ) -> None:
         recover = getattr(self._binding, "recover", None)
         if not callable(recover):
@@ -491,11 +492,21 @@ class StandardBrokerExternalExecutionAdapter:
             raise StandardBrokerExternalExecutionError("external_recovery_state_required")
         if not str(broker_order_id or "").strip():
             raise StandardBrokerExternalExecutionError("external_broker_order_id_required")
-        recover(
-            self._intent(request),
-            broker_order_id=str(broker_order_id or "").strip(),
-            state=canonical_state,
-        )
+        recovery_args = {
+            "broker_order_id": str(broker_order_id or "").strip(),
+            "state": canonical_state,
+        }
+        native_id = str(native_client_order_id or "").strip()
+        if native_id:
+            recovery_args["native_client_order_id"] = native_id
+        intent = self._intent(request)
+        try:
+            recover(intent, **recovery_args)
+        except TypeError as exc:
+            if not native_id or "native_client_order_id" not in str(exc):
+                raise
+            recovery_args.pop("native_client_order_id")
+            recover(intent, **recovery_args)
 
     def recover_client_order(
         self,
