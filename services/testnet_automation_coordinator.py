@@ -37,6 +37,15 @@ TESTNET_ENVIRONMENT = "testnet"
 TESTNET_TRANSPORT_PROFILE = "hyperliquid-testnet-default"
 TESTNET_PROTECTED_TRANSPORT_PROFILE = "hyperliquid-testnet-position-protection"
 MAX_TESTNET_CONFIRMATION_AGE_SECONDS = 900
+TICK_CALLBACK_COORDINATOR_STATES = frozenset(
+    {
+        "grid_running",
+        "grid_paused_range",
+        "dca_running",
+        "grid_blocked",
+        "dca_blocked",
+    }
+)
 _TESTNET_TRANSPORT_PROFILES = frozenset(
     {TESTNET_TRANSPORT_PROFILE, TESTNET_PROTECTED_TRANSPORT_PROFILE}
 )
@@ -1514,6 +1523,7 @@ class TestnetAutomationCoordinator:
         execution_plan = self._execution_plan(plan, current)
         if current.get("status") not in {
             "grid_running",
+            "grid_paused_range",
             "grid_interrupted",
             "grid_blocked",
         }:

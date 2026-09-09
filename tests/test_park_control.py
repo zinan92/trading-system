@@ -618,7 +618,10 @@ def test_setup_exception_is_recorded_without_deferred_name_error(monkeypatch, tm
     assert result == {"status": "blocked", "reason": "testnet_tick_setup_failed:RuntimeError"}
 
 
-def test_testnet_control_tick_attaches_and_builds_callbacks_for_grid_blocked(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("coordinator_state", ["grid_blocked", "grid_paused_range"])
+def test_testnet_control_tick_attaches_and_builds_callbacks_for_tickable_grid_state(
+    monkeypatch, tmp_path, coordinator_state
+) -> None:
     import pipelines.park_control as module
 
     class Coordinator:
@@ -626,7 +629,7 @@ def test_testnet_control_tick_attaches_and_builds_callbacks_for_grid_blocked(mon
             pass
 
         def status(self):
-            return {"status": "grid_blocked", "activation_id": "activation-1"}
+            return {"status": coordinator_state, "activation_id": "activation-1"}
 
     class Scheduler:
         def __init__(self, *_args, **_kwargs):

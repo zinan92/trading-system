@@ -10,7 +10,10 @@ from typing import Any, Callable, Mapping
 
 from services.journal_store import load_json, write_json
 from services.scheduler_ownership import SchedulerOwnershipStore
-from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+from services.testnet_automation_coordinator import (
+    TICK_CALLBACK_COORDINATOR_STATES,
+    TestnetAutomationCoordinator,
+)
 
 
 TESTNET_SCHEDULER_SCHEMA = "testnet-scheduler-ownership-v1"
@@ -351,7 +354,7 @@ class TestnetScheduler:
         if str(coordinator.get("activation_id") or "") != requested:
             return self._blocked("testnet_scheduler_activation_not_found", timestamp)
         coordinator_state = str(coordinator.get("status") or "")
-        if coordinator_state not in {"grid_running", "grid_paused_range", "dca_running", "grid_blocked", "dca_blocked"}:
+        if coordinator_state not in TICK_CALLBACK_COORDINATOR_STATES:
             return self._blocked("testnet_scheduler_attach_requires_running_coordinator", timestamp)
         current = self.status()
         existing_id = str(current.get("activation_id") or "")
@@ -499,6 +502,17 @@ class TestnetScheduler:
                 )
             restart_reconciled = True
         coordinator_state = str(coordinator_status.get("status") or "")
+        no_callback_warning = (
+            f"no_tick_callbacks:{coordinator_state}"
+            if coordinator_state not in {"idle", *_TERMINAL_COORDINATOR_STATES}
+            and not callable(advance)
+            else None
+        )
+        no_callback_result = (
+            {"status": "not_applicable", "reason": no_callback_warning}
+            if no_callback_warning
+            else None
+        )
         if coordinator_state in _TERMINAL_COORDINATOR_STATES:
             result = {
                 **current,
@@ -535,11 +549,12 @@ class TestnetScheduler:
                 "execution_enabled": False,
                 "next_action": "notify_park_and_wait",
                 "blocker": coordinator_status.get("blocker") or "coordinator_blocked",
-                "warning": None,
+                "warning": no_callback_warning,
+                "advance_result": no_callback_result,
                 "alerts_authorize_actions": False,
             }
             return self._record_tick(tick_key, result)
-        advanced = None
+        advanced = no_callback_result
         if event is not None and callable(advance):
             try:
                 advanced = dict(advance(dict(event)))
@@ -581,7 +596,7 @@ class TestnetScheduler:
             "execution_enabled": False if became_terminal else updated_coordinator.get("execution_enabled") is True,
             "next_action": "notify_park_and_wait" if became_terminal else "await_event_or_heartbeat",
             "blocker": None,
-            "warning": None,
+            "warning": no_callback_warning,
             "advance_result": advanced,
             "alerts_authorize_actions": False,
             "heartbeat": {"status": "fresh", "observed_at": now, "tick_id": tick_key},

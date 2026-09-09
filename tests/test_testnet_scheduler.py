@@ -133,6 +133,53 @@ def test_scheduler_attaches_to_running_coordinator_without_reactivation(tmp_path
     assert tick["warning"] is None
 
 
+def test_scheduler_warns_when_nonterminal_coordinator_has_no_tick_callbacks(tmp_path: Path) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current.update({"status": "grid_paused_range", "execution_enabled": True})
+    coordinator._record(current)
+
+    tick = scheduler.tick(
+        tick_id="paused-range-without-callbacks",
+        event={"kind": "market_heartbeat"},
+        timestamp=NOW,
+    )
+
+    assert tick["status"] == "active"
+    assert tick["warning"] == "no_tick_callbacks:grid_paused_range"
+    assert tick["advance_result"] == {
+        "status": "not_applicable",
+        "reason": "no_tick_callbacks:grid_paused_range",
+    }
+
+
+def test_scheduler_blocked_state_still_records_missing_tick_callbacks(tmp_path: Path) -> None:
+    scheduler, coordinator = _scheduler(tmp_path)
+    scheduler.activate(_activation(), command_id="activation-1", timestamp=NOW)
+    current = coordinator.status()
+    current.update({
+        "status": "candidate_blocked",
+        "execution_enabled": False,
+        "blocker": "candidate_ineligible",
+    })
+    coordinator._record(current)
+
+    tick = scheduler.tick(
+        tick_id="blocked-without-callbacks",
+        event={"kind": "market_heartbeat"},
+        timestamp=NOW,
+    )
+
+    assert tick["status"] == "blocked"
+    assert tick["blocker"] == "candidate_ineligible"
+    assert tick["warning"] == "no_tick_callbacks:candidate_blocked"
+    assert tick["advance_result"] == {
+        "status": "not_applicable",
+        "reason": "no_tick_callbacks:candidate_blocked",
+    }
+
+
 def test_scheduler_attach_keeps_active_session_conflict_for_new_activation(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
