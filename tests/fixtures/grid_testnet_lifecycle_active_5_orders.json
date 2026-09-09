@@ -1,0 +1,71 @@
+[
+  {
+    "schema_version": "testnet-grid-lifecycle-v1",
+    "status": "active",
+    "strategy_plan_id": "dashboard-plan:fixture",
+    "plan_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cycle_id": "dashboard-preview",
+    "orders": [
+      {
+        "ticket_id": "grid:rung-0:entry",
+        "instrument_id": "BTC-USD-PERP",
+        "side": "buy",
+        "quantity": "0.001",
+        "order_type": "limit",
+        "limit_price": "60000",
+        "idempotency_key": "grid:rung-0:entry",
+        "client_order_id": "0x00000000000000000000000000000001",
+        "broker_order_id": "1000",
+        "state": "accepted"
+      },
+      {
+        "ticket_id": "grid:rung-1:entry",
+        "instrument_id": "BTC-USD-PERP",
+        "side": "buy",
+        "quantity": "0.001",
+        "order_type": "limit",
+        "limit_price": "59900",
+        "idempotency_key": "grid:rung-1:entry",
+        "client_order_id": "0x00000000000000000000000000000002",
+        "broker_order_id": "1001",
+        "state": "accepted"
+      },
+      {
+        "ticket_id": "grid:rung-2:entry",
+        "instrument_id": "BTC-USD-PERP",
+        "side": "buy",
+        "quantity": "0.001",
+        "order_type": "limit",
+        "limit_price": "59800",
+        "idempotency_key": "grid:rung-2:entry",
+        "client_order_id": "0x00000000000000000000000000000003",
+        "broker_order_id": "1002",
+        "state": "accepted"
+      },
+      {
+        "ticket_id": "grid:rung-3:entry",
+        "instrument_id": "BTC-USD-PERP",
+        "side": "buy",
+        "quantity": "0.001",
+        "order_type": "limit",
+        "limit_price": "59700",
+        "idempotency_key": "grid:rung-3:entry",
+        "client_order_id": "0x00000000000000000000000000000004",
+        "broker_order_id": "1003",
+        "state": "accepted"
+      },
+      {
+        "ticket_id": "grid:rung-4:entry",
+        "instrument_id": "BTC-USD-PERP",
+        "side": "buy",
+        "quantity": "0.001",
+        "order_type": "limit",
+        "limit_price": "59600",
+        "idempotency_key": "grid:rung-4:entry",
+        "client_order_id": "0x00000000000000000000000000000005",
+        "broker_order_id": "1004",
+        "state": "accepted"
+      }
+    ]
+  }
+]

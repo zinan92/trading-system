@@ -27,6 +27,7 @@ from services.park_paper_runtime import (
     prepare_park_paper_config,
 )
 from services.park_safety_evidence import build_park_safety_evidence
+from services.broker_port import BrokerOrderRequest
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.hyperliquid_testnet_runtime import (
     HyperliquidTestnetRuntimeConfig,
@@ -49,6 +50,10 @@ from services.telegram_bot_transport import (
     TelegramBotTransport,
     TelegramBotTransportError,
 )
+
+
+class OrderIdentityHydrationError(RuntimeError):
+    """One active lifecycle row cannot restore its durable broker identity."""
 
 
 def _latest(path: Path) -> dict[str, Any]:
@@ -98,6 +103,70 @@ def _load_dashboard_plan(output_root: Path, activation_id: str, plan_digest: str
     if not matching:
         return None
     return dict(matching[-1]), confirmation
+
+
+def hydrate_order_identities(broker: object, state: Mapping[str, Any]) -> None:
+    """Restore active lifecycle order identities into a fresh broker binding."""
+    recovery_states = {
+        "accepted": "resting",
+        "cancel_pending": "cancel_pending",
+        "partial": "partially_filled",
+        "partially_filled": "partially_filled",
+    }
+    cycle_id = str(state.get("cycle_id") or "").strip()
+    if not cycle_id:
+        raise OrderIdentityHydrationError("lifecycle:cycle_id_missing")
+    for index, row in enumerate(state.get("orders") or []):
+        if not isinstance(row, Mapping):
+            raise OrderIdentityHydrationError(f"order[{index}]:row_invalid")
+        recovered_state = recovery_states.get(str(row.get("state") or "").strip().lower())
+        if recovered_state is None:
+            continue
+        broker_order_id = str(row.get("broker_order_id") or "").strip()
+        if not broker_order_id:
+            raise OrderIdentityHydrationError(f"order[{index}]:broker_order_id_missing")
+        if not str(row.get("client_order_id") or "").strip():
+            raise OrderIdentityHydrationError(f"order[{index}]:client_order_id_missing")
+        if not str(row.get("ticket_id") or "").strip():
+            raise OrderIdentityHydrationError(f"order[{index}]:ticket_id_missing")
+        try:
+            broker.recover(
+                BrokerOrderRequest(run_date=cycle_id, ticket=dict(row)),
+                broker_order_id=broker_order_id,
+                state=recovered_state,
+            )
+        except Exception as exc:  # noqa: BLE001 - caller converts this to a typed tick blocker.
+            raise OrderIdentityHydrationError(
+                f"order[{index}]:recover_{type(exc).__name__}"
+            ) from exc
+
+
+def _load_testnet_lifecycle_state(
+    output_root: Path,
+    plan: Mapping[str, Any],
+    *,
+    strategy_family: str,
+) -> dict[str, Any]:
+    plan_id = str(plan.get("strategy_plan_id") or "").strip()
+    if not plan_id:
+        raise OrderIdentityHydrationError("lifecycle:strategy_plan_id_missing")
+    family = str(strategy_family or "").strip().lower()
+    if family not in {"grid", "dca"}:
+        raise OrderIdentityHydrationError("lifecycle:strategy_family_invalid")
+    path = Path(output_root) / "dualtrack" / f"{family}_testnet_lifecycle" / f"{plan_id}.json"
+    try:
+        rows = load_json(path)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise OrderIdentityHydrationError("lifecycle:state_unreadable") from exc
+    if not isinstance(rows, list) or not rows or not isinstance(rows[-1], Mapping):
+        raise OrderIdentityHydrationError("lifecycle:state_missing")
+    state = dict(rows[-1])
+    if str(state.get("strategy_plan_id") or "").strip() != plan_id:
+        raise OrderIdentityHydrationError("lifecycle:strategy_plan_id_mismatch")
+    plan_digest = str(plan.get("plan_digest") or "").strip()
+    if plan_digest and str(state.get("plan_digest") or "").strip() != plan_digest:
+        raise OrderIdentityHydrationError("lifecycle:plan_digest_mismatch")
+    return state
 
 
 def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") -> dict[str, Any]:
@@ -177,6 +246,20 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
     )
     broker = build_broker_execution_port(context)
     coordinator = TestnetAutomationCoordinator(output_root)
+    family = str(coordinator_status.get("strategy_family") or "").lower()
+    try:
+        lifecycle_state = _load_testnet_lifecycle_state(
+            output_root,
+            plan,
+            strategy_family=family,
+        )
+        hydrate_order_identities(broker, lifecycle_state)
+    except OrderIdentityHydrationError as exc:
+        reason = f"order_identity_hydration_failed:{exc}"
+        return (
+            lambda _event, reason=reason: {"status": "blocked", "reason": reason},
+            None,
+        )
 
     def facts() -> dict[str, Any]:
         raw = broker.read_public_facts(instrument_id=instrument_id)
@@ -215,7 +298,6 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         # Sample it only after the coherent market read so a slow read cannot
         # make a fresh market appear to come from the future.
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        family = str(coordinator_status.get("strategy_family") or "").lower()
         if family == "grid":
             result = coordinator.status()
             for fill in fills:

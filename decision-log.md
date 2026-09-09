@@ -18745,3 +18745,34 @@ auditable datafeed port; broker execution remains a separate port.
 - `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_automation_coordinator.py tests/test_dashboard_control_plane.py tests/test_testnet_scheduler.py` — 87 passed.
 - `git diff --check` — passed.
 - `/opt/homebrew/bin/gitleaks git --no-banner --redact --log-opts='--all'` — 1183 commits scanned; no leaks found.
+
+# 2026-09-09 — Hydrate Testnet order identities before scheduled facts (#1225)
+
+## Decision
+
+- After composing a fresh protected Testnet broker, load the current Grid or
+  DCA lifecycle state and recover every active `accepted`, `cancel_pending`, or
+  partially-filled order before the first public facts read or lifecycle
+  advance.
+- Recover each identity from the lifecycle row's original ticket,
+  `broker_order_id`, `client_order_id`, cycle, and mapped standard-broker state.
+  Terminal orders are not restored into the fresh in-memory registry.
+- Fail the tick closed with `order_identity_hydration_failed:<row>` when the
+  current lifecycle cannot be identified, an active row lacks either durable
+  identity, or standard-broker rejects recovery.
+
+## Gotchas
+
+- The lifecycle currently persists partially-filled rows as `partial`, while
+  the issue contract names `partially_filled`; hydration accepts both and maps
+  them to the canonical standard-broker state.
+- The source lifecycle and standard-broker repository were read only. The
+  regression fixture contains five synthetic oid/cloid pairs and no account,
+  credential, or provider data. No launchd, online output, HTTP 8100, Testnet
+  transport, or live-money path was changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_standard_broker_external_execution.py tests/test_grid_testnet_lifecycle.py tests/test_dca_testnet_lifecycle.py tests/test_testnet_automation_coordinator.py` — 107 passed.
+- `python3 -m ruff check pipelines/park_control.py`, `python3 -m compileall -q pipelines/park_control.py tests/test_park_control.py`, and `git diff --check` — passed.
+- `gitleaks dir . --no-banner --redact` — 23.94 MB scanned; no leaks found.

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 
 def test_park_control_checks_scheduler_ownership_before_telegram(monkeypatch, tmp_path, capsys) -> None:
@@ -104,16 +107,126 @@ def test_dashboard_plan_loader_binds_confirmation_to_preview(tmp_path) -> None:
     assert result == ({"preview_digest": digest, "preview": {}}, {"activation_id": "activation-1", "status": "confirmed", "preview_digest": digest})
 
 
+def test_hydrate_order_identities_recovers_five_active_orders() -> None:
+    import pipelines.park_control as module
+
+    class Broker:
+        def __init__(self):
+            self.recovered = []
+
+        def recover(self, request, *, broker_order_id, state):
+            self.recovered.append((request, broker_order_id, state))
+
+    broker = Broker()
+    orders = [
+        {
+            "ticket_id": f"grid:rung-{index}:entry",
+            "instrument_id": "BTC-USD-PERP",
+            "side": "buy",
+            "quantity": "0.001",
+            "order_type": "limit",
+            "limit_price": str(60_000 - index * 100),
+            "idempotency_key": f"grid:rung-{index}:entry",
+            "client_order_id": "0x" + f"{index + 1:032x}",
+            "broker_order_id": str(1000 + index),
+            "state": "accepted",
+        }
+        for index in range(5)
+    ]
+
+    module.hydrate_order_identities(
+        broker,
+        {"cycle_id": "dashboard-preview", "orders": orders},
+    )
+
+    assert len(broker.recovered) == 5
+    assert [row[1] for row in broker.recovered] == [str(1000 + index) for index in range(5)]
+    assert [row[2] for row in broker.recovered] == ["resting"] * 5
+    assert [row[0].ticket for row in broker.recovered] == orders
+
+
+def test_hydrate_order_identities_rejects_active_order_without_oid() -> None:
+    import pipelines.park_control as module
+
+    state = {
+        "cycle_id": "dashboard-preview",
+        "orders": [
+            {
+                "ticket_id": "grid:rung-0:entry",
+                "instrument_id": "BTC-USD-PERP",
+                "side": "buy",
+                "quantity": "0.001",
+                "order_type": "limit",
+                "limit_price": "60000",
+                "client_order_id": "0x" + "1" * 32,
+                "state": "accepted",
+            }
+        ],
+    }
+
+    with pytest.raises(
+        module.OrderIdentityHydrationError,
+        match=r"^order\[0\]:broker_order_id_missing$",
+    ):
+        module.hydrate_order_identities(object(), state)
+
+
+def test_hydrate_order_identities_maps_dca_active_states_and_skips_terminal_orders() -> None:
+    import pipelines.park_control as module
+
+    recovered = []
+
+    class Broker:
+        def recover(self, request, *, broker_order_id, state):
+            recovered.append((request.ticket["state"], broker_order_id, state))
+
+    orders = []
+    for index, lifecycle_state in enumerate(
+        ("accepted", "cancel_pending", "partially_filled", "filled", "cancelled")
+    ):
+        orders.append(
+            {
+                "ticket_id": f"dca:entry:{index}",
+                "instrument_id": "BTC-USD-PERP",
+                "side": "buy",
+                "quantity": "0.001",
+                "order_type": "limit",
+                "limit_price": "60000",
+                "client_order_id": "0x" + f"{index + 1:032x}",
+                "broker_order_id": str(2000 + index),
+                "state": lifecycle_state,
+            }
+        )
+
+    module.hydrate_order_identities(
+        Broker(),
+        {"cycle_id": "dashboard-preview", "orders": orders},
+    )
+
+    assert recovered == [
+        ("accepted", "2000", "resting"),
+        ("cancel_pending", "2001", "cancel_pending"),
+        ("partially_filled", "2002", "partially_filled"),
+    ]
+
+
 def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(monkeypatch, tmp_path) -> None:
     import pipelines.park_control as module
     from datetime import datetime as real_datetime
 
     digest = "sha256:" + "a" * 64
     activation_id = "activation-1"
-    root = tmp_path / "outputs" / "dashboard_control_plane"
+    output_root = tmp_path / "outputs"
+    root = output_root / "dashboard_control_plane"
     root.mkdir(parents=True)
     (root / "previews.json").write_text(json.dumps([{"preview_digest": digest, "preview": {}}]), encoding="utf-8")
     (root / "confirmations.json").write_text(json.dumps([{"activation_id": activation_id, "status": "confirmed", "preview_digest": digest, "confirmation_id": "dashboard-confirmation:unused", "operator_id": "park"}]), encoding="utf-8")
+    lifecycle_path = output_root / "dualtrack" / "grid_testnet_lifecycle" / "dashboard-plan:fixture.json"
+    lifecycle_path.parent.mkdir(parents=True)
+    lifecycle_path.write_text(
+        (Path(__file__).parent / "fixtures" / "grid_testnet_lifecycle_active_5_orders.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
 
     class Config:
         start_ready = True
@@ -144,6 +257,12 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
         broker_config = {"transport_profile": "hyperliquid-testnet-position-protection", "environment": "testnet", "real_money_eligible": False, "live_trading_enabled": False}
         fills = []
 
+        def __init__(self):
+            self.recovered = []
+
+        def recover(self, request, *, broker_order_id, state):
+            self.recovered.append((request, broker_order_id, state))
+
         def market_fact(self, *, instrument_id, now):
             return {
                 "instrument_id": instrument_id, "price": "100", "source": "fake",
@@ -154,6 +273,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
             raise AssertionError("tick must use the public facts contract")
 
         def read_public_facts(self, **_kwargs):
+            assert len(self.recovered) == 5
             return {
                 "status": "pass",
                 "cursor": "fake-cursor",
@@ -175,7 +295,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     timestamps = []
     monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", staticmethod(lambda: Config()))
     monkeypatch.setattr(module, "HyperliquidTestnetMarketReader", Market)
-    monkeypatch.setattr(module, "build_plan", lambda preview, confirmation: built.append((preview, confirmation)) or {"strategy_type": "grid"})
+    monkeypatch.setattr(module, "build_plan", lambda preview, confirmation: built.append((preview, confirmation)) or {"strategy_type": "grid", "strategy_plan_id": "dashboard-plan:fixture", "plan_digest": digest})
     monkeypatch.setattr(module, "read_coherent_market", lambda *_args, **_kwargs: (
         {**Market().read("BTC-USD-PERP"), "observed_at": "2026-09-08T01:00:02+00:00"}, []
     ))
@@ -189,7 +309,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda self, plan, **kwargs: timestamps.append(kwargs["timestamp"]) or {"status": "grid_running", "fill": kwargs.get("fill")})
     status = {"activation_id": activation_id, "plan_digest": digest, "strategy_family": "grid", "instrument_id": "BTC-USD-PERP"}
 
-    advance, reconcile = module._build_testnet_tick_callbacks(tmp_path / "outputs", status)
+    advance, reconcile = module._build_testnet_tick_callbacks(output_root, status)
     reconciled = reconcile()
     empty = advance({"kind": "market_heartbeat"})
     empty_2 = advance({"kind": "market_heartbeat"})
@@ -198,6 +318,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     filled = advance({"kind": "market_heartbeat"})
 
     assert len(built) == 1
+    assert len(broker.recovered) == 5
     assert contexts[0].broker_config["approval_id"] == "dashboard-confirmation:unused"
     assert contexts[0].broker_config["approved_by"] == "park"
     assert reconciled["status"] == "pass"
@@ -214,6 +335,87 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     assert timestamps == ["2026-09-08T01:00:03+00:00"] * 4
     assert all("warning" not in row for row in (empty, empty_2, empty_3, filled))
     assert filled["fill"]["order_id"] == "fake-order"
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "expected_reason"),
+    [
+        ("missing_oid", "order_identity_hydration_failed:order[0]:broker_order_id_missing"),
+        ("recover_error", "order_identity_hydration_failed:order[0]:recover_RuntimeError"),
+    ],
+)
+def test_dashboard_activation_tick_blocks_before_facts_when_identity_hydration_fails(
+    monkeypatch,
+    tmp_path,
+    failure_mode,
+    expected_reason,
+) -> None:
+    import pipelines.park_control as module
+
+    class Config:
+        start_ready = True
+        instrument_id = "BTC-USD-PERP"
+        account_address = "0x" + "1" * 40
+        runtime_id = "runtime"
+        release_sha = "a" * 40
+        standard_broker_release_sha = "b" * 40
+        capability_revision = "capability"
+        secret_file = tmp_path / "fake-secret"
+
+    class Market:
+        def read(self, instrument_id):
+            return {"source": "fake", "instrument_id": instrument_id}
+
+    class Broker:
+        facts_calls = 0
+
+        def recover(self, *_args, **_kwargs):
+            if failure_mode == "recover_error":
+                raise RuntimeError("provider details must not leak")
+
+        def read_public_facts(self, **_kwargs):
+            self.facts_calls += 1
+            raise AssertionError("facts must not run after failed hydration")
+
+    order = {
+        "ticket_id": "grid:rung-0:entry",
+        "instrument_id": "BTC-USD-PERP",
+        "side": "buy",
+        "quantity": "0.001",
+        "order_type": "limit",
+        "limit_price": "60000",
+        "client_order_id": "0x" + "1" * 32,
+        "broker_order_id": "1000",
+        "state": "accepted",
+    }
+    if failure_mode == "missing_oid":
+        order.pop("broker_order_id")
+
+    broker = Broker()
+    monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", staticmethod(lambda: Config()))
+    monkeypatch.setattr(module, "HyperliquidTestnetMarketReader", Market)
+    monkeypatch.setattr(module, "_load_dashboard_plan", lambda *_args: ({}, {"confirmation_id": "confirmation", "operator_id": "park"}))
+    monkeypatch.setattr(module, "build_plan", lambda *_args: {"strategy_type": "grid", "strategy_plan_id": "dashboard-plan:fixture"})
+    monkeypatch.setattr(module, "_load_testnet_lifecycle_state", lambda *_args, **_kwargs: {"cycle_id": "dashboard-preview", "orders": [order]})
+    import services.broker_composition as composition
+    monkeypatch.setattr(composition, "build_broker_execution_port", lambda _context: broker)
+
+    advance, reconcile = module._build_testnet_tick_callbacks(
+        tmp_path / "outputs",
+        {
+            "activation_id": "activation-1",
+            "plan_digest": "sha256:" + "a" * 64,
+            "strategy_family": "grid",
+            "instrument_id": "BTC-USD-PERP",
+        },
+    )
+
+    assert advance({"kind": "market_heartbeat"}) == {
+        "status": "blocked",
+        "reason": expected_reason,
+    }
+    assert reconcile is None
+    assert broker.facts_calls == 0
 
 
 def test_setup_exception_is_recorded_without_deferred_name_error(monkeypatch, tmp_path) -> None:
