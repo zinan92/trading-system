@@ -160,17 +160,7 @@ class GridTestnetLifecycle:
             self._save(state)
             return self.snapshot(plan)
         try:
-            for rung in state["rungs"]:
-                line = GridLineLifecycle.from_snapshot(rung["line"])
-                if not line.can_enter:
-                    continue
-                if any(
-                    row.get("state") == "accepted"
-                    and row.get("order_id") == rung.get("entry_order_id")
-                    for row in state["orders"]
-                ):
-                    continue
-                self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
+            self._rearm_missing_rungs(plan, state, timestamp=timestamp)
         except Exception as exc:  # noqa: BLE001 - keep the blocker durable.
             self._block(state, f"resume_submit_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
             self._save(state)
@@ -348,7 +338,7 @@ class GridTestnetLifecycle:
                 self._save(state)
                 raise GridTestnetLifecycleError(state["blocker"]) from exc
             rung["line"] = line.snapshot()
-            if order.get("event") == "tp" and line.state == "rearmed":
+            if order.get("event") == "tp" and line.state == "rearmed" and state.get("status") != "paused_above_range":
                 reconciliation = reconcile_before_continuation(
                     self.broker,
                     state,
@@ -434,7 +424,35 @@ class GridTestnetLifecycle:
         state["last_market_price"] = float(price)
         upper = float(state["upper_boundary"])
         lower = float(state["lower_boundary"])
-        if float(price) >= upper or float(price) <= lower:
+        market_price = float(price)
+        direction = str(state.get("direction") or "")
+        range_pause = (
+            direction == "long" and market_price > upper
+        ) or (
+            direction == "short" and market_price < lower
+        )
+        if state.get("status") == "paused_above_range":
+            reentered = (direction == "long" and market_price <= upper) or (
+                direction == "short" and market_price >= lower
+            )
+            if reentered:
+                state["status"] = "active"
+                self._record_event(state, "range_reenter", timestamp=timestamp, market_price=market_price)
+                try:
+                    self._rearm_missing_rungs(plan, state, timestamp=timestamp)
+                except Exception as exc:  # noqa: BLE001 - retain the existing fail-closed submit path.
+                    self._submission_failure(plan, state, timestamp=timestamp, reason=f"range_reenter_submit_failed:{type(exc).__name__}:{exc}")
+            # Above-range pause deliberately leaves entries and protection alone.
+        elif range_pause:
+            state["status"] = "paused_above_range"
+            self._record_event(state, "range_exit_upper", timestamp=timestamp, market_price=market_price)
+        elif (
+            direction == "long" and market_price <= lower
+        ) or (
+            direction == "short" and market_price >= upper
+        ) or (
+            direction == "neutral" and (market_price >= upper or market_price <= lower)
+        ):
             self._hard_stop(plan, state, timestamp=timestamp, reason="grid_boundary", market_price=float(price))
         else:
             self._skip_missed_rungs(plan, state, price=float(price), timestamp=timestamp)
@@ -695,6 +713,20 @@ class GridTestnetLifecycle:
                 self._record_event(state, "rung_missed_skipped", timestamp=timestamp, rung_id=rung["rung_id"], market_price=price, rung_price=rung["price"])
             except Exception as exc:  # noqa: BLE001 - unresolved cancellation cannot be silently chased.
                 self._submission_failure(plan, state, timestamp=timestamp, reason=f"missed_rung_cancel_failed:{type(exc).__name__}:{exc}")
+
+    def _rearm_missing_rungs(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
+        """Restore entry orders for eligible lines without duplicating accepted orders."""
+        for rung in state["rungs"]:
+            line = GridLineLifecycle.from_snapshot(rung["line"])
+            if not line.can_enter:
+                continue
+            if any(
+                row.get("state") == "accepted"
+                and row.get("order_id") == rung.get("entry_order_id")
+                for row in state["orders"]
+            ):
+                continue
+            self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
 
     def _hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str, market_price: float | None = None) -> None:
         if state["status"] in {"terminal", "sealed"}:
@@ -1210,6 +1242,9 @@ class GridTestnetLifecycle:
         for key in ("maximum_loss_at_full_depth", "equity", "leverage_limit", "max_notional", "max_open_orders", "max_open_positions", "max_slippage"):
             if risk.get(key) in (None, "") or float(risk[key]) <= 0:
                 raise GridTestnetLifecycleError(f"{key} is required before Testnet writes")
+        grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
+        if "trailing_up" in grid and not isinstance(grid["trailing_up"], bool):
+            raise GridTestnetLifecycleError("grid_trailing_up_must_be_boolean")
 
     @staticmethod
     def _validate_full_depth_risk(plan: Mapping[str, Any], rungs: list[dict[str, Any]]) -> None:

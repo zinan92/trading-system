@@ -164,6 +164,25 @@ def test_grid_hard_stop_is_terminal_and_not_rearmed(tmp_path: Path) -> None:
     assert terminal["next_action"] == "notify_park_and_wait"
 
 
+def test_grid_upper_boundary_is_published_as_pause_with_execution_enabled(tmp_path: Path) -> None:
+    coordinator, plan, confirmation, broker, _backend, market, _fill = _setup(tmp_path)
+    started = coordinator.start_grid_session(
+        plan, confirmation=confirmation, market=_market_at(market, NOW), broker=broker, timestamp=NOW
+    )
+
+    paused = coordinator.advance_grid_session(
+        plan,
+        broker=broker,
+        price=66001.0,
+        market=_market_at(market, "2026-08-26T01:01:00+00:00"),
+        timestamp="2026-08-26T01:01:00+00:00",
+    )
+    assert paused["status"] == "grid_paused_range"
+    assert paused["grid_lifecycle_status"] == "paused_above_range"
+    assert paused["execution_enabled"] is True
+    assert paused["next_action"] == "await_fill_or_grid_event"
+
+
 def test_manual_grid_interrupt_preserves_position_and_resume_revalidates(tmp_path: Path) -> None:
     coordinator, plan, confirmation, broker, _backend, market, fill = _setup(tmp_path)
     started = coordinator.start_grid_session(

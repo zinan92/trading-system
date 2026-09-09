@@ -149,7 +149,7 @@ function openAiReceipt(evaluationId){const rows=aiEvaluations(state.data),select
 function fillInputs(plan,{force=false}={}){
   if(state.formDirty&&!force)return;
   const range=plan?.range||{},grid=plan?.grid||{},risk=plan?.risk_budget||{};
-  $("#rangeLow").value=range.low??"";$("#rangeHigh").value=range.high??"";$("#gridCount").value=grid.count||grid.orders?.length||"";$("#gridNotional").value=grid.notional_per_grid??"";$("#leverage").value=grid.leverage??risk.leverage??risk.max_leverage??"10";$("#outOfRange").value=grid.out_of_range||"wait";$("#adjustLow").value=range.low??"";$("#adjustHigh").value=range.high??"";
+  $("#rangeLow").value=range.low??"";$("#rangeHigh").value=range.high??"";$("#gridCount").value=grid.count||grid.orders?.length||"";$("#gridNotional").value=grid.notional_per_grid??"";$("#leverage").value=grid.leverage??risk.leverage??risk.max_leverage??"10";$("#outOfRange").value=grid.out_of_range||"pause_keep_orders";$("#adjustLow").value=range.low??"";$("#adjustHigh").value=range.high??"";
   state.notionalMode=grid.notional_mode||"manual";state.gridMode=grid.mode||"arithmetic";
   state.direction=plan?.direction||"neutral";state.style=plan?.style||"steady";setChoice("#directionChoices","direction",state.direction);setChoice("#styleChoices","style",state.style);setGridMode(state.gridMode);
 }
@@ -161,7 +161,7 @@ function strategyPayload({useInputs=true}={}){
   if(!Number.isFinite(low)||!Number.isFinite(high)||high<=low)throw Error("下边界必须小于上边界。");
   if(!Number.isInteger(count)||count<2||count>80)throw Error("网格数量必须是 2–80 的整数。");
   if(!Number.isFinite(leverage)||leverage<=0||leverage>10)throw Error("杠杆必须大于 0 且不超过 10x。");
-  payload.range={low,high};payload.grid={count,mode:state.gridMode,notional_per_grid:Number.isFinite(notional)&&notional>0?notional:0,notional_mode:state.notionalMode,out_of_range:payload.out_of_range};payload.risk_budget={leverage};
+  payload.range={low,high};payload.grid={count,mode:state.gridMode,notional_per_grid:Number.isFinite(notional)&&notional>0?notional:0,notional_mode:state.notionalMode,out_of_range:payload.out_of_range,trailing_up:false};payload.risk_budget={leverage};
   return payload;
 }
 

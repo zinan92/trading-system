@@ -1531,6 +1531,9 @@ class TestnetAutomationCoordinator:
         if lifecycle_state == "interrupted":
             status = "grid_interrupted"
             enabled = False
+        elif lifecycle_state == "paused_above_range":
+            status = "grid_paused_range"
+            enabled = True
         elif lifecycle_state in {"terminal", "stopped"} or lifecycle.get("sealed") is True:
             status = "grid_terminal"
             enabled = False

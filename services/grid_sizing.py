@@ -434,6 +434,9 @@ def build_grid_preview(
     if low <= 0 or high <= low:
         raise ValueError("grid range must have positive low below high")
     grid_input = body.get("grid") if isinstance(body.get("grid"), dict) else {}
+    trailing_up = grid_input.get("trailing_up", False)
+    if not isinstance(trailing_up, bool):
+        raise ValueError("grid trailing_up must be boolean")
     mode = str(grid_input.get("mode") or strategy_cfg.get("default_mode") or "arithmetic").lower()
     if mode not in GRID_MODES:
         raise ValueError("grid mode must be arithmetic or geometric")
@@ -666,7 +669,8 @@ def build_grid_preview(
             "target_net_profit_per_grid_usd": round(min_net_profit_target, 2),
             "profit_target_met": min(net_profits) + 1e-8 >= min_net_profit_target,
             "profit_calculation": "modeled_entry_exit_fees_after_execution_rounding_funding_excluded",
-            "out_of_range": str(body.get("out_of_range") or grid_input.get("out_of_range") or "exit_only"),
+            "out_of_range": str(body.get("out_of_range") or grid_input.get("out_of_range") or "pause_keep_orders"),
+            "trailing_up": trailing_up,
         },
         "orders": orders,
         "risk": {

@@ -302,7 +302,7 @@ class TestnetScheduler:
         if str(coordinator.get("activation_id") or "") != requested:
             return self._blocked("testnet_scheduler_activation_not_found", timestamp)
         coordinator_state = str(coordinator.get("status") or "")
-        if coordinator_state not in {"grid_running", "dca_running", "grid_blocked", "dca_blocked"}:
+        if coordinator_state not in {"grid_running", "grid_paused_range", "dca_running", "grid_blocked", "dca_blocked"}:
             return self._blocked("testnet_scheduler_attach_requires_running_coordinator", timestamp)
         current = self.status()
         existing_id = str(current.get("activation_id") or "")
