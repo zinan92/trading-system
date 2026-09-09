@@ -54,6 +54,7 @@ _ACTIONS = frozenset(
         "resume",
         "select_candidate",
         "reconcile_stop",
+        "close_terminal",
     }
 )
 _APPROVED_MARKET_SOURCES = frozenset(
@@ -339,6 +340,8 @@ class TestnetAutomationCoordinator:
             )
         if normalized_action == "reconcile_stop":
             return self._reconcile_stop(payload, command_id=command_id, now=now)
+        if normalized_action == "close_terminal":
+            return self._close_terminal(payload, command_id=command_id, now=now)
         return self._operator_intent(
             normalized_action,
             payload if isinstance(payload, Mapping) else {},
@@ -825,6 +828,78 @@ class TestnetAutomationCoordinator:
             "status": "idle",
             "receipt": receipt,
             "fingerprint_scheme": receipt["fingerprint_scheme"],
+        }
+        return self._record(state)
+
+    def _close_terminal(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        command_id: str | None,
+        now: str | datetime | None,
+    ) -> dict[str, Any]:
+        """Close a sealed terminal activation from durable local evidence only."""
+
+        del payload
+        current = self._read_current_or_raise()
+        if current is None or current.get("status") == "idle":
+            raise TestnetCoordinatorError("activation_required")
+        activation_id = str(current.get("activation_id") or "")
+        normalized_command_id = self._command_id(command_id, "close_terminal", activation_id)
+        replay = self._replay(normalized_command_id)
+        if replay is not None:
+            return replay
+        if current.get("status") not in {"grid_terminal", "dca_terminal"}:
+            raise TestnetCoordinatorError("terminal_close_requires_reconciliation")
+        lifecycle = current.get("lifecycle")
+        lifecycle = lifecycle if isinstance(lifecycle, Mapping) else {}
+        reconciliation = lifecycle.get("reconciliation")
+        reconciliation = reconciliation if isinstance(reconciliation, Mapping) else {}
+        if lifecycle.get("sealed") is not True or str(reconciliation.get("status") or "").lower() != "ok":
+            raise TestnetCoordinatorError(
+                "terminal_close_requires_reconciliation",
+                {"sealed": lifecycle.get("sealed") is True, "reconciliation": dict(reconciliation)},
+            )
+        nonzero_keys = (
+            "broker_open_order_count",
+            "local_open_order_count",
+            "broker_position_count",
+        )
+        nonzero = {
+            key: reconciliation.get(key)
+            for key in nonzero_keys
+            if reconciliation.get(key) not in (None, 0, "0", 0.0)
+        }
+        if nonzero:
+            raise TestnetCoordinatorError(
+                "terminal_close_requires_reconciliation",
+                {"reconciliation": dict(reconciliation), "nonzero": nonzero},
+            )
+        timestamp = self._timestamp(now)
+        terminal_reason = str(
+            lifecycle.get("terminal_reason") or current.get("terminal_reason") or "unknown"
+        )
+        receipt = {
+            "schema_version": "testnet-terminal-close-receipt-v1",
+            "event": "close_terminal",
+            "status": "closed",
+            "activation_id": activation_id,
+            "terminal_reason": terminal_reason,
+            "reconciliation": dict(reconciliation),
+            "closed_at": timestamp,
+            "broker_operation_invoked": False,
+            "network_operation_invoked": False,
+            "execution_mutation": False,
+        }
+        state = {
+            **self._idle_state(),
+            "event": "close_terminal",
+            "action": "close_terminal",
+            "command_id": normalized_command_id,
+            "occurred_at": timestamp,
+            "previous_activation_id": activation_id,
+            "status": "idle",
+            "receipt": receipt,
         }
         return self._record(state)
 

@@ -400,6 +400,50 @@ def test_reconcile_stop_keeps_enabled_testnet_activation_blocked(tmp_path: Path)
         )
 
 
+def test_close_terminal_returns_idle_with_local_receipt(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    activation = _activation()
+    coordinator.activate(activation, command_id="activate-terminal-close")
+    coordinator._record({
+        **coordinator.status(),
+        "status": "grid_terminal",
+        "execution_mutation": True,
+        "lifecycle": {
+            "sealed": True,
+            "terminal_reason": "hard_stop",
+            "reconciliation": {
+                "status": "ok",
+                "broker_open_order_count": 0,
+                "local_open_order_count": 0,
+                "broker_position_count": 0,
+            },
+        },
+    })
+
+    result = coordinator.command(
+        "close_terminal", {}, command_id="close-terminal", now="2026-09-09T01:00:00+00:00"
+    )
+
+    assert result["status"] == "idle"
+    assert result["previous_activation_id"] == activation_digest(activation)
+    assert result["receipt"]["schema_version"] == "testnet-terminal-close-receipt-v1"
+    assert result["receipt"]["terminal_reason"] == "hard_stop"
+    assert result["receipt"]["network_operation_invoked"] is False
+
+
+def test_close_terminal_requires_healthy_reconciliation(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    coordinator.activate(_activation(), command_id="activate-terminal-blocked")
+    coordinator._record({
+        **coordinator.status(),
+        "status": "dca_terminal",
+        "lifecycle": {"sealed": True, "reconciliation": {"status": "blocked"}},
+    })
+
+    with pytest.raises(TestnetCoordinatorError, match="terminal_close_requires_reconciliation"):
+        coordinator.command("close_terminal", {}, command_id="close-terminal-blocked")
+
+
 def test_protected_start_confirmation_accepts_durable_dashboard_projection(tmp_path: Path) -> None:
     from datetime import datetime, timezone
 

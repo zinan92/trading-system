@@ -382,6 +382,20 @@ class TestnetScheduler:
                 self._blocked(guard.get("blocker", "ownership_blocked"), timestamp),
             )
         current = self.status()
+        coordinator_status = self.coordinator.status()
+        if current.get("status") == "awaiting_operator" and coordinator_status.get("status") == "idle":
+            return self._save_state({
+                **current,
+                "event": "scheduler_idle",
+                "status": "idle",
+                "occurred_at": self._timestamp(timestamp),
+                "activation_id": None,
+                "coordinator_status": "idle",
+                "coordinator": coordinator_status,
+                "execution_enabled": False,
+                "next_action": "await_activation",
+                "blocker": None,
+            })
         if current.get("status") not in {"active", "reconcile_required"}:
             return self._record_tick(
                 tick_key,
@@ -408,7 +422,6 @@ class TestnetScheduler:
                     self._blocked("restart_reconciliation_failed", timestamp),
                 )
             restart_reconciled = True
-        coordinator_status = self.coordinator.status()
         coordinator_state = str(coordinator_status.get("status") or "")
         if coordinator_state in _TERMINAL_COORDINATOR_STATES:
             result = {
