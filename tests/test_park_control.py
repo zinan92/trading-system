@@ -281,11 +281,12 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
                 "positions": [],
                 "open_orders": [
                     {
-                        "oid": "oid-1",
-                        "broker_order_id": "oid-1",
-                        "cloid": "cloid-1",
-                        "client_order_id": "cloid-1",
+                        "oid": broker_order_id,
+                        "broker_order_id": broker_order_id,
+                        "cloid": request.ticket["client_order_id"],
+                        "client_order_id": request.ticket["client_order_id"],
                     }
+                    for request, broker_order_id, _state in self.recovered
                 ],
             }
 
@@ -323,13 +324,9 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     assert contexts[0].broker_config["approved_by"] == "park"
     assert reconciled["status"] == "pass"
     assert reconciled["cursor"] == "fake-cursor"
-    assert reconciled["open_orders"] == [
-        {
-            "oid": "oid-1",
-            "broker_order_id": "oid-1",
-            "cloid": "cloid-1",
-            "client_order_id": "cloid-1",
-        }
+    assert len(reconciled["open_orders"]) == 5
+    assert [row["oid"] for row in reconciled["open_orders"]] == [
+        "1000", "1001", "1002", "1003", "1004",
     ]
     assert [row["status"] for row in (empty, empty_2, empty_3, filled)] == ["grid_running"] * 4
     assert timestamps == ["2026-09-08T01:00:03+00:00"] * 4
