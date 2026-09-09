@@ -291,7 +291,6 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
                 self.intent(
                     order_id=f"recovered-{index}",
                     key=f"cycle:recovered-{index}",
-                    client_order_id=str(row["cloid"]),
                 ),
                 broker_order_id=str(row["oid"]),
                 state=OrderState.RESTING,
@@ -304,6 +303,42 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
             [f"recovered-{index}" for index in range(5)],
         )
         self.assertFalse(any(receipt.is_unregistered_broker_order for receipt in open_orders))
+        self.assertEqual(
+            [receipt.native_client_order_id for receipt in open_orders],
+            [str(row["cloid"]) for row in rows],
+        )
+
+        filled = adapter.apply_fill(
+            {
+                "coin": "BTC",
+                "side": "B",
+                "px": "65000",
+                "sz": "0.1",
+                "time": 1787313669000,
+                "tid": 501,
+                "oid": rows[0]["oid"],
+                "cloid": rows[0]["cloid"],
+            }
+        )
+
+        self.assertEqual(filled.order_id, "recovered-0")
+        self.assertEqual(filled.state, OrderState.FILLED)
+
+    def test_recover_client_order_restores_native_client_identity(self) -> None:
+        adapter = HyperliquidOrderAdapter(
+            transport=InMemoryOrderTransport(submit_response=self.resting_response())
+        )
+
+        recovered = adapter.recover_client_order(
+            self.intent(order_id="recovered-client", key="cycle:recovered-client"),
+            client_order_id="0xcanonical-recovered",
+            native_client_order_id="0xnative-recovered",
+            state=OrderState.RESTING,
+        )
+
+        self.assertEqual(recovered.client_order_id, "0xcanonical-recovered")
+        self.assertEqual(recovered.native_client_order_id, "0xnative-recovered")
+        self.assertEqual(adapter.resolve_order_id("0xnative-recovered"), "recovered-client")
 
     def test_strict_reconcile_rejects_unregistered_client_identity(self) -> None:
         adapter = HyperliquidOrderAdapter(
@@ -344,6 +379,34 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
                     "tid": 501,
                     "oid": 201,
                     "cloid": "0xunregistered-1",
+                }
+            )
+
+    def test_oid_fallback_rejects_cloid_owned_by_another_canonical_order(self) -> None:
+        adapter = HyperliquidOrderAdapter(
+            transport=InMemoryOrderTransport(submit_response=self.resting_response())
+        )
+        first = adapter.submit(self.intent())
+        second = adapter.recover(
+            self.intent(
+                order_id="o-2",
+                key="cycle:o-2",
+                client_order_id="0xcanonical-other",
+            ),
+            broker_order_id="202",
+            state=OrderState.RESTING,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Broker order identity belongs to a different canonical order",
+        ):
+            adapter.apply_order_update(
+                {
+                    "status": "open",
+                    "oid": first.broker_order_id,
+                    "cloid": second.client_order_id,
+                    "timestamp": 1787313661000,
                 }
             )
 

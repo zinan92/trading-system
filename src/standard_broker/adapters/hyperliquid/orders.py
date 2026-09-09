@@ -166,6 +166,7 @@ class HyperliquidOrderAdapter:
         *,
         broker_order_id: str,
         state: str | OrderState,
+        native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         """Restore one persisted order identity without invoking transport."""
 
@@ -199,6 +200,7 @@ class HyperliquidOrderAdapter:
             updated_at=datetime.now(UTC),
             broker_order_lineage=(broker_id,),
             client_order_lineage=(client_order_id,),
+            native_client_order_id=native_client_order_id,
         )
         self._remember(intent, receipt)
         return receipt
@@ -209,6 +211,7 @@ class HyperliquidOrderAdapter:
         *,
         client_order_id: str,
         state: str | OrderState,
+        native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         """Restore one intent when only the persisted client identity exists."""
 
@@ -240,6 +243,7 @@ class HyperliquidOrderAdapter:
             provenance=self._provenance(),
             updated_at=datetime.now(UTC),
             client_order_lineage=(client_id,),
+            native_client_order_id=native_client_order_id,
         )
         self._remember(intent, receipt)
         return receipt
@@ -345,12 +349,7 @@ class HyperliquidOrderAdapter:
         self,
         raw: Mapping[str, object],
     ) -> OrderReceipt | None:
-        client_order_id = raw.get("cloid") or raw.get("client_order_id")
-        if client_order_id is not None:
-            order_id = self._by_client.get(str(client_order_id))
-            return self._orders.get(order_id) if order_id is not None else None
-        broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else None
-        return self._receipt_for_broker_id(broker_order_id)
+        return self._find_receipt_or_none(raw)
 
     def _external_open_order(self, raw: Mapping[str, object]) -> OrderReceipt:
         broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else ""
@@ -721,12 +720,31 @@ class HyperliquidOrderAdapter:
                 if receipt.state is not OrderState.MODIFY_PENDING:
                     raise ValueError("Broker order identity conflicts with client order identity")
             return receipt
+        receipt = self._receipt_for_broker_id(broker_order_id)
+        if receipt is not None:
+            if client_order_id is not None:
+                return self._replace(
+                    receipt,
+                    native_client_order_id=str(client_order_id),
+                )
+            return receipt
         if client_order_id is not None:
             raise ValueError("unknown client order identity cannot fall back to Broker order identity")
-        for receipt in self._orders.values():
-            if broker_order_id in receipt.broker_order_lineage:
-                return receipt
         raise KeyError("unable to resolve Hyperliquid lifecycle event to a canonical order")
+
+    def _find_receipt_or_none(self, raw: Mapping[str, object]) -> OrderReceipt | None:
+        client_order_id = raw.get("cloid") or raw.get("client_order_id")
+        broker_order_id = str(raw["oid"]) if raw.get("oid") is not None else None
+        if (
+            client_order_id is not None
+            and str(client_order_id) not in self._by_client
+            and self._receipt_for_broker_id(broker_order_id) is None
+        ):
+            return None
+        try:
+            return self._find_receipt(raw)
+        except KeyError:
+            return None
 
     def _receipt_for_broker_id(self, broker_order_id: str | None) -> OrderReceipt | None:
         if broker_order_id is None:
@@ -739,6 +757,11 @@ class HyperliquidOrderAdapter:
     def _apply_submit_response(self, receipt: OrderReceipt, response: object) -> OrderReceipt:
         if not isinstance(response, Mapping):
             return self._replace(receipt, state=OrderState.UNKNOWN, reason="invalid_submit_response")
+        if response.get("native_cloid") is not None:
+            receipt = self._replace(
+                receipt,
+                native_client_order_id=str(response["native_cloid"]),
+            )
         statuses = (
             response.get("response", {})
             .get("data", {})
@@ -895,10 +918,21 @@ class HyperliquidOrderAdapter:
             raise OrderIdempotencyError(
                 f"client order ID {receipt.client_order_id!r} was reused by another canonical order"
             )
+        if receipt.native_client_order_id is not None:
+            native_owner = self._by_client.get(receipt.native_client_order_id)
+            if native_owner is not None and native_owner != intent.order_id:
+                raise OrderIdempotencyError(
+                    f"native client order ID {receipt.native_client_order_id!r} was reused by another canonical order"
+                )
         self._orders[intent.order_id] = receipt
         self._by_key[intent.idempotency_key] = intent.order_id
         self._intent_fingerprints[intent.idempotency_key] = self._intent_fingerprint(intent)
         self._by_client[receipt.client_order_id] = intent.order_id
+        if receipt.native_client_order_id is not None:
+            self._by_client[receipt.native_client_order_id] = intent.order_id
+            remember_native = getattr(self._transport, "remember_native_client_order_id", None)
+            if callable(remember_native):
+                remember_native(intent.order_id, receipt.native_client_order_id)
         self._instrument_ids[intent.order_id] = intent.instrument_id
         remember_instrument = getattr(self._transport, "remember_instrument", None)
         if callable(remember_instrument):
@@ -916,10 +950,25 @@ class HyperliquidOrderAdapter:
         new_client_order_id = str(next_changes.get("client_order_id", receipt.client_order_id))
         if not receipt.client_order_lineage or receipt.client_order_lineage[-1] != new_client_order_id:
             next_changes["client_order_lineage"] = receipt.client_order_lineage + (new_client_order_id,)
+        new_native_client_order_id = next_changes.get(
+            "native_client_order_id",
+            receipt.native_client_order_id,
+        )
+        if new_native_client_order_id is not None:
+            new_native_client_order_id = str(new_native_client_order_id)
+            native_owner = self._by_client.get(new_native_client_order_id)
+            if native_owner is not None and native_owner != receipt.order_id:
+                raise ValueError("client order identity belongs to a different canonical order")
+            next_changes["native_client_order_id"] = new_native_client_order_id
         next_changes.setdefault("updated_at", datetime.now(UTC))
         updated = replace(receipt, **next_changes)
         self._orders[receipt.order_id] = updated
         self._by_client[updated.client_order_id] = updated.order_id
+        if updated.native_client_order_id is not None:
+            self._by_client[updated.native_client_order_id] = updated.order_id
+            remember_native = getattr(self._transport, "remember_native_client_order_id", None)
+            if callable(remember_native):
+                remember_native(updated.order_id, updated.native_client_order_id)
         return updated
 
     def _promote(self, receipt: OrderReceipt, broker_order_id: str | None) -> OrderReceipt:
@@ -997,6 +1046,11 @@ class _RuntimeOrderTransport:
         """Keep recovered canonical orders usable before a submit call occurs."""
 
         self._instrument_ids[order_id] = instrument_id
+
+    def remember_native_client_order_id(self, order_id: str, client_order_id: str) -> None:
+        """Restore the Broker-native CLOID used for runtime queries and mutations."""
+
+        self._native_cloids[order_id] = client_order_id
 
     def cancel(self, receipt: OrderReceipt) -> object:
         if receipt.broker_order_id is None:
@@ -1178,6 +1232,7 @@ class HyperliquidRuntimeOrderAdapter:
         *,
         broker_order_id: str,
         state: str | OrderState,
+        native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         self._validate_intent(intent)
         return self._bind_receipt(
@@ -1185,6 +1240,7 @@ class HyperliquidRuntimeOrderAdapter:
                 intent,
                 broker_order_id=broker_order_id,
                 state=state,
+                native_client_order_id=native_client_order_id,
             )
         )
 
@@ -1194,6 +1250,7 @@ class HyperliquidRuntimeOrderAdapter:
         *,
         client_order_id: str,
         state: str | OrderState,
+        native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         self._validate_intent(intent)
         return self._bind_receipt(
@@ -1201,6 +1258,7 @@ class HyperliquidRuntimeOrderAdapter:
                 intent,
                 client_order_id=client_order_id,
                 state=state,
+                native_client_order_id=native_client_order_id,
             )
         )
 
@@ -1428,6 +1486,7 @@ class ExternalOrderLifecyclePort(Protocol):
         *,
         broker_order_id: str,
         state: str | OrderState,
+        native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         ...
 
@@ -1521,13 +1580,19 @@ class HyperliquidExternalOrderAdapter:
         *,
         broker_order_id: str,
         state: str | OrderState,
+        native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         self._authorize(intent.order_id, "query", intent)
+        recovery_options: dict[str, object] = {
+            "broker_order_id": broker_order_id,
+            "state": state,
+        }
+        if native_client_order_id is not None:
+            recovery_options["native_client_order_id"] = native_client_order_id
         return self._validate_receipt(
             self._lifecycle.recover(
                 intent,
-                broker_order_id=broker_order_id,
-                state=state,
+                **recovery_options,
             )
         )
 
@@ -1537,6 +1602,7 @@ class HyperliquidExternalOrderAdapter:
         *,
         client_order_id: str,
         state: str | OrderState,
+        native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         self._authorize(intent.order_id, "query", intent)
         recover = getattr(self._lifecycle, "recover_client_order", None)
@@ -1545,11 +1611,16 @@ class HyperliquidExternalOrderAdapter:
                 "client_order_recovery_unavailable",
                 "external order lifecycle does not support persisted client identity recovery",
             )
+        recovery_options: dict[str, object] = {
+            "client_order_id": client_order_id,
+            "state": state,
+        }
+        if native_client_order_id is not None:
+            recovery_options["native_client_order_id"] = native_client_order_id
         return self._validate_receipt(
             recover(
                 intent,
-                client_order_id=client_order_id,
-                state=state,
+                **recovery_options,
             )
         )
 

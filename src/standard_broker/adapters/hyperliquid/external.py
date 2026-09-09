@@ -896,13 +896,51 @@ class NautilusHyperliquidTestnetBackend:
         return self._with_provenance(self._attach_fill(event, request))
 
     def _open_orders(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        self._ensure_instruments()
         instrument_id = request.get("instrument_id")
         result = self._call(
             "request_order_status_reports",
             str(self._instrument_id(instrument_id)) if instrument_id else None,
         )
-        rows = [self._order_event(item) for item in (result or [])]
+        rows = [self._open_order_event(item) for item in (result or [])]
         return self._with_provenance({"orders": rows})
+
+    def _open_order_event(self, report: object) -> dict[str, object]:
+        """Project Nautilus cumulative quantities into Hyperliquid open-order fields."""
+
+        mapping = self._to_mapping(report)
+        event = self._order_event(report)
+        original_text = self._string_value(report, mapping, "quantity")
+        if original_text is None:
+            return event
+        filled_text = self._string_value(report, mapping, "filled_qty") or "0"
+        try:
+            original = Decimal(original_text)
+            filled = Decimal(filled_text)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise RuntimeBoundaryError(
+                "open_order_quantity_invalid",
+                "Hyperliquid open-order quantities are not valid decimals",
+            ) from exc
+        remaining = original - filled
+        if (
+            not original.is_finite()
+            or not filled.is_finite()
+            or original <= 0
+            or filled < 0
+            or remaining < 0
+        ):
+            raise RuntimeBoundaryError(
+                "open_order_quantity_invalid",
+                "Hyperliquid open-order quantities are inconsistent",
+            )
+        instrument_id = self._string_value(report, mapping, "instrument_id")
+        instrument = self._instruments.get(str(instrument_id)) if instrument_id else None
+        precision = int(getattr(instrument, "size_precision", 0))
+        quantum = Decimal(1).scaleb(-precision)
+        event["sz"] = format(remaining.quantize(quantum), f".{precision}f")
+        event["origSz"] = format(original.quantize(quantum), f".{precision}f")
+        return event
 
     def _fills(self, request: Mapping[str, object]) -> Mapping[str, object]:
         instrument_id = request.get("instrument_id")
@@ -1394,6 +1432,16 @@ class NautilusHyperliquidTestnetBackend:
         mapping = self._to_mapping(report)
         status = self._status_name(report, mapping)
         venue_order_id = self._string_value(report, mapping, "venue_order_id", "oid")
+        native_cloid = self._string_value(report, mapping, "client_order_id", "cloid")
+
+        def response(status_value: object) -> dict[str, object]:
+            payload: dict[str, object] = {
+                "response": {"data": {"statuses": [status_value]}},
+            }
+            if native_cloid is not None:
+                payload["native_cloid"] = native_cloid
+            return payload
+
         if status in {"FILLED", "PARTIALLY_FILLED", "PARTIAL"}:
             event = self._order_event(report)
             event = self._attach_fill(event, request)
@@ -1401,20 +1449,14 @@ class NautilusHyperliquidTestnetBackend:
                 filled = dict(event)
                 filled["totalSz"] = event.get("sz")
                 filled["avgPx"] = event.get("px")
-                return {"response": {"data": {"statuses": [{"filled": filled}]}}}
+                return response({"filled": filled})
         if status in {"REJECTED", "DENIED", "ERROR"}:
-            return {
-                "response": {
-                    "data": {
-                        "statuses": [{"error": self._string_value(report, mapping, "cancel_reason") or status}]
-                    }
-                }
-            }
+            return response({"error": self._string_value(report, mapping, "cancel_reason") or status})
         if status in {"CANCELED", "CANCELLED"}:
-            return {"response": {"data": {"statuses": ["waitingForFill"]}}}
+            return response("waitingForFill")
         if not venue_order_id:
-            return {"response": {"data": {"statuses": ["waitingForFill"]}}}
-        return {"response": {"data": {"statuses": [{"resting": {"oid": venue_order_id}}]}}}
+            return response("waitingForFill")
+        return response({"resting": {"oid": venue_order_id}})
 
     def _order_event(self, report: object) -> dict[str, object]:
         mapping = self._to_mapping(report)

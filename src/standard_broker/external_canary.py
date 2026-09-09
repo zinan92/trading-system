@@ -607,6 +607,7 @@ class ExternalCanaryBinding:
         *,
         broker_order_id: str,
         state: str,
+        native_client_order_id: str | None = None,
     ) -> None:
         """Restore persisted canonical intent/order identity without transport."""
 
@@ -616,7 +617,13 @@ class ExternalCanaryBinding:
                 "order_recovery_unavailable",
                 "external order facade does not support persisted identity recovery",
             )
-        recover(intent, broker_order_id=broker_order_id, state=state)
+        recovery_options: dict[str, object] = {
+            "broker_order_id": broker_order_id,
+            "state": state,
+        }
+        if native_client_order_id is not None:
+            recovery_options["native_client_order_id"] = native_client_order_id
+        recover(intent, **recovery_options)
         self._remember_intent(intent)
 
     def recover_client_order(
@@ -625,6 +632,7 @@ class ExternalCanaryBinding:
         *,
         client_order_id: str,
         state: str,
+        native_client_order_id: str | None = None,
     ) -> ExternalCanaryReceipt:
         """Restore a persisted client identity without a transport call."""
 
@@ -635,11 +643,13 @@ class ExternalCanaryBinding:
                 "public order facade lacks persisted client identity recovery",
             )
         self._remember_intent(intent)
-        receipt = recover(
-            intent,
-            client_order_id=client_order_id,
-            state=state,
-        )
+        recovery_options: dict[str, object] = {
+            "client_order_id": client_order_id,
+            "state": state,
+        }
+        if native_client_order_id is not None:
+            recovery_options["native_client_order_id"] = native_client_order_id
+        receipt = recover(intent, **recovery_options)
         return self._wrap_receipt(receipt, intent)
 
     def query(self, order_id: str) -> ExternalCanaryReceipt:

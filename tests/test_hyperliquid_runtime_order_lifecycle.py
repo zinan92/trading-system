@@ -64,6 +64,7 @@ class FakeOrderBackend:
         self.last_broker_order_id = 100
         self.submit_timeout = False
         self.inline_filled = False
+        self.submit_native_cloid: str | None = None
         self.responses: dict[str, object] = {}
         self.metadata = NautilusAdapterMetadata(
             package="nautilus-hyperliquid",
@@ -91,13 +92,16 @@ class FakeOrderBackend:
                         },
                     },
                 }
-            return {
+            response = {
                 "status": "ok",
                 "response": {
                     "type": "order",
                     "data": {"statuses": [{"resting": {"oid": self.last_broker_order_id}}]},
                 },
             }
+            if self.submit_native_cloid is not None:
+                response["native_cloid"] = self.submit_native_cloid
+            return response
         if operation in {"cancel", "replace"}:
             return {"status": "ok"}
         if operation == "query":
@@ -328,13 +332,16 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
             self.intent(order_id="recovered", key="recovered"),
             broker_order_id="701",
             state="resting",
+            native_client_order_id="0xnative-recovered",
         )
 
         pending = adapter.cancel(recovered.order_id)
 
         self.assertEqual(pending.state, OrderState.CANCEL_PENDING)
+        self.assertEqual(recovered.native_client_order_id, "0xnative-recovered")
         cancel_request = next(request for _, operation, request in backend.calls if operation == "cancel")
         self.assertEqual(cancel_request["instrument_id"], "BTC-USD-PERP")
+        self.assertEqual(cancel_request["cloid"], "0xnative-recovered")
 
     def test_testnet_runtime_rejects_empty_capability_profile_before_ready(self) -> None:
         profile = capabilities_for(BrokerEnvironment.TESTNET)
@@ -465,12 +472,14 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
 
     def test_submit_returns_canonical_receipt_and_native_request_stays_internal(self) -> None:
         adapter, backend = self.adapter()
+        backend.submit_native_cloid = "0xnative-submit"
 
         receipt = adapter.submit(self.intent())
 
         self.assertEqual(receipt.state, OrderState.RESTING)
         self.assertEqual(receipt.environment, BrokerEnvironment.PAPER)
         self.assertEqual(receipt.broker_order_id, "101")
+        self.assertEqual(receipt.native_client_order_id, "0xnative-submit")
         self.assertTrue(receipt.client_order_id.startswith("0x"))
         self.assertIsNotNone(receipt.updated_at)
         request = backend.calls[0][2]

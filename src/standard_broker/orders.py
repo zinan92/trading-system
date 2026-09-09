@@ -124,6 +124,7 @@ class OrderReceipt:
     account_address: str | None = None
     lifecycle_id: str | None = None
     release_sha: str | None = None
+    native_client_order_id: str | None = None
 
     @property
     def is_unregistered_broker_order(self) -> bool:

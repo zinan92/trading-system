@@ -1,5 +1,26 @@
 # Decision log
 
+## Issue #127: recovered native CLOID attribution
+
+- Lifecycle observations resolve client identity first, then fall back to an
+  already registered Broker order ID. A native CLOID discovered through that
+  fallback becomes an alias of the canonical order for later events and fills.
+- `OrderReceipt.native_client_order_id` is the persistence surface for the
+  Broker-native CLOID. Both recovery paths accept it, and submit responses
+  populate it from the native report when available.
+- Nautilus open-order reports expose cumulative `filled_qty` and original
+  `quantity`; the adapter projects `sz` as their difference and `origSz` as
+  `quantity`, formatted at the instrument size precision.
+
+### Gotchas
+
+- A CLOID already owned by another canonical order never falls back by OID;
+  conflicting identities remain fail-closed.
+- The native CLOID alias is process-local unless the caller persists
+  `native_client_order_id` and supplies it during recovery.
+- `filled_qty` is not an open order's remaining size, even when both values
+  happen to share the same fixed precision.
+
 ## Issue #125: unregistered open-order projection
 
 - `open_orders()` treats a Broker order that is absent from the recovered local

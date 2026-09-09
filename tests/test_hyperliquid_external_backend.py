@@ -90,11 +90,12 @@ class FakeClient:
 
 
 class AssetIndexInstrument(SimpleNamespace):
-    def __init__(self, name: str, asset_index: int | None) -> None:
+    def __init__(self, name: str, asset_index: int | None, *, size_precision: int = 2) -> None:
         super().__init__(
             id=f"{name}-USD-PERP.HYPERLIQUID",
             raw_symbol=name,
             info={} if asset_index is None else {"asset_index": asset_index},
+            size_precision=size_precision,
         )
 
 
@@ -331,6 +332,51 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
                     {},
                 ),
             )
+
+    def test_open_orders_projects_remaining_size_at_instrument_precision(self) -> None:
+        class PreciseOpenOrderClient(FakeClient):
+            async def load_instrument_definitions(self, **kwargs: object) -> list[object]:
+                self.calls.append(("load_instrument_definitions", (), kwargs))
+                return [AssetIndexInstrument("HYPE", 0, size_precision=5)]
+
+            async def request_order_status_reports(self, instrument_id: str | None = None) -> list[object]:
+                self.calls.append(("request_order_status_reports", (instrument_id,), {}))
+                return [
+                    {
+                        "order_status": "RESTING",
+                        "venue_order_id": "9001",
+                        "client_order_id": "0xnative-open-order",
+                        "instrument_id": "HYPE-USD-PERP.HYPERLIQUID",
+                        "order_side": "BUY",
+                        "price": "50",
+                        "filled_qty": "0.00000",
+                        "quantity": "0.00024",
+                        "ts_last": 1_800_000_000_000_000_000,
+                    }
+                ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = PreciseOpenOrderClient()
+            session = self.session()
+            backend = NautilusHyperliquidTestnetBackend(
+                session=session,
+                config=HyperliquidTestnetBackendConfig(
+                    account_address=session.account.address,
+                    capabilities=session.capabilities,
+                ),
+                secrets=self.provider(directory),
+                client_factory=lambda private_key, account: client,
+            )
+
+            backend.activate(release_sha="a" * 40)
+            result = backend.invoke(
+                "order_execution",
+                "open_orders",
+                {},
+            )
+
+            self.assertEqual(result["orders"][0]["sz"], "0.00024")
+            self.assertEqual(result["orders"][0]["origSz"], "0.00024")
 
     def test_external_fill_query_passes_string_instrument_id_to_nautilus(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -925,6 +971,7 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
             )
 
             self.assertEqual(result["response"]["data"]["statuses"][0]["resting"]["oid"], "9001")
+            self.assertEqual(result["native_cloid"], "0x" + "ab" * 16)
             self.assertEqual(client.calls[-1][0], "submit_order")
             self.assertEqual(str(client.calls[-1][1][1]), "0x" + "ab" * 16)
 
