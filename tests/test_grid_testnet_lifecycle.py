@@ -695,6 +695,98 @@ def test_grid_hard_stop_retries_failed_cancels_on_next_tick_and_closes_exposure_
     assert sum(event["event"] == "order_cancel_attempt" for event in recovered["events"]) == 4
 
 
+def test_hard_stop_heartbeat_retries_from_public_position_fixture_and_finalizes_from_facts(tmp_path: Path) -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "issue_1240_hard_stop_state.json").read_text()
+    )
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["lower_price_boundary"] = 74000.0
+    plan["upper_price_boundary"] = 79000.0
+    plan["hard_stop"] = 73000.0
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": price, "take_profit": price + 500,
+         "side": "buy", "hard_stop": 73000.0, "quantity": 0.00024}
+        for index, price in enumerate((74000.0, 74918.0, 75837.0, 76755.0, 77673.0), start=1)
+    ]
+    plan["risk_budget"].update(max_open_orders=8, max_open_positions=5, max_notional=40000.0)
+    lifecycle.start(plan, timestamp="2026-09-10T12:00:00+00:00")
+    state = lifecycle._state(plan)
+    for row in state["orders"]:
+        row["state"] = "cancelled"
+    state["rungs"][4]["line"]["state"] = "open"
+    state["rungs"][4]["line"]["entry_filled_quantity"] = fixture["public_position"]
+    state["rungs"][4]["line"]["open_quantity"] = fixture["public_position"]
+    state.update(status=fixture["status"], blocker="tp_submit_failed", hard_stop_requested=None)
+    state.pop("hard_stop_reason", None)
+    lifecycle._save(state)
+
+    public = {
+        "positions": [{"instrument_id": fixture["instrument_id"], "signed_quantity": str(fixture["public_position"])}],
+        "open_orders": fixture["public_open_orders"],
+    }
+    broker.read_public_facts = lambda **_kwargs: public
+    captured = []
+    original_submit = broker.submit_order
+
+    def capture(request):
+        captured.append(dict(request.ticket))
+        return original_submit(request)
+
+    broker.submit_order = capture
+    retried = lifecycle.on_market_event(
+        plan, price=77673.0, market=fixture["market"],
+        timestamp="2026-09-10T12:01:00+00:00",
+    )
+
+    recovery = next(row for row in captured if row["event"] == "hard_stop_recovery")
+    assert recovery["price"] == pytest.approx(76950.0)
+    assert recovery["quantity"] == pytest.approx(fixture["public_position"])
+    assert retried["status"] == "hard_stop_triggered"
+    assert retried["hard_stop_requested"] is True
+    assert retried["hard_stop_reason"] == "hard_stop_recovery"
+    assert retried["hard_stop_retry_attempts"] == 1
+
+    public["positions"] = []
+    terminal = lifecycle.on_fill(
+        plan, _fill(retried["orders"][-1], price=76950.0, tid=1240),
+        timestamp="2026-09-10T12:02:00+00:00",
+    )
+    assert terminal["status"] == "terminal"
+    assert terminal["sealed"] is True
+
+
+def test_hard_stop_heartbeat_blocks_after_five_public_fact_retry_failures(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    lifecycle.start(plan, timestamp="2026-09-10T12:00:00+00:00")
+    state = lifecycle._state(plan)
+    for row in state["orders"]:
+        row["state"] = "cancelled"
+    state.update(status="hard_stop_triggered", hard_stop_requested=None)
+    lifecycle._save(state)
+    broker.read_public_facts = lambda **_kwargs: {
+        "positions": [{"instrument_id": "BTC-USD-PERP", "signed_quantity": "0.1"}],
+        "open_orders": [],
+    }
+    broker.submit_order = lambda _request: (_ for _ in ()).throw(TimeoutError("flatten unavailable"))
+
+    blocked = None
+    for index in range(5):
+        blocked = lifecycle.on_market_event(
+            plan, price=65000.0, market={"bid": 64950.0, "ask": 64952.0, "mid": 64951.0},
+            timestamp=f"2026-09-10T12:0{index + 1}:00+00:00",
+        )
+
+    assert blocked["status"] == "blocked_reconciliation"
+    assert blocked["blocker"] == "position_open_unprotected"
+    assert blocked["hard_stop_retry_attempts"] == 5
+    assert blocked["park_notification_required"] is True
+    assert any(event["event"] == "hard_stop_retry_exhausted" for event in blocked["events"])
+
+
 def test_blocked_dashboard_fixture_discovers_and_retries_all_plan_orders(tmp_path: Path) -> None:
     fixture = json.loads(
         (Path(__file__).parent / "fixtures" / "grid_blocked_exposure_retry.json").read_text()
