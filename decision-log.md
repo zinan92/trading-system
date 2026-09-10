@@ -19272,5 +19272,8 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 - Focused proof/replay tests — 67 passed.
-- `scripts/testnet_replay.sh` and `scripts/testnet_replay_mutations.sh` — run
-  before PR creation; their result lines are recorded in the PR body.
+- `scripts/testnet_replay.sh` — 23 passed in 0.35s.
+- `scripts/testnet_replay_mutations.sh` — 14/14 mutations caught, including
+  strict equality and raw-BBO binding-band regressions.
+- `git diff HEAD^ --check` — passed; `gitleaks dir . --no-banner --redact` —
+  no leaks found, 24.61 MB scanned.
