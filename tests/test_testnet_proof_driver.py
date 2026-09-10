@@ -346,7 +346,9 @@ def test_market_price_mismatch_retries_then_succeeds_with_attempt_evidence() -> 
         {"price": "60000", "source": "binding", "observed_at": "now"},
     ])
     reader = _MarketSequence([
-        _complete_market("60001"), _complete_market("60000"), _complete_market("60000"),
+        {**_complete_market("60001"), "max_slippage": "0.1"},
+        {**_complete_market("60000"), "max_slippage": "0.1"},
+        {**_complete_market("60000"), "max_slippage": "0.1"},
     ])
     reader.read = lambda _instrument_id: next(reader.values)  # type: ignore[attr-defined]
     sleeps: list[float] = []
@@ -370,7 +372,7 @@ def test_market_price_mismatch_fails_closed_after_attempt_limit() -> None:
     broker = _MarketSequence([
         {"price": "60000", "source": "binding", "observed_at": "now"},
     ] * 3)
-    reader = _MarketSequence([_complete_market("60001")] * 3)
+    reader = _MarketSequence([{**_complete_market("60001"), "max_slippage": "0.1"}] * 3)
     reader.read = lambda _instrument_id: next(reader.values)  # type: ignore[attr-defined]
     sleeps: list[float] = []
 

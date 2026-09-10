@@ -17,6 +17,8 @@ MARKET_REQUIRED = (
 )
 MARKET_BBO_FIELDS = ("bid", "ask", "mid")
 MARKET_READ_ATTEMPTS = 5
+DEFAULT_MARKET_MAX_DEVIATION_BPS = Decimal("10")
+DEFAULT_MARKET_OBSERVATION_MAX_DELTA_SECONDS = Decimal("10")
 
 
 class MarketDocumentError(ValueError):
@@ -24,6 +26,79 @@ class MarketDocumentError(ValueError):
         self.reason_code = reason_code
         self.details = details
         super().__init__(reason_code)
+
+
+def compare_market_observations(
+    binding_price: Any,
+    reader_price: Any,
+    *,
+    bid: Any,
+    ask: Any,
+    max_slippage: Any,
+    binding_observed_at: Any = None,
+    reader_observed_at: Any = None,
+    max_bps: Decimal = DEFAULT_MARKET_MAX_DEVIATION_BPS,
+    max_observation_delta: Decimal = DEFAULT_MARKET_OBSERVATION_MAX_DELTA_SECONDS,
+) -> dict[str, Any]:
+    """Apply the shared bounded market-read rule used by startup and ticks."""
+    check: dict[str, Any] = {
+        "binding_price": str(binding_price),
+        "reader_price": str(reader_price),
+    }
+    try:
+        binding_number = Decimal(str(binding_price))
+        reader_number = Decimal(str(reader_price))
+        bid_number = Decimal(str(bid))
+        ask_number = Decimal(str(ask))
+        slippage = Decimal(str(max_slippage))
+        bps = Decimal(str(max_bps))
+        observation_limit = Decimal(str(max_observation_delta))
+    except (InvalidOperation, TypeError, ValueError):
+        check.update({"passed": False, "reason_code": "market_price_mismatch"})
+        return check
+    finite_values = (binding_number, reader_number, bid_number, ask_number, bps, observation_limit)
+    if not all(value.is_finite() for value in finite_values) or (
+        not slippage.is_finite() and slippage != Decimal("Infinity")
+    ):
+        check.update({"passed": False, "reason_code": "market_price_mismatch"})
+        return check
+    tolerance = min(slippage, reader_number * bps / Decimal("10000"))
+    deviation = abs(binding_number - reader_number)
+    check.update({"deviation": str(deviation), "tolerance": str(tolerance)})
+    if (
+        slippage <= 0 or bps <= 0 or observation_limit <= 0
+        or bid_number >= ask_number
+        or not (bid_number <= binding_number <= ask_number)
+        or not (bid_number <= reader_number <= ask_number)
+    ):
+        check.update({"passed": False, "reason_code": "market_bbo_inconsistent"})
+        return check
+    if deviation > tolerance:
+        check.update({"passed": False, "reason_code": "market_price_mismatch"})
+        return check
+    if binding_observed_at is not None or reader_observed_at is not None:
+        binding_text = str(binding_observed_at or "")
+        reader_text = str(reader_observed_at or "")
+        if binding_text == reader_text and binding_text and binding_text.lower() == "now":
+            observed_delta = Decimal("0")
+        elif binding_text.lower() == "now" or reader_text.lower() == "now":
+            observed_delta = Decimal("0")
+        else:
+            try:
+                binding_time = datetime.fromisoformat(binding_text.replace("Z", "+00:00"))
+                reader_time = datetime.fromisoformat(reader_text.replace("Z", "+00:00"))
+                if binding_time.tzinfo is None or reader_time.tzinfo is None:
+                    raise ValueError
+                observed_delta = Decimal(str(abs((binding_time - reader_time).total_seconds())))
+            except (TypeError, ValueError):
+                check.update({"passed": False, "reason_code": "market_observation_mismatch"})
+                return check
+        check["observed_delta_s"] = str(observed_delta)
+        if observed_delta > observation_limit:
+            check.update({"passed": False, "reason_code": "market_observation_mismatch"})
+            return check
+    check.update({"passed": True, "reason_code": None})
+    return check
 
 
 def bbo_check(market: Mapping[str, Any]) -> dict[str, Any]:
@@ -96,19 +171,24 @@ def read_coherent_market(
                     raise MarketDocumentError("market_fact_unavailable") from exc
                 if not isinstance(raw_reader, Mapping):
                     raise MarketDocumentError("market_fact_invalid")
-                binding_price = raw_binding.get("price")
-                reader_price = raw_reader.get("price")
-                if str(binding_price) != str(reader_price):
-                    check = {
-                        "attempt": attempt,
-                        "binding_price": str(binding_price),
-                        "reader_price": str(reader_price),
-                        "passed": False,
-                    }
+                check = compare_market_observations(
+                    raw_binding.get("price"),
+                    raw_reader.get("price"),
+                    bid=raw_reader.get("bid"),
+                    ask=raw_reader.get("ask"),
+                    max_slippage=(raw_reader.get("max_slippage")
+                                   or raw_binding.get("max_slippage")
+                                   or (preview.get("market") or {}).get("max_slippage")
+                                   or "Infinity"),
+                    binding_observed_at=raw_binding.get("observed_at"),
+                    reader_observed_at=raw_reader.get("observed_at"),
+                )
+                check["attempt"] = attempt
+                if not check["passed"]:
                     checks.append(check)
                     if attempt == max_attempts:
                         raise MarketDocumentError(
-                            "market_price_mismatch", attempts=checks
+                            check.get("reason_code") or "market_price_mismatch", attempts=checks
                         )
                     sleep_fn(1.0)
                     continue

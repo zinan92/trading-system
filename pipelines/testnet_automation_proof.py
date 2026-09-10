@@ -27,6 +27,7 @@ from services.park_confirmation_ledger import (
     parse_durable_confirmation,
 )
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+from services.testnet_market_document import compare_market_observations
 from services.standard_broker_external_execution import (
     PROTECTED_CAPABILITY_REVISION,
     PROTECTED_EXTERNAL_PROFILE,
@@ -479,29 +480,25 @@ def _authoritative_market(
         raise TestnetAutomationProofError("market_price_mismatch") from exc
     if not max_bps.is_finite() or max_bps <= 0 or not max_observation_delta.is_finite() or max_observation_delta <= 0:
         raise TestnetAutomationProofError("market_price_mismatch")
-    tolerance = min(max_slippage, supplied_mid * max_bps / Decimal("10000"))
-    deviation = abs(broker_price - supplied_mid)
     supplied_bid = _decimal(market.get("bid"), "market_bid", positive=True)
     supplied_ask = _decimal(market.get("ask"), "market_ask", positive=True)
-    grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
-    execution_context = plan.get("execution_context") if isinstance(plan.get("execution_context"), Mapping) else {}
-    tick = _decimal(
-        plan.get("price_tick") or execution_context.get("price_tick") or grid.get("price_tick") or "0.001",
-        "price_tick",
-        positive=True,
+    comparison = compare_market_observations(
+        broker_price,
+        supplied_mid,
+        bid=supplied_bid,
+        ask=supplied_ask,
+        max_slippage=max_slippage,
+        binding_observed_at=raw.get("observed_at"),
+        reader_observed_at=market.get("observed_at"),
+        max_bps=max_bps,
+        max_observation_delta=max_observation_delta,
     )
-    if (
-        deviation > tolerance
-        or supplied_bid >= supplied_ask
-        or broker_price < supplied_bid - tick
-        or broker_price > supplied_ask + tick
-    ):
-        raise TestnetAutomationProofError("market_price_mismatch")
+    if not comparison["passed"]:
+        reason_code = comparison["reason_code"] or "market_price_mismatch"
+        if reason_code == "market_bbo_inconsistent":
+            reason_code = "market_price_mismatch"
+        raise TestnetAutomationProofError(reason_code, result=comparison)
     broker_observed = _aware_datetime(raw.get("observed_at"), "broker_market_observed_at")
-    supplied_observed = _aware_datetime(market.get("observed_at"), "market_observed_at")
-    observed_delta = abs(Decimal(str((broker_observed - supplied_observed).total_seconds())))
-    if observed_delta > max_observation_delta:
-        raise TestnetAutomationProofError("market_observation_mismatch")
     return {
         **dict(market),
         "broker_market_fact": {
@@ -509,9 +506,9 @@ def _authoritative_market(
             "price": str(broker_price),
             "supplied_mid": str(supplied_mid),
             "broker_price": str(broker_price),
-            "deviation": str(deviation),
-            "tolerance": str(tolerance),
-            "observed_delta_s": str(observed_delta),
+            "deviation": comparison["deviation"],
+            "tolerance": comparison["tolerance"],
+            "observed_delta_s": comparison.get("observed_delta_s", "0"),
             "freshness": "fresh",
             "observed_at": broker_observed.isoformat(),
             "source": source,

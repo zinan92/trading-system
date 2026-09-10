@@ -19246,3 +19246,30 @@ auditable datafeed port; broker execution remains a separate port.
   `services/testnet_market_document.py:99-101`; no corresponding match was
   found in `/Users/wendy/work/standard-broker/src/standard_broker`. It remains
   outside this no-production-code replay change.
+
+# 2026-09-11 — Shared tick market price tolerance (#1253)
+
+## Decision
+
+- Share one `compare_market_observations` rule between the attended startup
+  proof and the always-read Testnet tick path: deviation is bounded by
+  `min(max_slippage, 10bps)`, both observations remain inside the BBO, and
+  parseable observation timestamps may differ by at most 10 seconds.
+- Keep failures fail-closed and include deviation, tolerance, observation
+  delta, and attempt number in tick retry evidence. The I4 replay is now a
+  passing regression rather than an expected failure.
+
+## Gotchas
+
+- Existing local replay fixtures use the opaque equal timestamp sentinel
+  `now`; equal or mixed sentinel samples remain compatible, while real
+  timestamp pairs receive the 10-second check.
+- The mutation gate changes the shared helper back to strict equality and
+  must be caught by the replay suite. No launchd, HTTP 8100, data source,
+  credential, or live-money path was changed or invoked.
+
+## Verification
+
+- Focused proof/replay tests — 67 passed.
+- `scripts/testnet_replay.sh` and `scripts/testnet_replay_mutations.sh` — run
+  before PR creation; their result lines are recorded in the PR body.
