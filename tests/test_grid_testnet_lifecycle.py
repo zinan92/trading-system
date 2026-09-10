@@ -377,6 +377,90 @@ def test_blocked_local_fill_retries_without_cancelling_and_recovers_protection(t
     assert blocked["blocker"] == "position_open_unprotected"
 
 
+def test_blocked_local_fill_recovers_from_public_facts_and_backfills_missing_fill_id(
+    tmp_path: Path,
+) -> None:
+    facts_fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "issue_1234_facts.json").read_text()
+    )
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["lower_price_boundary"] = 73000.0
+    plan["upper_price_boundary"] = 79000.0
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": price, "side": "buy", "take_profit": price + 500,
+         "hard_stop": 73000.0, "quantity": 0.00024}
+        for index, price in enumerate((74000.0, 74918.0, 75837.0, 76755.0, 77673.0), start=1)
+    ]
+    plan["risk_budget"].update(max_open_orders=8, max_open_positions=5, max_notional=40000.0)
+    lifecycle.start(plan, timestamp="2026-09-10T11:00:00+00:00")
+    state = lifecycle._state(plan)
+    target = state["rungs"][4]
+    target_order = state["orders"][4]
+    target_order["broker_order_id"] = facts_fixture["fills"][0]["oid"]
+    target_order["state"] = "filled"
+    for row in state["orders"][:4]:
+        row["state"] = "cancelled"
+    state["fills"] = [{
+        "fill_id": "",
+        "fill_identities": [],
+        "order_id": target_order["order_id"],
+        "broker_order_id": str(facts_fixture["fills"][0]["oid"]),
+        "event": "entry",
+        "side": "buy",
+        "rung_id": target["rung_id"],
+        "quantity": 0.00024,
+    }]
+    state.update(status="blocked_reconciliation", blocker="grid_entry_fill_state_error:ValueError:grid line fill_id is required")
+    lifecycle._save(state)
+    broker.read_public_facts = lambda **_kwargs: facts_fixture
+
+    recovered = lifecycle.on_market_event(
+        plan, price=facts_fixture["market_price"], timestamp="2026-09-10T11:08:26+00:00"
+    )
+
+    assert recovered["rungs"][4]["line"]["state"] == "open"
+    assert recovered["fills"][0]["fill_id"] == "219949055209235"
+    assert recovered["fills"][0]["fill_identities"] == ["219949055209235", "hash-1234-redacted"]
+    assert recovered["status"] == "active"
+    assert any(row["event"] == "tp" and row["rung_id"] == target["rung_id"] for row in recovered["orders"])
+    assert recovered["hard_stop_protection"]["status"] == "active"
+    assert sum(row["state"] == "accepted" and row["event"] == "entry_rearm" for row in recovered["orders"]) == 4
+    assert any(event["event"] == "blocked_position_recovered" for event in recovered["events"])
+
+
+def test_grid_facts_failure_keeps_blocked_without_cancellation_or_terminal_close(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    lifecycle.start(plan, timestamp="2026-09-10T11:00:00+00:00")
+    state = lifecycle._state(plan)
+    state.update(status="blocked_reconciliation", blocker="grid_entry_fill_state_error:ValueError:grid line fill_id is required")
+    lifecycle._save(state)
+    broker.read_public_facts = lambda **_kwargs: {"open_orders": [], "fills": []}
+
+    blocked = lifecycle.on_market_event(plan, price=65000.0, timestamp="2026-09-10T11:01:00+00:00")
+
+    assert blocked["status"] == "blocked_reconciliation"
+    assert blocked["blocker"] == "position_open_unprotected"
+    assert not any(event["event"] == "order_cancel_attempt" for event in blocked["events"])
+
+
+def test_grid_terminal_reconciliation_blocks_when_facts_show_position(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    broker.read_public_facts = lambda **_kwargs: {
+        "open_orders": [],
+        "positions": [{"instrument_id": "BTC-USD-PERP", "signed_quantity": "0.00024"}],
+    }
+
+    result = lifecycle._terminal_reconciliation({"instrument_id": "BTC-USD-PERP", "orders": [], "fills": [], "rungs": []}, "2026-09-10T11:01:00+00:00")
+
+    assert result["status"] == "blocked"
+    assert result["broker_position_count"] == 1
+
+
 def test_grid_partial_entry_deadline_sets_tp_to_authoritative_fill_quantity(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
@@ -443,7 +527,7 @@ def test_paused_long_grid_records_tp_and_defers_rearm_until_reentry(tmp_path: Pa
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
     started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
-    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=101), timestamp="2026-08-22T01:01:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=101), timestamp="2026-08-22T01:01:00+00:00")
     paused = lifecycle.on_market_event(plan, price=66001.0, timestamp="2026-08-22T01:02:00+00:00")
     tp = next(row for row in paused["orders"] if row["event"] == "tp")
 
@@ -481,7 +565,7 @@ def test_grid_hard_stop_retries_failed_cancels_on_next_tick_and_closes_exposure_
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
     plan = _plan()
-    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
     original_cancel = broker.cancel_order
     failures = {"enabled": True}
 
@@ -521,7 +605,7 @@ def test_blocked_dashboard_fixture_discovers_and_retries_all_plan_orders(tmp_pat
     ]
     plan["risk_budget"].update(max_open_orders=5, max_open_positions=5,
                                 max_notional=40000.0, maximum_loss_at_full_depth=3000.0)
-    started = lifecycle.start(plan, timestamp="2026-09-08T13:47:21+00:00")
+    lifecycle.start(plan, timestamp="2026-09-08T13:47:21+00:00")
     state = lifecycle._state(plan)
     for row, fixture_order in zip(state["orders"], fixture["orders"]):
         row["broker_order_id"] = fixture_order["broker_order_id"]

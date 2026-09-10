@@ -18890,3 +18890,30 @@ auditable datafeed port; broker execution remains a separate port.
 - `python3 -m ruff check services/grid_testnet_lifecycle.py services/dca_testnet_lifecycle.py pipelines/park_control.py services/standard_broker_external_execution.py services/testnet_scheduler.py` — passed.
 - `python3 -m compileall -q services/grid_testnet_lifecycle.py services/dca_testnet_lifecycle.py pipelines/park_control.py services/standard_broker_external_execution.py services/testnet_scheduler.py tests/test_grid_testnet_lifecycle.py tests/test_dca_testnet_lifecycle.py tests/test_park_control.py tests/test_standard_broker_external_execution.py tests/test_testnet_scheduler.py` and `git diff --check` — passed.
 - `gitleaks dir . --no-banner --redact` with gitleaks 8.30.1 — 24.20 MB scanned; no leaks found.
+
+# 2026-09-10 — Use public Broker facts for Grid position truth (#1234)
+
+## Decision
+
+- Grid blocked-position recovery, terminal reconciliation, and broker-absent
+  order reconciliation consume one `read_public_facts` snapshot, with typed
+  `read_facts` as the adapter fallback. Account reads are no longer lifecycle
+  position truth.
+- Position rows are filtered by instrument and summed by signed quantity.
+  Missing or failed facts remain unknown and keep the lifecycle blocked.
+- A locally recorded entry fill with a missing identity is matched by broker
+  order id (`oid`), then backfilled with the venue `tid` and hash before the
+  existing protection and re-arm recovery path continues.
+
+## Gotchas
+
+- The legacy local Testnet adapter did not expose the public facts seam, so it
+  now projects account, fill, and open-order data behind `read_public_facts`;
+  lifecycle code still does not call `account.read`.
+- The redacted dashboard facts fixture is synthetic evidence for the reported
+  position/fill shape only. No online output, launchd service, HTTP 8100
+  contract, data source, or live-money path was changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py` — 38 passed.

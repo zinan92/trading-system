@@ -396,6 +396,18 @@ class StandardBrokerTestnetExecutionAdapter:
             f"unsupported Testnet order operation: {operation}"
         )
 
+    def read_public_facts(self, *, instrument_id: str) -> dict[str, Any]:
+        """Expose one lifecycle facts snapshot without leaking port semantics."""
+        account = self.request("account", "read", self.broker_config["account_id"])
+        positions = getattr(account, "positions", None)
+        if positions is None and isinstance(account, Mapping):
+            positions = account.get("positions") or account.get("assetPositions")
+        return {
+            "positions": tuple(positions or ()),
+            "fills": tuple(self._orders.fills.values()),
+            "open_orders": tuple(self.request("order_execution", "open_orders", instrument_id) or ()),
+        }
+
     def _intent_from_request(self, request: BrokerOrderRequest) -> Any:
         try:
             from standard_broker import OrderIntent, OrderSide, OrderType, TimeInForce

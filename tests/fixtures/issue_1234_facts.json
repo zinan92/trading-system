@@ -1,0 +1,25 @@
+{
+  "status": "pass",
+  "fills": [
+    {
+      "tid": "219949055209235",
+      "hash": "hash-1234-redacted",
+      "oid": 59671766069,
+      "cloid": "0xredacted1234",
+      "side": "B",
+      "px": "77673",
+      "sz": "0.00024",
+      "coin": "BTC"
+    }
+  ],
+  "positions": [
+    {
+      "instrument_id": "BTC-USD-PERP",
+      "coin": "BTC",
+      "signed_quantity": "0.00024",
+      "szi": "0.00024"
+    }
+  ],
+  "open_orders": [],
+  "market_price": 77673
+}

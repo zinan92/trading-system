@@ -249,6 +249,8 @@ class GridTestnetLifecycle:
             "fill_id": fill_id,
             "fill_identities": fill_identities,
             "order_id": order_id,
+            "broker_order_id": raw_fill.get("oid") or raw_fill.get("broker_order_id"),
+            "client_order_id": raw_fill.get("cloid") or raw_fill.get("client_order_id"),
             "event": order.get("event"),
             "side": raw_fill.get("side"),
             "rung_id": order.get("rung_id"),
@@ -531,13 +533,68 @@ class GridTestnetLifecycle:
         except (TypeError, ValueError):
             return 0.0
 
+    def _public_facts(self, state: Mapping[str, Any], *required: str) -> dict[str, Any]:
+        instrument_id = str(state["instrument_id"])
+        reader = getattr(self.broker, "read_public_facts", None)
+        if callable(reader):
+            facts = reader(instrument_id=instrument_id)
+        else:
+            reader = getattr(self.broker, "read_facts", None)
+            if not callable(reader):
+                raise GridTestnetLifecycleError("broker_facts_reader_missing")
+            typed = reader(instrument_id=instrument_id)
+            facts = {
+                key: getattr(typed, key, None)
+                for key in ("open_orders", "positions", "fills")
+            }
+        if not isinstance(facts, Mapping):
+            raise GridTestnetLifecycleError("broker_facts_invalid")
+        missing = [key for key in required if key not in facts or facts[key] is None]
+        if missing:
+            raise GridTestnetLifecycleError(f"broker_facts_missing:{','.join(missing)}")
+        return dict(facts)
+
+    @staticmethod
+    def _fact_value(row: Any, *names: str) -> Any:
+        for name in names:
+            value = row.get(name) if isinstance(row, Mapping) else getattr(row, name, None)
+            if value not in (None, ""):
+                return value
+        return None
+
+    def _backfill_fact_fills(
+        self, state: dict[str, Any], fact_fills: Any,
+    ) -> None:
+        for fill in state.get("fills", ()):
+            if fill.get("event") != "entry" or str(fill.get("fill_id") or "").strip():
+                continue
+            oid = str(fill.get("broker_order_id") or "").strip()
+            if not oid:
+                continue
+            match = next(
+                (
+                    row for row in fact_fills
+                    if str(self._fact_value(row, "oid", "broker_order_id", "order_id") or "") == oid
+                ),
+                None,
+            )
+            if match is None:
+                continue
+            tid = str(self._fact_value(match, "tid", "fill_id") or "").strip()
+            if not tid:
+                continue
+            fill["fill_id"] = tid
+            identities = [tid]
+            fill_hash = self._fact_value(match, "hash", "fill_hash")
+            if fill_hash not in (None, ""):
+                identities.append(str(fill_hash))
+            fill["fill_identities"] = identities
+
     def _recover_blocked_position(self, plan: dict[str, Any], state: dict[str, Any], *, price: float, timestamp: str) -> None:
         """Retry a local fill failure without cancelling unrelated resting entries."""
         try:
-            account = self.broker.request("account", "read", self.broker.broker_config["account_id"])
-            positions = getattr(account, "positions", None)
-            if positions is None and isinstance(account, Mapping):
-                positions = account.get("positions") or account.get("assetPositions") or ()
+            facts = self._public_facts(state, "positions", "fills")
+            positions = facts["positions"]
             signed_quantity = sum(self._position_quantity(row, str(state["instrument_id"])) for row in positions or ())
         except Exception as exc:  # noqa: BLE001 - unknown venue truth stays blocked.
             state["blocker"] = "position_open_unprotected"
@@ -546,6 +603,7 @@ class GridTestnetLifecycle:
             return
         if abs(signed_quantity) <= 1e-9:
             return
+        self._backfill_fact_fills(state, facts["fills"])
         fills = [
             fill for fill in state.get("fills", ())
             if fill.get("event") == "entry"
@@ -980,7 +1038,8 @@ class GridTestnetLifecycle:
 
     def _exchange_open_order_ids(self, state: Mapping[str, Any]) -> set[str] | None:
         try:
-            rows = self.broker.request("order_execution", "open_orders", str(state["instrument_id"])) or ()
+            facts = self._public_facts(state, "open_orders")
+            rows = facts["open_orders"] or ()
         except Exception:  # noqa: BLE001 - unknown venue truth must remain open.
             return None
         return self._exchange_order_identities(rows)
@@ -1133,9 +1192,12 @@ class GridTestnetLifecycle:
     def _terminal_reconciliation(self, state: dict[str, Any], timestamp: str) -> dict[str, Any]:
         instrument = str(state.get("instrument_id") or "")
         try:
-            open_orders = tuple(self.broker.request("order_execution", "open_orders", instrument) or ())
-            account = self.broker.request("account", "read", self.broker.broker_config["account_id"])
-            positions = tuple(position for position in getattr(account, "positions", ()) if abs(float(getattr(position, "signed_quantity", 0) or 0)) > 1e-9)
+            facts = self._public_facts(state, "open_orders", "positions")
+            open_orders = tuple(facts["open_orders"] or ())
+            positions = tuple(
+                position for position in facts["positions"] or ()
+                if abs(self._position_quantity(position, instrument)) > 1e-9
+            )
         except Exception as exc:  # noqa: BLE001
             return {"status": "blocked", "reason": f"broker_truth_query_failed:{type(exc).__name__}:{exc}", "at": timestamp}
         local_open = [row for row in state["orders"] if row.get("state") in {"accepted", "cancel_pending"}]
