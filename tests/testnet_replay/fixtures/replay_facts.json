@@ -1,0 +1,8 @@
+{
+  "instrument_id": "BTC-USD-PERP",
+  "account_address": "TESTNET_ACCOUNT_PLACEHOLDER",
+  "positions": [],
+  "open_orders": [],
+  "fills": [{"coin": "BTC", "px": "76946.0", "sz": "0.00024", "side": "A", "time": 1789047483626, "oid": 59791377663, "tid": 573671142921614}],
+  "market": {"bid": "76937.0", "ask": "76978.0", "mid": "76957.5", "cursor": "replay-1"}
+}

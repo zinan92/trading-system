@@ -19149,3 +19149,32 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_testnet_grid_coordinator.py tests/test_park_control.py` — 67 passed.
 - `git diff --check` — passed.
+# 2026-09-11 — Testnet replay regression suite (#1251)
+
+## Decision
+
+- Add `tests/testnet_replay/` as the Testnet-related PR merge gate. The suite
+  replays the driver/coordinator/lifecycle/control-tick/scheduler seams with a
+  local Standard Broker-shaped fixture and asserts I1-I4 at each step.
+- Keep Nautilus client-level exchange simulation out of this issue; that is a
+  separate follow-up requiring the standard-broker `client_factory` seam.
+
+## Gotchas
+
+- Historical references #1227, #1229, #1233, #1235, #1237, #1239, #1241,
+  #1243, #1219, #1231, #1209, #1213, #1215, #1248, #1250, #1245, #1223,
+  #1221, and #1226 were not resolvable as Issues through `gh issue view`; the
+  corresponding merged PR diffs were inspected where `gh pr list` returned a
+  match. #1217 had no matching merged PR result.
+- The fixture is synthetic and redacted. It does not prove exchange-client
+  behavior, live transport behavior, or real-money execution.
+
+## Verification
+
+- `scripts/testnet_replay.sh` — 13 passed in 0.13s.
+- `PYTHONPATH=.:src:/Users/wendy/work/standard-broker/src ~/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python -m py_compile tests/testnet_replay/harness.py tests/testnet_replay/test_replay_scenarios.py` — passed.
+- `git diff --check` — passed; `gitleaks dir . --no-banner --redact` — no leaks found, 21.04 MB scanned.
+- Read-only I4 grep found one exact binding/public price comparison in
+  `services/testnet_market_document.py:99-101`; no corresponding match was
+  found in `/Users/wendy/work/standard-broker/src/standard_broker`. It remains
+  outside this no-production-code replay change.
