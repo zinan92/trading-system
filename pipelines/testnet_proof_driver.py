@@ -778,7 +778,9 @@ def run(
             "market_self_check": market_checks,
             "broker_market_fact": market_rows[-1].get("broker_market_fact") if market_rows else None,
             "market_retry_attempts": market_retry_attempts,
-            "result": {key: result.get(key) for key in ("status", "reason_code", "detail", "lifecycle_status", "execution_blocker", "execution_mutation", "network_operation_invoked", "next_action")},
+            "historical_unattributed_fills": result.get("historical_unattributed_fills", []),
+            "failure_reasons": result.get("failure_reasons") or (result.get("detail") or {}).get("failure_reasons"),
+            "result": {key: result.get(key) for key in ("status", "reason_code", "detail", "failure_reasons", "lifecycle_status", "execution_blocker", "execution_mutation", "network_operation_invoked", "next_action")},
             "secret_material_present": False,
         }
     receipt.parent.mkdir(parents=True, exist_ok=True)
