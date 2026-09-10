@@ -145,7 +145,19 @@ def hydrate_order_identities(broker: object, state: Mapping[str, Any]) -> dict[s
             continue
         broker_order_id = str(row.get("broker_order_id") or "").strip()
         if not broker_order_id:
-            raise OrderIdentityHydrationError(f"order[{index}]:broker_order_id_missing")
+            # A rejected IOC can be durably present without a venue oid.  It
+            # is not an order identity that a fresh broker binding can
+            # recover, so keep it visible in the tick result and out of the
+            # active lifecycle rather than failing the whole tick.
+            if isinstance(row, dict):
+                row["state"] = "rejected"
+                row["rejection_reason"] = "broker_order_id_missing"
+            report["skipped"].append({
+                "index": index,
+                "state": persisted_state or None,
+                "reason": "broker_order_id_missing",
+            })
+            continue
         if not str(row.get("client_order_id") or "").strip():
             raise OrderIdentityHydrationError(f"order[{index}]:client_order_id_missing")
         if not str(row.get("ticket_id") or "").strip():

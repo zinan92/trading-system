@@ -533,6 +533,8 @@ def _park_plan_to_lifecycle_plan(
         "risk_budget": _risk_budget(risk, normalized, config, family),
         "field_sources": {"direction": "park_telegram", "risk_budget": "park_telegram"},
     }
+    if normalized.get("hard_stop") not in (None, ""):
+        base["hard_stop"] = normalized["hard_stop"]
     if family == "dca":
         count = max(1, int(risk.get("order_count") or normalized.get("order_count") or 1))
         upper = float(normalized.get("upper_price_boundary") or 0)

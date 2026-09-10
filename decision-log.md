@@ -18945,3 +18945,38 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py` — 38 passed.
+
+# 2026-09-10 — Correct Grid Testnet TP/flatten/protection recovery (#1238)
+
+## Decision
+
+- Grid rung take-profit is a reduce-only resting limit GTC at the rung TP;
+  it is not an IOC market order.
+- Emergency and hard-stop flattening uses the same tick's executable BBO
+  (long: bid minus max slippage; short: ask plus max slippage), with the
+  existing bounded recovery submission as the second attempt.  If recovery
+  still fails, the lifecycle remains `position_open_unprotected` and queues
+  Park notification.
+- `positionTpsl` protection always carries exactly one TP and one SL leg.
+  The TP is the weighted TP of the open rungs and the SL is the operator
+  hard stop when supplied, otherwise the directional boundary.  Coverage is
+  active only after the query confirms it.
+- A persisted order without a broker oid is a rejected/skipped local row,
+  not a reason to abort hydration of the remaining tick.  Dashboard hard stop
+  is persisted into lifecycle state and each effective rung.
+
+## Gotchas
+
+- Legacy lifecycle rows may contain an accepted-looking row without a venue
+  oid; they are deliberately downgraded to `rejected` during hydration and
+  included in the tick's `skipped` report.
+- Existing lifecycle callers may still provide only `price`; BBO-aware
+  flattening is used when the authoritative `market` document is present,
+  while old callers retain the bounded fallback for compatibility.
+- No launchd, online output, HTTP 8100 contract, data source, standard-broker
+  source, credentials, or live-money path was changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_testnet_grid_coordinator.py tests/test_park_control.py` — 67 passed.
+- `git diff --check` — passed.

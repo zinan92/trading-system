@@ -168,7 +168,7 @@ def test_quantized_grid_spacing_tp_and_sl_allow_one_tick(tmp_path: Path) -> None
         )
     ]
     plan["risk_budget"].update(max_open_orders=5, max_open_positions=5,
-                                max_notional=40000, maximum_loss_at_full_depth=3000)
+                                    max_notional=40000, maximum_loss_at_full_depth=5000)
 
     started = GridTestnetLifecycle(tmp_path / "outputs", broker).start(
         plan, timestamp="2026-09-08T13:00:00+00:00"
@@ -318,6 +318,55 @@ def test_grid_entry_tp_and_original_price_rearm(tmp_path: Path) -> None:
     rearm = next(row for row in closed["orders"] if row["event"] == "entry_rearm")
     assert rearm["price"] == 65000.0
     assert rearm["idempotency_key"] != entry["idempotency_key"]
+
+
+def test_grid_tp_is_resting_reduce_only_limit(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+
+    opened = lifecycle.on_fill(
+        plan, _fill(started["orders"][0], price=65000.0, tid=901),
+        timestamp="2026-08-22T01:01:00+00:00",
+    )
+    tp = next(row for row in opened["orders"] if row["event"] == "tp")
+
+    assert tp["order_type"] == "limit"
+    assert tp["time_in_force"] == "gtc"
+    assert tp["price"] == pytest.approx(plan["grid"]["rungs"][0]["take_profit"])
+    assert tp["reduce_only"] is True
+    assert tp["execution_semantics"] == "resting_limit"
+
+
+def test_grid_hard_stop_uses_current_tick_bid_and_plan_stop_in_both_protection_legs(tmp_path: Path) -> None:
+    broker, backend = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["hard_stop"] = 62000.0
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000.0, tid=902), timestamp="2026-08-22T01:01:00+00:00")
+
+    captured = []
+    original_submit = broker.submit_order
+
+    def capture(request):
+        captured.append(dict(request.ticket))
+        return original_submit(request)
+
+    broker.submit_order = capture
+    stopped = lifecycle.on_market_event(
+        plan,
+        price=62900.0,
+        market={"bid": "77300", "ask": "77302", "mid": "77301"},
+        timestamp="2026-08-22T01:02:00+00:00",
+    )
+
+    hard_stop = next(row for row in captured if row["event"] == "hard_stop")
+    assert hard_stop["price"] == pytest.approx(77250.0)
+    protection_submit = next(request for port, operation, request in backend.calls if port == "protection_order" and operation == "submit")
+    assert {leg["tpsl"] for leg in protection_submit["legs"]} == {"tp", "sl"}
+    assert stopped["hard_stop_protection"] is None
 
 
 def test_blocked_local_fill_retries_without_cancelling_and_recovers_protection(tmp_path: Path) -> None:

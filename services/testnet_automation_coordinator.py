@@ -1411,6 +1411,7 @@ class TestnetAutomationCoordinator:
                 state = lifecycle.on_market_event(
                     execution_plan,
                     price=float(price),
+                    market=market,
                     timestamp=observed_at,
                 )
             else:
@@ -1536,11 +1537,14 @@ class TestnetAutomationCoordinator:
         lifecycle = GridTestnetLifecycle(self.output_root, broker)
         try:
             if fill is not None:
-                state = lifecycle.on_fill(execution_plan, dict(fill), timestamp=observed_at)
+                state = lifecycle.on_fill(execution_plan, dict(fill), market=market, timestamp=observed_at)
+                if price is not None:
+                    state = lifecycle.on_market_event(execution_plan, price=float(price), market=market, timestamp=observed_at)
             elif price is not None:
                 state = lifecycle.on_market_event(
                     execution_plan,
                     price=float(price),
+                    market=market,
                     timestamp=observed_at,
                 )
             else:
