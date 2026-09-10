@@ -246,7 +246,9 @@ class GridTestnetLifecycle:
         price = float(receipt.average_fill_price or raw_fill.get("px") or 0.0)
         state["last_market_price"] = price
         planned = float(order.get("planned_price") or order.get("price") or 0.0)
-        slippage = abs(price - planned)
+        slippage, price_improvement = self._slippage_metrics(
+            order.get("side"), price, planned,
+        )
         fill_id = fill_identities[0] if fill_identities else ""
         fill = {
             "fill_id": fill_id,
@@ -261,6 +263,7 @@ class GridTestnetLifecycle:
             "price": price,
             "planned_price": planned,
             "slippage": slippage,
+            "price_improvement": price_improvement,
             **self._identity_metadata(),
             "timestamp": timestamp,
         }
@@ -317,7 +320,11 @@ class GridTestnetLifecycle:
             rung["line"] = line.snapshot()
             if slippage_breached:
                 self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
-                self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
+                self._record_event(
+                    state, "slippage_budget_breached", timestamp=timestamp,
+                    planned_price=planned, actual_price=price,
+                    slippage=slippage, price_improvement=price_improvement,
+                )
                 self._hard_stop(plan, state, timestamp=timestamp, reason="slippage", market_price=price)
                 state["updated_at"] = timestamp
                 self._save(state)
@@ -383,7 +390,11 @@ class GridTestnetLifecycle:
             self._ensure_hard_stop(plan, state, market=market, timestamp=timestamp)
             if slippage_breached:
                 self._block(state, "exit_fill_slippage_exceeded", timestamp=timestamp)
-                self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
+                self._record_event(
+                    state, "slippage_budget_breached", timestamp=timestamp,
+                    planned_price=planned, actual_price=price,
+                    slippage=slippage, price_improvement=price_improvement,
+                )
                 if line.open_quantity > 1e-9 or any(GridLineLifecycle.from_snapshot(item["line"]).open_quantity > 1e-9 for item in state["rungs"]):
                     self._hard_stop(plan, state, timestamp=timestamp, reason="exit_slippage", market_price=price)
                 else:
@@ -524,6 +535,15 @@ class GridTestnetLifecycle:
             "coin": instrument.removesuffix("-USD-PERP").removesuffix("-USDT-PERP"),
             "order_id": fill.get("order_id"),
         }
+
+    @staticmethod
+    def _slippage_metrics(side: Any, price: float, planned: float) -> tuple[float, float]:
+        """Return adverse slippage and price improvement for one fill."""
+        if str(side or "").lower() == "buy":
+            return max(0.0, price - planned), max(0.0, planned - price)
+        if str(side or "").lower() == "sell":
+            return max(0.0, planned - price), max(0.0, price - planned)
+        raise GridTestnetLifecycleError(f"slippage_side_missing:{side!r}")
 
     @staticmethod
     def _position_quantity(position: Any, instrument_id: str) -> float:
@@ -1496,7 +1516,11 @@ class GridTestnetLifecycle:
             "limit_price": execution_price,
             "time_in_force": time_in_force,
             "price": execution_price,
-            "planned_price": planned_price if planned_price is not None else price,
+            # For an aggressive market/IOC flatten, the bounded executable
+            # price is the plan being measured.  The strategy stop remains in
+            # trigger_price/price input, but comparing a fill to that distant
+            # boundary would not measure execution slippage.
+            "planned_price": execution_price if order_type == "market" and reduce_only else (planned_price if planned_price is not None else price),
             "trigger_price": trigger_price,
             "execution_semantics": "aggressive_ioc_market" if order_type == "market" else "resting_limit",
             "quantity": quantity,

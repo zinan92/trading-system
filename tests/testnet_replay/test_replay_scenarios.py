@@ -679,6 +679,63 @@ def test_issue_1251_fixture_preserves_real_btc_payload_shapes() -> None:
     assert fixture["l2Book"]["levels"][0][0]["px"] == "76937.0"
 
 
+@pytest.mark.parametrize(
+    ("fill_price", "expected_slippage", "expected_improvement", "breached"),
+    [(76859.0, 0.0, 60.0, False), (76700.0, 99.0, 0.0, True)],
+)
+def test_issue_1259_directional_ioc_exit_slippage_replay(
+    tmp_path: Path,
+    fill_price: float,
+    expected_slippage: float,
+    expected_improvement: float,
+    breached: bool,
+) -> None:
+    """Replay the redacted first-fill shape through the IOC exit path."""
+    fixture = json.loads((ROOT / "tests/testnet_replay/fixtures/first_fill_20260910_user_fills.json").read_text())
+    broker, _backend = _broker(tmp_path)
+    exchange = ReplayExchange(); exchange.observe(broker)
+    lifecycle = new_lifecycle(tmp_path / "outputs", broker)
+    plan = grid_plan(plan_id=f"issue-1259-{fill_price}")
+    plan["grid"]["rungs"] = [{
+        "rung": 1, "price": 76675.0, "side": "buy", "take_profit": 77344.0,
+        "hard_stop": 72000.0, "quantity": 0.00024,
+    }]
+    started = lifecycle.start(plan, timestamp="2026-09-10T22:25:07+00:00")
+    entry = started["orders"][0]
+    entry_fill = {**fixture[1], "oid": int(entry["broker_order_id"]), "cloid": entry["client_order_id"]}
+    exchange.inject_fill(entry, tid=int(entry_fill["tid"]), price=float(entry_fill["px"]))
+    opened = lifecycle.on_fill(plan, entry_fill, timestamp="2026-09-10T22:25:08+00:00")
+
+    # A failed protection submission drives the same emergency IOC sell path
+    # as the supplied first-fill lifecycle: bid 76849 minus the 50 USD budget.
+    exchange.protection_groups.clear()
+    state = lifecycle._state(plan)
+    state["hard_stop_protection"] = None
+    state["status"] = "hard_stop_triggered"
+    state["hard_stop_requested"] = True
+    state["hard_stop_reason"] = "protection_failed"
+    exchange.open_orders.clear()
+    lifecycle._save(state)
+    lifecycle.on_market_event(
+        plan, price=76849, market={"bid": "76849", "ask": "76850", "mid": "76849.5"},
+        timestamp="2026-09-10T22:25:09+00:00",
+    )
+    exit_order = next(row for row in lifecycle.snapshot(plan)["orders"] if row["event"] == "hard_stop_recovery")
+    assert exit_order["time_in_force"] == "ioc"
+    assert exit_order["planned_price"] == 76799.0
+    exchange.inject_fill(exit_order, tid=736728562523506, price=fill_price)
+    result = lifecycle.on_fill(
+        plan, {**fixture[0], "px": str(fill_price), "oid": int(exit_order["broker_order_id"]), "cloid": exit_order["client_order_id"]},
+        timestamp="2026-09-10T22:25:10+00:00",
+    )
+    fill_row = result["fills"][-1]
+    assert fill_row["slippage"] == expected_slippage
+    assert fill_row["price_improvement"] == expected_improvement
+    assert result["status"] == "terminal"
+    assert (result.get("closure_blocker") == "exit_fill_slippage_exceeded") is breached
+    assert any(event.get("event") == "fill_received" for event in result["events"])
+
+
 def test_issue_1251_i4_price_jitter_is_reproduced_for_followup() -> None:
     from pipelines.testnet_proof_driver import ProofDriverError, read_coherent_market
 

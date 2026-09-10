@@ -1,5 +1,31 @@
 # Decision Log
 
+# 2026-09-11 — Make Grid Testnet fill slippage directional (#1259)
+
+## Decision
+
+- Grid fill `slippage` now records only adverse movement: buy fills above the
+  planned price and sell fills below it. `price_improvement` records the
+  non-negative favorable movement separately.
+- The slippage budget gate uses adverse slippage for entries, take-profits, and
+  emergency IOC exits; the existing market-order price bound is unchanged.
+- The redacted first-fill replay proves a sell IOC planned at 76799 and filled
+  at 76859 reaches terminal without an exit-slippage blocker, while a 76700
+  fill records 99 USD adverse slippage and blocks the terminal closure.
+
+## Gotchas
+
+- `max_slippage <= 0` remains fail-closed; directionality changes only the
+  measured adverse amount.
+- The replay uses a local fixture binding and proves no venue, launchd, HTTP
+  8100, or live-money behavior.
+
+## Verification
+
+- `~/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python -m pytest tests/testnet_replay -q` — 30 passed.
+- `scripts/testnet_replay.sh` — 30 passed.
+- `scripts/testnet_replay_mutations.sh` — 16/16 mutations caught.
+
 # 2026-09-11 — Mutation-gated Testnet replay acceptance (#1251)
 
 ## Decision
