@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 import time
@@ -147,6 +148,59 @@ def test_authoritative_account_snapshot_accepts_typed_stub_broker_facts() -> Non
     assert reconciliation is binding.reconciliation
 
 
+def _authoritative_market_fixture(*, broker_price: str = "60000", broker_observed_at: str | None = None) -> tuple[dict, dict, object]:
+    observed_at = datetime.fromisoformat("2026-09-10T01:00:00+00:00")
+    market = {
+        "bid": "59999", "ask": "60005", "mid": "60000", "observed_at": observed_at.isoformat(),
+        "source": "nautilus-hyperliquid.testnet", "mapping_revision": cli.PROTECTED_CAPABILITY_REVISION,
+    }
+    plan = {"risk_budget": {"max_slippage": "50"}, "price_tick": "1"}
+    raw = {
+        "instrument_id": "BTC-USD-PERP", "price": broker_price, "freshness": "fresh",
+        "observed_at": broker_observed_at or observed_at.isoformat(),
+        "source": market["source"], "transport_state": "external_testnet",
+        "mapping_revision": market["mapping_revision"],
+    }
+
+    class StubBroker:
+        def market_fact(self, *, instrument_id: str, now: object) -> dict:
+            return {**raw, "instrument_id": instrument_id}
+
+    return market, plan, StubBroker()
+
+
+@pytest.mark.parametrize(
+    ("broker_price", "expected_reason"),
+    [("60000", None), ("60003", None), ("60007", "market_price_mismatch"), ("60060", "market_price_mismatch")],
+)
+def test_authoritative_market_uses_bounded_tolerance_and_bbo(
+    broker_price: str, expected_reason: str | None
+) -> None:
+    market, plan, broker = _authoritative_market_fixture(broker_price=broker_price)
+    if expected_reason:
+        with pytest.raises(cli.TestnetAutomationProofError, match=expected_reason):
+            cli._authoritative_market(broker, market=market, plan=plan, instrument_id="BTC-USD-PERP")
+        return
+
+    # The second success case is inside the 10 bps / max-slippage envelope but
+    # outside the narrow document midpoint, proving equality is not required.
+    result = cli._authoritative_market(broker, market=market, plan=plan, instrument_id="BTC-USD-PERP")
+    fact = result["broker_market_fact"]
+    assert fact["supplied_mid"] == "60000"
+    assert fact["broker_price"] == broker_price
+    assert fact["deviation"] == str(abs(Decimal(broker_price) - Decimal("60000")))
+    assert fact["tolerance"] == "50"
+    assert fact["observed_delta_s"] == "0.0"
+
+
+def test_authoritative_market_rejects_observation_delta_over_configured_limit() -> None:
+    market, plan, broker = _authoritative_market_fixture(
+        broker_observed_at="2026-09-10T01:00:11+00:00"
+    )
+    with pytest.raises(cli.TestnetAutomationProofError, match="market_observation_mismatch"):
+        cli._authoritative_market(broker, market=market, plan=plan, instrument_id="BTC-USD-PERP")
+
+
 @pytest.mark.parametrize(
     ("family", "plan_factory", "expected_submits"),
     [("dca", dca_plan, 1), ("grid", grid_plan, 2)],
@@ -184,7 +238,7 @@ def test_start_drives_canonical_lifecycle_through_protected_adapter(
         "fallback_policy": "none",
         "observed_at": observed_at.isoformat(),
         "bid": "59999",
-        "ask": "60001",
+        "ask": "60005",
         "mid": "60000",
         "mark": "60000",
         "oracle": "60000",
@@ -266,7 +320,7 @@ def test_start_drives_canonical_lifecycle_through_protected_adapter(
     }
     binding.market_fact = lambda *, instrument_id, now: {
         "instrument_id": instrument_id,
-        "price": "60000",
+        "price": "60003",
         "freshness": "fresh",
         "observed_at": now.isoformat(),
         "source": "nautilus-hyperliquid.testnet",
@@ -307,4 +361,10 @@ def test_start_drives_canonical_lifecycle_through_protected_adapter(
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == f"{family}_running"
     assert result["lifecycle_status"] in {"waiting_entry", "active"}
+    broker_market_fact = result["broker_market_fact"]
+    assert broker_market_fact["supplied_mid"] == "60000"
+    assert broker_market_fact["broker_price"] == "60003"
+    assert broker_market_fact["deviation"] == "3"
+    assert broker_market_fact["tolerance"] == "50.0"
+    assert float(broker_market_fact["observed_delta_s"]) <= 10
     assert len([name for name, _ in binding.calls if name == "submit"]) == expected_submits

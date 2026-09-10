@@ -14,6 +14,7 @@ import argparse
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -39,6 +40,8 @@ DEFAULT_OUTPUT_ROOT = Path("outputs")
 _APPROVED_MARKET_SOURCES = frozenset(
     {"hyperliquid.external_testnet", "nautilus-hyperliquid.testnet"}
 )
+DEFAULT_MARKET_MAX_DEVIATION_BPS = Decimal("10")
+DEFAULT_MARKET_OBSERVATION_MAX_DELTA_SECONDS = Decimal("10")
 _MARKET_REQUIRED = (
     "execution_ready",
     "fresh",
@@ -355,6 +358,7 @@ def _authoritative_market(
     broker: object,
     *,
     market: Mapping[str, Any],
+    plan: Mapping[str, Any],
     instrument_id: str,
 ) -> dict[str, Any]:
     try:
@@ -384,17 +388,54 @@ def _authoritative_market(
         or broker_mapping_revision != supplied_mapping_revision
     ):
         raise TestnetAutomationProofError("market_fact_identity_invalid")
-    if broker_price != supplied_mid:
+
+    risk_budget = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), Mapping) else {}
+    max_slippage = _decimal(risk_budget.get("max_slippage"), "max_slippage", positive=True)
+    try:
+        max_bps = Decimal(os.environ.get("TESTNET_MARKET_MAX_BPS", str(DEFAULT_MARKET_MAX_DEVIATION_BPS)))
+        max_observation_delta = Decimal(
+            os.environ.get(
+                "TESTNET_MARKET_OBSERVATION_MAX_SECONDS",
+                str(DEFAULT_MARKET_OBSERVATION_MAX_DELTA_SECONDS),
+            )
+        )
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise TestnetAutomationProofError("market_price_mismatch") from exc
+    if not max_bps.is_finite() or max_bps <= 0 or not max_observation_delta.is_finite() or max_observation_delta <= 0:
+        raise TestnetAutomationProofError("market_price_mismatch")
+    tolerance = min(max_slippage, supplied_mid * max_bps / Decimal("10000"))
+    deviation = abs(broker_price - supplied_mid)
+    supplied_bid = _decimal(market.get("bid"), "market_bid", positive=True)
+    supplied_ask = _decimal(market.get("ask"), "market_ask", positive=True)
+    grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
+    execution_context = plan.get("execution_context") if isinstance(plan.get("execution_context"), Mapping) else {}
+    tick = _decimal(
+        plan.get("price_tick") or execution_context.get("price_tick") or grid.get("price_tick") or "0.001",
+        "price_tick",
+        positive=True,
+    )
+    if (
+        deviation > tolerance
+        or supplied_bid >= supplied_ask
+        or broker_price < supplied_bid - tick
+        or broker_price > supplied_ask + tick
+    ):
         raise TestnetAutomationProofError("market_price_mismatch")
     broker_observed = _aware_datetime(raw.get("observed_at"), "broker_market_observed_at")
     supplied_observed = _aware_datetime(market.get("observed_at"), "market_observed_at")
-    if abs((broker_observed - supplied_observed).total_seconds()) > 5:
+    observed_delta = abs(Decimal(str((broker_observed - supplied_observed).total_seconds())))
+    if observed_delta > max_observation_delta:
         raise TestnetAutomationProofError("market_observation_mismatch")
     return {
         **dict(market),
         "broker_market_fact": {
             "instrument_id": instrument_id,
             "price": str(broker_price),
+            "supplied_mid": str(supplied_mid),
+            "broker_price": str(broker_price),
+            "deviation": str(deviation),
+            "tolerance": str(tolerance),
+            "observed_delta_s": str(observed_delta),
             "freshness": "fresh",
             "observed_at": broker_observed.isoformat(),
             "source": source,
@@ -607,6 +648,7 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
         market = _authoritative_market(
             broker,
             market=market,
+            plan=plan,
             instrument_id=args.instrument_id,
         )
         preflight = coordinator.preflight(
@@ -683,6 +725,7 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
             "lifecycle_status": lifecycle_status,
             "execution_mutation": result.get("execution_mutation"),
             "network_operation_invoked": result.get("network_operation_invoked"),
+            "broker_market_fact": market.get("broker_market_fact"),
         }
     finally:
         close = getattr(broker, "close", None)
