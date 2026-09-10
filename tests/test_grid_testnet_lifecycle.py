@@ -320,6 +320,63 @@ def test_grid_entry_tp_and_original_price_rearm(tmp_path: Path) -> None:
     assert rearm["idempotency_key"] != entry["idempotency_key"]
 
 
+def test_blocked_local_fill_retries_without_cancelling_and_recovers_protection(tmp_path: Path) -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "issue_1232_fill_recovery.json").read_text())
+    broker, backend = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["lower_price_boundary"] = 73000.0
+    plan["upper_price_boundary"] = 79000.0
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": price, "side": "buy",
+         "take_profit": price + 500, "hard_stop": 73000.0,
+         "quantity": 0.00024}
+        for index, price in enumerate((74000.0, 74918.0, 75837.0, 76755.0, 77673.0), start=1)
+    ]
+    plan["risk_budget"].update(max_open_orders=8, max_open_positions=5, max_notional=40000.0)
+    lifecycle.start(plan, timestamp="2026-09-10T11:00:00+00:00")
+    state = lifecycle._state(plan)
+    target = state["rungs"][4]
+    target_order = state["orders"][4]
+    for row in state["orders"]:
+        row["state"] = "cancelled"
+    target_order["state"] = "filled"
+    state.update(status="blocked_reconciliation", blocker="grid_entry_fill_state_error:ValueError:grid line fill_id is required")
+    lifecycle._save(state)
+    backend.account_positions = [{"position": fixture["position"]}]
+    original_request = broker.request
+    broker.request = lambda port, operation, payload=None: (
+        SimpleNamespace(positions=(fixture["position"],))
+        if port == "account" and operation == "read"
+        else original_request(port, operation, payload)
+    )
+
+    raw_fill = {
+        "tid": fixture["fill"]["fill_id"], "hash": fixture["fill"]["hash"],
+        "oid": int(target_order["broker_order_id"]), "cloid": target_order["client_order_id"],
+        "px": fixture["fill"]["price"], "sz": fixture["fill"]["quantity"],
+        "side": "B", "time": 1789038505000, "coin": "BTC",
+        "order_id": target_order["order_id"],
+    }
+    retried = lifecycle.on_fill(plan, raw_fill, timestamp="2026-09-10T11:08:25+00:00")
+    recovered = lifecycle.on_market_event(plan, price=fixture["market_price"], timestamp="2026-09-10T11:08:26+00:00")
+
+    assert retried["rungs"][4]["line"]["state"] == "open"
+    assert recovered["status"] == "active", recovered.get("events", [])[-1].get("reason")
+    assert recovered["rungs"][4]["line"]["entry_filled_quantity"] == pytest.approx(0.00024)
+    assert any(row["event"] == "tp" and row["rung_id"] == target["rung_id"] for row in recovered["orders"])
+    assert recovered["hard_stop_protection"]["status"] == "active"
+    assert sum(row["state"] == "accepted" and row["event"] == "entry_rearm" for row in recovered["orders"]) == 4
+    assert not any(event["event"] == "order_cancel_attempt" for event in recovered["events"])
+
+    fixture["position"]["szi"] = "0.00025"
+    recovered_state = lifecycle._state(plan)
+    recovered_state.update(status="blocked_reconciliation", blocker="grid_entry_fill_state_error:ValueError:grid line fill_id is required")
+    blocked = lifecycle.on_market_event(plan, price=fixture["market_price"], timestamp="2026-09-10T11:08:27+00:00")
+    assert blocked["status"] == "blocked_reconciliation"
+    assert blocked["blocker"] == "position_open_unprotected"
+
+
 def test_grid_partial_entry_deadline_sets_tp_to_authoritative_fill_quantity(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path)
     lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)

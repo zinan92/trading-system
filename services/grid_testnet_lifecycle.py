@@ -28,6 +28,11 @@ class GridTestnetLifecycle:
     """
 
     schema_version = "testnet-grid-lifecycle-v1"
+    _LOCAL_FILL_BLOCKERS = (
+        "grid_entry_fill_state_error:",
+        "fill_rejected:",
+        "unknown_fill_order",
+    )
 
     def __init__(self, output_root: Path, broker: Any) -> None:
         self.output_root = Path(output_root)
@@ -183,6 +188,7 @@ class GridTestnetLifecycle:
         return json.loads(json.dumps(state, sort_keys=True))
 
     def on_fill(self, plan: dict[str, Any], raw_fill: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
+        raw_fill = self._normalize_fill(raw_fill)
         state = self._state(plan)
         order_id = str(raw_fill.get("order_id") or "").strip()
         if not order_id:
@@ -203,7 +209,11 @@ class GridTestnetLifecycle:
             return self.snapshot(plan)
         was_cancelled = order.get("state") == "cancelled"
         late_cancelled_entry_allowed = was_cancelled and order.get("event") in {"entry", "entry_rearm"} and state["status"] in {"active", "terminal", "sealed", "hard_stop_triggered", "blocked_reconciliation", "blocked_protection", "blocked_risk"}
-        if (state["status"] in {"terminal", "sealed"} and not late_cancelled_entry_allowed) or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed) or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed):
+        retryable_local_fill = (
+            state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"}
+            and self._is_local_fill_blocker(state.get("blocker"))
+        )
+        if (state["status"] in {"terminal", "sealed"} and not late_cancelled_entry_allowed) or (state["status"] in {"blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed and not retryable_local_fill) or (state["status"] == "hard_stop_triggered" and order.get("event") not in {"hard_stop", "hard_stop_recovery"} and not late_cancelled_entry_allowed):
             self._block(state, "late_fill_after_block_or_terminal", timestamp=timestamp)
             self._save(state)
             raise GridTestnetLifecycleError(state["blocker"])
@@ -240,6 +250,7 @@ class GridTestnetLifecycle:
             "fill_identities": fill_identities,
             "order_id": order_id,
             "event": order.get("event"),
+            "side": raw_fill.get("side"),
             "rung_id": order.get("rung_id"),
             "quantity": quantity,
             "price": price,
@@ -399,6 +410,11 @@ class GridTestnetLifecycle:
             self._save(state)
             return self.snapshot(plan)
         if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"}:
+            if self._is_local_fill_blocker(state.get("blocker")):
+                self._recover_blocked_position(plan, state, price=price, timestamp=timestamp)
+                state["updated_at"] = timestamp
+                self._save(state)
+                return self.snapshot(plan)
             if str(state.get("blocker") or "").startswith("order_cancel_failed"):
                 state["hard_stop_requested"] = True
             exposure_ids = self._discover_exchange_exposure(state)
@@ -460,6 +476,111 @@ class GridTestnetLifecycle:
         state["updated_at"] = timestamp
         self._save(state)
         return self.snapshot(plan)
+
+    @classmethod
+    def _is_local_fill_blocker(cls, blocker: Any) -> bool:
+        value = str(blocker or "")
+        return value.startswith(cls._LOCAL_FILL_BLOCKERS)
+
+    @staticmethod
+    def _normalize_fill(fill: Mapping[str, Any]) -> dict[str, Any]:
+        """Accept both the public Standard Broker and native Grid fill shapes."""
+        if any(key in fill for key in ("tid", "oid", "cloid", "px", "sz", "time")):
+            return dict(fill)
+        from datetime import datetime as DateTime
+        occurred_at = fill.get("occurred_at") or fill.get("timestamp")
+        if isinstance(occurred_at, DateTime):
+            milliseconds = occurred_at.timestamp() * 1000
+        else:
+            try:
+                milliseconds = DateTime.fromisoformat(str(occurred_at).replace("Z", "+00:00")).timestamp() * 1000
+            except (TypeError, ValueError, OverflowError):
+                milliseconds = 0
+        side = str(fill.get("side") or "").lower()
+        instrument = str(fill.get("instrument_id") or "")
+        return {
+            **dict(fill),
+            "tid": str(fill.get("fill_id") or ""),
+            "oid": fill.get("broker_order_id"),
+            "cloid": fill.get("client_order_id"),
+            "px": fill.get("price"),
+            "sz": fill.get("quantity"),
+            "side": "B" if side in {"buy", "b"} else "A",
+            "time": int(milliseconds),
+            "coin": instrument.removesuffix("-USD-PERP").removesuffix("-USDT-PERP"),
+            "order_id": fill.get("order_id"),
+        }
+
+    @staticmethod
+    def _position_quantity(position: Any, instrument_id: str) -> float:
+        if isinstance(position, Mapping):
+            nested = position.get("position")
+            if isinstance(nested, Mapping):
+                position = nested
+            instrument = position.get("instrument_id") or position.get("coin") or position.get("symbol")
+            quantity = position.get("signed_quantity", position.get("quantity", position.get("size", position.get("szi"))))
+        else:
+            instrument = getattr(position, "instrument_id", None) or getattr(position, "coin", None) or getattr(position, "symbol", None)
+            quantity = getattr(position, "signed_quantity", None)
+            if quantity is None:
+                quantity = getattr(position, "quantity", getattr(position, "size", None))
+        if instrument not in (None, "") and str(instrument) not in {instrument_id, instrument_id.removesuffix("-USD-PERP"), instrument_id.removesuffix("-USDT-PERP")}:
+            return 0.0
+        try:
+            return float(quantity or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _recover_blocked_position(self, plan: dict[str, Any], state: dict[str, Any], *, price: float, timestamp: str) -> None:
+        """Retry a local fill failure without cancelling unrelated resting entries."""
+        try:
+            account = self.broker.request("account", "read", self.broker.broker_config["account_id"])
+            positions = getattr(account, "positions", None)
+            if positions is None and isinstance(account, Mapping):
+                positions = account.get("positions") or account.get("assetPositions") or ()
+            signed_quantity = sum(self._position_quantity(row, str(state["instrument_id"])) for row in positions or ())
+        except Exception as exc:  # noqa: BLE001 - unknown venue truth stays blocked.
+            state["blocker"] = "position_open_unprotected"
+            state["park_notification_required"] = True
+            self._record_event(state, "blocked_position_recovery_failed", timestamp=timestamp, reason=f"broker_truth_query_failed:{type(exc).__name__}")
+            return
+        if abs(signed_quantity) <= 1e-9:
+            return
+        fills = [
+            fill for fill in state.get("fills", ())
+            if fill.get("event") == "entry"
+            and str(fill.get("fill_id") or "").strip()
+            and float(fill.get("quantity") or 0.0) > 0
+        ]
+        expected = sum(float(fill.get("quantity") or 0.0) * (1 if fill.get("side", "buy") in {"buy", "B"} else -1) for fill in fills)
+        if abs(expected - signed_quantity) > 1e-9:
+            state["blocker"] = "position_open_unprotected"
+            state["park_notification_required"] = True
+            self._record_event(state, "blocked_position_recovery_mismatch", timestamp=timestamp, expected_quantity=expected, broker_quantity=signed_quantity)
+            return
+        for fill in fills:
+            rung = self._rung(state, str(fill.get("rung_id") or ""))
+            line = GridLineLifecycle.from_snapshot(rung["line"])
+            if line.open_quantity <= 1e-9:
+                fill_id = str(fill.get("fill_id") or next(iter(fill.get("fill_identities") or ()), ""))
+                if not fill_id:
+                    state["blocker"] = "position_open_unprotected"
+                    state["park_notification_required"] = True
+                    return
+                line.apply_entry_fill(fill_id=fill_id, quantity=float(fill["quantity"]), at=timestamp)
+                rung["line"] = line.snapshot()
+            self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
+        self._ensure_hard_stop(plan, state, timestamp=timestamp)
+        if state.get("hard_stop_protection", {}).get("status") != "active":
+            state["blocker"] = "position_open_unprotected"
+            state["park_notification_required"] = True
+            return
+        if price < float(state["upper_boundary"]) and price > float(state["lower_boundary"]):
+            self._rearm_missing_rungs(plan, state, timestamp=timestamp)
+            state["status"] = "active"
+            state["blocker"] = None
+            state["park_notification_required"] = False
+            self._record_event(state, "blocked_position_recovered", timestamp=timestamp, quantity=signed_quantity)
 
     def advance(
         self,

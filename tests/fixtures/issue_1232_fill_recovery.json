@@ -1,0 +1,19 @@
+{
+  "fill": {
+    "fill_id": "fill-1232-redacted",
+    "order_id": "grid-plan-redacted:rung-5:entry:g1",
+    "broker_order_id": "59671766069",
+    "client_order_id": "0xredacted1232",
+    "instrument_id": "BTC-USD-PERP",
+    "side": "buy",
+    "price": "77673",
+    "quantity": "0.00024",
+    "occurred_at": "2026-09-10T11:08:25+00:00",
+    "hash": "hash-redacted-1232"
+  },
+  "position": {
+    "coin": "BTC",
+    "szi": "0.00024"
+  },
+  "market_price": 77673
+}
