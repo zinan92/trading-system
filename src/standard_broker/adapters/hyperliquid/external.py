@@ -11,7 +11,7 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from time import time_ns
+from time import sleep, time_ns
 
 from ...capabilities import CapabilityDescriptor
 from ...external_host import digest_canonical
@@ -274,9 +274,23 @@ class NautilusHyperliquidTestnetBackend:
         orders = self._build_protection_orders(request)
         reports = self._call("submit_orders", orders)
         if not isinstance(reports, (list, tuple)) or not reports:
+            rows, evidence = self._recover_protection_rows(request)
+            if len(rows) == 2:
+                self._protection_orders[protection_id] = {
+                    "request": dict(request),
+                    "rows": tuple(rows),
+                }
+                return self._protection_observation(
+                    protection_id=protection_id,
+                    operation="submit",
+                    state="submitted",
+                    covered_quantity=Decimal("0"),
+                    rows=rows,
+                )
+            reason = "protection_submit_partial" if rows else "protection_submit_unconfirmed"
             raise RuntimeBoundaryError(
-                "protection_submit_response_invalid",
-                "Nautilus returned no actionable protection group report",
+                reason,
+                f"Nautilus returned no protection report; recovery evidence: {evidence}",
             )
         if len(reports) == len(orders):
             rows = tuple(self._protection_report(report) for report in reports)
@@ -343,6 +357,83 @@ class NautilusHyperliquidTestnetBackend:
             ),
             covered_quantity=Decimal("0"),
             rows=rows,
+        )
+
+    def _recover_protection_rows(
+        self, request: Mapping[str, object]
+    ) -> tuple[list[dict[str, object]], str]:
+        """Recover both native legs after Nautilus acknowledges no report."""
+
+        instrument = self._instrument(request)
+        legs = request["legs"]
+        assert isinstance(legs, list)
+        latest: list[dict[str, object]] = []
+        for attempt in range(5):
+            try:
+                reports = self._call("request_order_status_reports", str(instrument.id))
+            except Exception as exc:  # noqa: BLE001 - recovery remains fail-closed.
+                latest = [{"error": type(exc).__name__}]
+            else:
+                latest = self._match_protection_reports(legs, reports, request.get("quantity"))
+                if len(latest) == len(legs):
+                    return latest, self._protection_recovery_evidence(latest)
+            if attempt < 4:
+                sleep(1)
+        return latest, self._protection_recovery_evidence(latest)
+
+    def _match_protection_reports(
+        self, legs: list[object], reports: object, quantity: object
+    ) -> list[dict[str, object]]:
+        if not isinstance(reports, (list, tuple)):
+            return []
+        available = [self._protection_report(report) for report in reports]
+        matched: list[dict[str, object]] = []
+        consumed: set[int] = set()
+        for leg in legs:
+            if not isinstance(leg, Mapping):
+                continue
+            for index, report in enumerate(available):
+                if index in consumed:
+                    continue
+                if self._protection_report_matches_leg(report, leg, quantity):
+                    matched.append(report)
+                    consumed.add(index)
+                    break
+        return matched
+
+    @classmethod
+    def _protection_report_matches_leg(
+        cls, report: Mapping[str, object], leg: Mapping[str, object], quantity: object
+    ) -> bool:
+        if str(report.get("status") or "").lower() not in {
+            "resting", "waiting_for_trigger", "waiting_for_fill", "open"
+        }:
+            return False
+        if report.get("reduce_only") is not True:
+            return False
+        if str(report.get("side") or "") != str(leg.get("side") or ""):
+            return False
+        try:
+            return (
+                Decimal(str(report.get("trigger_px"))) == Decimal(str(leg.get("triggerPx")))
+                and Decimal(str(report.get("quantity"))) == Decimal(str(quantity))
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _protection_recovery_evidence(rows: list[Mapping[str, object]]) -> str:
+        return json.dumps(
+            [
+                {
+                    key: row.get(key)
+                    for key in ("status", "oid", "cloid", "side", "trigger_px", "quantity")
+                    if row.get(key) is not None
+                }
+                for row in rows
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
         )
 
     def _query_protection(self, protection_id: str) -> Mapping[str, object]:
@@ -606,9 +697,20 @@ class NautilusHyperliquidTestnetBackend:
         return f"SBP-{digest}"
 
     def _protection_report(self, report: object) -> dict[str, object]:
-        event = self._order_event(report)
         mapping = self._to_mapping(report)
+        nested_order = mapping.get("order")
+        if isinstance(nested_order, Mapping):
+            # Replay/API payloads wrap the native order and put its lifecycle
+            # status beside it.  Keep this normalization at the adapter edge.
+            mapping = {**dict(nested_order), **mapping}
+        event = self._order_event(mapping)
         quantity = self._string_value(report, mapping, "quantity", "sz", "size") or event.get("sz")
+        trigger_px = self._string_value(
+            report, mapping, "trigger_price", "triggerPx", "trigger_px"
+        )
+        reduce_only = mapping.get("reduce_only")
+        if reduce_only is None:
+            reduce_only = mapping.get("reduceOnly")
         return {
             "status": str(event.get("status") or "unknown").lower(),
             "oid": event.get("oid"),
@@ -617,6 +719,8 @@ class NautilusHyperliquidTestnetBackend:
             "px": event.get("px"),
             "sz": event.get("sz"),
             "quantity": quantity,
+            "trigger_px": trigger_px,
+            "reduce_only": reduce_only is True,
             "time": event.get("time"),
         }
 

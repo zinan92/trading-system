@@ -8,6 +8,7 @@ from standard_broker.adapters.hyperliquid.external import (
     NautilusHyperliquidTestnetBackend,
     default_testnet_capabilities,
 )
+import standard_broker.adapters.hyperliquid.external as external_module
 from standard_broker.adapters.hyperliquid.credentials import LocalFileSecretProvider
 from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import RuntimeBoundaryError
@@ -187,6 +188,87 @@ def test_external_protection_submit_and_query_are_redacted_and_cursorable(tmp_pa
     assert queried["state"] == "active"
     assert queried["covered_quantity"] == "0.001"
     assert "reduceOnly" not in str(submitted)
+
+
+def _recovered_orders() -> list[dict[str, object]]:
+    return [
+        {
+            "order": {
+                "oid": 59821879831,
+                "cloid": "0xa0ad802259b69ff96afcc988317353b8",
+                "side": "A",
+                "triggerPx": "61000.0",
+                "sz": "0.001",
+                "reduceOnly": True,
+            },
+            "status": "open",
+        },
+        {
+            "order": {
+                "oid": 59821879832,
+                "cloid": "0xa371b58ce4842e11ca0667abded7dbda",
+                "side": "A",
+                "triggerPx": "59000.0",
+                "sz": "0.001",
+                "reduceOnly": True,
+            },
+            "status": "open",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("orders", "reason"),
+    [(_recovered_orders(), None), (_recovered_orders()[:1], "protection_submit_partial"), ([], "protection_submit_unconfirmed")],
+)
+def test_empty_protection_submit_recovers_or_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orders: list[dict[str, object]],
+    reason: str | None,
+) -> None:
+    backend = _backend(tmp_path)
+    backend.activate(release_sha="a" * 40)
+    backend._build_protection_orders = lambda request: ["tp-order", "sl-order"]
+    backend._instrument = lambda request: SimpleNamespace(id="BTC-USD-PERP.HYPERLIQUID")
+    monkeypatch.setattr(external_module, "sleep", lambda seconds: None)
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def call(method: str, *args, **kwargs):
+        calls.append((method, dict(kwargs)))
+        del args
+        if method == "submit_orders":
+            return []
+        if method == "request_order_status_reports":
+            return orders
+        if method == "cancel_order":
+            return {"status": "ok"}
+        if method == "request_order_status_report":
+            return {
+                "order_status": "CANCELED",
+                "venue_order_id": kwargs.get("venue_order_id"),
+                "client_order_id": kwargs.get("client_order_id"),
+                "quantity": "0.001",
+            }
+        raise AssertionError(method)
+
+    backend._call = call
+    if reason is None:
+        submitted = backend.invoke("protection_order", "submit", _supported_request())
+        assert submitted["state"] == "submitted"
+        assert submitted["order_ids"] == ["59821879831", "59821879832"]
+        assert backend._protection_orders["dca-protection:1"]["rows"][0]["cloid"].startswith("0x")
+        backend.invoke("protection_order", "cancel", {"protectionId": "dca-protection:1"})
+        cancel_calls = [kwargs for method, kwargs in calls if method == "cancel_order"]
+        assert {str(kwargs["client_order_id"]) for kwargs in cancel_calls} == {
+            "0xa0ad802259b69ff96afcc988317353b8",
+            "0xa371b58ce4842e11ca0667abded7dbda",
+        }
+    else:
+        with pytest.raises(RuntimeBoundaryError) as raised:
+            backend.invoke("protection_order", "submit", _supported_request())
+        assert raised.value.reason_code == reason
+        assert "59821879831" in str(raised.value) if orders else "[]" in str(raised.value)
 
 
 def test_external_protection_accepts_group_level_submit_report_and_queries_child_cloids(tmp_path: Path) -> None:

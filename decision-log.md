@@ -1,5 +1,27 @@
 # Decision log
 
+## Issue #135: recover positionTpsl protection after an empty submit response
+
+- When Nautilus `submit_orders` returns an empty or non-list response, the
+  Hyperliquid adapter performs at most five instrument-scoped open-order
+  queries. A complete match requires both reduce-only legs to have the
+  requested side, trigger price, and quantity; the recovered Broker `oid` and
+  native `cloid` are persisted for later query and cancel operations.
+- Recovery is fail-closed: zero matched legs raises
+  `protection_submit_unconfirmed`, while one matched leg raises
+  `protection_submit_partial`. The error includes a redacted, bounded query
+  summary rather than treating an empty response as success.
+
+### Gotchas
+
+- Nautilus can return no actionable group report even after Hyperliquid has
+  accepted both child orders. Hyperliquid replay payloads may also wrap the
+  order under `order` and expose lifecycle status beside it; both forms must
+  be normalized only at the adapter boundary.
+- The canonical `SBP-...` IDs are not necessarily the native Hyperliquid
+  CLOIDs. Once recovery finds native identities, all later status and cancel
+  calls must use those persisted identities.
+
 ## Issue #133: declarative recovered fill state and bounded fill reconciliation
 
 - `recover()` and `recover_client_order()` preserve a persisted `filled` or
