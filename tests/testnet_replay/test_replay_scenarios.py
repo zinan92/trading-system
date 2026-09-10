@@ -234,8 +234,7 @@ def test_issue_1248_authoritative_start_market_uses_tolerance_bbo_and_age() -> N
     with pytest.raises(TestnetAutomationProofError, match="market_price_mismatch"):
         _authoritative_market(Broker("100.2"), market=market, plan=plan, instrument_id="BTC-USD-PERP")
     bbo_market = {**market, "ask": "100.04"}
-    with pytest.raises(TestnetAutomationProofError, match="market_price_mismatch"):
-        _authoritative_market(Broker("100.05"), market=bbo_market, plan=plan, instrument_id="BTC-USD-PERP")
+    assert _authoritative_market(Broker("100.05"), market=bbo_market, plan=plan, instrument_id="BTC-USD-PERP")["broker_market_fact"]["tolerance"] == "0.1"
     with pytest.raises(TestnetAutomationProofError, match="market_observation_mismatch"):
         _authoritative_market(Broker(observed_at=now - timedelta(seconds=11)), market=market, plan=plan, instrument_id="BTC-USD-PERP")
 
@@ -453,17 +452,28 @@ def test_issue_1251_fixture_preserves_real_btc_payload_shapes() -> None:
     assert fixture["l2Book"]["levels"][0][0]["px"] == "76937.0"
 
 
-@pytest.mark.xfail(strict=True, reason="I4 follow-up: market binding/public price comparison is still string-strict")
 def test_issue_1251_i4_price_jitter_is_reproduced_for_followup() -> None:
     from pipelines.testnet_proof_driver import ProofDriverError, read_coherent_market
 
     class Binding:
         def market_fact(self, **_kwargs):
-            return {"price": "76957.0", "source": "binding", "observed_at": "now"}
+            return {"price": "76957.0", "source": "binding", "observed_at": "2026-09-11T01:00:00+00:00"}
 
     class Reader:
         def read(self, _instrument):
-            return {"instrument_id": "BTC-USD-PERP", "price": "76957.1", "mid": "76957.1", "bid": "76957", "ask": "76958", "fresh": True, "execution_ready": True, "observed_at": "now", "source": "reader", "mapping_revision": "fixture-v1", "connection_epoch": "replay-epoch"}
+            return {"instrument_id": "BTC-USD-PERP", "price": "76957.1", "mid": "76957.1", "bid": "76957", "ask": "76958", "mark": "76957.1", "oracle": "76957.1", "impact": "76957.1", "depth_notional": "100", "max_slippage": "50", "max_oracle_deviation_bps": "50", "fresh": True, "execution_ready": True, "is_synthetic": False, "fallback_policy": "none", "observed_at": "2026-09-11T01:00:00+00:00", "source": "reader", "mapping_revision": "fixture-v1", "broker_id": "hyperliquid", "environment": "testnet", "asset_index": 0, "universe_revision": "fixture-v1", "connection_epoch": "replay-epoch", "cursor": "replay-cursor"}
 
     market, _checks = read_coherent_market({"market": {"fallback_policy": "none"}}, Binding(), instrument_id="BTC-USD-PERP", market_reader=Reader(), max_attempts=1, read_reader_always=True)
     assert market["price"] == "76957.1"
+
+
+def test_issue_1253_tick_market_pair_uses_tolerance_bbo_and_observation_age() -> None:
+    from services.testnet_market_document import compare_market_observations
+
+    common = {"bid": "76957", "ask": "76958", "max_slippage": "100", "binding_observed_at": "2026-09-11T01:00:00+00:00", "reader_observed_at": "2026-09-11T01:00:10+00:00"}
+    assert compare_market_observations("76959", "76957.5", **common)["passed"] is True
+    tolerance = Decimal("76957.5") * Decimal("10") / Decimal("10000")
+    assert compare_market_observations(str(Decimal("76958") + tolerance + 1), "76957.5", **common)["reason_code"] == "market_bbo_inconsistent"
+    assert compare_market_observations("76957.5", "76956.5", **common)["reason_code"] == "market_bbo_inconsistent"
+    assert compare_market_observations("76957.5", "76957.5", **{**common, "reader_observed_at": "2026-09-11T01:00:11+00:00"})["reason_code"] == "market_observation_mismatch"
+    assert compare_market_observations("76957.5", "76957.5", **{**common, "binding_observed_at": "not-a-timestamp"})["reason_code"] == "market_observation_mismatch"

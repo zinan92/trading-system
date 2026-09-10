@@ -341,12 +341,14 @@ def test_market_price_mismatch_retries_then_succeeds_with_attempt_evidence() -> 
     preview, _ = _preview()
     preview["market"] = {"fallback_policy": "none"}
     broker = _MarketSequence([
-        {"price": "60000", "source": "binding", "observed_at": "now"},
-        {"price": "60001", "source": "binding", "observed_at": "now"},
-        {"price": "60000", "source": "binding", "observed_at": "now"},
+        {"price": "60000", "source": "binding", "observed_at": "2026-09-08T01:00:03+00:00"},
+        {"price": "60001", "source": "binding", "observed_at": "2026-09-08T01:00:03+00:00"},
+        {"price": "60000", "source": "binding", "observed_at": "2026-09-08T01:00:03+00:00"},
     ])
     reader = _MarketSequence([
-        _complete_market("60001"), _complete_market("60000"), _complete_market("60000"),
+        {**_complete_market("60001"), "max_slippage": "0.1"},
+        {**_complete_market("60000"), "max_slippage": "0.1"},
+        {**_complete_market("60000"), "max_slippage": "0.1"},
     ])
     reader.read = lambda _instrument_id: next(reader.values)  # type: ignore[attr-defined]
     sleeps: list[float] = []
@@ -368,9 +370,9 @@ def test_market_price_mismatch_fails_closed_after_attempt_limit() -> None:
     preview, _ = _preview()
     preview["market"] = {"fallback_policy": "none"}
     broker = _MarketSequence([
-        {"price": "60000", "source": "binding", "observed_at": "now"},
+        {"price": "60000", "source": "binding", "observed_at": "2026-09-08T01:00:03+00:00"},
     ] * 3)
-    reader = _MarketSequence([_complete_market("60001")] * 3)
+    reader = _MarketSequence([{**_complete_market("60001"), "max_slippage": "0.1"}] * 3)
     reader.read = lambda _instrument_id: next(reader.values)  # type: ignore[attr-defined]
     sleeps: list[float] = []
 
@@ -387,7 +389,7 @@ def test_market_price_mismatch_fails_closed_after_attempt_limit() -> None:
 def test_market_reader_can_be_required_for_every_coherent_tick_read() -> None:
     preview, _ = _preview()
     preview["market"] = {"fallback_policy": "none"}
-    broker = _MarketSequence([{"price": "60000", "source": "binding", "observed_at": "now"}])
+    broker = _MarketSequence([{"price": "60000", "source": "binding", "observed_at": "2026-09-08T01:00:03+00:00"}])
     reader = _MarketSequence([_complete_market("60000")])
     reader.read = lambda _instrument_id: next(reader.values)  # type: ignore[attr-defined]
 

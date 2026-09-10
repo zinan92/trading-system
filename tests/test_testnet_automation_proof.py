@@ -261,7 +261,7 @@ def _authoritative_market_fixture(*, broker_price: str = "60000", broker_observe
 
 @pytest.mark.parametrize(
     ("broker_price", "expected_reason"),
-    [("60000", None), ("60003", None), ("60007", "market_price_mismatch"), ("60060", "market_price_mismatch")],
+    [("60000", None), ("60003", None), ("60007", None), ("60060", "market_price_mismatch")],
 )
 def test_authoritative_market_uses_bounded_tolerance_and_bbo(
     broker_price: str, expected_reason: str | None
