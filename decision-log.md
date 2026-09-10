@@ -1,5 +1,33 @@
 # Decision Log
 
+# 2026-09-11 — Mutation-gated Testnet replay acceptance (#1251)
+
+## Decision
+
+- The replay gate now exercises the real Coordinator tick path from a genuine
+  `grid_paused_range` session, the startup `_authoritative_market` seam, all
+  four hard-stop request paths, exchange-side protection invariants, typed
+  proof facts, and preview/lifecycle full-depth loss parity.
+- `scripts/testnet_replay_mutations.sh` applies twelve documented historical
+  regressions in detached temporary copies; every mutation must make
+  `tests/testnet_replay` fail before the PR is considered acceptable.
+
+## Gotchas
+
+- The local replay binding is deliberately synthetic and never proves a venue
+  action, launchd state, HTTP 8100 behavior, or live-money behavior.
+- The real tick path may persist a fail-closed reconciliation blocker when the
+  fixture cannot prove exchange-side cancellation; the acceptance still
+  requires the callback to execute, advance durable lifecycle state, and
+  process a public fill rather than treating that blocker as healthy runtime.
+- No production code, data source, launchd plist, online output directory, or
+  live/real-money path was changed.
+
+## Verification
+
+- `scripts/testnet_replay.sh` — 21 passed, 1 strict xfailed.
+- `scripts/testnet_replay_mutations.sh` — 12/12 mutations caught.
+
 # 2026-09-11 — Admit only bounded historical unattributed Testnet fills at activation (#1249)
 
 ## Decision
@@ -19149,3 +19177,72 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_testnet_grid_coordinator.py tests/test_park_control.py` — 67 passed.
 - `git diff --check` — passed.
+# 2026-09-11 — Testnet replay regression suite (#1251)
+
+## Revision 2 decision
+
+- Replay acceptance now checks exchange-side protection groups, including both
+  typed TP and hard-stop SL legs, and requires the resting TP to be reduce-only
+  GTC.  Terminal replay steps require sealed state, flat positions, no open
+  orders, and canceled protection.
+- Every terminal/reconciliation scenario uses an explicit single outcome.  The
+  end-to-end replay rebuilds broker and lifecycle objects from durable state at
+  each process step, then exercises the Park control tick callback through
+  facts, reconcile, and coordinator advance, including historical fills.
+- I4 remains a strict xfail because the current market document still compares
+  binding/public prices as strings; the assertion now only requires successful
+  return after the follow-up tolerance fix.
+
+## Revision 2 Gotchas
+
+- The replay fake had to retain protection leg facts and remove canceled orders
+  by both venue and client identity; otherwise terminal reconciliation could
+  incorrectly report broker-open orders.
+- The scenario-11 checks are split into market tolerance/BBO, historical-fill
+  cutoff, full-depth loss parity, and typed-facts tests.  They use local
+  fixtures and never invoke a venue, launchd service, HTTP 8100, or live-money
+  path.
+
+## Revision 2 Verification
+
+- `scripts/testnet_replay.sh` — 20 passed, 1 strict xfailed.
+
+## Decision
+
+- Add `tests/testnet_replay/` as the Testnet-related PR merge gate. The suite
+  replays the driver/coordinator/lifecycle/control-tick/scheduler seams with a
+  local Standard Broker-shaped fixture and asserts I1-I4 at each step.
+- Keep Nautilus client-level exchange simulation out of this issue; that is a
+  separate follow-up requiring the standard-broker `client_factory` seam.
+
+## Gotchas
+
+- The replay harness now keeps exchange-side positions, open orders,
+  protection groups, and fills as durable fake-binding state while constructing
+  a fresh broker for each replay step. A fill is not considered valid unless
+  the public facts read shows the corresponding position transition.
+- The control-tick regression uses the real coordinator advance seam; direct
+  lifecycle calls remain only for focused normalization/error cases. The
+  real-shaped BTC fixture retains two historical userFills, empty
+  clearinghouse/frontend orders, BBO levels, and `szDecimals: 5` with a
+  placeholder account address.
+- I4 remains an intentional `xfail(strict=True)`: the one-tick binding/public
+  price jitter is reproduced for the follow-up fix and is not changed here.
+
+- Historical references #1227, #1229, #1233, #1235, #1237, #1239, #1241,
+  #1243, #1219, #1231, #1209, #1213, #1215, #1248, #1250, #1245, #1223,
+  #1221, and #1226 were not resolvable as Issues through `gh issue view`; the
+  corresponding merged PR diffs were inspected where `gh pr list` returned a
+  match. #1217 had no matching merged PR result.
+- The fixture is synthetic and redacted. It does not prove exchange-client
+  behavior, live transport behavior, or real-money execution.
+
+## Verification
+
+- `scripts/testnet_replay.sh` — 13 passed in 0.13s.
+- `PYTHONPATH=.:src:/Users/wendy/work/standard-broker/src ~/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python -m py_compile tests/testnet_replay/harness.py tests/testnet_replay/test_replay_scenarios.py` — passed.
+- `git diff --check` — passed; `gitleaks dir . --no-banner --redact` — no leaks found, 21.04 MB scanned.
+- Read-only I4 grep found one exact binding/public price comparison in
+  `services/testnet_market_document.py:99-101`; no corresponding match was
+  found in `/Users/wendy/work/standard-broker/src/standard_broker`. It remains
+  outside this no-production-code replay change.

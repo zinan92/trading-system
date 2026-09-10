@@ -1,0 +1,12 @@
+{
+  "instrument_id": "BTC-USD-PERP",
+  "account_address": "TESTNET_ACCOUNT_PLACEHOLDER",
+  "meta": {"universe": [{"name": "BTC", "szDecimals": 5, "maxLeverage": 40}]},
+  "userFills": [
+    {"coin": "BTC", "px": "77673.0", "sz": "0.00024", "side": "B", "time": 1789038505558, "startPosition": "0.0", "dir": "Open Long", "oid": 59671766069, "tid": 219949055209235, "cloid": "0x558355c04261382dfcedc30d3a2b0d79"},
+    {"coin": "BTC", "px": "76946.0", "sz": "0.00024", "side": "A", "time": 1789047483626, "startPosition": "0.00024", "dir": "Close Long", "oid": 59791377663, "tid": 573671142921614, "cloid": "0x715528fd2da46e694ae05c56b54b8f36"}
+  ],
+  "clearinghouseState": {"assetPositions": [], "marginSummary": {"accountValue": "995.280109", "totalNtlPos": "0.0"}},
+  "frontendOpenOrders": [],
+  "l2Book": {"coin": "BTC", "time": 1789056958510, "levels": [[{"px": "76937.0", "sz": "0.00293", "n": 1}], [{"px": "76978.0", "sz": "0.00014", "n": 1}]]}
+}
