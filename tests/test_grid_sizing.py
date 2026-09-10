@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from services import grid_sizing
+from services.grid_risk import full_depth_loss
 from services.strategy_control_plane import StrategyControlPlane
 
 
@@ -382,8 +383,27 @@ def test_read_only_preview_can_explain_unsafe_manual_notional_without_resizing_i
 
     assert preview["grid"]["notional_per_grid"] == 10_000_000.0
     assert preview["risk"]["capital_budget_exceeded"] is True
-    assert preview["risk"]["max_loss_role"] == "advisory_only"
+    assert preview["risk"]["max_loss_role"] == "risk_gate_enforced"
     assert 0 < preview["risk"]["safe_notional_cap_per_grid"] < 10_000_000.0
+
+
+def test_operator_hard_stop_is_the_same_full_depth_loss_as_lifecycle_model() -> None:
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        {
+            "direction": "long",
+            "style": "steady",
+            "range": {"low": 80, "high": 120},
+            "grid": {"count": 15, "notional_per_grid": 1_000, "notional_mode": "manual"},
+            "hard_stop": 70,
+        },
+        market=market(),
+        account=account(),
+        config=StrategyControlPlane(Path("/tmp/grid-risk-test")).config,
+    )
+
+    assert {order["sl"] for order in preview["orders"]} == {70.0}
+    assert preview["risk"]["max_loss"] == round(full_depth_loss(preview["orders"]), 2)
 
 
 def test_auto_density_searches_from_70_down_to_30_for_ten_dollar_target(

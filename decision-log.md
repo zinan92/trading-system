@@ -1,5 +1,31 @@
 # Decision Log
 
+# 2026-09-10 — Use one full-depth Grid loss model (#1244)
+
+## Decision
+
+- The operator Grid hard stop is applied to preview orders before modeled loss
+  is calculated; without one, the directional solver stop remains canonical.
+- Dashboard preview, risk gate, Dashboard-to-plan projection, and Grid Testnet
+  lifecycle use the shared `services.grid_risk.full_depth_loss` calculation.
+- A preview blocks with `maximum_loss_exceeds_loss_cap` when modeled full-depth
+  loss exceeds the Portfolio loss cap, instead of deferring the failure to the
+  lifecycle dry-run.
+
+## Gotchas
+
+- Neutral Grids use the `long`/`buy` and `short`/`sell` entries of an operator
+  hard-stop mapping; the lifecycle consumes the normalized stop on each rung.
+- The risk gate remains subtractive: it may scale notional, but it never hides
+  a full-depth loss-cap breach by reporting the scaled loss as the request.
+- No launchd, online runtime, HTTP 8100, data source, credential, or live-money
+  path was changed or invoked.
+
+## Verification
+
+- Focused regression tests and offline proof-plan/lifecycle checks are recorded
+  in the pull request validation evidence.
+
 # 2026-09-10 — Retry hard-stop flatten from public position facts (#1240)
 
 ## Decision

@@ -734,6 +734,28 @@ def test_execution_admission_blocks_missing_preview_notional(tmp_path: Path) -> 
 
     assert result["execution_ready"] is False
     assert "preview_notional_missing" in result["blockers"]
+
+
+def test_execution_admission_blocks_full_depth_loss_above_loss_cap(tmp_path: Path) -> None:
+    result = DashboardControlPlane(tmp_path).execution_admission(
+        {
+            "venue_profile_id": "hyperliquid.testnet",
+            "instrument_id": "BTC-USD-PERP",
+            "strategy_family": "dca",
+            "preview": {
+                "dca": {"total_possible_notional": 100},
+                "risk": {"maximum_loss_at_full_depth": 60},
+            },
+            "execution_ready": True,
+            "blockers": [],
+        },
+        market=_execution_market(),
+        account=_testnet_account(1_000),
+    )
+
+    assert result["execution_ready"] is False
+    assert result["risk_gate"]["loss_cap"] == 50.0
+    assert "maximum_loss_exceeds_loss_cap" in result["blockers"]
     assert result["risk_gate"]["outcome"] == "reject"
 
 

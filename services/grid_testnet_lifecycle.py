@@ -12,6 +12,7 @@ from services.broker_port import BrokerCancelRequest, BrokerOrderRequest
 from services.dualtrack_grid_core import GridLineLifecycle
 from services.journal_store import load_json, write_json
 from services.testnet_continuation_reconciliation import reconcile_before_continuation
+from services.grid_risk import full_depth_loss
 
 
 class GridTestnetLifecycleError(RuntimeError):
@@ -1663,12 +1664,7 @@ class GridTestnetLifecycle:
     def _validate_full_depth_risk(plan: Mapping[str, Any], rungs: list[dict[str, Any]]) -> None:
         risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), Mapping) else {}
         maximum_loss = float(risk.get("maximum_loss_at_full_depth") or 0.0)
-        modeled_loss = sum(
-            (float(rung["price"]) - float(rung["hard_stop"])) * float(rung["quantity"])
-            if rung["side"] == "buy"
-            else (float(rung["hard_stop"]) - float(rung["price"])) * float(rung["quantity"])
-            for rung in rungs
-        )
+        modeled_loss = full_depth_loss(rungs)
         max_open_orders = int(risk.get("max_open_orders") or 0)
         if max_open_orders < len(rungs):
             raise GridTestnetLifecycleError("max_open_orders_exceeded_at_initial_ladder")

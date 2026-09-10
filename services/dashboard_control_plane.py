@@ -575,12 +575,14 @@ class DashboardControlPlane:
             requested_hard_stop = normalized_strategy.get("hard_stop")
             if requested_hard_stop in (None, ""):
                 direction = str(normalized_strategy.get("direction") or "neutral").lower()
+                spacing = float(grid_preview.get("spacing") or 0.0)
                 requested_hard_stop = (
-                    low
+                    low - spacing
                     if direction == "long"
                     else high
+                    + spacing
                     if direction == "short"
-                    else {"long": low, "short": high}
+                    else {"long": low - spacing, "short": high + spacing}
                 )
                 hard_stop_source = "derived_from_grid_boundary"
             else:
@@ -803,6 +805,7 @@ class DashboardControlPlane:
             loss_cap = min(equity * 0.05, 50.0)
             effective_notional = min(requested_notional, notional_cap)
             if requested_loss > 0 and requested_loss > loss_cap:
+                blockers.append("maximum_loss_exceeds_loss_cap")
                 effective_notional = min(
                     effective_notional,
                     requested_notional * loss_cap / requested_loss,
