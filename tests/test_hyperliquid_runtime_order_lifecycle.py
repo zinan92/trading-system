@@ -818,6 +818,43 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(fills_call[2]["instrument_id"], "BTC")
         self.assertEqual(fills_call[2]["cloid"], submitted.client_order_id)
 
+    def test_recovered_fills_accept_all_instrument_aliases_and_keep_runtime_identity(self) -> None:
+        adapter, backend = self.adapter(profile=capabilities("fills"))
+        intent = self.intent(order_id="recovered-fill", key="cycle:recovered-fill")
+        recovered = adapter.recover(
+            intent,
+            broker_order_id="59671766069",
+            state=OrderState.RESTING,
+        )
+        backend.responses["fills"] = {
+            "fills": [
+                {
+                    "coin": "BTC",
+                    "side": "B",
+                    "px": "65000",
+                    "sz": "0.1",
+                    "time": 1787313669000,
+                    "tid": 219949235,
+                    "oid": 59671766069,
+                    "cloid": recovered.client_order_id,
+                }
+            ]
+        }
+
+        for instrument_id in ("BTC", "BTC-USD-PERP", "BTC-USD-PERP.HYPERLIQUID"):
+            fills = adapter.query_fills(instrument_id=instrument_id)
+            self.assertEqual(len(fills), 1)
+            self.assertEqual(fills[0].order_id, "recovered-fill")
+            self.assertEqual(fills[0].instrument_id, "BTC-USD-PERP")
+            self.assertEqual(fills[0].account_address, "0xmaster")
+            self.assertEqual(fills[0].lifecycle_id, "order-runtime-1")
+            self.assertIsNone(fills[0].release_sha)
+            self.assertEqual(backend.calls[-1][2]["instrument_id"], "BTC")
+
+        registered = adapter._lifecycle.get("recovered-fill")
+        self.assertEqual(registered.account_address, "0xmaster")
+        self.assertEqual(registered.lifecycle_id, "order-runtime-1")
+
     def test_capability_gap_blocks_cancel_before_runtime_backend(self) -> None:
         adapter, backend = self.adapter(profile=capabilities("submit"))
         submitted = adapter.submit(self.intent())

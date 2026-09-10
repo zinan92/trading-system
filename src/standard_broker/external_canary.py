@@ -142,7 +142,7 @@ class HyperliquidExternalSnapshotReader:
         # CLOID first and OID second inside the order facade; unknown fills
         # remain explicit reconciliation evidence instead of being dropped.
         account_wide = not order_id
-        instrument_fills = tuple(self._order.query_fills(instrument_id=instrument.broker_symbol))
+        instrument_fills = tuple(self._order.query_fills(instrument_id=instrument.canonical_symbol))
         fills = instrument_fills if account_wide else tuple(
             fill for fill in instrument_fills if fill.order_id == order_id
         )
@@ -155,7 +155,7 @@ class HyperliquidExternalSnapshotReader:
             instrument_fills = tuple(
                 client_fills(
                     client_order_id=client_order_id,
-                    instrument_id=instrument.broker_symbol,
+                    instrument_id=instrument.canonical_symbol,
                 )
                 if client_order_id and callable(client_fills)
                 else instrument_fills

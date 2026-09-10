@@ -73,3 +73,20 @@
   `asset_index`; caching that object makes Nautilus fail later during cancel.
 - Recovery does not call submit, so submit-only transport state must not be the
   source of instrument identity.
+
+## Issue #131: canonical instrument-scoped fill recovery
+
+- Instrument-scoped fill queries normalize canonical IDs, Broker symbols, and
+  `<canonical>.HYPERLIQUID` aliases before sending the Broker symbol to the
+  transport and comparing canonical fill identities.
+- Runtime recovery binds the receipt before registering it, and fills derived
+  from the recovered lifecycle carry the same session identity used by
+  reconciliation.
+
+### Gotchas
+
+- `HyperliquidExternalSnapshotReader` passes the canonical instrument ID to the
+  typed order facade; the adapter translates it to the Broker-native symbol at
+  the transport boundary.
+- An instrument alias is only a lookup convenience. It does not change the
+  canonical `OrderFill.instrument_id` or create a second instrument identity.

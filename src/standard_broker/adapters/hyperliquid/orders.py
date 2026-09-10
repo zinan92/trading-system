@@ -1243,14 +1243,13 @@ class HyperliquidRuntimeOrderAdapter:
         native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         self._validate_intent(intent)
-        return self._bind_receipt(
-            self._lifecycle.recover(
-                intent,
-                broker_order_id=broker_order_id,
-                state=state,
-                native_client_order_id=native_client_order_id,
-            )
+        receipt = self._lifecycle.recover(
+            intent,
+            broker_order_id=broker_order_id,
+            state=state,
+            native_client_order_id=native_client_order_id,
         )
+        return self._register_bound_receipt(receipt)
 
     def recover_client_order(
         self,
@@ -1261,14 +1260,13 @@ class HyperliquidRuntimeOrderAdapter:
         native_client_order_id: str | None = None,
     ) -> OrderReceipt:
         self._validate_intent(intent)
-        return self._bind_receipt(
-            self._lifecycle.recover_client_order(
-                intent,
-                client_order_id=client_order_id,
-                state=state,
-                native_client_order_id=native_client_order_id,
-            )
+        receipt = self._lifecycle.recover_client_order(
+            intent,
+            client_order_id=client_order_id,
+            state=state,
+            native_client_order_id=native_client_order_id,
         )
+        return self._register_bound_receipt(receipt)
 
     def cancel(self, order_id: str) -> OrderReceipt:
         return self._bind_receipt(
@@ -1312,7 +1310,8 @@ class HyperliquidRuntimeOrderAdapter:
             request["oid"] = receipt.broker_order_id
             request["cloid"] = receipt.client_order_id
         elif instrument_id is not None:
-            request["instrument_id"] = instrument_id
+            canonical_instrument_id = self._canonical_instrument_id(instrument_id)
+            request["instrument_id"] = self._instruments.get(canonical_instrument_id).broker_symbol
         else:
             raise BrokerCapabilityError(
                 "order_execution",
@@ -1349,7 +1348,8 @@ class HyperliquidRuntimeOrderAdapter:
         if resolved_order_id is not None:
             values = tuple(item for item in values if item.order_id == resolved_order_id)
         if instrument_id is not None:
-            values = tuple(item for item in values if item.instrument_id == instrument_id)
+            canonical_instrument_id = self._canonical_instrument_id(instrument_id)
+            values = tuple(item for item in values if item.instrument_id == canonical_instrument_id)
         if client_order_id is not None:
             values = tuple(item for item in values if item.client_order_id == client_order_id)
         return values
@@ -1372,6 +1372,20 @@ class HyperliquidRuntimeOrderAdapter:
             occurred_at=datetime.fromtimestamp(int(raw["time"]) / 1000, tz=UTC),
             hash=str(raw["hash"]) if raw.get("hash") is not None else None,
         )
+
+    def _canonical_instrument_id(self, instrument_id: str) -> str:
+        value = str(instrument_id or "").strip()
+        if value.endswith(".HYPERLIQUID"):
+            value = value[: -len(".HYPERLIQUID")]
+        try:
+            return self._instruments.get(value).canonical_symbol
+        except KeyError:
+            return self._instruments.get_by_broker_symbol(value).canonical_symbol
+
+    def _register_bound_receipt(self, receipt: OrderReceipt) -> OrderReceipt:
+        bound = self._bind_receipt(receipt)
+        self._lifecycle._orders[bound.order_id] = bound
+        return bound
 
     def fills_by_client_order_id(
         self,

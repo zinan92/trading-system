@@ -315,7 +315,7 @@ def test_account_wide_snapshot_queries_instrument_fills_and_retains_unregistered
 
     class FakeOrder:
         def query_fills(self, *, instrument_id: str):
-            assert instrument_id == "PAXG"
+            assert instrument_id == "PAXG-USD-PERP"
             return ()
 
         def open_orders(self, instrument_id: str):
@@ -325,7 +325,7 @@ def test_account_wide_snapshot_queries_instrument_fills_and_retains_unregistered
     class FakeInstruments:
         def get(self, instrument_id: str):
             assert instrument_id == "PAXG-USD-PERP"
-            return SimpleNamespace(broker_symbol="PAXG")
+            return SimpleNamespace(canonical_symbol="PAXG-USD-PERP", broker_symbol="PAXG")
 
     captured: dict[str, object] = {}
 
@@ -400,7 +400,7 @@ def test_order_snapshot_falls_back_to_instrument_fills_and_filters_identity(
             if order_id is not None:
                 assert order_id == "order-close"
                 return ()
-            assert instrument_id == "PAXG"
+            assert instrument_id == "PAXG-USD-PERP"
             return (matching, unrelated)
 
         def open_orders(self, instrument_id: str):
@@ -410,7 +410,7 @@ def test_order_snapshot_falls_back_to_instrument_fills_and_filters_identity(
     class FakeInstruments:
         def get(self, instrument_id: str):
             assert instrument_id == "PAXG-USD-PERP"
-            return SimpleNamespace(broker_symbol="PAXG")
+            return SimpleNamespace(canonical_symbol="PAXG-USD-PERP", broker_symbol="PAXG")
 
     class FakeMapper:
         map_account = staticmethod(lambda **_kwargs: None)
@@ -500,7 +500,7 @@ def test_order_snapshot_uses_client_scoped_fill_recovery_when_available(
 
         def fills_by_client_order_id(self, *, client_order_id: str, instrument_id: str):
             assert client_order_id == "client-close"
-            assert instrument_id == "PAXG"
+            assert instrument_id == "PAXG-USD-PERP"
             return (matching,)
 
         def open_orders(self, instrument_id: str):
@@ -510,7 +510,7 @@ def test_order_snapshot_uses_client_scoped_fill_recovery_when_available(
     class FakeInstruments:
         def get(self, instrument_id: str):
             assert instrument_id == "PAXG-USD-PERP"
-            return SimpleNamespace(broker_symbol="PAXG")
+            return SimpleNamespace(canonical_symbol="PAXG-USD-PERP", broker_symbol="PAXG")
 
     class FakeMapper:
         map_account = staticmethod(lambda **_kwargs: None)
@@ -706,7 +706,7 @@ def test_market_fact_freshness_uses_read_completion_time() -> None:
 
     class FakeInstruments:
         def get(self, _instrument_id):
-            return SimpleNamespace(broker_symbol="PAXG")
+            return SimpleNamespace(canonical_symbol="PAXG-USD-PERP", broker_symbol="PAXG")
 
     reader = ExternalCanaryRuntimeFactsReader(
         context=context,
