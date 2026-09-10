@@ -1,5 +1,33 @@
 # Decision Log
 
+# 2026-09-10 — Hydrate every persisted Testnet order state (#1236)
+
+## Decision
+
+- Restore every persisted order with a Broker order identity using the
+  canonical `standard-broker` state vocabulary. Legacy `accepted`, `partial`,
+  and `cancelled` values map to `resting`, `partially_filled`, and `canceled`;
+  unsupported values are reported in `hydration.skipped` instead of silently
+  disappearing.
+- Expose the hydration report on Testnet tick results and reconciliation
+  evidence. When a blocked Grid fill has no local OID, resolve it through its
+  canonical order identity before matching public fill facts, then persist the
+  fill TID and hash identities.
+
+## Gotchas
+
+- Terminal order rows still need hydration: a filled row is required to
+  attribute the corresponding public fill even though it is no longer open.
+- `tests/fixtures/issue_1236_dashboard_state.json` is a redacted copy of the
+  reported Dashboard state and is test evidence only; it does not authorize
+  online reads or order actions.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_grid_testnet_lifecycle.py tests/test_standard_broker_external_execution.py` — passed.
+- No launchd service, online output directory, HTTP 8100 interface, data
+  source, Testnet network, or live-money path was changed or invoked.
+
 # 2026-09-10 — Normalize Testnet fills and recover blocked Grid exposure (#1232)
 
 ## Decision

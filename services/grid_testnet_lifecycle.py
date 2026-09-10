@@ -32,6 +32,7 @@ class GridTestnetLifecycle:
         "grid_entry_fill_state_error:",
         "fill_rejected:",
         "unknown_fill_order",
+        "position_open_unprotected",
     )
 
     def __init__(self, output_root: Path, broker: Any) -> None:
@@ -569,6 +570,18 @@ class GridTestnetLifecycle:
             if fill.get("event") != "entry" or str(fill.get("fill_id") or "").strip():
                 continue
             oid = str(fill.get("broker_order_id") or "").strip()
+            if not oid:
+                order_id = str(fill.get("order_id") or "").strip()
+                oid = next(
+                    (
+                        str(order.get("broker_order_id") or "").strip()
+                        for order in state.get("orders", ())
+                        if isinstance(order, Mapping)
+                        and str(order.get("ticket_id") or order.get("order_id") or "").strip() == order_id
+                        and str(order.get("broker_order_id") or "").strip()
+                    ),
+                    "",
+                )
             if not oid:
                 continue
             match = next(

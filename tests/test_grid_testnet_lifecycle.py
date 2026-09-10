@@ -406,7 +406,6 @@ def test_blocked_local_fill_recovers_from_public_facts_and_backfills_missing_fil
         "fill_id": "",
         "fill_identities": [],
         "order_id": target_order["order_id"],
-        "broker_order_id": str(facts_fixture["fills"][0]["oid"]),
         "event": "entry",
         "side": "buy",
         "rung_id": target["rung_id"],
@@ -428,6 +427,60 @@ def test_blocked_local_fill_recovers_from_public_facts_and_backfills_missing_fil
     assert recovered["hard_stop_protection"]["status"] == "active"
     assert sum(row["state"] == "accepted" and row["event"] == "entry_rearm" for row in recovered["orders"]) == 4
     assert any(event["event"] == "blocked_position_recovered" for event in recovered["events"])
+
+
+def test_online_dashboard_state_shape_recovers_all_orders_and_backfills_fill_id(tmp_path: Path) -> None:
+    state_fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "issue_1236_dashboard_state.json").read_text()
+    )
+    facts_fixture = {
+        "status": "pass",
+        "fills": [{"oid": 59671766069, "tid": "219949055209235", "hash": "hash-1236-redacted"}],
+        "positions": [{"instrument_id": "BTC-USD-PERP", "signed_quantity": "0.00024"}],
+        "open_orders": [],
+    }
+    broker, _ = _broker(tmp_path)
+    lifecycle = GridTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["lower_price_boundary"] = 73000.0
+    plan["upper_price_boundary"] = 79000.0
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": price, "side": "buy", "take_profit": price + 500,
+         "hard_stop": 73000.0, "quantity": quantity}
+        for index, (price, quantity) in enumerate(
+            ((74000.0, 0.00025), (74918.0, 0.00025), (75837.0, 0.00025),
+             (76755.0, 0.00024), (77673.0, 0.00024)), start=1
+        )
+    ]
+    plan["risk_budget"].update(max_open_orders=8, max_open_positions=5, max_notional=40000.0)
+    lifecycle.start(plan, timestamp="2026-09-10T11:00:00+00:00")
+    state = lifecycle._state(plan)
+    original_orders = [dict(order) for order in state["orders"]]
+    state["orders"] = [
+        {**original, "broker_order_id": fixture_order["broker_order_id"],
+         "client_order_id": original["client_order_id"], "state": fixture_order["state"]}
+        for original, fixture_order in zip(original_orders, state_fixture["orders"])
+    ]
+    fixture_fill = dict(state_fixture["fills"][0])
+    fixture_fill.update({"order_id": original_orders[4]["order_id"], "rung_id": state["rungs"][4]["rung_id"]})
+    state["fills"] = [fixture_fill]
+    state.update(status="blocked_reconciliation", blocker="position_open_unprotected")
+    lifecycle._save(state)
+    from pipelines.park_control import hydrate_order_identities
+    recovered_orders = []
+    broker.recover = lambda request, **kwargs: recovered_orders.append((request, kwargs))
+    hydration = hydrate_order_identities(broker, state)
+    assert hydration == {"recovered": 5, "skipped": []}
+    assert [row[1]["state"] for row in recovered_orders] == ["canceled"] * 4 + ["filled"]
+    lifecycle._backfill_fact_fills(state, facts_fixture["fills"])
+    assert state["fills"][0]["fill_id"] == "219949055209235"
+    broker.read_public_facts = lambda **_kwargs: facts_fixture
+
+    recovered = lifecycle.on_market_event(plan, price=77673.0, timestamp="2026-09-10T11:08:26+00:00")
+
+    assert recovered["fills"][0]["fill_id"] == "219949055209235"
+    assert recovered["fills"][0]["fill_identities"] == ["219949055209235", "hash-1236-redacted"]
+    assert recovered["status"] == "active"
 
 
 def test_grid_facts_failure_keeps_blocked_without_cancellation_or_terminal_close(tmp_path: Path) -> None:
