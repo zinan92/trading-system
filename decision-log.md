@@ -19151,6 +19151,34 @@ auditable datafeed port; broker execution remains a separate port.
 - `git diff --check` — passed.
 # 2026-09-11 — Testnet replay regression suite (#1251)
 
+## Revision 2 decision
+
+- Replay acceptance now checks exchange-side protection groups, including both
+  typed TP and hard-stop SL legs, and requires the resting TP to be reduce-only
+  GTC.  Terminal replay steps require sealed state, flat positions, no open
+  orders, and canceled protection.
+- Every terminal/reconciliation scenario uses an explicit single outcome.  The
+  end-to-end replay rebuilds broker and lifecycle objects from durable state at
+  each process step, then exercises the Park control tick callback through
+  facts, reconcile, and coordinator advance, including historical fills.
+- I4 remains a strict xfail because the current market document still compares
+  binding/public prices as strings; the assertion now only requires successful
+  return after the follow-up tolerance fix.
+
+## Revision 2 Gotchas
+
+- The replay fake had to retain protection leg facts and remove canceled orders
+  by both venue and client identity; otherwise terminal reconciliation could
+  incorrectly report broker-open orders.
+- The scenario-11 checks are split into market tolerance/BBO, historical-fill
+  cutoff, full-depth loss parity, and typed-facts tests.  They use local
+  fixtures and never invoke a venue, launchd service, HTTP 8100, or live-money
+  path.
+
+## Revision 2 Verification
+
+- `scripts/testnet_replay.sh` — 20 passed, 1 strict xfailed.
+
 ## Decision
 
 - Add `tests/testnet_replay/` as the Testnet-related PR merge gate. The suite

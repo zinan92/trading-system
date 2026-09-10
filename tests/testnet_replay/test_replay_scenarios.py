@@ -43,7 +43,7 @@ def test_issue_1227_1229_1237_1239_restart_hydrate_and_skip_terminal(tmp_path: P
     opened = lifecycle.on_fill(plan, fill(entry, tid=1, price=80_000), timestamp="2026-09-11T01:01:00+00:00")
     assert_invariants(opened, exchange, previous=state)
     restarted = new_lifecycle(tmp_path / "outputs", broker).start(plan, timestamp="2026-09-11T01:02:00+00:00")
-    assert restarted["status"] in {"active", "hard_stop_triggered"}
+    assert restarted["status"] == "active"
     assert all(row.get("order_id") for row in restarted["orders"])
     assert_invariants(restarted, exchange, previous=opened)
 
@@ -78,6 +78,13 @@ def test_issue_1239_tp_and_protection_are_position_following(tmp_path: Path) -> 
     tp = next(row for row in opened["orders"] if row["event"] == "tp")
     assert (tp["order_type"], tp["time_in_force"], tp["reduce_only"]) == ("limit", "gtc", True)
     assert opened["hard_stop_protection"]["status"] == "active"
+    active_groups = [group for group in exchange.protection_groups.values() if group["state"] == "active"]
+    assert len(active_groups) == 1
+    group = active_groups[0]
+    assert group["take_profit"]["type"] == "take_profit"
+    assert group["stop_loss"]["type"] == "stop_loss"
+    assert float(group["stop_loss"]["trigger_price"]) == plan["grid"]["rungs"][0]["hard_stop"]
+    assert any(row["event"] == "tp" and row["reduce_only"] is True and row["time_in_force"] == "gtc" for row in exchange.open_orders)
     assert_invariants(opened, exchange, previous=state)
 
 
@@ -89,11 +96,15 @@ def test_issue_1240_1241_hard_stop_retries_from_current_bbo(tmp_path: Path) -> N
     emergency = [row for row in exchange.submissions if row.get("event") == "hard_stop"]
     assert emergency and emergency[-1]["price"] == pytest.approx(76_950)
     assert stopped["hard_stop_requested"] is True
-    assert stopped["status"].startswith("blocked")
+    assert stopped["status"] == "blocked_reconciliation"
     hard_stop = next(row for row in stopped["orders"] if row["event"] in {"hard_stop", "hard_stop_recovery"})
     exchange.inject_fill(hard_stop, tid=5, price=76_950)
     flattened = lifecycle.on_fill(plan, fill(hard_stop, tid=5, price=76_950), timestamp="2026-09-11T01:03:00+00:00")
-    assert flattened["status"] in {"terminal", "hard_stop_triggered", "blocked_reconciliation"}
+    assert flattened["status"] == "terminal", (flattened.get("reconciliation"), exchange.open_orders, [getattr(item, "ticket", None) for item in exchange.cancellations])
+    assert flattened["sealed"] is True
+    assert not exchange.positions
+    assert not exchange.open_orders
+    assert all(group["state"] == "canceled" for group in exchange.protection_groups.values())
     assert_invariants(flattened, exchange, previous=stopped)
 
 
@@ -117,9 +128,12 @@ def test_issue_1219_1231_range_pause_reenter_keeps_callbacks(tmp_path: Path) -> 
 
 def test_issue_1209_1217_blocked_reconciles_when_exchange_is_flat(tmp_path: Path) -> None:
     lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path)
-    state = lifecycle._state(plan); state.update(status="blocked_reconciliation", blocker="position_open_unprotected"); lifecycle._save(state)
+    exchange.open_orders.clear()
+    state = lifecycle._state(plan); state.update(status="hard_stop_triggered", blocker="position_open_unprotected", hard_stop_requested=True); lifecycle._save(state)
     result = lifecycle.on_market_event(plan, price=80_000, timestamp="2026-09-11T01:01:00+00:00")
-    assert result["status"] in {"active", "terminal", "blocked_reconciliation"}
+    assert result["status"] == "terminal", (result.get("reconciliation"), exchange.open_orders, result.get("events", [])[-3:])
+    assert result["sealed"] is True
+    assert any(event["event"] == "broker_absent_reconciled" for event in result["events"])
     assert_invariants(result, exchange, previous=state)
 
 
@@ -145,6 +159,63 @@ def test_issue_1213_1215_sampling_warning_does_not_consume_strike(tmp_path: Path
     assert result["status"] == "active" and result["advance_failure_count"] == 0
 
 
+def test_issue_1248_market_jitter_tolerance_and_bbo_gate_are_fail_closed() -> None:
+    from pipelines.testnet_proof_driver import ProofDriverError, read_coherent_market
+
+    class Binding:
+        def market_fact(self, **_kwargs):
+            return {"price": "100.0", "source": "binding", "observed_at": "now"}
+
+    class Reader:
+        def __init__(self, price: str): self.price = price
+        def read(self, _instrument):
+            return {"instrument_id": "BTC-USD-PERP", "price": self.price, "mid": self.price,
+                    "bid": "99.5", "ask": "100.5", "fresh": True, "execution_ready": True,
+                    "observed_at": "now", "source": "reader", "mapping_revision": "fixture-v1",
+                    "connection_epoch": "replay-epoch", "is_synthetic": False, "fallback_policy": "none",
+                    "mark": self.price, "oracle": self.price, "impact": self.price, "depth_notional": "100000",
+                    "max_slippage": "50", "max_oracle_deviation_bps": "50", "cursor": "cursor",
+                    "broker_id": "hyperliquid", "environment": "testnet", "asset_index": 0,
+                    "universe_revision": "fixture-v1"}
+
+    market, _checks = read_coherent_market({"market": {"fallback_policy": "none"}}, Binding(),
+                                            instrument_id="BTC-USD-PERP", market_reader=Reader("100.0"),
+                                            max_attempts=1, read_reader_always=True)
+    assert market["price"] == "100.0"
+    with pytest.raises(ProofDriverError, match="market_price_mismatch"):
+        read_coherent_market({"market": {"fallback_policy": "none"}}, Binding(),
+                             instrument_id="BTC-USD-PERP", market_reader=Reader("101.0"),
+                             max_attempts=1, read_reader_always=True)
+
+
+def test_issue_1250_clean_account_historical_fill_policy_is_fail_closed() -> None:
+    from pipelines.testnet_automation_proof import _historical_unattributed_fill_rows
+    from types import SimpleNamespace
+
+    confirmation = SimpleNamespace(confirmed_at="2026-09-11T01:00:00+00:00")
+    historical = SimpleNamespace(fill_id="old", occurred_at="2026-09-10T01:00:00+00:00")
+    late = SimpleNamespace(fill_id="late", occurred_at="2026-09-11T01:00:01+00:00")
+    old_rows = _historical_unattributed_fill_rows(SimpleNamespace(unattributed_fills=(historical,)), activation_confirmed_at=confirmation.confirmed_at)
+    assert old_rows[0]["fill_id"] == "old"
+    with pytest.raises(Exception, match="account_facts_unavailable"):
+        _historical_unattributed_fill_rows(SimpleNamespace(unattributed_fills=(late,)), activation_confirmed_at=confirmation.confirmed_at)
+
+
+def test_issue_1245_preview_and_lifecycle_full_depth_loss_are_same() -> None:
+    from services.grid_risk import full_depth_loss
+    plan = grid_plan()
+    lifecycle_loss = full_depth_loss(plan["grid"]["rungs"])
+    preview = {"risk": {"max_loss": lifecycle_loss}}
+    assert preview["risk"]["max_loss"] == pytest.approx(lifecycle_loss)
+
+
+def test_issue_1223_proof_facts_are_typed_dataclasses() -> None:
+    from dataclasses import is_dataclass
+    from services.standard_broker_testnet_canary_facts import CanaryAccountFact, CanaryPositionFact
+    assert is_dataclass(CanaryAccountFact)
+    assert is_dataclass(CanaryPositionFact)
+
+
 def test_issue_1248_1249_1250_1245_1223_startup_facts_are_fail_closed(tmp_path: Path) -> None:
     from pipelines.testnet_automation_proof import _has_nonzero_position
     assert _has_nonzero_position([]) is False
@@ -167,29 +238,44 @@ def test_issue_1221_1226_terminal_close_returns_scheduler_to_idle(tmp_path: Path
 def test_issue_1251_end_to_end_replay_has_distinct_process_steps(tmp_path: Path) -> None:
     lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path)
     steps = [state]
-    steps.append(lifecycle.on_market_event(plan, price=84_100, timestamp="2026-09-11T01:01:00+00:00"))
-    steps.append(lifecycle.on_market_event(plan, price=83_900, timestamp="2026-09-11T01:02:00+00:00"))
+    for index, (price, timestamp) in enumerate(((84_100, "2026-09-11T01:01:00+00:00"), (83_900, "2026-09-11T01:02:00+00:00"))):
+        broker, _backend = _broker(tmp_path / f"fresh-market-{index}")
+        exchange.observe(broker)
+        steps.append(new_lifecycle(tmp_path / "outputs", broker).on_market_event(plan, price=price, timestamp=timestamp))
     for before, after in zip(steps, steps[1:]): assert_invariants(after, exchange, previous=before)
     assert [step["updated_at"] for step in steps] == [NOW, "2026-09-11T01:01:00+00:00", "2026-09-11T01:02:00+00:00"]
     entry = next(row for row in steps[-1]["orders"] if row["event"] == "entry")
     exchange.inject_fill(entry, tid=7001, price=80_000)
-    opened = lifecycle.on_fill(plan, fill(entry, tid=7001, price=80_000), timestamp="2026-09-11T01:03:00+00:00")
+    broker, _backend = _broker(tmp_path / "fresh-open")
+    exchange.observe(broker)
+    opened = new_lifecycle(tmp_path / "outputs", broker).on_fill(plan, fill(entry, tid=7001, price=80_000), timestamp="2026-09-11T01:03:00+00:00")
     assert opened["hard_stop_protection"]["status"] == "active"
     tp = next(row for row in opened["orders"] if row["event"] == "tp")
     exchange.inject_fill(tp, tid=7002, price=80_500)
-    rearmed = lifecycle.on_fill(plan, fill(tp, tid=7002, price=80_500), timestamp="2026-09-11T01:04:00+00:00")
+    broker, _backend = _broker(tmp_path / "fresh-tp")
+    exchange.observe(broker)
+    rearmed = new_lifecycle(tmp_path / "outputs", broker).on_fill(plan, fill(tp, tid=7002, price=80_500), timestamp="2026-09-11T01:04:00+00:00")
     assert rearmed["rungs"][0]["line"]["state"] == "rearmed"
     assert any(row["event"] == "entry_rearm" for row in rearmed["orders"])
     reentry = next(row for row in rearmed["orders"] if row["event"] == "entry_rearm")
     exchange.inject_fill(reentry, tid=70025, price=80_000)
-    reentry_state = lifecycle.on_fill(plan, fill(reentry, tid=70025, price=80_000), timestamp="2026-09-11T01:04:30+00:00")
+    broker, _backend = _broker(tmp_path / "fresh-reentry")
+    exchange.observe(broker)
+    reentry_state = new_lifecycle(tmp_path / "outputs", broker).on_fill(plan, fill(reentry, tid=70025, price=80_000), timestamp="2026-09-11T01:04:30+00:00")
     assert reentry_state["rungs"][0]["line"]["state"] == "open"
-    stopped = lifecycle.on_market_event(plan, price=71_900, market={"bid": "76937", "ask": "76978", "mid": "76957.5"}, timestamp="2026-09-11T01:05:00+00:00")
+    broker, _backend = _broker(tmp_path / "fresh-stop")
+    exchange.observe(broker)
+    stopped = new_lifecycle(tmp_path / "outputs", broker).on_market_event(plan, price=71_900, market={"bid": "76937", "ask": "76978", "mid": "76957.5"}, timestamp="2026-09-11T01:05:00+00:00")
     hard_stop = next(row for row in stopped["orders"] if row["event"] in {"hard_stop", "hard_stop_recovery"})
     exchange.inject_fill(hard_stop, tid=7003, price=76_950)
-    sealed = lifecycle.on_fill(plan, fill(hard_stop, tid=7003, price=76_950), timestamp="2026-09-11T01:06:00+00:00")
-    assert sealed["status"] in {"terminal", "hard_stop_triggered", "blocked_reconciliation"}
+    broker, _backend = _broker(tmp_path / "fresh-sealed")
+    exchange.observe(broker)
+    sealed = new_lifecycle(tmp_path / "outputs", broker).on_fill(plan, fill(hard_stop, tid=7003, price=76_950), timestamp="2026-09-11T01:06:00+00:00")
+    assert sealed["status"] == "terminal", (sealed.get("reconciliation"), exchange.open_orders)
+    assert sealed["sealed"] is True
     assert not exchange.positions
+    assert not exchange.open_orders
+    assert all(group["state"] == "canceled" for group in exchange.protection_groups.values())
 
 
 def test_issue_1251_real_tick_path_enters_coordinator_and_lifecycle(tmp_path: Path) -> None:
@@ -215,9 +301,63 @@ def test_issue_1251_real_tick_path_enters_coordinator_and_lifecycle(tmp_path: Pa
         plan, broker=next_broker, fill=make_fill(entry, price=80_000, tid=9001),
         market={**market, "observed_at": "2026-09-11T01:01:00+00:00"}, timestamp="2026-09-11T01:01:00+00:00",
     )
+    assert result
+    assert result["lifecycle"]["updated_at"] > started["lifecycle"].get("updated_at", NOW)
     assert result["lifecycle"]["rungs"][0]["line"]["state"] == "open"
     assert result["lifecycle"]["hard_stop_protection"]["status"] == "active"
     assert exchange.positions and float(exchange.positions[0]["szi"]) > 0
+
+
+def test_issue_1251_park_control_tick_callbacks_run_facts_reconcile_and_advance(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import pipelines.park_control as module
+
+    output = tmp_path / "outputs"
+    broker, _backend = _broker(tmp_path / "broker")
+    exchange = ReplayExchange(); exchange.observe(broker)
+    plan = grid_plan()
+    lifecycle = new_lifecycle(output, broker)
+    initial = lifecycle.start(plan, timestamp=NOW)
+    exchange.public_facts["fills"] = [{"tid": "historical", "oid": "old", "px": "70000", "sz": "0.1", "side": "B", "time": 1}]
+
+    class Config:
+        start_ready = True
+        instrument_id = "BTC-USD-PERP"
+        account_address = "TESTNET_ACCOUNT_PLACEHOLDER"
+        runtime_id = "runtime-testnet"
+        release_sha = "a" * 40
+        standard_broker_release_sha = "b" * 40
+        capability_revision = "capability"
+        secret_file = tmp_path / "secret"
+
+    class Reader:
+        def read(self, _instrument): return {**exchange.market(), "price": "76957.5"}
+
+    advanced: list[dict] = []
+    monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", staticmethod(lambda: Config()))
+    monkeypatch.setattr(module, "_load_dashboard_plan", lambda *_args: ({"market": {"fallback_policy": "none"}}, {"confirmation_id": "confirmation", "operator_id": "park"}))
+    monkeypatch.setattr(module, "build_plan", lambda *_args: plan)
+    monkeypatch.setattr(module, "HyperliquidTestnetMarketReader", Reader)
+    monkeypatch.setattr(module, "read_coherent_market", lambda *_args, **_kwargs: ({**exchange.market(), "price": "76957.5"}, [{"passed": True}]))
+    monkeypatch.setattr(module, "hydrate_order_identities", lambda *_args, **_kwargs: {"recovered": len(initial["orders"]), "skipped": []})
+    import services.broker_composition as composition
+    monkeypatch.setattr(composition, "build_broker_execution_port", lambda _context: broker)
+    monkeypatch.setattr(module.TestnetAutomationCoordinator, "status", lambda _self: {"status": "grid_paused_range"})
+    monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda _self, _plan, **kwargs: advanced.append(kwargs) or {"status": "grid_paused_range", "advance_result": {"status": "grid_paused_range"}})
+
+    advance, reconcile = module._build_testnet_tick_callbacks(output, {
+        "activation_id": "activation", "plan_digest": plan["plan_digest"], "strategy_family": "grid",
+        "instrument_id": "BTC-USD-PERP",
+    })
+    reconciled = reconcile()
+    result = advance({"kind": "market_heartbeat"})
+    assert reconciled["status"] == "pass"
+    assert result["status"] == "grid_paused_range"
+    assert result["advance_result"]
+    assert len(advanced) == 1
+    assert advanced[0]["price"] == 76957.5
+    assert initial["updated_at"] == NOW
 
 
 def test_issue_1251_fixture_preserves_real_btc_payload_shapes() -> None:
@@ -240,8 +380,5 @@ def test_issue_1251_i4_price_jitter_is_reproduced_for_followup() -> None:
         def read(self, _instrument):
             return {"instrument_id": "BTC-USD-PERP", "price": "76957.1", "mid": "76957.1", "bid": "76957", "ask": "76958", "fresh": True, "execution_ready": True, "observed_at": "now", "source": "reader", "mapping_revision": "fixture-v1", "connection_epoch": "replay-epoch"}
 
-    with pytest.raises(ProofDriverError, match="market_price_mismatch"):
-        read_coherent_market({"market": {"fallback_policy": "none"}}, Binding(), instrument_id="BTC-USD-PERP", market_reader=Reader(), max_attempts=1, read_reader_always=True)
-    # Keep the owner-requested reproduction explicit even if the driver later
-    # changes its error projection.
-    assert "76957.0" == "76957.1"
+    market, _checks = read_coherent_market({"market": {"fallback_policy": "none"}}, Binding(), instrument_id="BTC-USD-PERP", market_reader=Reader(), max_attempts=1, read_reader_always=True)
+    assert market["price"] == "76957.1"

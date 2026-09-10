@@ -76,8 +76,17 @@ class ReplayExchange:
             self.cancellations.append(request)
             result = original_cancel(request)
             ticket = getattr(request, "ticket", {}) or {}
-            oid = str(ticket.get("broker_order_id") or ticket.get("order_id") or "")
-            self.open_orders[:] = [row for row in self.open_orders if str(row.get("broker_order_id")) != oid]
+            if not isinstance(ticket, Mapping):
+                ticket = vars(ticket) if hasattr(ticket, "__dict__") else {}
+            if not ticket:
+                ticket = vars(request) if hasattr(request, "__dict__") else {}
+            oid = str(ticket.get("broker_order_id") or ticket.get("order_id") or getattr(request, "broker_order_id", "") or getattr(request, "order_id", "") or "")
+            order_id = str(ticket.get("order_id") or getattr(request, "order_id", "") or "")
+            cloid = str(ticket.get("client_order_id") or ticket.get("cloid") or getattr(request, "client_order_id", "") or "")
+            self.open_orders[:] = [row for row in self.open_orders
+                                   if str(row.get("broker_order_id")) != oid
+                                   and str(row.get("order_id") or "") != order_id
+                                   and str(row.get("client_order_id") or row.get("cloid") or "") != cloid]
             return result
 
         def request(port: str, operation: str, payload: Any) -> Any:
@@ -87,7 +96,19 @@ class ReplayExchange:
                 if not protection_id and isinstance(payload, Mapping):
                     protection_id = str(payload.get("protection_id") or payload.get("protectionId") or "")
                 if operation in {"submit", "replace"}:
-                    self.protection_groups[protection_id] = {"protection_id": protection_id, "state": "active"}
+                    def leg(row: Any, kind: str) -> dict[str, Any]:
+                        value = getattr(row, kind, None)
+                        return {
+                            "type": str(getattr(getattr(value, "protection_type", None), "value", getattr(value, "protection_type", ""))).lower(),
+                            "execution": str(getattr(getattr(value, "execution", None), "value", getattr(value, "execution", ""))).lower(),
+                            "trigger_price": str(getattr(value, "trigger_price", "")),
+                        }
+                    self.protection_groups[protection_id] = {
+                        "protection_id": protection_id,
+                        "state": "active",
+                        "take_profit": leg(payload, "take_profit"),
+                        "stop_loss": leg(payload, "stop_loss"),
+                    }
                 elif operation == "cancel":
                     self.protection_groups.setdefault(protection_id, {"protection_id": protection_id})["state"] = "canceled"
             return result
