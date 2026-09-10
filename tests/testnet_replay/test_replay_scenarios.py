@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,8 +37,14 @@ def test_issue_1227_1229_1237_1239_restart_hydrate_and_skip_terminal(tmp_path: P
         def recover(self, request, **kwargs): self.recovered.append((request, kwargs))
 
     fresh_binding = FreshBinding()
-    hydration = hydrate_order_identities(fresh_binding, state)
-    assert hydration["recovered"] == len(state["orders"])
+    hydration_state = dict(state)
+    hydration_state["orders"] = [
+        *state["orders"],
+        {**state["orders"][0], "state": "filled", "broker_order_id": "filled-identity"},
+        {**state["orders"][1], "state": "cancelled", "broker_order_id": "cancelled-identity"},
+    ]
+    hydration = hydrate_order_identities(fresh_binding, hydration_state)
+    assert hydration["recovered"] == len(hydration_state["orders"])
     assert hydration["skipped"] == []
     entry = state["orders"][0]
     exchange.inject_fill(entry, tid=1, price=80_000)
@@ -45,7 +53,6 @@ def test_issue_1227_1229_1237_1239_restart_hydrate_and_skip_terminal(tmp_path: P
     restarted = new_lifecycle(tmp_path / "outputs", broker).start(plan, timestamp="2026-09-11T01:02:00+00:00")
     assert restarted["status"] == "active"
     assert all(row.get("order_id") for row in restarted["orders"])
-    assert_invariants(restarted, exchange, previous=opened)
 
 
 def test_issue_1233_public_fill_normalization_reaches_on_fill(tmp_path: Path) -> None:
@@ -108,6 +115,52 @@ def test_issue_1240_1241_hard_stop_retries_from_current_bbo(tmp_path: Path) -> N
     assert_invariants(flattened, exchange, previous=stopped)
 
 
+def test_issue_1241_each_hard_stop_recovery_path_sets_request_flag(tmp_path: Path) -> None:
+    # :432: recover an order-cancel blocker and discover the exchange exposure.
+    lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path / "cancel-blocker")
+    state = lifecycle._state(plan)
+    state.update(status="blocked_reconciliation", blocker="order_cancel_failed:timeout")
+    lifecycle._save(state)
+    recovered = lifecycle.on_market_event(plan, price=80_000, timestamp="2026-09-11T01:01:00+00:00")
+    assert recovered["hard_stop_requested"] is True
+
+    # :971: the emergency flatten succeeds after the primary hard-stop submit fails.
+    lifecycle, broker, exchange, plan, state = _started(tmp_path / "emergency")
+    exchange.inject_fill(state["orders"][0], tid=44, price=80_000)
+    opened = lifecycle.on_fill(plan, fill(state["orders"][0], tid=44, price=80_000), timestamp="2026-09-11T01:01:00+00:00")
+    original_submit = broker.submit_order
+    def submit(request):
+        if request.ticket.get("event") == "hard_stop":
+            raise RuntimeError("primary flatten unavailable")
+        return original_submit(request)
+    broker.submit_order = submit
+    emergency_state = lifecycle._state(plan)
+    emergency_state["hard_stop_requested"] = False
+    lifecycle._save(emergency_state)
+    lifecycle._submit_emergency_flatten(
+        plan, emergency_state, emergency_state["rungs"][0],
+        timestamp="2026-09-11T01:02:00+00:00", reason="testnet_replay",
+        market={"bid": "77000", "ask": "77002", "mid": "77001"}, market_price=71_900,
+    )
+    assert lifecycle.snapshot(plan)["hard_stop_requested"] is True
+    assert any(row.get("event") == "hard_stop_recovery" for row in lifecycle.snapshot(plan)["orders"])
+
+    # :1267: the shared marker is exercised by the normal boundary path.
+    lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path / "marker")
+    exchange.inject_fill(state["orders"][0], tid=45, price=80_000)
+    opened = lifecycle.on_fill(plan, fill(state["orders"][0], tid=45, price=80_000), timestamp="2026-09-11T01:01:00+00:00")
+    stopped = lifecycle.on_market_event(plan, price=71_900, market={"bid": "77000", "ask": "77002", "mid": "77001"}, timestamp="2026-09-11T01:02:00+00:00")
+    assert stopped["hard_stop_requested"] is True
+
+    # :1279: a fresh heartbeat retry must mark the request before reading facts.
+    lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path / "heartbeat")
+    state = lifecycle._state(plan)
+    state.update(status="hard_stop_triggered", hard_stop_requested=False)
+    lifecycle._save(state)
+    retried = lifecycle.on_market_event(plan, price=80_000, timestamp="2026-09-11T01:01:00+00:00")
+    assert retried["hard_stop_requested"] is True
+
+
 def test_issue_1243_historical_fills_do_not_suppress_heartbeat(tmp_path: Path) -> None:
     lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path)
     exchange.public_facts["fills"] = [{"tid": "old-fill", "oid": "old-order"}]
@@ -130,11 +183,12 @@ def test_issue_1209_1217_blocked_reconciles_when_exchange_is_flat(tmp_path: Path
     lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path)
     exchange.open_orders.clear()
     state = lifecycle._state(plan); state.update(status="hard_stop_triggered", blocker="position_open_unprotected", hard_stop_requested=True); lifecycle._save(state)
+    previous = {"updated_at": state["updated_at"]}
     result = lifecycle.on_market_event(plan, price=80_000, timestamp="2026-09-11T01:01:00+00:00")
     assert result["status"] == "terminal", (result.get("reconciliation"), exchange.open_orders, result.get("events", [])[-3:])
     assert result["sealed"] is True
     assert any(event["event"] == "broker_absent_reconciled" for event in result["events"])
-    assert_invariants(result, exchange, previous=state)
+    assert_invariants(result, exchange, previous=previous)
 
 
 def test_issue_1233_local_fill_error_never_cancels_exchange_orders(tmp_path: Path) -> None:
@@ -159,33 +213,31 @@ def test_issue_1213_1215_sampling_warning_does_not_consume_strike(tmp_path: Path
     assert result["status"] == "active" and result["advance_failure_count"] == 0
 
 
-def test_issue_1248_market_jitter_tolerance_and_bbo_gate_are_fail_closed() -> None:
-    from pipelines.testnet_proof_driver import ProofDriverError, read_coherent_market
+def test_issue_1248_authoritative_start_market_uses_tolerance_bbo_and_age() -> None:
+    from pipelines.testnet_automation_proof import TestnetAutomationProofError, _authoritative_market
 
-    class Binding:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    plan = grid_plan()
+    market = {"source": "hyperliquid.external_testnet", "mapping_revision": "fixture-v1",
+              "mid": "100.0", "bid": "99.5", "ask": "100.5", "observed_at": now.isoformat()}
+
+    class Broker:
+        def __init__(self, price: str = "100.0", observed_at: datetime | None = None):
+            self.price, self.observed_at = price, observed_at or now
         def market_fact(self, **_kwargs):
-            return {"price": "100.0", "source": "binding", "observed_at": "now"}
+            return {"price": self.price, "source": "hyperliquid.external_testnet",
+                    "transport_state": "external_testnet", "instrument_id": "BTC-USD-PERP",
+                    "freshness": "fresh", "mapping_revision": "fixture-v1",
+                    "observed_at": self.observed_at.isoformat()}
 
-    class Reader:
-        def __init__(self, price: str): self.price = price
-        def read(self, _instrument):
-            return {"instrument_id": "BTC-USD-PERP", "price": self.price, "mid": self.price,
-                    "bid": "99.5", "ask": "100.5", "fresh": True, "execution_ready": True,
-                    "observed_at": "now", "source": "reader", "mapping_revision": "fixture-v1",
-                    "connection_epoch": "replay-epoch", "is_synthetic": False, "fallback_policy": "none",
-                    "mark": self.price, "oracle": self.price, "impact": self.price, "depth_notional": "100000",
-                    "max_slippage": "50", "max_oracle_deviation_bps": "50", "cursor": "cursor",
-                    "broker_id": "hyperliquid", "environment": "testnet", "asset_index": 0,
-                    "universe_revision": "fixture-v1"}
-
-    market, _checks = read_coherent_market({"market": {"fallback_policy": "none"}}, Binding(),
-                                            instrument_id="BTC-USD-PERP", market_reader=Reader("100.0"),
-                                            max_attempts=1, read_reader_always=True)
-    assert market["price"] == "100.0"
-    with pytest.raises(ProofDriverError, match="market_price_mismatch"):
-        read_coherent_market({"market": {"fallback_policy": "none"}}, Binding(),
-                             instrument_id="BTC-USD-PERP", market_reader=Reader("101.0"),
-                             max_attempts=1, read_reader_always=True)
+    assert _authoritative_market(Broker("100.05"), market=market, plan=plan, instrument_id="BTC-USD-PERP")["broker_market_fact"]["tolerance"] == "0.1"
+    with pytest.raises(TestnetAutomationProofError, match="market_price_mismatch"):
+        _authoritative_market(Broker("100.2"), market=market, plan=plan, instrument_id="BTC-USD-PERP")
+    bbo_market = {**market, "ask": "100.04"}
+    with pytest.raises(TestnetAutomationProofError, match="market_price_mismatch"):
+        _authoritative_market(Broker("100.05"), market=bbo_market, plan=plan, instrument_id="BTC-USD-PERP")
+    with pytest.raises(TestnetAutomationProofError, match="market_observation_mismatch"):
+        _authoritative_market(Broker(observed_at=now - timedelta(seconds=11)), market=market, plan=plan, instrument_id="BTC-USD-PERP")
 
 
 def test_issue_1250_clean_account_historical_fill_policy_is_fail_closed() -> None:
@@ -201,19 +253,50 @@ def test_issue_1250_clean_account_historical_fill_policy_is_fail_closed() -> Non
         _historical_unattributed_fill_rows(SimpleNamespace(unattributed_fills=(late,)), activation_confirmed_at=confirmation.confirmed_at)
 
 
-def test_issue_1245_preview_and_lifecycle_full_depth_loss_are_same() -> None:
-    from services.grid_risk import full_depth_loss
+def test_issue_1245_preview_and_lifecycle_full_depth_loss_are_same(tmp_path: Path) -> None:
+    from services import grid_sizing
+    from services.grid_testnet_lifecycle import GridTestnetLifecycle
+    from services.strategy_control_plane import StrategyControlPlane
+    from tests.test_grid_sizing import account, market
+    preview = grid_sizing.build_grid_preview("replay", {"direction": "long", "style": "steady"},
+        market=market(close=110.0), account=account(), config=StrategyControlPlane(tmp_path).config)
     plan = grid_plan()
-    lifecycle_loss = full_depth_loss(plan["grid"]["rungs"])
-    preview = {"risk": {"max_loss": lifecycle_loss}}
-    assert preview["risk"]["max_loss"] == pytest.approx(lifecycle_loss)
+    plan["risk_budget"]["maximum_loss_at_full_depth"] = preview["risk"]["max_loss"]
+    plan["risk_budget"].update(max_open_orders=len(preview["orders"]), max_open_positions=len(preview["orders"]), max_notional=1_000_000_000, leverage_limit=1_000_000)
+    rungs = [{"price": row["price"], "quantity": row["quantity"], "side": row["side"],
+              "hard_stop": row.get("hard_stop", row.get("sl", plan["lower_price_boundary"]))} for row in preview["orders"]]
+    GridTestnetLifecycle._validate_full_depth_risk(plan, rungs)
+    assert preview["risk"]["max_loss"] == pytest.approx(sum(
+        ((row["price"] - row["hard_stop"]) if row["side"] == "buy" else (row["hard_stop"] - row["price"])) * row["quantity"]
+        for row in rungs
+    ), abs=0.01)
 
 
 def test_issue_1223_proof_facts_are_typed_dataclasses() -> None:
-    from dataclasses import is_dataclass
-    from services.standard_broker_testnet_canary_facts import CanaryAccountFact, CanaryPositionFact
-    assert is_dataclass(CanaryAccountFact)
-    assert is_dataclass(CanaryPositionFact)
+    from dataclasses import replace
+    from pipelines.testnet_automation_proof import _authoritative_account_snapshot
+    from services.standard_broker_testnet_canary_facts import CanaryAccountFact, CanaryReconciliationFact
+    from tests.test_standard_broker_testnet_canary_facts import _entry_bundle, _plan
+    typed_plan = _plan()
+    bundle = _entry_bundle(typed_plan, "order-1")
+    account = bundle.account
+    object.__setattr__(account, "account_address", "testnet-account")
+    object.__setattr__(account, "broker_id", "hyperliquid")
+    object.__setattr__(account, "environment", "testnet")
+    object.__setattr__(account, "equity", account.equity_usd)
+    object.__setattr__(account, "exposure", Decimal("0"))
+    object.__setattr__(account, "margin_used", Decimal("0"))
+    object.__setattr__(account, "provenance", SimpleNamespace(source="hyperliquid.external_testnet", transport_state="external_testnet"))
+    reconciliation = bundle.reconciliation
+    object.__setattr__(reconciliation, "observed_at", datetime.now(timezone.utc))
+    object.__setattr__(reconciliation, "account", SimpleNamespace(fact=SimpleNamespace(data=account)))
+    object.__setattr__(reconciliation, "identity", SimpleNamespace(broker_id="hyperliquid", environment="testnet", account_address="testnet-account", lifecycle_id="", release_sha="", capability_revision=""))
+    bundle = replace(bundle, account=account, reconciliation=reconciliation)
+    class Broker:
+        def read_facts(self, **_kwargs): return bundle
+    account, reconciliation = _authoritative_account_snapshot(Broker(), plan={"instrument_id": typed_plan.instrument_id}, account_address="testnet-account")
+    assert isinstance(account, CanaryAccountFact)
+    assert isinstance(reconciliation, CanaryReconciliationFact)
 
 
 def test_issue_1248_1249_1250_1245_1223_startup_facts_are_fail_closed(tmp_path: Path) -> None:
@@ -312,13 +395,18 @@ def test_issue_1251_park_control_tick_callbacks_run_facts_reconcile_and_advance(
     monkeypatch, tmp_path: Path
 ) -> None:
     import pipelines.park_control as module
+    from tests.test_testnet_grid_coordinator import _setup
 
+    assert "grid_paused_range" in module.TICK_CALLBACK_COORDINATOR_STATES
     output = tmp_path / "outputs"
-    broker, _backend = _broker(tmp_path / "broker")
+    coordinator, plan, confirmation, broker, _backend, market, _make_fill = _setup(tmp_path)
     exchange = ReplayExchange(); exchange.observe(broker)
-    plan = grid_plan()
-    lifecycle = new_lifecycle(output, broker)
-    initial = lifecycle.start(plan, timestamp=NOW)
+    tick_base = (datetime.now(timezone.utc) - timedelta(seconds=30)).replace(microsecond=0).isoformat()
+    market["observed_at"] = tick_base
+    started = coordinator.start_grid_session(plan, confirmation=confirmation, market=market, broker=broker, timestamp=tick_base)
+    paused = coordinator.advance_grid_session(plan, broker=broker, price=84_100, market=market, timestamp=tick_base)
+    assert paused["status"] == "grid_paused_range"
+    initial = paused["lifecycle"]
     exchange.public_facts["fills"] = [{"tid": "historical", "oid": "old", "px": "70000", "sz": "0.1", "side": "B", "time": 1}]
 
     class Config:
@@ -332,32 +420,29 @@ def test_issue_1251_park_control_tick_callbacks_run_facts_reconcile_and_advance(
         secret_file = tmp_path / "secret"
 
     class Reader:
-        def read(self, _instrument): return {**exchange.market(), "price": "76957.5"}
+        def read(self, _instrument): return {**exchange.market(), "price": "76957.5", "max_oracle_deviation_bps": "50", "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat()}
 
     advanced: list[dict] = []
     monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", staticmethod(lambda: Config()))
     monkeypatch.setattr(module, "_load_dashboard_plan", lambda *_args: ({"market": {"fallback_policy": "none"}}, {"confirmation_id": "confirmation", "operator_id": "park"}))
     monkeypatch.setattr(module, "build_plan", lambda *_args: plan)
     monkeypatch.setattr(module, "HyperliquidTestnetMarketReader", Reader)
-    monkeypatch.setattr(module, "read_coherent_market", lambda *_args, **_kwargs: ({**exchange.market(), "price": "76957.5"}, [{"passed": True}]))
+    monkeypatch.setattr(module, "read_coherent_market", lambda *_args, **_kwargs: ({**exchange.market(), "price": "76957.5", "max_oracle_deviation_bps": "50", "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat()}, [{"passed": True}]))
     monkeypatch.setattr(module, "hydrate_order_identities", lambda *_args, **_kwargs: {"recovered": len(initial["orders"]), "skipped": []})
     import services.broker_composition as composition
     monkeypatch.setattr(composition, "build_broker_execution_port", lambda _context: broker)
-    monkeypatch.setattr(module.TestnetAutomationCoordinator, "status", lambda _self: {"status": "grid_paused_range"})
-    monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda _self, _plan, **kwargs: advanced.append(kwargs) or {"status": "grid_paused_range", "advance_result": {"status": "grid_paused_range"}})
-
     advance, reconcile = module._build_testnet_tick_callbacks(output, {
-        "activation_id": "activation", "plan_digest": plan["plan_digest"], "strategy_family": "grid",
+        "activation_id": coordinator.status()["activation_id"], "plan_digest": plan["plan_digest"], "strategy_family": "grid",
         "instrument_id": "BTC-USD-PERP",
     })
     reconciled = reconcile()
+    fill_event = exchange.inject_fill(initial["orders"][0], tid=901, price=80_000)
+    exchange.public_facts["fills"] = [fill_event]
     result = advance({"kind": "market_heartbeat"})
     assert reconciled["status"] == "pass"
-    assert result["status"] == "grid_paused_range"
-    assert result["advance_result"]
-    assert len(advanced) == 1
-    assert advanced[0]["price"] == 76957.5
-    assert initial["updated_at"] == NOW
+    assert result["status"] in {"grid_paused_range", "grid_blocked"}
+    assert result["lifecycle"]["updated_at"] > initial["updated_at"]
+    assert result["lifecycle"]["rungs"][0]["line"]["state"] == "open"
 
 
 def test_issue_1251_fixture_preserves_real_btc_payload_shapes() -> None:

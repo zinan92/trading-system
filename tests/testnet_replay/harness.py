@@ -156,15 +156,22 @@ class ReplayExchange:
 def assert_invariants(state: Mapping[str, Any], exchange: ReplayExchange, *, previous: Mapping[str, Any] | None = None) -> None:
     """Assert I1-I3 at every replay step; I4 is a repository-level audit."""
     positions_open = any(abs(float(row.get("szi") or row.get("quantity") or 0)) > 1e-9 for row in exchange.positions)
-    protection = state.get("hard_stop_protection") or state.get("protection") or {}
     if positions_open:
-        assert protection.get("status") == "active" or (
+        active_groups = [
+            group for group in exchange.protection_groups.values()
+            if group.get("state") == "active"
+            and group.get("take_profit")
+            and group.get("stop_loss")
+        ]
+        assert active_groups or (
             state.get("status", "").startswith("blocked")
             and state.get("blocker") == "position_open_unprotected"
             and state.get("park_notification_required") is True
         ), state
-    if previous is not None and state.get("advance_result") is not None and state.get("updated_at") == previous.get("updated_at"):
-        assert state.get("warning"), state
+    if previous is not None and previous is not state:
+        assert state.get("updated_at") > previous.get("updated_at"), state
+    if state.get("event") == "grid_lifecycle_observed":
+        assert state.get("advance_result") is not None, state
     if state.get("status", "").startswith("blocked") and state.get("blocker", "").startswith(("unknown_fill", "grid_entry_fill", "fill_rejected")):
         assert not exchange.cancellations
 

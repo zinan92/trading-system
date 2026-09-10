@@ -1,5 +1,33 @@
 # Decision Log
 
+# 2026-09-11 — Mutation-gated Testnet replay acceptance (#1251)
+
+## Decision
+
+- The replay gate now exercises the real Coordinator tick path from a genuine
+  `grid_paused_range` session, the startup `_authoritative_market` seam, all
+  four hard-stop request paths, exchange-side protection invariants, typed
+  proof facts, and preview/lifecycle full-depth loss parity.
+- `scripts/testnet_replay_mutations.sh` applies twelve documented historical
+  regressions in detached temporary copies; every mutation must make
+  `tests/testnet_replay` fail before the PR is considered acceptable.
+
+## Gotchas
+
+- The local replay binding is deliberately synthetic and never proves a venue
+  action, launchd state, HTTP 8100 behavior, or live-money behavior.
+- The real tick path may persist a fail-closed reconciliation blocker when the
+  fixture cannot prove exchange-side cancellation; the acceptance still
+  requires the callback to execute, advance durable lifecycle state, and
+  process a public fill rather than treating that blocker as healthy runtime.
+- No production code, data source, launchd plist, online output directory, or
+  live/real-money path was changed.
+
+## Verification
+
+- `scripts/testnet_replay.sh` — 21 passed, 1 strict xfailed.
+- `scripts/testnet_replay_mutations.sh` — 12/12 mutations caught.
+
 # 2026-09-11 — Admit only bounded historical unattributed Testnet fills at activation (#1249)
 
 ## Decision
