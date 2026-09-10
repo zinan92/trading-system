@@ -306,6 +306,42 @@ def _has_nonzero_position(positions: Sequence[object]) -> bool:
     return False
 
 
+def _validate_snapshot_reconciliation(
+    reconciliation: object,
+    *,
+    activation_confirmed_at: Any | None,
+) -> list[dict[str, str]]:
+    """Validate the one account-coherence rule shared by startup gates."""
+    failure_reasons = tuple(getattr(reconciliation, "failure_reasons", ()) or ())
+    if failure_reasons == ("unattributed_fills",):
+        if activation_confirmed_at is None:
+            raise TestnetAutomationProofError(
+                "account_facts_unavailable",
+                result={"failure_reasons": list(failure_reasons)},
+            )
+        historical_rows = _historical_unattributed_fill_rows(
+            reconciliation,
+            activation_confirmed_at=activation_confirmed_at,
+        )
+        positions = _fact_data(reconciliation, "positions")
+        open_orders = _fact_data(reconciliation, "open_orders")
+        if _has_nonzero_position(positions) or open_orders:
+            raise TestnetAutomationProofError(
+                "account_facts_unavailable",
+                result={
+                    "failure_reasons": list(failure_reasons),
+                    "unattributed_fill_blocker": "account_not_flat_or_has_open_orders",
+                },
+            )
+        return historical_rows
+    if failure_reasons or getattr(reconciliation, "passed", False) is not True:
+        raise TestnetAutomationProofError(
+            "account_facts_unavailable",
+            result={"failure_reasons": list(failure_reasons)},
+        )
+    return []
+
+
 def _authoritative_account_snapshot(
     broker: object,
     *,
@@ -326,40 +362,10 @@ def _authoritative_account_snapshot(
         reconciliation = getattr(bundle, "reconciliation", None)
         if account is None or reconciliation is None:
             raise TestnetAutomationProofError("account_facts_bundle_incomplete")
-        failure_reasons = tuple(getattr(reconciliation, "failure_reasons", ()) or ())
-        if failure_reasons == ("unattributed_fills",):
-            if activation_confirmed_at is None:
-                raise TestnetAutomationProofError(
-                    "account_facts_unavailable",
-                    result={"failure_reasons": list(failure_reasons)},
-                )
-            _historical_unattributed_fill_rows(
-                reconciliation,
-                activation_confirmed_at=activation_confirmed_at,
-            )
-            positions = _fact_data(reconciliation, "positions")
-            open_orders = _fact_data(reconciliation, "open_orders")
-            if _has_nonzero_position(positions) or open_orders:
-                raise TestnetAutomationProofError(
-                    "account_facts_unavailable",
-                    result={
-                        "failure_reasons": list(failure_reasons),
-                        "unattributed_fill_blocker": "account_not_flat_or_has_open_orders",
-                    },
-                )
-        elif callable(getattr(reconciliation, "require_coherent", None)):
-            try:
-                reconciliation.require_coherent()
-            except Exception as exc:  # noqa: BLE001 - retain typed failure reasons.
-                raise TestnetAutomationProofError(
-                    "account_facts_unavailable",
-                    result={"failure_reasons": list(failure_reasons)},
-                ) from exc
-        elif getattr(reconciliation, "passed", False) is not True:
-            raise TestnetAutomationProofError(
-                "account_reconciliation_not_coherent",
-                result={"failure_reasons": list(failure_reasons)},
-            )
+        _validate_snapshot_reconciliation(
+            reconciliation,
+            activation_confirmed_at=activation_confirmed_at,
+        )
     except TestnetAutomationProofError:
         raise
     except Exception as exc:  # noqa: BLE001 - redact upstream details at the proof boundary.
@@ -525,6 +531,7 @@ def _snapshot(
     account: object,
     reconciliation: object,
     market: Mapping[str, Any],
+    activation_confirmed_at: Any | None,
 ) -> PortfolioSnapshot:
     session_id = str(plan.get("strategy_session_id") or "").strip()
     if not session_id:
@@ -538,9 +545,14 @@ def _snapshot(
     observation_age = (
         datetime.now(timezone.utc) - observed_at.astimezone(timezone.utc)
     ).total_seconds()
-    coherent = getattr(reconciliation, "passed", False) is True
+    _validate_snapshot_reconciliation(
+        reconciliation,
+        activation_confirmed_at=activation_confirmed_at,
+    )
+    coherent = True
+    reconciliation_passed = getattr(reconciliation, "passed", False) is True
     fresh = 0 <= observation_age <= 120
-    if not coherent or not fresh:
+    if not fresh:
         raise TestnetAutomationProofError("account_snapshot_not_ready")
     provenance = getattr(account, "provenance", None)
     source = str(getattr(provenance, "source", "") or "").strip().lower()
@@ -757,6 +769,7 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
             account=account,
             reconciliation=reconciliation,
             market=market,
+            activation_confirmed_at=confirmation.get("confirmed_at") or current.get("occurred_at"),
         )
         selected = coordinator.command(
             "select_candidate",

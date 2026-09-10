@@ -34,6 +34,7 @@ printf '%-46s result\n' mutation
 printf '%-46s ------\n' ----------------------------------------------
 mutate '#1239 IOC TP' services/grid_testnet_lifecycle.py 'time_in_force="gtc",\n            planned_price=float(rung["tp"])' 'time_in_force="ioc",\n            planned_price=float(rung["tp"])'
 mutate '#1250 admit every historical fill' pipelines/testnet_automation_proof.py 'if occurred_at >= cutoff:' 'if True:'
+mutate '#1255 _snapshot requires reconciliation.passed' pipelines/testnet_automation_proof.py 'if not fresh:' 'if not reconciliation_passed or not fresh:'
 mutate '#1241 skip hard-stop flag at recovery' services/grid_testnet_lifecycle.py 'if str(state.get("blocker") or "").startswith("order_cancel_failed"):\n                state["hard_stop_requested"] = True' 'if str(state.get("blocker") or "").startswith("order_cancel_failed"):\n                pass'
 mutate '#1241 skip hard-stop flag at emergency flatten' services/grid_testnet_lifecycle.py 'state["status"] = "hard_stop_triggered"\n            state["hard_stop_requested"] = True' 'state["status"] = "hard_stop_triggered"\n            pass'
 mutate '#1241 skip shared hard-stop marker' services/grid_testnet_lifecycle.py 'def _mark_hard_stop_requested(state: dict[str, Any], reason: str) -> None:\n        state["hard_stop_requested"] = True' 'def _mark_hard_stop_requested(state: dict[str, Any], reason: str) -> None:\n        pass'

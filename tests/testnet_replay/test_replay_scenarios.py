@@ -252,6 +252,39 @@ def test_issue_1250_clean_account_historical_fill_policy_is_fail_closed() -> Non
         _historical_unattributed_fill_rows(SimpleNamespace(unattributed_fills=(late,)), activation_confirmed_at=confirmation.confirmed_at)
 
 
+def test_issue_1255_snapshot_uses_historical_fill_policy() -> None:
+    from pipelines.testnet_automation_proof import _snapshot
+
+    observed = datetime.now(timezone.utc)
+    reconciliation = SimpleNamespace(
+        passed=False,
+        failure_reasons=("unattributed_fills",),
+        observed_at=observed,
+        evidence_digest="sha256:" + "d" * 64,
+        cursor=SimpleNamespace(value="replay"),
+        positions=SimpleNamespace(fact=SimpleNamespace(data=())),
+        open_orders=SimpleNamespace(fact=SimpleNamespace(data=())),
+        unattributed_fills=(SimpleNamespace(fill_id="old", broker_order_id="old", occurred_at=datetime(2026, 9, 10, tzinfo=timezone.utc)),),
+    )
+    account = SimpleNamespace(
+        equity=Decimal("10000"), withdrawable=Decimal("10000"), exposure=Decimal("0"),
+        margin_used=Decimal("0"), provenance=SimpleNamespace(source="hyperliquid.external_testnet"),
+    )
+    snapshot = _snapshot(
+        {"strategy_session_id": "session"}, account_address="account", account=account,
+        reconciliation=reconciliation, market={"cursor": "replay", "mapping_revision": "map", "universe_revision": "universe", "connection_epoch": "epoch"},
+        activation_confirmed_at="2026-09-11T00:00:00+00:00",
+    )
+    assert snapshot.coherent is True
+    reconciliation.unattributed_fills = (*reconciliation.unattributed_fills, SimpleNamespace(fill_id="new", broker_order_id="new", occurred_at=datetime(2026, 9, 11, 0, 0, 1, tzinfo=timezone.utc)))
+    with pytest.raises(Exception, match="account_facts_unavailable"):
+        _snapshot(
+            {"strategy_session_id": "session"}, account_address="account", account=account,
+            reconciliation=reconciliation, market={"cursor": "replay", "mapping_revision": "map", "universe_revision": "universe", "connection_epoch": "epoch"},
+            activation_confirmed_at="2026-09-11T00:00:00+00:00",
+        )
+
+
 def test_issue_1245_preview_and_lifecycle_full_depth_loss_are_same(tmp_path: Path) -> None:
     from services import grid_sizing
     from services.grid_testnet_lifecycle import GridTestnetLifecycle

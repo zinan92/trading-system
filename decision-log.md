@@ -19277,3 +19277,21 @@ auditable datafeed port; broker execution remains a separate port.
   strict equality and raw-BBO binding-band regressions.
 - `git diff HEAD^ --check` — passed; `gitleaks dir . --no-banner --redact` —
   no leaks found, 24.61 MB scanned.
+
+# 2026-09-11 — Historical fills accepted consistently at proof startup (#1255)
+
+## Decision
+
+- Share one snapshot reconciliation gate between `_authoritative_account_snapshot` and `_snapshot`.
+- Accept only a reconciliation with no failure reasons, or exactly `unattributed_fills` where every fill predates activation confirmation and the account is flat with no open orders.
+- Preserve fresh observation enforcement at 120 seconds and fail closed for late fills, non-flat accounts, open orders, or any other reason.
+
+## Gotchas
+
+- A historically admissible reconciliation must produce a coherent `PortfolioSnapshot`; using `reconciliation.passed` directly would reintroduce the #1255 regression.
+- The replay mutation gate specifically restores that strict `_snapshot` check and must be caught.
+
+## Verification
+
+- `scripts/testnet_replay.sh` — pending.
+- `scripts/testnet_replay_mutations.sh` — pending.
