@@ -260,11 +260,57 @@ def _open_order_row(order: object, *, account_address: str, portfolio_session_id
     }
 
 
+def _historical_unattributed_fill_rows(
+    reconciliation: object,
+    *,
+    activation_confirmed_at: Any,
+) -> list[dict[str, str]]:
+    """Return only fills proven to predate this activation confirmation."""
+    cutoff = _aware_datetime(activation_confirmed_at, "activation_confirmed_at")
+    rows: list[dict[str, str]] = []
+    for fill in getattr(reconciliation, "unattributed_fills", ()) or ():
+        occurred_at = _aware_datetime(
+            getattr(fill, "occurred_at", None), "unattributed_fill_occurred_at"
+        )
+        if occurred_at >= cutoff:
+            raise TestnetAutomationProofError(
+                "account_facts_unavailable",
+                result={
+                    "failure_reasons": list(getattr(reconciliation, "failure_reasons", ()) or ()),
+                    "unattributed_fill_blocker": "fill_not_historical",
+                },
+            )
+        rows.append(
+            {
+                "fill_id": str(getattr(fill, "fill_id", "") or ""),
+                "oid": str(getattr(fill, "broker_order_id", "") or ""),
+                "occurred_at": occurred_at.isoformat(),
+            }
+        )
+    return rows
+
+
+def _has_nonzero_position(positions: Sequence[object]) -> bool:
+    for position in positions:
+        quantity = getattr(position, "signed_quantity", None)
+        if quantity is None:
+            quantity = getattr(position, "quantity", None)
+        if quantity is None:
+            return True
+        try:
+            if Decimal(str(quantity)) != 0:
+                return True
+        except (InvalidOperation, TypeError, ValueError):
+            return True
+    return False
+
+
 def _authoritative_account_snapshot(
     broker: object,
     *,
     plan: Mapping[str, Any],
     account_address: str,
+    activation_confirmed_at: Any | None = None,
 ) -> tuple[object, object]:
     instrument_id = str(plan.get("instrument_id") or "").strip()
     try:
@@ -279,10 +325,40 @@ def _authoritative_account_snapshot(
         reconciliation = getattr(bundle, "reconciliation", None)
         if account is None or reconciliation is None:
             raise TestnetAutomationProofError("account_facts_bundle_incomplete")
-        if callable(getattr(reconciliation, "require_coherent", None)):
-            reconciliation.require_coherent()
+        failure_reasons = tuple(getattr(reconciliation, "failure_reasons", ()) or ())
+        if failure_reasons == ("unattributed_fills",):
+            if activation_confirmed_at is None:
+                raise TestnetAutomationProofError(
+                    "account_facts_unavailable",
+                    result={"failure_reasons": list(failure_reasons)},
+                )
+            _historical_unattributed_fill_rows(
+                reconciliation,
+                activation_confirmed_at=activation_confirmed_at,
+            )
+            positions = _fact_data(reconciliation, "positions")
+            open_orders = _fact_data(reconciliation, "open_orders")
+            if _has_nonzero_position(positions) or open_orders:
+                raise TestnetAutomationProofError(
+                    "account_facts_unavailable",
+                    result={
+                        "failure_reasons": list(failure_reasons),
+                        "unattributed_fill_blocker": "account_not_flat_or_has_open_orders",
+                    },
+                )
+        elif callable(getattr(reconciliation, "require_coherent", None)):
+            try:
+                reconciliation.require_coherent()
+            except Exception as exc:  # noqa: BLE001 - retain typed failure reasons.
+                raise TestnetAutomationProofError(
+                    "account_facts_unavailable",
+                    result={"failure_reasons": list(failure_reasons)},
+                ) from exc
         elif getattr(reconciliation, "passed", False) is not True:
-            raise TestnetAutomationProofError("account_reconciliation_not_coherent")
+            raise TestnetAutomationProofError(
+                "account_reconciliation_not_coherent",
+                result={"failure_reasons": list(failure_reasons)},
+            )
     except TestnetAutomationProofError:
         raise
     except Exception as exc:  # noqa: BLE001 - redact upstream details at the proof boundary.
@@ -349,7 +425,7 @@ def _authoritative_account_snapshot(
         raise TestnetAutomationProofError("account_equity_unavailable")
     positions = _fact_data(reconciliation, "positions")
     open_orders = _fact_data(reconciliation, "open_orders")
-    if positions or open_orders:
+    if _has_nonzero_position(positions) or open_orders:
         raise TestnetAutomationProofError("account_not_clean_for_proof")
     return account, reconciliation
 
@@ -670,7 +746,14 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
             broker,
             plan=plan,
             account_address=args.account_address,
+            activation_confirmed_at=confirmation.get("confirmed_at") or current.get("occurred_at"),
         )
+        historical_unattributed_fills = []
+        if tuple(getattr(reconciliation, "failure_reasons", ()) or ()) == ("unattributed_fills",):
+            historical_unattributed_fills = _historical_unattributed_fill_rows(
+                reconciliation,
+                activation_confirmed_at=confirmation.get("confirmed_at") or current.get("occurred_at"),
+            )
         snapshot = _snapshot(
             plan,
             account_address=args.account_address,
@@ -726,6 +809,7 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
             "execution_mutation": result.get("execution_mutation"),
             "network_operation_invoked": result.get("network_operation_invoked"),
             "broker_market_fact": market.get("broker_market_fact"),
+            "historical_unattributed_fills": historical_unattributed_fills,
         }
     finally:
         close = getattr(broker, "close", None)

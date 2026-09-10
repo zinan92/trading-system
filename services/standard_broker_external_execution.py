@@ -686,13 +686,29 @@ class StandardBrokerExternalExecutionAdapter:
         return {
             "status": "pass" if passed is True and cursor not in (None, "") else "unknown",
             "cursor": cls._safe_value(cursor),
-            "fills": cls._safe_value(getattr(bundle, "fills", ())),
+            "fills": cls._safe_value(cls._attributed_fills(getattr(bundle, "fills", ()))),
             "positions": cls._safe_value(getattr(bundle, "positions", ())),
             "open_orders": cls._public_open_orders(getattr(bundle, "open_orders", ())),
             "fees": cls._safe_value(getattr(bundle, "fees", ())),
             "account": cls._safe_value(getattr(bundle, "account", None)),
             "reconciliation": cls._safe_value(reconciliation),
         }
+
+    @staticmethod
+    def _attributed_fills(rows: object) -> tuple[object, ...]:
+        """Keep public tick facts limited to fills bound to a canonical order."""
+        result: list[object] = []
+        for row in rows or ():
+            if (
+                row.__class__.__name__ == "UnattributedFill"
+                or (isinstance(row, Mapping) and row.get("is_unattributed") is True)
+                or getattr(row, "is_unattributed", False) is True
+            ):
+                continue
+            order_id = row.get("order_id") if isinstance(row, Mapping) else getattr(row, "order_id", None)
+            if str(order_id or "").strip() or not hasattr(row, "order_id"):
+                result.append(row)
+        return tuple(result)
 
     @classmethod
     def _public_open_orders(cls, rows: object) -> list[dict[str, Any]]:

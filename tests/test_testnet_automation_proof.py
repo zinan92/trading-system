@@ -148,6 +148,96 @@ def test_authoritative_account_snapshot_accepts_typed_stub_broker_facts() -> Non
     assert reconciliation is binding.reconciliation
 
 
+def _historical_snapshot_broker(*, occurred_at: str, position: str = "0", open_orders: bool = False):
+    binding = _Binding()
+    binding.reconciliation.failure_reasons = ("unattributed_fills",)
+    binding.reconciliation.unattributed_fills = (
+        SimpleNamespace(
+            fill_id="fill-old",
+            broker_order_id="59671766069",
+            occurred_at=datetime.fromisoformat(occurred_at),
+        ),
+    )
+    binding.reconciliation.positions = SimpleNamespace(
+        fact=SimpleNamespace(data=()
+            if position == "0"
+            else (SimpleNamespace(signed_quantity=Decimal(position)),)
+        )
+    )
+    binding.reconciliation.open_orders = SimpleNamespace(
+        fact=SimpleNamespace(data=(SimpleNamespace(order_id="open-1"),) if open_orders else ())
+    )
+
+    class StubBroker:
+        runtime_session = binding.runtime_session
+        broker_config = {
+            "release_sha": RELEASE,
+            "capability_revision": cli.PROTECTED_CAPABILITY_REVISION,
+        }
+
+        def read_facts(self, *, instrument_id, now):
+            return binding
+
+    return StubBroker(), binding
+
+
+def test_authoritative_account_snapshot_allows_only_pre_activation_historical_fills() -> None:
+    broker, binding = _historical_snapshot_broker(
+        occurred_at="2026-09-10T11:08:00+00:00"
+    )
+
+    account, reconciliation = cli._authoritative_account_snapshot(
+        broker,
+        plan={"instrument_id": "BTC-USD-PERP"},
+        account_address=ACCOUNT,
+        activation_confirmed_at="2026-09-10T15:00:00+00:00",
+    )
+
+    assert account is binding.account
+    assert reconciliation is binding.reconciliation
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_blocker"),
+    [
+        ({"occurred_at": "2026-09-10T15:00:00+00:00"}, "account_facts_unavailable"),
+        ({"occurred_at": "2026-09-10T11:08:00+00:00", "position": "0.001"}, "account_facts_unavailable"),
+        ({"occurred_at": "2026-09-10T11:08:00+00:00", "open_orders": True}, "account_facts_unavailable"),
+    ],
+)
+def test_authoritative_account_snapshot_blocks_untrusted_historical_fill_cases(kwargs, expected_blocker) -> None:
+    broker, _binding = _historical_snapshot_broker(**kwargs)
+
+    with pytest.raises(cli.TestnetAutomationProofError) as caught:
+        cli._authoritative_account_snapshot(
+            broker,
+            plan={"instrument_id": "BTC-USD-PERP"},
+            account_address=ACCOUNT,
+            activation_confirmed_at="2026-09-10T15:00:00+00:00",
+        )
+
+    assert caught.value.reason_code == expected_blocker
+    assert caught.value.result["failure_reasons"] == ["unattributed_fills"]
+
+
+def test_authoritative_account_snapshot_blocks_historical_fill_with_other_failure_reason() -> None:
+    broker, binding = _historical_snapshot_broker(
+        occurred_at="2026-09-10T11:08:00+00:00"
+    )
+    binding.reconciliation.failure_reasons = ("unattributed_fills", "identity_conflict")
+    binding.reconciliation.require_coherent = lambda: (_ for _ in ()).throw(RuntimeError("not coherent"))
+
+    with pytest.raises(cli.TestnetAutomationProofError) as caught:
+        cli._authoritative_account_snapshot(
+            broker,
+            plan={"instrument_id": "BTC-USD-PERP"},
+            account_address=ACCOUNT,
+            activation_confirmed_at="2026-09-10T15:00:00+00:00",
+        )
+
+    assert caught.value.result["failure_reasons"] == ["unattributed_fills", "identity_conflict"]
+
+
 def _authoritative_market_fixture(*, broker_price: str = "60000", broker_observed_at: str | None = None) -> tuple[dict, dict, object]:
     observed_at = datetime.fromisoformat("2026-09-10T01:00:00+00:00")
     market = {

@@ -325,6 +325,31 @@ def test_external_execution_adapter_projects_cursor_bound_public_facts_for_tick(
     assert len(facts["fills"]) == 1
 
 
+def test_external_execution_public_facts_exclude_unattributed_historical_fills() -> None:
+    attributed = {"fill_id": "new-fill", "order_id": "local-entry-1"}
+    historical = {
+        "fill_id": "old-fill",
+        "broker_order_id": "59671766069",
+        "is_unattributed": True,
+    }
+
+    bundle = SimpleNamespace(
+        reconciliation=SimpleNamespace(
+            passed=True,
+            cursor=SimpleNamespace(value="cursor-1"),
+        ),
+        fills=(attributed, historical),
+        positions=(),
+        open_orders=(),
+        fees=(),
+        account=None,
+    )
+
+    facts = StandardBrokerExternalExecutionAdapter._public_facts(bundle)
+
+    assert [row["fill_id"] for row in facts["fills"]] == ["new-fill"]
+
+
 def test_external_execution_adapter_closes_owned_runtime() -> None:
     adapter, _binding, closed = _adapter()
 

@@ -1,5 +1,36 @@
 # Decision Log
 
+# 2026-09-11 — Admit only bounded historical unattributed Testnet fills at activation (#1249)
+
+## Decision
+
+- A start-time account snapshot may proceed when reconciliation fails only with
+  `unattributed_fills`, every such fill is strictly earlier than the current
+  Dashboard confirmation (falling back to activation creation time), and the
+  instrument has zero position and zero open orders.
+- The proof receipt records each admitted fill as `{fill_id, oid, occurred_at}`.
+  Any newer fill, exposure, open order, or additional failure reason remains
+  fail-closed and preserves the Broker's actual `failure_reasons`.
+- Public Testnet tick facts exclude explicitly unattributed fills, so a prior
+  activation's OID cannot enter the current lifecycle as a new fill.
+
+## Gotchas
+
+- The exception is start-bound and does not make reconciliation coherent for
+  later lifecycle operations; the existing lifecycle still consumes only
+  attributed public fills and its own durable identities.
+- `confirmed_at` is the preferred cutoff because it is the operator's current
+  Dashboard boundary; activation `occurred_at` is only the fallback for older
+  evidence without a confirmation timestamp.
+- No launchd service, online output directory, HTTP 8100 interface, data
+  source, credential, Testnet network, or live-money path was changed or
+  invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_automation_proof.py tests/test_standard_broker_external_execution.py tests/test_park_control.py` — 50 passed.
+- `python3 -m py_compile ...` and `git diff --check` — passed.
+
 # 2026-09-10 — Use bounded Testnet market tolerance for proof execution (#1247)
 
 ## Decision
