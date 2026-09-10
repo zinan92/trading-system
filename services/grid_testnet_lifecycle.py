@@ -220,6 +220,7 @@ class GridTestnetLifecycle:
             raise GridTestnetLifecycleError(state["blocker"])
         if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"} and order.get("event") in {"hard_stop", "hard_stop_recovery"}:
             state["status"] = "hard_stop_triggered"
+            self._mark_hard_stop_requested(state, "hard_stop_order_fill")
         if state["status"] in {"terminal", "sealed"} and late_cancelled_entry_allowed:
             state["status"] = "hard_stop_triggered"
             state["sealed"] = False
@@ -404,21 +405,18 @@ class GridTestnetLifecycle:
 
     def on_market_event(self, plan: dict[str, Any], *, price: float, market: Mapping[str, Any] | None = None, timestamp: str) -> dict[str, Any]:
         state = self._state(plan)
-        if state.get("status") == "hard_stop_triggered" and state.get("hard_stop_requested") and self._net_quantity(state) > 1e-9:
-            has_open_flatten = any(
-                row.get("state") == "accepted"
-                and row.get("event") in {"hard_stop", "hard_stop_recovery"}
-                for row in state.get("orders", ())
+        if state.get("status") == "hard_stop_triggered":
+            self._retry_hard_stop_from_public_facts(
+                plan, state, market=market, timestamp=timestamp,
             )
-            if not has_open_flatten:
-                self._hard_stop(plan, state, timestamp=timestamp, reason="hard_stop_retry", market=market)
-                state["updated_at"] = timestamp
-                self._save(state)
-                return self.snapshot(plan)
+            state["updated_at"] = timestamp
+            self._save(state)
+            return self.snapshot(plan)
         if state.get("exchange_exposure_open"):
             self._retry_exchange_exposure(state, timestamp=timestamp)
             if not state.get("exchange_exposure_open") and state.get("hard_stop_requested"):
                 state["status"] = "hard_stop_triggered"
+                self._mark_hard_stop_requested(state, "blocked_exchange_exposure_recovered")
                 self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
             state["updated_at"] = timestamp
             self._save(state)
@@ -443,6 +441,7 @@ class GridTestnetLifecycle:
                 self._retry_exchange_exposure(state, timestamp=timestamp)
             if state.get("hard_stop_requested") and not state.get("exchange_exposure_open"):
                 state["status"] = "hard_stop_triggered"
+                self._mark_hard_stop_requested(state, "blocked_position_recovered")
                 self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
             state["updated_at"] = timestamp
             self._save(state)
@@ -935,7 +934,7 @@ class GridTestnetLifecycle:
         if state["status"] in {"terminal", "sealed"}:
             return
         state["status"] = "hard_stop_triggered"
-        state["hard_stop_requested"] = True
+        self._mark_hard_stop_requested(state, reason)
         self._cancel_all_open_orders(state, timestamp=timestamp, reason=reason)
         self._cancel_hard_stop_protection(plan, state, timestamp=timestamp)
         for rung in state["rungs"]:
@@ -968,6 +967,8 @@ class GridTestnetLifecycle:
             receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
             state["orders"].append(self._order_row(command, receipt))
             state["status"] = "hard_stop_triggered"
+            state["hard_stop_requested"] = True
+            state["hard_stop_reason"] = state.get("hard_stop_reason") or reason
             self._record_event(state, "emergency_flatten_submitted", timestamp=timestamp, rung_id=rung["rung_id"], reason=reason)
         except GridTestnetLifecycleError as exc:
             self._block(state, f"emergency_flatten_failed:{exc}", timestamp=timestamp)
@@ -1215,13 +1216,29 @@ class GridTestnetLifecycle:
     def _maybe_finalize_hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         if state.get("status") != "hard_stop_triggered":
             return
-        open_quantity = sum(GridLineLifecycle.from_snapshot(rung["line"]).open_quantity for rung in state["rungs"])
-        if open_quantity > 1e-9:
-            return
         try:
+            facts = self._public_facts(state, "positions")
+            broker_quantity = sum(
+                self._position_quantity(position, str(state["instrument_id"]))
+                for position in facts["positions"] or ()
+            )
+            state["exchange_position_quantity"] = broker_quantity
+            if abs(broker_quantity) > 1e-9:
+                reconciliation = self._terminal_reconciliation(state, timestamp)
+                state["reconciliation"] = reconciliation
+                if reconciliation.get("status") != "ok":
+                    self._block(state, "hard_stop_reconciliation_blocked", timestamp=timestamp)
+                return
+            local_quantity = sum(
+                GridLineLifecycle.from_snapshot(rung["line"]).open_quantity
+                for rung in state["rungs"]
+            )
+            if local_quantity > 1e-9:
+                return
             reconciliation = self._terminal_reconciliation(state, timestamp)
         except Exception as exc:  # noqa: BLE001
-            self._block(state, f"hard_stop_reconciliation_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+            state["reconciliation"] = self._terminal_reconciliation(state, timestamp)
+            self._block(state, "hard_stop_reconciliation_blocked", timestamp=timestamp)
             return
         state["reconciliation"] = reconciliation
         if reconciliation.get("status") != "ok":
@@ -1243,6 +1260,126 @@ class GridTestnetLifecycle:
             "next_action": "notify_park_and_wait",
         }
         self._record_event(state, "revision_sealed", timestamp=timestamp, reason="hard_stop")
+
+    @staticmethod
+    def _mark_hard_stop_requested(state: dict[str, Any], reason: str) -> None:
+        state["hard_stop_requested"] = True
+        state["hard_stop_reason"] = str(reason)
+
+    def _retry_hard_stop_from_public_facts(
+        self,
+        plan: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        market: Mapping[str, Any] | None,
+        timestamp: str,
+    ) -> None:
+        """Retry one aggressive flatten per heartbeat using venue position truth."""
+        state["hard_stop_requested"] = True
+        state.setdefault("hard_stop_reason", "hard_stop_recovery")
+        try:
+            facts = self._public_facts(state, "positions", "open_orders")
+            broker_quantity = sum(
+                self._position_quantity(position, str(state["instrument_id"]))
+                for position in facts["positions"] or ()
+            )
+        except Exception as exc:  # noqa: BLE001 - unknown venue truth stays fail-closed.
+            self._block(state, f"hard_stop_facts_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+            state["blocker"] = "position_open_unprotected"
+            state["park_notification_required"] = True
+            return
+        state["exchange_position_quantity"] = broker_quantity
+        if abs(broker_quantity) <= 1e-9:
+            self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
+            return
+
+        open_ids = self._exchange_order_identities(facts["open_orders"] or ())
+        has_open_flatten = any(
+            row.get("state") == "accepted"
+            and row.get("event") in {"hard_stop", "hard_stop_recovery"}
+            and self._order_identities(row).intersection(open_ids)
+            for row in state.get("orders", ())
+        )
+        if has_open_flatten:
+            return
+
+        retry_limit = max(1, int((plan.get("risk_budget") or {}).get("hard_stop_retry_limit") or 5))
+        attempts = int(state.get("hard_stop_retry_attempts") or 0)
+        if attempts >= retry_limit:
+            self._block(state, "position_open_unprotected", timestamp=timestamp)
+            state["park_notification_required"] = True
+            self._record_event(
+                state, "hard_stop_retry_exhausted", timestamp=timestamp,
+                attempts=attempts, retry_limit=retry_limit,
+                broker_quantity=broker_quantity,
+            )
+            return
+
+        rung = next(
+            (item for item in state["rungs"] if (
+                broker_quantity > 0 and item.get("side") == "buy"
+                and GridLineLifecycle.from_snapshot(item["line"]).open_quantity > 1e-9
+            ) or (
+                broker_quantity < 0 and item.get("side") == "sell"
+                and GridLineLifecycle.from_snapshot(item["line"]).open_quantity > 1e-9
+            )),
+            next(
+                (item for item in state["rungs"] if (
+                    broker_quantity > 0 and item.get("side") == "buy"
+                ) or (
+                    broker_quantity < 0 and item.get("side") == "sell"
+                )),
+                state["rungs"][0],
+            ),
+        )
+        attempt = attempts + 1
+        market_price = self._flatten_market_price(rung, market, state.get("last_market_price"))
+        command = self._command(
+            plan, state, rung,
+            price=float(rung["hard_stop"]), quantity=abs(broker_quantity),
+            event="hard_stop_recovery", index=int(rung.get("generation") or 1),
+            timestamp=timestamp, reduce_only=True, order_type="market",
+            time_in_force="ioc", planned_price=float(rung["hard_stop"]),
+            attempt=attempt, market_price=market_price,
+        )
+        state["hard_stop_retry_attempts"] = attempt
+        try:
+            receipt = self.broker.submit_order(
+                BrokerOrderRequest(
+                    run_date=state["cycle_id"], ticket=command,
+                    latest_price=float(command.get("price") or 0),
+                    actual_size=float(command.get("quantity") or 0),
+                )
+            )
+            state.setdefault("retry_events", []).append({
+                "operation": "hard_stop_recovery", "attempt": attempt,
+                "ticket_id": command["ticket_id"], "status": "accepted",
+                "timestamp": timestamp,
+            })
+            state["orders"].append(self._order_row(command, receipt))
+            self._record_event(
+                state, "emergency_flatten_submitted", timestamp=timestamp,
+                rung_id=rung["rung_id"], reason="hard_stop_retry",
+                quantity=abs(broker_quantity), attempt=attempt,
+            )
+        except Exception as exc:  # noqa: BLE001 - next heartbeat owns the next attempt.
+            state.setdefault("retry_events", []).append({
+                "operation": "hard_stop_recovery", "attempt": attempt,
+                "ticket_id": command["ticket_id"], "status": "failed",
+                "error": type(exc).__name__, "timestamp": timestamp,
+            })
+            self._record_event(
+                state, "emergency_flatten_failed", timestamp=timestamp,
+                reason=f"{type(exc).__name__}:{exc}", attempt=attempt,
+            )
+            if attempt >= retry_limit:
+                self._block(state, "position_open_unprotected", timestamp=timestamp)
+                state["park_notification_required"] = True
+                self._record_event(
+                    state, "hard_stop_retry_exhausted", timestamp=timestamp,
+                    attempts=attempt, retry_limit=retry_limit,
+                    broker_quantity=broker_quantity,
+                )
 
     def _terminal_reconciliation(self, state: dict[str, Any], timestamp: str) -> dict[str, Any]:
         instrument = str(state.get("instrument_id") or "")

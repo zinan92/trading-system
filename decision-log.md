@@ -1,5 +1,35 @@
 # Decision Log
 
+# 2026-09-10 — Retry hard-stop flatten from public position facts (#1240)
+
+## Decision
+
+- Every transition into `hard_stop_triggered` persists `hard_stop_requested=true`
+  and `hard_stop_reason`.
+- A hard-stop heartbeat reads public position and open-order facts. If the
+  instrument remains exposed and no resting hard-stop recovery order is
+  present, it submits at most one reduce-only IOC recovery order using the
+  current executable BBO. Attempts persist across ticks and default to five;
+  exhaustion blocks with `position_open_unprotected` and queues Park notice.
+- Hard-stop finalization uses public position facts as the authority. Only a
+  facts-proven zero position can seal the revision.
+
+## Gotchas
+
+- Local rung `open_quantity` is not used to decide whether a hard-stop
+  heartbeat must recover an exchange position.
+- The retry path deliberately makes one direct submit per tick; the generic
+  submit retry loop is not reused, so one heartbeat cannot create multiple
+  emergency flatten attempts.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py` —
+  focused lifecycle suite passed.
+- The redacted dashboard-state fixture proves BBO pricing (`77000 - 50 =
+  76950`) and facts-driven terminal close. No launchd, online output,
+  network, HTTP 8100, data-source, or live-money path was changed.
+
 # 2026-09-10 — Hydrate every persisted Testnet order state (#1236)
 
 ## Decision

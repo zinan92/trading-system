@@ -1,0 +1,16 @@
+{
+  "source": "redacted_copy_of_dashboard_plan_0e696f60b88b903d",
+  "status": "hard_stop_triggered",
+  "hard_stop_requested": null,
+  "hard_stop_reason": null,
+  "rung": 5,
+  "instrument_id": "BTC-USD-PERP",
+  "local_open_quantity": 0.0,
+  "public_position": 0.00024,
+  "public_open_orders": [],
+  "market": {
+    "bid": 77000.0,
+    "ask": 77002.0,
+    "mid": 77001.0
+  }
+}
