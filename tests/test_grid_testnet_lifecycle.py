@@ -472,15 +472,17 @@ def test_online_dashboard_state_shape_recovers_all_orders_and_backfills_fill_id(
     hydration = hydrate_order_identities(broker, state)
     assert hydration == {"recovered": 5, "skipped": []}
     assert [row[1]["state"] for row in recovered_orders] == ["canceled"] * 4 + ["filled"]
-    lifecycle._backfill_fact_fills(state, facts_fixture["fills"])
-    assert state["fills"][0]["fill_id"] == "219949055209235"
     broker.read_public_facts = lambda **_kwargs: facts_fixture
 
-    recovered = lifecycle.on_market_event(plan, price=77673.0, timestamp="2026-09-10T11:08:26+00:00")
+    recovered = lifecycle.advance(plan, price=77673.0, timestamp="2026-09-10T11:08:26+00:00")
 
     assert recovered["fills"][0]["fill_id"] == "219949055209235"
     assert recovered["fills"][0]["fill_identities"] == ["219949055209235", "hash-1236-redacted"]
     assert recovered["status"] == "active"
+    assert any(event["event"] == "blocked_position_recovered" for event in recovered["events"])
+    assert any(row["event"] == "tp" for row in recovered["orders"])
+    assert recovered["hard_stop_protection"]["status"] == "active"
+    assert sum(row["state"] == "accepted" and row["event"] == "entry_rearm" for row in recovered["orders"]) == 4
 
 
 def test_grid_facts_failure_keeps_blocked_without_cancellation_or_terminal_close(tmp_path: Path) -> None:
