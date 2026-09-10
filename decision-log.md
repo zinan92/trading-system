@@ -1,5 +1,30 @@
 # Decision Log
 
+# 2026-09-10 — Retry proof-driver market coherence races (#1179)
+
+## Decision
+
+- The proof driver retries only `market_price_mismatch` and
+  `market_observation_mismatch` from the CLI's authoritative market check.
+- The outer retry is bounded to 10 attempts with a 2-second interval. Each
+  retry creates a fresh broker binding, reuses the shared coherent market read,
+  rebuilds `driver-inputs/market.json`, and records the reason and attempt in
+  the driver receipt.
+- The CLI equality and observation checks remain fail-closed and unchanged.
+
+## Gotchas
+
+- The shared market reader has its own bounded sampling-race retry; the driver
+  retry handles the later CLI read against the newly assembled document.
+- A retry never reuses the broker instance that was closed after the previous
+  document read. No launchd, online runtime, HTTP 8100, data source,
+  credential, or live-money path was changed or invoked.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_testnet_automation_proof.py` — 34 passed.
+- `python3 -m compileall -q pipelines/testnet_proof_driver.py` and `git diff --check` — passed.
+
 # 2026-09-10 — Use one full-depth Grid loss model (#1244)
 
 ## Decision

@@ -7,12 +7,14 @@ import pytest
 
 from pipelines.testnet_proof_driver import (
     ProofDriverError,
+    _run_with_market_retry,
     build_market_document,
     build_plan,
     map_confirmation,
     read_coherent_market,
     validate_grid_plan,
 )
+from pipelines import testnet_automation_proof as proof
 from pipelines.testnet_automation_proof import _MARKET_REQUIRED
 from services.park_confirmation_ledger import DurableParkConfirmationError, parse_durable_confirmation
 from services.grid_testnet_lifecycle import GridTestnetLifecycle
@@ -397,6 +399,58 @@ def test_market_reader_can_be_required_for_every_coherent_tick_read() -> None:
     assert market["mid"] == "60000"
     assert checks == [{"bid": "59999", "mid": "60000", "ask": "60001", "passed": True,
                       "binding_price": "60000", "reader_price": "60000", "attempt": 1}]
+
+
+def test_driver_retries_price_and_observation_mismatch_then_records_success() -> None:
+    outcomes = iter([
+        proof.TestnetAutomationProofError("market_price_mismatch"),
+        proof.TestnetAutomationProofError("market_observation_mismatch"),
+        {"status": "candidate_selected"},
+    ])
+    refreshed = iter([({"mid": "60001"}, [{"attempt": 2}]), ({"mid": "60002"}, [{"attempt": 3}])])
+    sleeps: list[float] = []
+    written: list[dict] = []
+    checks: list[dict] = []
+
+    def run_attempt() -> dict:
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    result, attempts = _run_with_market_retry(
+        run_attempt,
+        lambda: next(refreshed), written.append, checks, sleep_fn=sleeps.append,
+    )
+
+    assert result == {"status": "candidate_selected"}
+    assert attempts == [
+        {"attempt": 1, "reason_code": "market_price_mismatch"},
+        {"attempt": 2, "reason_code": "market_observation_mismatch"},
+    ]
+    assert sleeps == [2.0, 2.0]
+    assert written == [{"mid": "60001"}, {"mid": "60002"}]
+    assert checks == [{"attempt": 2}, {"attempt": 3}]
+
+
+def test_driver_market_retry_fails_after_ten_attempts_with_attempt_evidence() -> None:
+    def always_mismatch() -> dict:
+        raise proof.TestnetAutomationProofError("market_price_mismatch")
+
+    sleeps: list[float] = []
+    checks: list[dict] = []
+    with pytest.raises(proof.TestnetAutomationProofError) as error:
+        _run_with_market_retry(
+            always_mismatch,
+            lambda: ({"mid": "60001"}, [{"attempt": 1}]),
+            lambda _market: None,
+            checks,
+            sleep_fn=sleeps.append,
+        )
+
+    assert len(error.value.driver_retry_attempts) == 10
+    assert all(item["reason_code"] == "market_price_mismatch" for item in error.value.driver_retry_attempts)
+    assert sleeps == [2.0] * 9
 
 
 def test_confirmation_mapping_rejects_dashboard_authorization_forgery(tmp_path: Path) -> None:
