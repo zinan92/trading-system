@@ -48,6 +48,8 @@ from services.testnet_market_document import (
 PREVIEWS = Path("dashboard_control_plane/previews.json")
 DASHBOARD_CONFIRMATIONS = Path("dashboard_control_plane/confirmations.json")
 PARK_CONFIRMATIONS = Path("park_strategy/confirmations.jsonl")
+DRIVER_MARKET_RETRY_ATTEMPTS = 10
+DRIVER_MARKET_RETRY_INTERVAL_SECONDS = 2.0
 
 
 class ProofDriverError(ValueError):
@@ -55,6 +57,33 @@ class ProofDriverError(ValueError):
         self.reason_code = reason_code
         self.details = details
         super().__init__(reason_code)
+
+
+def _run_with_market_retry(
+    run_attempt: Any,
+    refresh_market: Any,
+    write_market: Any,
+    market_checks: list[dict[str, Any]],
+    *,
+    sleep_fn: Any = time.sleep,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Retry only the CLI's fail-closed market coherence race."""
+    retry_attempts: list[dict[str, Any]] = []
+    for attempt in range(1, DRIVER_MARKET_RETRY_ATTEMPTS + 1):
+        try:
+            return run_attempt(), retry_attempts
+        except proof.TestnetAutomationProofError as exc:
+            if exc.reason_code not in {"market_price_mismatch", "market_observation_mismatch"}:
+                raise
+            retry_attempts.append({"attempt": attempt, "reason_code": exc.reason_code})
+            if attempt == DRIVER_MARKET_RETRY_ATTEMPTS:
+                exc.driver_retry_attempts = retry_attempts
+                raise
+            sleep_fn(DRIVER_MARKET_RETRY_INTERVAL_SECONDS)
+            market, checks = refresh_market()
+            market_checks.extend(checks)
+            write_market(market)
+    raise AssertionError("unreachable")
 
 
 # These are the fields consumed immediately before GridTestnetLifecycle can
@@ -640,36 +669,37 @@ def run(
         )
         # The market document is obtained from the bound Broker and, when its
         # public ticker is sparse, one coherent credential-free source read.
-        broker = proof.build_broker_execution_port(proof._context(args, family=plan["strategy_type"]))
-        market_broker = broker
-        if dry_run:
-            # Dry-run must exercise the candidate gate without external I/O.
-            # The supplied Dashboard market is immutable evidence; project it
-            # into the same sparse binding contract used by the protected
-            # adapter, while the real execution path remains unchanged.
-            preview_market = preview.get("market") if isinstance(preview.get("market"), Mapping) else {}
+        # Every outer retry creates a new binding and assembles a new document;
+        # a failed attempt must not reuse a closed broker or stale price.
+        preview_market = preview.get("market") if isinstance(preview.get("market"), Mapping) else {}
 
-            class _DryRunMarketBroker:
-                def market_fact(self, *, instrument_id: str, now: Any) -> dict[str, Any]:
-                    return {
-                        **preview_market,
-                        "instrument_id": instrument_id,
-                        "price": preview_market.get("mid"),
-                        "observed_at": now.isoformat(),
-                        "source": preview_market.get("source") or "dashboard.preview",
-                        "fallback_policy": "none",
-                    }
+        class _DryRunMarketBroker:
+            def market_fact(self, *, instrument_id: str, now: Any) -> dict[str, Any]:
+                return {
+                    **preview_market,
+                    "instrument_id": instrument_id,
+                    "price": preview_market.get("mid"),
+                    "observed_at": now.isoformat(),
+                    "source": preview_market.get("source") or "dashboard.preview",
+                    "fallback_policy": "none",
+                }
 
-            market_broker = _DryRunMarketBroker()
-        try:
-            market, market_checks = read_coherent_market(
-                preview, market_broker, instrument_id=plan["instrument_id"]
+        def refresh_market() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+            market_broker = _DryRunMarketBroker() if dry_run else proof.build_broker_execution_port(
+                proof._context(args, family=plan["strategy_type"])
             )
-            _write_input(market_path, market)
-        finally:
-            close = getattr(broker, "close", None)
-            if callable(close):
-                close()
+            try:
+                return read_coherent_market(
+                    preview, market_broker, instrument_id=plan["instrument_id"]
+                )
+            finally:
+                close = getattr(market_broker, "close", None)
+                if callable(close):
+                    close()
+
+        market, market_checks = refresh_market()
+        _write_input(market_path, market)
+        market_retry_attempts: list[dict[str, Any]] = []
         if dry_run:
             # Run the real preflight/account/market/candidate path in the
             # temporary copy, replacing only the first exposure-changing call.
@@ -695,32 +725,30 @@ def run(
                  patch.object(proof, "_authoritative_account_snapshot", return_value=(fake_account, fake_reconciliation)), \
                  patch.object(TestnetAutomationCoordinator, "start_dca_session", return_value=safe_result), \
                  patch.object(TestnetAutomationCoordinator, "start_grid_session", return_value=safe_result):
-                for proof_attempt in range(1, _MARKET_READ_ATTEMPTS + 1):
-                    try:
-                        result = proof._start(args)
-                        break
-                    except StrategyControlMachineError as exc:
-                        result = {
-                            "status": "BLOCKED",
-                            "reason_code": exc.code,
-                            "detail": dict(exc.evidence),
-                            "execution_mutation": False,
-                            "network_operation_invoked": False,
-                            "next_action": "notify_park_and_wait",
-                        }
-                        break
-                    except proof.TestnetAutomationProofError as exc:
-                        if exc.reason_code != "market_price_mismatch" or proof_attempt == _MARKET_READ_ATTEMPTS:
-                            raise ProofDriverError(exc.reason_code, **dict(exc.result)) from exc
-                        time.sleep(1.0)
-                        market, retry_checks = read_coherent_market(
-                            preview, broker, instrument_id=plan["instrument_id"]
-                        )
-                        market_checks.extend(retry_checks)
-                        _write_input(market_path, market)
+                try:
+                    result, market_retry_attempts = _run_with_market_retry(
+                        lambda: proof._start(args), refresh_market,
+                        lambda value: _write_input(market_path, value), market_checks,
+                    )
+                except StrategyControlMachineError as exc:
+                    result = {
+                        "status": "BLOCKED",
+                        "reason_code": exc.code,
+                        "detail": dict(exc.evidence),
+                        "execution_mutation": False,
+                        "network_operation_invoked": False,
+                        "next_action": "notify_park_and_wait",
+                    }
+                except proof.TestnetAutomationProofError as exc:
+                    details = dict(exc.result)
+                    details["market_retry_attempts"] = getattr(exc, "driver_retry_attempts", [])
+                    raise ProofDriverError(exc.reason_code, **details) from exc
         else:
             try:
-                result = proof._start(args)
+                result, market_retry_attempts = _run_with_market_retry(
+                    lambda: proof._start(args), refresh_market,
+                    lambda value: _write_input(market_path, value), market_checks,
+                )
             except StrategyControlMachineError as exc:
                 result = {
                     "status": "BLOCKED",
@@ -736,6 +764,7 @@ def run(
                     "execution_blocker",
                     TestnetAutomationCoordinator(work_root).status().get("execution_blocker"),
                 )
+                details["market_retry_attempts"] = getattr(exc, "driver_retry_attempts", [])
                 raise ProofDriverError(exc.reason_code, **details) from exc
         output = {
             "schema_version": "testnet-proof-driver-receipt-v1", "status": result.get("status"),
@@ -749,6 +778,7 @@ def run(
                        "market_bound": True,
                        "confirmation_mapped": True, "candidate_selected": result.get("status") in {"candidate_selected", "dry_run_candidate_selected"}},
             "market_self_check": market_checks,
+            "market_retry_attempts": market_retry_attempts,
             "result": {key: result.get(key) for key in ("status", "reason_code", "detail", "lifecycle_status", "execution_blocker", "execution_mutation", "network_operation_invoked", "next_action")},
             "secret_material_present": False,
         }
