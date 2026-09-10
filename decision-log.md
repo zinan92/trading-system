@@ -19293,5 +19293,5 @@ auditable datafeed port; broker execution remains a separate port.
 
 ## Verification
 
-- `scripts/testnet_replay.sh` — pending.
-- `scripts/testnet_replay_mutations.sh` — pending.
+- `scripts/testnet_replay.sh` — 24 passed in 0.24s.
+- `scripts/testnet_replay_mutations.sh` — 15/15 mutations caught, including the #1255 strict `_snapshot` regression.
