@@ -109,22 +109,39 @@ def _load_dashboard_plan(output_root: Path, activation_id: str, plan_digest: str
     return dict(matching[-1]), confirmation
 
 
-def hydrate_order_identities(broker: object, state: Mapping[str, Any]) -> None:
-    """Restore active lifecycle order identities into a fresh broker binding."""
+def hydrate_order_identities(broker: object, state: Mapping[str, Any]) -> dict[str, Any]:
+    """Restore persisted lifecycle order identities into a fresh broker binding."""
     recovery_states = {
+        "submitting": "submitting",
+        "resting": "resting",
         "accepted": "resting",
+        "waiting_for_fill": "waiting_for_fill",
+        "waiting_for_trigger": "waiting_for_trigger",
         "cancel_pending": "cancel_pending",
         "partial": "partially_filled",
         "partially_filled": "partially_filled",
+        "filled": "filled",
+        "cancelled": "canceled",
+        "canceled": "canceled",
+        "modify_pending": "modify_pending",
+        "rejected": "rejected",
+        "unknown": "unknown",
     }
     cycle_id = str(state.get("cycle_id") or "").strip()
     if not cycle_id:
         raise OrderIdentityHydrationError("lifecycle:cycle_id_missing")
+    report: dict[str, Any] = {"recovered": 0, "skipped": []}
     for index, row in enumerate(state.get("orders") or []):
         if not isinstance(row, Mapping):
             raise OrderIdentityHydrationError(f"order[{index}]:row_invalid")
-        recovered_state = recovery_states.get(str(row.get("state") or "").strip().lower())
+        persisted_state = str(row.get("state") or "").strip().lower()
+        recovered_state = recovery_states.get(persisted_state)
         if recovered_state is None:
+            report["skipped"].append({
+                "index": index,
+                "state": persisted_state or None,
+                "reason": "unsupported_order_state",
+            })
             continue
         broker_order_id = str(row.get("broker_order_id") or "").strip()
         if not broker_order_id:
@@ -154,10 +171,12 @@ def hydrate_order_identities(broker: object, state: Mapping[str, Any]) -> None:
                     raise
                 recovery_args.pop("native_client_order_id")
                 broker.recover(request, **recovery_args)
+            report["recovered"] += 1
         except Exception as exc:  # noqa: BLE001 - caller converts this to a typed tick blocker.
             raise OrderIdentityHydrationError(
                 f"order[{index}]:recover_{type(exc).__name__}"
             ) from exc
+    return report
 
 
 def _read_testnet_facts(broker: object, instrument_id: str) -> dict[str, Any]:
@@ -312,7 +331,7 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
             plan,
             strategy_family=family,
         )
-        hydrate_order_identities(broker, lifecycle_state)
+        hydration = hydrate_order_identities(broker, lifecycle_state)
     except OrderIdentityHydrationError as exc:
         reason = f"order_identity_hydration_failed:{exc}"
         return (
@@ -356,7 +375,7 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         evidence = facts()
         if str(evidence.get("reason") or "").startswith("testnet_facts_unavailable:"):
             return evidence
-        evidence.update({"status": evidence.get("status") if evidence.get("status") in {"pass", "ok"} else ("pass" if evidence.get("cursor") else "unknown"), "activation_id": activation_id, "environment": "testnet", "account_fingerprint": coordinator_status.get("account_fingerprint"), "release_sha": coordinator_status.get("release_sha")})
+        evidence.update({"status": evidence.get("status") if evidence.get("status") in {"pass", "ok"} else ("pass" if evidence.get("cursor") else "unknown"), "activation_id": activation_id, "environment": "testnet", "account_fingerprint": coordinator_status.get("account_fingerprint"), "release_sha": coordinator_status.get("release_sha"), "hydration": hydration})
         return evidence
 
     def advance(_event: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -394,12 +413,12 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
                     raise ValueError("testnet_fill_fact_invalid")
                 result = coordinator.advance_grid_session(plan, broker=broker, fill=normalize_fill(fill), market=tick_market, timestamp=timestamp)
             result = result if fills else coordinator.advance_grid_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
-            return {**result, "market_checks": market_checks}
+            return {**result, "market_checks": market_checks, "hydration": hydration}
         result = coordinator.status()
         for fill in fills:
             result = coordinator.advance_dca_session(plan, broker=broker, fill=dict(fill), market=tick_market, timestamp=timestamp)
         result = result if fills else coordinator.advance_dca_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
-        return {**result, "market_checks": market_checks}
+        return {**result, "market_checks": market_checks, "hydration": hydration}
 
     return advance, reconcile
 

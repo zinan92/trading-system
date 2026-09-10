@@ -1,0 +1,15 @@
+{
+  "source": "redacted_copy_of_dashboard_plan_0e696f60b88b903d",
+  "status": "blocked_reconciliation",
+  "blocker": "position_open_unprotected",
+  "orders": [
+    {"ticket_id": "dashboard-plan:fixture:grid:1:entry:g1", "order_id": "dashboard-plan:fixture:grid:1:entry:g1", "broker_order_id": "59671762645", "client_order_id": "0xredacted-1", "state": "cancelled"},
+    {"ticket_id": "dashboard-plan:fixture:grid:2:entry:g1", "order_id": "dashboard-plan:fixture:grid:2:entry:g1", "broker_order_id": "59671764043", "client_order_id": "0xredacted-2", "state": "cancelled"},
+    {"ticket_id": "dashboard-plan:fixture:grid:3:entry:g1", "order_id": "dashboard-plan:fixture:grid:3:entry:g1", "broker_order_id": "59671764476", "client_order_id": "0xredacted-3", "state": "cancelled"},
+    {"ticket_id": "dashboard-plan:fixture:grid:4:entry:g1", "order_id": "dashboard-plan:fixture:grid:4:entry:g1", "broker_order_id": "59671765769", "client_order_id": "0xredacted-4", "state": "cancelled"},
+    {"ticket_id": "dashboard-plan:fixture:grid:5:entry:g1", "order_id": "dashboard-plan:fixture:grid:5:entry:g1", "broker_order_id": "59671766069", "client_order_id": "0xredacted-5", "state": "filled"}
+  ],
+  "fills": [
+    {"fill_id": "", "fill_identities": [], "order_id": "dashboard-plan:fixture:grid:5:entry:g1", "event": "entry", "rung_id": "grid-testnet-long:5", "quantity": 0.00024, "side": "buy", "price": 77673.0}
+  ]
+}

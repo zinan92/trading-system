@@ -339,7 +339,7 @@ def test_hydrate_order_identities_rejects_active_order_without_oid() -> None:
         module.hydrate_order_identities(object(), state)
 
 
-def test_hydrate_order_identities_maps_dca_active_states_and_skips_terminal_orders() -> None:
+def test_hydrate_order_identities_maps_all_standard_broker_states() -> None:
     import pipelines.park_control as module
 
     recovered = []
@@ -375,7 +375,23 @@ def test_hydrate_order_identities_maps_dca_active_states_and_skips_terminal_orde
         ("accepted", "2000", "resting"),
         ("cancel_pending", "2001", "cancel_pending"),
         ("partially_filled", "2002", "partially_filled"),
+        ("filled", "2003", "filled"),
+        ("cancelled", "2004", "canceled"),
     ]
+
+
+def test_hydrate_order_identities_reports_unsupported_states() -> None:
+    import pipelines.park_control as module
+
+    report = module.hydrate_order_identities(
+        type("Broker", (), {"recover": lambda *_args, **_kwargs: None})(),
+        {"cycle_id": "dashboard-preview", "orders": [{"broker_order_id": "1", "state": "venue_specific_state"}]},
+    )
+
+    assert report == {
+        "recovered": 0,
+        "skipped": [{"index": 0, "state": "venue_specific_state", "reason": "unsupported_order_state"}],
+    }
 
 
 def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(monkeypatch, tmp_path) -> None:
@@ -508,6 +524,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
         "1000", "1001", "1002", "1003", "1004",
     ]
     assert [row["status"] for row in (empty, empty_2, empty_3, filled)] == ["grid_running"] * 4
+    assert all(row["hydration"] == {"recovered": 5, "skipped": []} for row in (empty, empty_2, empty_3, filled))
     assert timestamps == ["2026-09-08T01:00:03+00:00"] * 4
     assert all("warning" not in row for row in (empty, empty_2, empty_3, filled))
     assert filled["fill"]["order_id"] == "fake-order"
