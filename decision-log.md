@@ -19161,6 +19161,18 @@ auditable datafeed port; broker execution remains a separate port.
 
 ## Gotchas
 
+- The replay harness now keeps exchange-side positions, open orders,
+  protection groups, and fills as durable fake-binding state while constructing
+  a fresh broker for each replay step. A fill is not considered valid unless
+  the public facts read shows the corresponding position transition.
+- The control-tick regression uses the real coordinator advance seam; direct
+  lifecycle calls remain only for focused normalization/error cases. The
+  real-shaped BTC fixture retains two historical userFills, empty
+  clearinghouse/frontend orders, BBO levels, and `szDecimals: 5` with a
+  placeholder account address.
+- I4 remains an intentional `xfail(strict=True)`: the one-tick binding/public
+  price jitter is reproduced for the follow-up fix and is not changed here.
+
 - Historical references #1227, #1229, #1233, #1235, #1237, #1239, #1241,
   #1243, #1219, #1231, #1209, #1213, #1215, #1248, #1250, #1245, #1223,
   #1221, and #1226 were not resolvable as Issues through `gh issue view`; the
