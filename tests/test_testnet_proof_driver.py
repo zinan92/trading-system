@@ -95,7 +95,7 @@ def test_plan_projects_all_dashboard_grid_risk_sources_for_lifecycle() -> None:
     plan = build_plan(preview, confirmation)
 
     assert plan["risk_budget"] == {
-        "maximum_loss_at_full_depth": 100,
+        "maximum_loss_at_full_depth": 25.0,
         "equity": 10_000,
         "leverage_limit": 5,
         "max_notional": 1_000,

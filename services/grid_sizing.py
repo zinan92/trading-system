@@ -4,7 +4,7 @@ Single source of truth for the fixed-timeframe grid contract: complete D1
 ATR14 owns the range, complete 4H ATR14 proposes the densest spacing, and the
 planner searches down to the configured grid-count floor until every complete
 grid clears its dollar-profit target within the 10x capital ceiling. Maximum
-stop loss remains an advisory diagnostic only.
+stop loss is an enforced full-depth risk fact.
 
 Pure functions only: no I/O, no plan or ledger mutation, no clock reads.
 Identical market/account/config inputs must produce an identical preview,
@@ -23,6 +23,7 @@ from typing import Any
 
 from services.dualtrack_execution_contract import normalize_execution_command
 from services.grid_marketability import market_outside_range_requires_blocker
+from services.grid_risk import full_depth_loss
 
 GRID_DIRECTIONS = {"neutral", "long", "short"}
 GRID_STYLES = {"steady", "aggressive"}
@@ -130,6 +131,7 @@ def _grid_geometry(
     latest: float,
     direction: str,
     config: dict[str, Any],
+    hard_stop: float | dict[str, Any] | None = None,
 ) -> tuple[list[float], float | None, float, float, list[dict[str, Any]]]:
     spacing = (high - low) / count
     if mode == "geometric":
@@ -142,6 +144,11 @@ def _grid_geometry(
         levels = [low + spacing * index for index in range(count + 1)]
         lower_stop = low - spacing
         upper_stop = high + spacing
+    if isinstance(hard_stop, dict):
+        lower_stop = float(hard_stop.get("long", hard_stop.get("buy", lower_stop)))
+        upper_stop = float(hard_stop.get("short", hard_stop.get("sell", upper_stop)))
+    elif hard_stop not in (None, ""):
+        lower_stop = upper_stop = float(hard_stop)
     nearest_index = min(range(len(levels)), key=lambda index: abs(levels[index] - latest))
     provisional: list[dict[str, Any]] = []
     for index, raw_price in enumerate(levels):
@@ -434,6 +441,9 @@ def build_grid_preview(
     if low <= 0 or high <= low:
         raise ValueError("grid range must have positive low below high")
     grid_input = body.get("grid") if isinstance(body.get("grid"), dict) else {}
+    requested_hard_stop = body.get("hard_stop")
+    if requested_hard_stop in (None, ""):
+        requested_hard_stop = grid_input.get("hard_stop", grid_input.get("hard_stop_price"))
     trailing_up = grid_input.get("trailing_up", False)
     if not isinstance(trailing_up, bool):
         raise ValueError("grid trailing_up must be boolean")
@@ -502,6 +512,7 @@ def build_grid_preview(
                 latest=latest,
                 direction=direction,
                 config=config,
+                hard_stop=requested_hard_stop,
             )
         except ValueError as error:
             if (
@@ -606,11 +617,7 @@ def build_grid_preview(
     max_side_notional = float(selected["max_side_notional"])
     spacing = (high - low) / count
     level_spacings = [right - left for left, right in zip(levels, levels[1:])]
-    side_losses = {
-        side: sum(abs(order["price"] - order["sl"]) * order["quantity"] for order in orders if order["side"] == side)
-        for side in ("buy", "sell")
-    }
-    max_loss = max(side_losses.values())
+    max_loss = full_depth_loss(orders)
     estimated_margin = max_side_notional / leverage
     net_profit_rates = [net / float(order["notional"]) for order, net in zip(orders, net_profits)]
     preview = {
@@ -677,7 +684,7 @@ def build_grid_preview(
             "equity": round(equity, 2),
             "estimated_margin": round(estimated_margin, 2),
             "max_loss": round(max_loss, 2),
-            "max_loss_role": "advisory_only",
+            "max_loss_role": "risk_gate_enforced",
             "absolute_notional_ceiling": round(absolute_notional_ceiling, 2),
             "capital_budget": round(capital_budget, 2),
             "capital_notional_cap_per_grid": round(capital_notional_cap, 2),

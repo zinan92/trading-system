@@ -35,6 +35,7 @@ from services.strategy_control_plane import StrategyControlMachineError
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.dashboard_control_plane import public_catalog_loader
 from services.grid_testnet_lifecycle import GridTestnetLifecycle, GridTestnetLifecycleError
+from services.grid_risk import full_depth_loss
 from services.testnet_market_document import (
     MARKET_BBO_FIELDS as _MARKET_BBO_FIELDS,
     MARKET_READ_ATTEMPTS as _MARKET_READ_ATTEMPTS,
@@ -340,10 +341,12 @@ def _grid_risk_budget(
     market = preview.get("market") if isinstance(preview.get("market"), Mapping) else {}
     # Effective notional is the subtractive Portfolio Gate result.  It is the
     # only notional permitted to reach an execution lifecycle.
+    canonical_hard_stop = _first_value(
+        grid, preview_grid, keys=("hard_stop", "hard_stop_price")
+    )
     values = {
-        "maximum_loss_at_full_depth": _first_value(
-            risk, preview.get("risk") if isinstance(preview.get("risk"), Mapping) else {},
-            keys=("maximum_loss_at_full_depth", "max_loss", "maximum_loss"),
+        "maximum_loss_at_full_depth": round(
+            full_depth_loss(orders, canonical_hard_stop), 2
         ),
         "equity": _first_value(account, body_account, risk, keys=("equity", "account_equity")),
         "leverage_limit": _first_value(
