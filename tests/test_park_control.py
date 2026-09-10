@@ -54,7 +54,7 @@ def test_testnet_control_tick_is_independent_and_heartbeat_only(tmp_path) -> Non
 def test_testnet_control_tick_running_session_without_broker_fails_closed(tmp_path) -> None:
     import pipelines.park_control as module
     from services.testnet_automation_coordinator import TestnetAutomationCoordinator
-    from services.testnet_scheduler import TestnetScheduler, TestnetSchedulerOwnershipStore
+    from services.testnet_scheduler import TestnetSchedulerOwnershipStore
 
     output = tmp_path / "outputs"
     TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
@@ -313,7 +313,7 @@ def test_testnet_facts_failure_returns_typed_redacted_reason() -> None:
     }
 
 
-def test_hydrate_order_identities_rejects_active_order_without_oid() -> None:
+def test_hydrate_order_identities_skips_active_order_without_oid() -> None:
     import pipelines.park_control as module
 
     state = {
@@ -332,11 +332,11 @@ def test_hydrate_order_identities_rejects_active_order_without_oid() -> None:
         ],
     }
 
-    with pytest.raises(
-        module.OrderIdentityHydrationError,
-        match=r"^order\[0\]:broker_order_id_missing$",
-    ):
-        module.hydrate_order_identities(object(), state)
+    report = module.hydrate_order_identities(object(), state)
+
+    assert report["recovered"] == 0
+    assert report["skipped"] == [{"index": 0, "state": "accepted", "reason": "broker_order_id_missing"}]
+    assert state["orders"][0]["state"] == "rejected"
 
 
 def test_hydrate_order_identities_maps_all_standard_broker_states() -> None:
@@ -537,7 +537,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
 @pytest.mark.parametrize(
     ("failure_mode", "expected_reason"),
     [
-        ("missing_oid", "order_identity_hydration_failed:order[0]:broker_order_id_missing"),
+            ("missing_oid", None),
         ("recover_error", "order_identity_hydration_failed:order[0]:recover_RuntimeError"),
     ],
 )
@@ -607,12 +607,18 @@ def test_dashboard_activation_tick_blocks_before_facts_when_identity_hydration_f
         },
     )
 
-    assert advance({"kind": "market_heartbeat"}) == {
-        "status": "blocked",
-        "reason": expected_reason,
-    }
-    assert reconcile is None
-    assert broker.facts_calls == 0
+    result = advance({"kind": "market_heartbeat"})
+    if expected_reason is None:
+        assert result["status"] == "failed"
+        assert result["reason"].startswith("testnet_facts_unavailable:")
+    else:
+        assert result == {"status": "blocked", "reason": expected_reason}
+    if expected_reason is not None:
+        assert reconcile is None
+        assert broker.facts_calls == 0
+    else:
+        assert reconcile is not None
+        assert broker.facts_calls == 1
 
 
 def test_setup_exception_is_recorded_without_deferred_name_error(monkeypatch, tmp_path) -> None:

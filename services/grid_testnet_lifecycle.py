@@ -145,7 +145,7 @@ class GridTestnetLifecycle:
             self._block(state, "capability_gap:resume_revalidation", timestamp=timestamp)
             self._save(state)
             return self.snapshot(plan)
-        if self._net_quantity(state) != 0 and state.get("hard_stop_protection", {}).get("status") != "active":
+        if self._net_quantity(state) != 0 and (state.get("hard_stop_protection") or {}).get("status") != "active":
             self._block(state, "hard_stop_protection_revalidation_required", timestamp=timestamp)
             self._save(state)
             return self.snapshot(plan)
@@ -188,7 +188,7 @@ class GridTestnetLifecycle:
         self._assert_state_identity(state, identity)
         return json.loads(json.dumps(state, sort_keys=True))
 
-    def on_fill(self, plan: dict[str, Any], raw_fill: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
+    def on_fill(self, plan: dict[str, Any], raw_fill: dict[str, Any], *, market: Mapping[str, Any] | None = None, timestamp: str) -> dict[str, Any]:
         raw_fill = self._normalize_fill(raw_fill)
         state = self._state(plan)
         order_id = str(raw_fill.get("order_id") or "").strip()
@@ -335,7 +335,7 @@ class GridTestnetLifecycle:
                 self._block(state, "maximum_loss_budget_exceeded", timestamp=timestamp)
                 self._hard_stop(plan, state, timestamp=timestamp, reason="risk_budget")
             else:
-                self._ensure_hard_stop(plan, state, timestamp=timestamp)
+                self._ensure_hard_stop(plan, state, market=market, timestamp=timestamp)
                 if receipt_state != "partially_filled":
                     try:
                         self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
@@ -378,7 +378,7 @@ class GridTestnetLifecycle:
                     return self.snapshot(plan)
             elif order.get("event") in {"hard_stop", "hard_stop_recovery"} and line.open_quantity <= 1e-9:
                 rung["hard_stop_closed"] = True
-            self._ensure_hard_stop(plan, state, timestamp=timestamp)
+            self._ensure_hard_stop(plan, state, market=market, timestamp=timestamp)
             if slippage_breached:
                 self._block(state, "exit_fill_slippage_exceeded", timestamp=timestamp)
                 self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
@@ -402,8 +402,19 @@ class GridTestnetLifecycle:
         self._save(state)
         return self.snapshot(plan)
 
-    def on_market_event(self, plan: dict[str, Any], *, price: float, timestamp: str) -> dict[str, Any]:
+    def on_market_event(self, plan: dict[str, Any], *, price: float, market: Mapping[str, Any] | None = None, timestamp: str) -> dict[str, Any]:
         state = self._state(plan)
+        if state.get("status") == "hard_stop_triggered" and state.get("hard_stop_requested") and self._net_quantity(state) > 1e-9:
+            has_open_flatten = any(
+                row.get("state") == "accepted"
+                and row.get("event") in {"hard_stop", "hard_stop_recovery"}
+                for row in state.get("orders", ())
+            )
+            if not has_open_flatten:
+                self._hard_stop(plan, state, timestamp=timestamp, reason="hard_stop_retry", market=market)
+                state["updated_at"] = timestamp
+                self._save(state)
+                return self.snapshot(plan)
         if state.get("exchange_exposure_open"):
             self._retry_exchange_exposure(state, timestamp=timestamp)
             if not state.get("exchange_exposure_open") and state.get("hard_stop_requested"):
@@ -414,7 +425,7 @@ class GridTestnetLifecycle:
             return self.snapshot(plan)
         if state["status"] in {"terminal", "sealed", "blocked_reconciliation", "blocked_protection", "blocked_risk"}:
             if self._is_local_fill_blocker(state.get("blocker")):
-                self._recover_blocked_position(plan, state, price=price, timestamp=timestamp)
+                self._recover_blocked_position(plan, state, price=price, market=market, timestamp=timestamp)
                 state["updated_at"] = timestamp
                 self._save(state)
                 return self.snapshot(plan)
@@ -472,7 +483,7 @@ class GridTestnetLifecycle:
         ) or (
             direction == "neutral" and (market_price >= upper or market_price <= lower)
         ):
-            self._hard_stop(plan, state, timestamp=timestamp, reason="grid_boundary", market_price=float(price))
+            self._hard_stop(plan, state, timestamp=timestamp, reason="grid_boundary", market=market, market_price=float(price))
         else:
             self._skip_missed_rungs(plan, state, price=float(price), timestamp=timestamp)
             self._expire_partial_entries(plan, state, timestamp=timestamp)
@@ -603,7 +614,7 @@ class GridTestnetLifecycle:
                 identities.append(str(fill_hash))
             fill["fill_identities"] = identities
 
-    def _recover_blocked_position(self, plan: dict[str, Any], state: dict[str, Any], *, price: float, timestamp: str) -> None:
+    def _recover_blocked_position(self, plan: dict[str, Any], state: dict[str, Any], *, price: float, market: Mapping[str, Any] | None = None, timestamp: str) -> None:
         """Retry a local fill failure without cancelling unrelated resting entries."""
         try:
             facts = self._public_facts(state, "positions", "fills")
@@ -641,8 +652,8 @@ class GridTestnetLifecycle:
                 line.apply_entry_fill(fill_id=fill_id, quantity=float(fill["quantity"]), at=timestamp)
                 rung["line"] = line.snapshot()
             self._submit_rung_tp(plan, state, rung, timestamp=timestamp)
-        self._ensure_hard_stop(plan, state, timestamp=timestamp)
-        if state.get("hard_stop_protection", {}).get("status") != "active":
+        self._ensure_hard_stop(plan, state, market=market, timestamp=timestamp)
+        if (state.get("hard_stop_protection") or {}).get("status") != "active":
             state["blocker"] = "position_open_unprotected"
             state["park_notification_required"] = True
             return
@@ -759,8 +770,8 @@ class GridTestnetLifecycle:
             index=int(rung.get("generation") or 1),
             timestamp=timestamp,
             reduce_only=True,
-            order_type="market",
-            time_in_force="ioc",
+            order_type="limit",
+            time_in_force="gtc",
             planned_price=float(rung["tp"]),
             attempt=tp_attempt,
             trigger_price=float(rung["tp"]),
@@ -920,10 +931,9 @@ class GridTestnetLifecycle:
                 continue
             self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
 
-    def _hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str, market_price: float | None = None) -> None:
+    def _hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str, market: Mapping[str, Any] | None = None, market_price: float | None = None) -> None:
         if state["status"] in {"terminal", "sealed"}:
             return
-        market_price = market_price if market_price is not None else state.get("last_market_price")
         state["status"] = "hard_stop_triggered"
         state["hard_stop_requested"] = True
         self._cancel_all_open_orders(state, timestamp=timestamp, reason=reason)
@@ -932,21 +942,28 @@ class GridTestnetLifecycle:
             line = GridLineLifecycle.from_snapshot(rung["line"])
             if line.open_quantity <= 1e-9:
                 continue
-            command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), market_price=market_price)
+            if any(
+                row.get("state") == "accepted"
+                and row.get("event") in {"hard_stop", "hard_stop_recovery"}
+                and row.get("rung_id") == rung.get("rung_id")
+                for row in state.get("orders", ())
+            ):
+                continue
+            command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), market_price=self._flatten_market_price(rung, market, market_price if market_price is not None else state.get("last_market_price")))
             try:
                 receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
                 state["orders"].append(self._order_row(command, receipt))
             except GridTestnetLifecycleError as exc:
                 self._block(state, f"hard_stop_submit_failed:{exc}", timestamp=timestamp)
-                self._submit_emergency_flatten(plan, state, rung, timestamp=timestamp, reason="hard_stop_submit_failed", market_price=market_price)
+                self._submit_emergency_flatten(plan, state, rung, timestamp=timestamp, reason="hard_stop_submit_failed", market=market, market_price=market_price)
         self._record_event(state, "hard_stop_triggered", timestamp=timestamp, reason=reason)
         self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
 
-    def _submit_emergency_flatten(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, timestamp: str, reason: str, market_price: float | None = None) -> None:
+    def _submit_emergency_flatten(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, timestamp: str, reason: str, market: Mapping[str, Any] | None = None, market_price: float | None = None) -> None:
         line = GridLineLifecycle.from_snapshot(rung["line"])
         if line.open_quantity <= 1e-9:
             return
-        command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop_recovery", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), attempt=int(rung.get("tp_attempt") or 0) + 1, market_price=market_price if market_price is not None else state.get("last_market_price"))
+        command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop_recovery", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), attempt=int(rung.get("tp_attempt") or 0) + 1, market_price=self._flatten_market_price(rung, market, market_price if market_price is not None else state.get("last_market_price")))
         try:
             receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
             state["orders"].append(self._order_row(command, receipt))
@@ -954,10 +971,33 @@ class GridTestnetLifecycle:
             self._record_event(state, "emergency_flatten_submitted", timestamp=timestamp, rung_id=rung["rung_id"], reason=reason)
         except GridTestnetLifecycleError as exc:
             self._block(state, f"emergency_flatten_failed:{exc}", timestamp=timestamp)
+            state["blocker"] = "position_open_unprotected"
+            state["park_notification_required"] = True
 
     def _submission_failure(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str) -> None:
         self._block(state, reason, timestamp=timestamp)
         self._hard_stop(plan, state, timestamp=timestamp, reason="grid_submission_failure")
+
+    @staticmethod
+    def _flatten_market_price(rung: Mapping[str, Any], market: Mapping[str, Any] | None, fallback: float | None) -> float | None:
+        """Return the current executable BBO side, never a fill-derived quote."""
+        if isinstance(market, Mapping):
+            key = "bid" if str(rung.get("side") or "").lower() == "buy" else "ask"
+            value = market.get(key)
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                value = None
+            if value is not None and value > 0:
+                return value
+            for key in ("mid", "price"):
+                try:
+                    value = float(market.get(key))
+                except (TypeError, ValueError):
+                    value = None
+                if value is not None and value > 0:
+                    return value
+        return fallback
 
     def _cancel_all_open_orders(
         self,
@@ -1124,7 +1164,7 @@ class GridTestnetLifecycle:
             )
         return unresolved_reason
 
-    def _ensure_hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
+    def _ensure_hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, market: Mapping[str, Any] | None = None, timestamp: str) -> None:
         net_quantity = self._net_quantity(state)
         if abs(net_quantity) <= 1e-9:
             if state.get("hard_stop_protection") is not None:
@@ -1140,6 +1180,8 @@ class GridTestnetLifecycle:
             else:
                 submitted = self.broker.request("protection_order", "replace", group)
             confirmed = self.broker.request("protection_order", "query", group)
+            if not self._protection_is_active(confirmed):
+                raise GridTestnetLifecycleError("protection_query_not_active")
             state["hard_stop_protection"] = {
                 "protection_id": group.protection_id,
                 "quantity": abs(net_quantity),
@@ -1154,7 +1196,7 @@ class GridTestnetLifecycle:
         except Exception as exc:  # noqa: BLE001
             self._block(state, f"hard_stop_coverage_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
             self._cancel_all_open_orders(state, timestamp=timestamp, reason="hard_stop_coverage_failure")
-            self._hard_stop(plan, state, timestamp=timestamp, reason="hard_stop_coverage_failure")
+            self._hard_stop(plan, state, timestamp=timestamp, reason="hard_stop_coverage_failure", market=market)
 
     def _cancel_hard_stop_protection(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         del plan
@@ -1244,7 +1286,11 @@ class GridTestnetLifecycle:
         from decimal import Decimal
         from standard_broker import OrderSide, ProtectionExecution, ProtectionGroup, ProtectionLeg, ProtectionType, ProtectionQuantityPolicy
         long = net_quantity > 0
-        stop = float(state["lower_boundary"] if long else state["upper_boundary"])
+        configured_stop = state.get("hard_stop")
+        if isinstance(configured_stop, Mapping):
+            configured_stop = configured_stop.get("long" if long else "short")
+        stop = float(configured_stop or (state["lower_boundary"] if long else state["upper_boundary"]))
+        tp = self._weighted_take_profit(state, long=long)
         return ProtectionGroup(
             protection_id=f"grid-hard-stop:{state['strategy_plan_id']}",
             parent_order_id=str(state["orders"][0]["order_id"] if state["orders"] else state["strategy_plan_id"]),
@@ -1253,9 +1299,32 @@ class GridTestnetLifecycle:
             entry_price=Decimal(str(self._weighted_entry(state))),
             quantity=Decimal(str(abs(net_quantity))),
             quantity_policy=ProtectionQuantityPolicy.POSITION_FOLLOWING,
-            take_profit=None,
+            take_profit=ProtectionLeg(protection_type=ProtectionType.TAKE_PROFIT, execution=ProtectionExecution.LIMIT, trigger_price=Decimal(str(tp)), limit_price=Decimal(str(tp))),
             stop_loss=ProtectionLeg(protection_type=ProtectionType.STOP_LOSS, execution=ProtectionExecution.MARKET, trigger_price=Decimal(str(stop))),
         )
+
+    @staticmethod
+    def _protection_is_active(observation: Any) -> bool:
+        state = getattr(observation, "state", None)
+        if state is None and isinstance(observation, Mapping):
+            state = observation.get("state")
+        if state is None:
+            accepted = getattr(observation, "accepted", None)
+            if accepted is None and isinstance(observation, Mapping):
+                accepted = observation.get("accepted")
+            return accepted is True
+        return str(getattr(state, "value", state) or "").lower() == "active"
+
+    def _weighted_take_profit(self, state: Mapping[str, Any], *, long: bool) -> float:
+        rows: list[tuple[float, float]] = []
+        for rung in state.get("rungs", ()):
+            line = GridLineLifecycle.from_snapshot(rung["line"])
+            if line.open_quantity > 1e-9 and bool(rung.get("side") == ("buy" if long else "sell")):
+                rows.append((float(rung["tp"]), line.open_quantity))
+        if not rows:
+            return float(state["upper_boundary"] if long else state["lower_boundary"])
+        total = sum(price * quantity for price, quantity in rows)
+        return total / sum(quantity for _, quantity in rows)
 
     def _hard_stop_group_from_state(self, state: dict[str, Any], protection: Mapping[str, Any]) -> Any:
         class _Plan:
@@ -1399,9 +1468,10 @@ class GridTestnetLifecycle:
                 raise GridTestnetLifecycleError("short_grid_requires_sell_rungs")
             if identity["direction"] == "neutral" and ((side == "buy" and price >= identity["midpoint"]) or (side == "sell" and price <= identity["midpoint"])):
                 raise GridTestnetLifecycleError("neutral_grid_midpoint_geometry_invalid")
+            stored_hard_stop = canonical_stop if explicit_hard_stop else hard_stop
             line_id = str(item.get("grid_line_id") or item.get("level_id") or f"{identity['revision_id']}:grid:{index}")
             line = GridLineLifecycle(line_id=line_id, armed_at=identity["created_at"], requested_quantity=quantity)
-            rungs.append({"rung_id": line_id, "rung": int(item.get("rung") or index), "side": side, "price": price, "tp": tp, "hard_stop": hard_stop, "quantity": quantity, "generation": 1, "line": line.snapshot(), "entry_order_id": None, "tp_order_id": None, "partial_deadline": None})
+            rungs.append({"rung_id": line_id, "rung": int(item.get("rung") or index), "side": side, "price": price, "tp": tp, "hard_stop": stored_hard_stop, "quantity": quantity, "generation": 1, "line": line.snapshot(), "entry_order_id": None, "tp_order_id": None, "partial_deadline": None})
         if len({rung["price"] for rung in rungs}) != len(rungs):
             raise GridTestnetLifecycleError("grid_rung_prices_not_unique")
         if identity["direction"] == "neutral" and {rung["side"] for rung in rungs} != {"buy", "sell"}:
@@ -1409,7 +1479,7 @@ class GridTestnetLifecycle:
         return rungs
 
     def _new_state(self, identity: dict[str, Any], rungs: list[dict[str, Any]], timestamp: str, *, status: str, blocker: str | None = None) -> dict[str, Any]:
-        state = {"schema_version": self.schema_version, "strategy_plan_id": identity["plan_id"], "strategy_plan_version": identity["version"], "cycle_id": identity["cycle_id"], "strategy_session_id": identity["session_id"], "strategy_revision_id": identity["revision_id"], "plan_digest": identity["plan_digest"], "instrument_id": identity["instrument_id"], "direction": identity["direction"], "lower_boundary": identity["lower_boundary"], "upper_boundary": identity["upper_boundary"], "rungs": rungs, "orders": [], "fills": [], "hard_stop_protection": None, "events": [], "retry_events": [], "status": status, "created_at": timestamp}
+        state = {"schema_version": self.schema_version, "strategy_plan_id": identity["plan_id"], "strategy_plan_version": identity["version"], "cycle_id": identity["cycle_id"], "strategy_session_id": identity["session_id"], "strategy_revision_id": identity["revision_id"], "plan_digest": identity["plan_digest"], "instrument_id": identity["instrument_id"], "direction": identity["direction"], "lower_boundary": identity["lower_boundary"], "upper_boundary": identity["upper_boundary"], "hard_stop": identity.get("hard_stop"), "rungs": rungs, "orders": [], "fills": [], "hard_stop_protection": None, "events": [], "retry_events": [], "status": status, "created_at": timestamp}
         state["midpoint"] = identity["midpoint"]
         if blocker:
             state["blocker"] = blocker
@@ -1436,7 +1506,11 @@ class GridTestnetLifecycle:
         instrument_id = str(plan.get("instrument_id") or (plan.get("execution_context") or {}).get("instrument_id") or "").strip()
         if not instrument_id:
             raise ValueError("Grid instrument identity is required")
-        return {"plan_id": str(plan["strategy_plan_id"]), "version": int(plan.get("version") or 0), "cycle_id": str(plan["cycle_id"]), "session_id": str(plan["strategy_session_id"]), "revision_id": str(plan["strategy_revision_id"]), "plan_digest": str(plan["plan_digest"]), "instrument_id": instrument_id, "direction": direction, "lower_boundary": lower, "upper_boundary": upper, "midpoint": midpoint, "created_at": str(plan.get("locked_at") or "")}
+        hard_stop = plan.get("hard_stop")
+        if hard_stop in (None, ""):
+            hard_stop = normalized.get("hard_stop")
+        normalized_hard_stop = hard_stop if isinstance(hard_stop, Mapping) else (float(hard_stop) if hard_stop not in (None, "") else None)
+        return {"plan_id": str(plan["strategy_plan_id"]), "version": int(plan.get("version") or 0), "cycle_id": str(plan["cycle_id"]), "session_id": str(plan["strategy_session_id"]), "revision_id": str(plan["strategy_revision_id"]), "plan_digest": str(plan["plan_digest"]), "instrument_id": instrument_id, "direction": direction, "lower_boundary": lower, "upper_boundary": upper, "midpoint": midpoint, "hard_stop": normalized_hard_stop, "created_at": str(plan.get("locked_at") or "")}
 
     @staticmethod
     def _validate_risk_inputs(plan: Mapping[str, Any]) -> None:
