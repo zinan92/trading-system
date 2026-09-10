@@ -16,7 +16,7 @@ from .external_host import (
 )
 from .fees import FeeEvent, FeeScheduleSnapshot, FundingPayment
 from .models import AccountScope, BrokerEnvironment, SignerKind
-from .orders import OrderFill, OrderReceipt, OrderState
+from .orders import OrderFill, OrderReceipt, OrderState, UnattributedFill
 
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
@@ -179,6 +179,7 @@ class ExternalReconciliationSnapshot:
     funding_ids: tuple[str, ...]
     position_ids: tuple[str, ...]
     evidence_digest: str
+    unattributed_fills: tuple[UnattributedFill, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.outcome, ExternalReconciliationOutcome):
@@ -263,6 +264,8 @@ class ExternalReconciliationSnapshot:
                 computed_failures.append("unknown_order_state")
             if self.unregistered_open_orders:
                 computed_failures.append("unregistered_open_orders")
+            if self.unattributed_fills:
+                computed_failures.append("unattributed_fills")
             if not set(_unique(computed_failures)).issubset(self.failure_reasons):
                 raise ValueError("snapshot failure reasons are not bound to its facts")
         expected = _snapshot_projection(self)
@@ -286,6 +289,7 @@ class ExternalReconciliationSnapshot:
             fee_ids=self.fee_ids,
             funding_ids=self.funding_ids,
             position_ids=self.position_ids,
+            unattributed_fills=self.unattributed_fills,
         ):
             raise ValueError("evidence_digest is not bound to the snapshot projection")
 
@@ -335,6 +339,7 @@ class ExternalReconciliationSnapshot:
         fees: ExternalReconciliationObservation[tuple[FeeEvent | FeeScheduleSnapshot, ...]] | None,
         funding: ExternalReconciliationObservation[tuple[FundingPayment, ...]] | None,
         funding_applicable: bool,
+        unattributed_fills: tuple[UnattributedFill, ...] = (),
         now: datetime | None = None,
         stale_after: timedelta | None = None,
         max_observation_skew: timedelta | None = None,
@@ -410,6 +415,8 @@ class ExternalReconciliationSnapshot:
             receipt.is_unregistered_broker_order for receipt in open_orders.fact.data
         ):
             failures.append("unregistered_open_orders")
+        if unattributed_fills:
+            failures.append("unattributed_fills")
 
         failure_reasons = _unique(failures)
         outcome = _outcome(failure_reasons)
@@ -442,6 +449,7 @@ class ExternalReconciliationSnapshot:
             fee_ids=fee_ids,
             funding_ids=funding_ids,
             position_ids=position_ids,
+            unattributed_fills=unattributed_fills,
         )
         return cls(
             identity=identity,
@@ -467,6 +475,7 @@ class ExternalReconciliationSnapshot:
             funding_ids=funding_ids,
             position_ids=position_ids,
             evidence_digest=evidence_digest,
+            unattributed_fills=tuple(unattributed_fills),
         )
 
 
@@ -605,6 +614,7 @@ def _evidence_digest(
     fee_ids,
     funding_ids,
     position_ids,
+    unattributed_fills=(),
 ) -> str:
     return digest_canonical(
         {
@@ -622,6 +632,7 @@ def _evidence_digest(
             "fee_ids": fee_ids,
             "funding_ids": funding_ids,
             "position_ids": position_ids,
+            "unattributed_fills": unattributed_fills,
         }
     )
 
@@ -664,6 +675,8 @@ def _outcome(failures: tuple[str, ...]) -> ExternalReconciliationOutcome:
     if any(reason.startswith("missing_") or reason.startswith("incomplete_") for reason in failures):
         return ExternalReconciliationOutcome.INCOMPLETE
     if any(reason in {"unknown_order_state", "unregistered_open_orders"} for reason in failures):
+        return ExternalReconciliationOutcome.UNKNOWN
+    if any(reason == "unattributed_fills" for reason in failures):
         return ExternalReconciliationOutcome.UNKNOWN
     if any(reason == "stale_observation" for reason in failures):
         return ExternalReconciliationOutcome.STALE

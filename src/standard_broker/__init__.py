@@ -71,6 +71,7 @@ from .external_reconciliation import (
     ExternalReconciliationObservation,
     ExternalReconciliationOutcome,
     ExternalReconciliationSnapshot,
+    UnattributedFill,
 )
 from .external_protection import (
     ExternalProtectionBinding,
@@ -115,6 +116,7 @@ from .orders import (
     OrderSide,
     OrderState,
     OrderType,
+    UnattributedFill,
     SlippagePolicy,
     TimeInForce,
 )

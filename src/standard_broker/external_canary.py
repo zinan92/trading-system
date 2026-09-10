@@ -138,11 +138,14 @@ class HyperliquidExternalSnapshotReader:
                 raw=raw,
             ),
         )
-        # An empty order identity is the public account-wide clean-state read:
-        # positions/open-orders/account are still reconciled, while fills and
-        # fees remain deliberately unscoped rather than querying a blank ID.
+        # Fill transport is instrument-scoped.  Resolve each observed fill by
+        # CLOID first and OID second inside the order facade; unknown fills
+        # remain explicit reconciliation evidence instead of being dropped.
         account_wide = not order_id
-        fills = tuple(self._order.query_fills(order_id=order_id)) if not account_wide else ()
+        instrument_fills = tuple(self._order.query_fills(instrument_id=instrument.broker_symbol))
+        fills = instrument_fills if account_wide else tuple(
+            fill for fill in instrument_fills if fill.order_id == order_id
+        )
         if order_id and not fills:
             # A fresh recovered lifecycle may not be able to resolve a venue
             # order reference for the first scoped call. Query the same typed
@@ -155,10 +158,11 @@ class HyperliquidExternalSnapshotReader:
                     instrument_id=instrument.broker_symbol,
                 )
                 if client_order_id and callable(client_fills)
-                else self._order.query_fills(instrument_id=instrument.broker_symbol)
+                else instrument_fills
             )
             fills = tuple(fill for fill in instrument_fills if fill.order_id == order_id)
         open_orders = tuple(self._order.open_orders(instrument_id))
+        unattributed_fills = tuple(getattr(self._order, "unattributed_fills", lambda: ())())
         provenance = account_envelope.provenance
         open_orders = tuple(
             replace(receipt, provenance=provenance)
@@ -258,6 +262,7 @@ class HyperliquidExternalSnapshotReader:
             now=max(now, datetime.now(UTC)),
             stale_after=timedelta(minutes=2),
             max_observation_skew=timedelta(minutes=2),
+            unattributed_fills=unattributed_fills,
         )
 
     def _read_fact(self, *, port, operation, subject, kind, instrument_id=None, request_id, mapper):

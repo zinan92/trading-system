@@ -19,6 +19,7 @@ from ...orders import (
     OrderSide,
     OrderState,
     OrderType,
+    UnattributedFill,
 )
 from ...runtime import BrokerRuntimeSession
 from ...runtime_facts import RuntimeFactLedger
@@ -84,6 +85,7 @@ class HyperliquidOrderAdapter:
         self._instrument_ids: dict[str, str] = {}
         self._sides: dict[str, OrderSide] = {}
         self._intents: dict[str, OrderIntent] = {}
+        self._unattributed_fills: dict[str, UnattributedFill] = {}
 
     @contextmanager
     def transaction(self):
@@ -102,6 +104,7 @@ class HyperliquidOrderAdapter:
             "_instrument_ids",
             "_sides",
             "_intents",
+            "_unattributed_fills",
         )
         checkpoint = {name: deepcopy(getattr(self, name)) for name in state_fields}
         try:
@@ -506,6 +509,8 @@ class HyperliquidOrderAdapter:
             price=price,
             quantity=quantity,
             occurred_at=_timestamp(raw["time"]),
+            hash=str(raw["hash"]) if raw.get("hash") is not None else None,
+            fee=_decimal(raw["fee"]) if raw.get("fee") is not None else None,
         )
         self._fills[fill_id] = fill
         self._fill_raws[fill_id] = dict(raw)
@@ -890,6 +895,8 @@ class HyperliquidOrderAdapter:
                 price=_decimal(filled["avgPx"]),
                 quantity=quantity,
                 occurred_at=_timestamp(filled["time"]),
+                hash=str(filled["hash"]) if filled.get("hash") is not None else None,
+                fee=_decimal(filled["fee"]) if filled.get("fee") is not None else None,
             )
             raw_fill = dict(filled)
             raw_fill.setdefault("px", filled.get("avgPx"))
@@ -1155,6 +1162,7 @@ class HyperliquidRuntimeOrderAdapter:
         )
         self._instruments = instruments
         self._ledger = ledger
+        self._unattributed_fills: dict[str, UnattributedFill] = {}
         self._ledger.bind_session(
             broker_id=runtime.session.broker_id,
             environment=runtime.session.environment.value,
@@ -1333,6 +1341,9 @@ class HyperliquidRuntimeOrderAdapter:
                     "external_fill_response_invalid",
                     "external fill query contained a non-mapping observation",
                 )
+            if self._lifecycle._find_receipt_or_none(row) is None:
+                self._record_unattributed_fill(row)
+                continue
             self.apply_fill(row)
         values = tuple(self.fills.values())
         if resolved_order_id is not None:
@@ -1342,6 +1353,25 @@ class HyperliquidRuntimeOrderAdapter:
         if client_order_id is not None:
             values = tuple(item for item in values if item.client_order_id == client_order_id)
         return values
+
+    def unattributed_fills(self) -> tuple[UnattributedFill, ...]:
+        return tuple(self._unattributed_fills.values())
+
+    def _record_unattributed_fill(self, raw: Mapping[str, object]) -> None:
+        fill_id = str(raw.get("tid") or raw.get("hash") or "")
+        if not fill_id:
+            raise RuntimeBoundaryError("external_fill_response_invalid", "unattributed fill has no identity")
+        self._unattributed_fills[fill_id] = UnattributedFill(
+            fill_id=fill_id,
+            broker_order_id=str(raw["oid"]) if raw.get("oid") is not None else None,
+            client_order_id=str(raw["cloid"]) if raw.get("cloid") is not None else None,
+            instrument_id=str(raw.get("coin") or ""),
+            side=str(raw.get("side") or ""),
+            price=str(raw.get("px") or ""),
+            quantity=str(raw.get("sz") or ""),
+            occurred_at=datetime.fromtimestamp(int(raw["time"]) / 1000, tz=UTC),
+            hash=str(raw["hash"]) if raw.get("hash") is not None else None,
+        )
 
     def fills_by_client_order_id(
         self,

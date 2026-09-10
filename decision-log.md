@@ -1,5 +1,23 @@
 # Decision log
 
+## Issue #129: instrument-scoped account fill reconciliation
+
+- Account and instrument reconciliation reads query the Broker's instrument-
+  scoped fill stream. Registered fills are attributed by native CLOID first and
+  Broker order ID second, so recovered OID-only orders receive later fills.
+- A fill that has neither registered identity is retained as an immutable
+  `UnattributedFill` on the reconciliation snapshot and makes the result
+  explicit `unknown`; it is never coerced into a canonical order or silently
+  discarded. Repeated observations are deduplicated by Hyperliquid trade ID.
+
+### Gotchas
+
+- The external fill transport requires an instrument scope; an account-wide
+  read still means all fills for the requested instrument, not an unscoped
+  network query.
+- `unattributed_fills` is evidence for review, not an execution identity and
+  cannot be used to place, modify, or protect an order.
+
 ## Issue #127: recovered native CLOID attribution
 
 - Lifecycle observations resolve client identity first, then fall back to an

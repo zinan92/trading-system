@@ -101,6 +101,30 @@ class OrderFill:
     account_address: str | None = None
     lifecycle_id: str | None = None
     release_sha: str | None = None
+    hash: str | None = None
+    fee: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class UnattributedFill:
+    """A Broker fill observed without a registered canonical order."""
+
+    fill_id: str
+    broker_order_id: str | None
+    client_order_id: str | None
+    instrument_id: str
+    side: str
+    price: str
+    quantity: str
+    occurred_at: datetime
+    hash: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("fill_id", "instrument_id", "side", "price", "quantity"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+                raise ValueError(f"unattributed fill {name} is required")
+        if self.occurred_at.tzinfo is None:
+            raise ValueError("unattributed fill timestamp must include timezone information")
 
 
 @dataclass(frozen=True)

@@ -262,7 +262,7 @@ def test_binding_read_facts_returns_complete_bundle_with_unregistered_open_order
     assert bundle.reconciliation.passed is False
 
 
-def test_account_wide_snapshot_does_not_query_fills_and_retains_unregistered_open_orders(
+def test_account_wide_snapshot_queries_instrument_fills_and_retains_unregistered_open_orders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _profile_session()
@@ -314,8 +314,8 @@ def test_account_wide_snapshot_does_not_query_fills_and_retains_unregistered_ope
             return self._envelope("fee.fill", {}, request_id)
 
     class FakeOrder:
-        def query_fills(self, *, order_id: str):
-            assert order_id
+        def query_fills(self, *, instrument_id: str):
+            assert instrument_id == "PAXG"
             return ()
 
         def open_orders(self, instrument_id: str):
