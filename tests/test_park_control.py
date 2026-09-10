@@ -477,7 +477,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     broker = Broker()
     built = []
     contexts = []
-    timestamps = []
+    calls = []
     monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", staticmethod(lambda: Config()))
     monkeypatch.setattr(module, "HyperliquidTestnetMarketReader", Market)
     monkeypatch.setattr(module, "build_plan", lambda preview, confirmation: built.append((preview, confirmation)) or {"strategy_type": "grid", "strategy_plan_id": "dashboard-plan:fixture", "plan_digest": digest})
@@ -491,7 +491,15 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     monkeypatch.setattr(module, "datetime", Clock)
     import services.broker_composition as composition
     monkeypatch.setattr(composition, "build_broker_execution_port", lambda context: contexts.append(context) or broker)
-    monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", lambda self, plan, **kwargs: timestamps.append(kwargs["timestamp"]) or {"status": "grid_running", "fill": kwargs.get("fill")})
+    def advance_grid(self, plan, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("fill") is not None:
+            state = json.loads(lifecycle_path.read_text(encoding="utf-8"))[-1]
+            state["fills"] = [{"fill_identities": [kwargs["fill"]["tid"], kwargs["fill"]["hash"]]}]
+            lifecycle_path.write_text(json.dumps([state]), encoding="utf-8")
+        return {"status": "grid_running", "fill": kwargs.get("fill"), "price": kwargs.get("price")}
+
+    monkeypatch.setattr(module.TestnetAutomationCoordinator, "advance_grid_session", advance_grid)
     status = {"activation_id": activation_id, "plan_digest": digest, "strategy_family": "grid", "instrument_id": "BTC-USD-PERP"}
 
     advance, reconcile = module._build_testnet_tick_callbacks(output_root, status)
@@ -512,6 +520,7 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
         "hash": "hash-1232-redacted",
     }]
     filled = advance({"kind": "market_heartbeat"})
+    filled_again = advance({"kind": "market_heartbeat"})
 
     assert len(built) == 1
     assert len(broker.recovered) == 5
@@ -523,15 +532,19 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     assert [row["oid"] for row in reconciled["open_orders"]] == [
         "1000", "1001", "1002", "1003", "1004",
     ]
-    assert [row["status"] for row in (empty, empty_2, empty_3, filled)] == ["grid_running"] * 4
-    assert all(row["hydration"] == {"recovered": 5, "skipped": []} for row in (empty, empty_2, empty_3, filled))
-    assert timestamps == ["2026-09-08T01:00:03+00:00"] * 4
-    assert all("warning" not in row for row in (empty, empty_2, empty_3, filled))
-    assert filled["fill"]["order_id"] == "fake-order"
-    assert filled["fill"]["tid"] == "fill-1232-redacted"
-    assert filled["fill"]["oid"] == "1000"
-    assert filled["fill"]["side"] == "A"
-    assert filled["fill"]["time"] == 1788829200000
+    all_results = (empty, empty_2, empty_3, filled, filled_again)
+    assert [row["status"] for row in all_results] == ["grid_running"] * 5
+    assert all(row["hydration"] == {"recovered": 5, "skipped": []} for row in all_results)
+    assert [row["fills_seen"] for row in all_results] == [0, 0, 0, 1, 1]
+    assert [row["fills_new"] for row in all_results] == [0, 0, 0, 1, 0]
+    assert len(calls) == 6
+    assert calls[3]["fill"]["order_id"] == "fake-order"
+    assert calls[3]["fill"]["tid"] == "fill-1232-redacted"
+    assert calls[3]["fill"]["oid"] == "1000"
+    assert calls[3]["fill"]["side"] == "A"
+    assert calls[3]["fill"]["time"] == 1788829200000
+    assert all(call.get("price") == 100.0 for call in (calls[0], calls[1], calls[2], calls[4], calls[5]))
+    assert all("warning" not in row for row in all_results)
 
 
 @pytest.mark.parametrize(

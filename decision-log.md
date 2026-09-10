@@ -182,6 +182,31 @@
 - No launchd service, online runtime directory, HTTP 8100 interface, data
   source, Testnet network, or live-money path was changed or invoked.
 
+# 2026-09-10 — Always run Testnet heartbeat after public fill processing (#1242)
+
+## Decision
+
+- Each Testnet control tick processes only fill identities not already persisted
+  in the lifecycle (`fill_identities`/`fill_id`/`tid`/`hash`) or Grid line
+  `processed_fill_ids`, then unconditionally advances one market heartbeat for
+  both Grid and DCA sessions.
+- Tick results expose `fills_seen` and `fills_new` so historical public facts
+  remain observable without repeatedly entering the coordinator.
+
+## Gotchas
+
+- Standard Broker public facts may return the full historical fill set on every
+  read; lifecycle-level idempotency alone is too late because it still invokes
+  the coordinator and can suppress the heartbeat branch.
+- The change is limited to the Park control callback. It does not alter the
+  8100 HTTP contract, launchd services, data sources, or live-money paths.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_park_control.py tests/test_grid_testnet_lifecycle.py tests/test_dca_testnet_lifecycle.py tests/test_testnet_automation_coordinator.py` — 114 passed.
+- `python3 -m ruff check pipelines/park_control.py tests/test_park_control.py`, `python3 -m compileall -q pipelines/park_control.py tests/test_park_control.py`, and `git diff --check` — passed.
+- `gitleaks dir . --no-banner --redact` — 24.11 MB scanned; no leaks found.
+
 # 2026-09-08 — Sample Testnet tick time after coherent market read (#1214)
 
 ## Decision

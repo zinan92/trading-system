@@ -238,6 +238,45 @@ def _load_testnet_lifecycle_state(
     return state
 
 
+def _lifecycle_fill_identities(state: Mapping[str, Any]) -> set[str]:
+    """Return durable fill identities already consumed by a lifecycle."""
+    identities: set[str] = set()
+    for fill in state.get("fills") or ():
+        if not isinstance(fill, Mapping):
+            continue
+        identities.update(
+            str(value)
+            for value in (
+                *(fill.get("fill_identities") or ()),
+                fill.get("fill_id"),
+                fill.get("tid"),
+                fill.get("hash"),
+            )
+            if value not in (None, "")
+        )
+    for rung in state.get("rungs") or ():
+        if not isinstance(rung, Mapping) or not isinstance(rung.get("line"), Mapping):
+            continue
+        identities.update(
+            str(value)
+            for value in rung["line"].get("processed_fill_ids") or ()
+            if value not in (None, "")
+        )
+    return identities
+
+
+def _fill_identities(fill: Mapping[str, Any]) -> set[str]:
+    return {
+        str(value)
+        for value in (
+            fill.get("tid"),
+            fill.get("hash"),
+            fill.get("fill_id"),
+        )
+        if value not in (None, "")
+    }
+
+
 def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") -> dict[str, Any]:
     """Run the local Testnet scheduler heartbeat in the Park control pass.
 
@@ -406,6 +445,22 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         fills = evidence.get("fills") or []
         if not isinstance(fills, (list, tuple)):
             raise ValueError("testnet_fill_facts_unknown")
+        lifecycle_state = _load_testnet_lifecycle_state(
+            output_root,
+            plan,
+            strategy_family=family,
+        )
+        seen_fill_identities = _lifecycle_fill_identities(lifecycle_state)
+        new_fills: list[dict[str, Any]] = []
+        for raw_fill in fills:
+            if not isinstance(raw_fill, Mapping):
+                raise ValueError("testnet_fill_fact_invalid")
+            normalized = normalize_fill(raw_fill)
+            identities = _fill_identities(normalized)
+            if identities and identities.intersection(seen_fill_identities):
+                continue
+            new_fills.append(normalized)
+            seen_fill_identities.update(identities)
         # Every tick gets one binding market_fact and one same-attempt public
         # reader snapshot.  Keep this read outside the lifecycle so a quality
         # failure becomes a scheduler warning before the coordinator gate.
@@ -429,17 +484,15 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         if family == "grid":
             result = coordinator.status()
-            for fill in fills:
-                if not isinstance(fill, Mapping):
-                    raise ValueError("testnet_fill_fact_invalid")
-                result = coordinator.advance_grid_session(plan, broker=broker, fill=normalize_fill(fill), market=tick_market, timestamp=timestamp)
-            result = result if fills else coordinator.advance_grid_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
-            return {**result, "market_checks": market_checks, "hydration": hydration}
+            for fill in new_fills:
+                result = coordinator.advance_grid_session(plan, broker=broker, fill=fill, market=tick_market, timestamp=timestamp)
+            result = coordinator.advance_grid_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
+            return {**result, "fills_seen": len(fills), "fills_new": len(new_fills), "market_checks": market_checks, "hydration": hydration}
         result = coordinator.status()
-        for fill in fills:
-            result = coordinator.advance_dca_session(plan, broker=broker, fill=dict(fill), market=tick_market, timestamp=timestamp)
-        result = result if fills else coordinator.advance_dca_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
-        return {**result, "market_checks": market_checks, "hydration": hydration}
+        for fill in new_fills:
+            result = coordinator.advance_dca_session(plan, broker=broker, fill=fill, market=tick_market, timestamp=timestamp)
+        result = coordinator.advance_dca_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
+        return {**result, "fills_seen": len(fills), "fills_new": len(new_fills), "market_checks": market_checks, "hydration": hydration}
 
     return advance, reconcile
 
