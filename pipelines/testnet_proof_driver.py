@@ -12,7 +12,6 @@ import argparse
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -32,12 +31,10 @@ from services.park_confirmation_ledger import (
 )
 from services.testnet_automation_coordinator import TestnetAutomationCoordinator
 from services.strategy_control_plane import StrategyControlMachineError
-from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
 from services.dashboard_control_plane import public_catalog_loader
 from services.grid_testnet_lifecycle import GridTestnetLifecycle, GridTestnetLifecycleError
 from services.grid_risk import full_depth_loss
 from services.testnet_market_document import (
-    MARKET_BBO_FIELDS as _MARKET_BBO_FIELDS,
     MARKET_READ_ATTEMPTS as _MARKET_READ_ATTEMPTS,
     build_market_document as _build_shared_market_document,
     read_coherent_market as _read_shared_coherent_market,
@@ -766,6 +763,7 @@ def run(
                 )
                 details["market_retry_attempts"] = getattr(exc, "driver_retry_attempts", [])
                 raise ProofDriverError(exc.reason_code, **details) from exc
+        market_rows = _rows(market_path)
         output = {
             "schema_version": "testnet-proof-driver-receipt-v1", "status": result.get("status"),
             "dry_run": dry_run, "activation_id": activation_id, "plan_digest": plan["plan_digest"],
@@ -778,6 +776,7 @@ def run(
                        "market_bound": True,
                        "confirmation_mapped": True, "candidate_selected": result.get("status") in {"candidate_selected", "dry_run_candidate_selected"}},
             "market_self_check": market_checks,
+            "broker_market_fact": market_rows[-1].get("broker_market_fact") if market_rows else None,
             "market_retry_attempts": market_retry_attempts,
             "result": {key: result.get(key) for key in ("status", "reason_code", "detail", "lifecycle_status", "execution_blocker", "execution_mutation", "network_operation_invoked", "next_action")},
             "secret_material_present": False,
@@ -813,7 +812,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.validate_plan:
             if args.strategy_plan is None:
                 raise ProofDriverError("strategy_plan_required")
-            plan = _load_mapping(args.strategy_plan, "plan")
+            plan = proof._load_mapping(args.strategy_plan, "plan")
             result = validate_grid_plan(plan)
             print(json.dumps(result, sort_keys=True, ensure_ascii=False))
             return 0

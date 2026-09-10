@@ -1,5 +1,37 @@
 # Decision Log
 
+# 2026-09-10 — Use bounded Testnet market tolerance for proof execution (#1247)
+
+## Decision
+
+- Replace the proof CLI's exact `broker_price == supplied_mid` gate with a
+  fail-closed bounded tolerance: `min(plan.risk_budget.max_slippage, mid * 10 /
+  10000)`. `TESTNET_MARKET_MAX_BPS` may narrow or widen the Testnet-only bps
+  bound; the default is 10 bps.
+- Require the newer Broker price to remain within the supplied `[bid - tick,
+  ask + tick]` envelope. Keep observation coherence fail-closed, with a
+  configurable `TESTNET_MARKET_OBSERVATION_MAX_SECONDS` default of 10 seconds.
+- Persist `supplied_mid`, `broker_price`, `deviation`, `tolerance`, and
+  `observed_delta_s` in `broker_market_fact`; the newer Broker price is the
+  execution audit anchor and the old Dashboard midpoint is not reused as
+  authoritative Broker evidence.
+
+## Gotchas
+
+- The outer driver retry remains bounded and only handles the same two market
+  mismatch reason codes; it is no longer expected to overcome ordinary price
+  movement by requiring a second exact equality.
+- The BBO/tick and plan slippage gates remain independent: satisfying the bps
+  tolerance alone cannot authorize a price outside the supplied market envelope.
+- No launchd, online output, HTTP 8100 contract, data source, credential,
+  live-money path, or live/Testnet runtime was changed or invoked.
+
+## Verification
+
+- Focused automation-proof and proof-driver tests cover zero deviation, within
+  tolerance, over tolerance, BBO rejection, observation timeout, and driver
+  retry evidence.
+
 # 2026-09-10 — Retry proof-driver market coherence races (#1179)
 
 ## Decision
