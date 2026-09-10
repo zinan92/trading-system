@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -421,6 +423,198 @@ def test_issue_1251_real_tick_path_enters_coordinator_and_lifecycle(tmp_path: Pa
     assert result["lifecycle"]["rungs"][0]["line"]["state"] == "open"
     assert result["lifecycle"]["hard_stop_protection"]["status"] == "active"
     assert exchange.positions and float(exchange.positions[0]["szi"]) > 0
+
+
+def _proof_start_inputs(tmp_path: Path, *, facts: dict[str, object] | None = None):
+    """Build the attended proof inputs without replacing any proof gate."""
+    from datetime import datetime, timezone
+    from pipelines import testnet_automation_proof as proof
+    from services.park_confirmation import ParkConfirmationLedger
+    from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+    output = tmp_path / "outputs"
+    plan = grid_plan()
+    plan["grid"]["rungs"] = [
+        {"rung": index, "price": price, "side": "buy", "take_profit": price + 500,
+         "hard_stop": 72_000.0, "quantity": 0.00024}
+        for index, price in enumerate((80_000.0, 78_000.0, 76_000.0, 74_000.0, 72_000.0), start=1)
+    ]
+    plan["risk_budget"]["max_open_positions"] = 5
+    plan.update({
+        "strategy_session_id": "replay-proof-session",
+        "strategy_revision_id": "replay-proof-revision",
+        "plan_digest": "sha256:" + "c" * 64,
+    })
+    coordinator = TestnetAutomationCoordinator(output)
+    activation = {
+        "strategy_family": "grid", "strategy_session_id": plan["strategy_session_id"],
+        "strategy_revision_id": plan["strategy_revision_id"], "plan_digest": plan["plan_digest"],
+        "account_fingerprint": proof._fingerprint("testnet-account"), "broker_id": "hyperliquid",
+        "environment": "testnet", "transport_profile": proof.PROTECTED_EXTERNAL_PROFILE,
+        "instrument_id": plan["instrument_id"], "runtime_id": "runtime-proof",
+        "release_sha": "a" * 40, "capability_revision": proof.PROTECTED_CAPABILITY_REVISION,
+    }
+    activation_row = coordinator.activate(activation, command_id="activate-replay-proof")
+    ledger = ParkConfirmationLedger(output, park_user_id="park")
+    confirmation_now = time.time()
+    proposal = ledger.create_proposal(
+        proposal_id="proposal-replay-proof", strategy_session_id=plan["strategy_session_id"],
+        strategy_revision_id=plan["strategy_revision_id"], plan_digest=plan["plan_digest"],
+        risk_digest=plan["plan_digest"], expires_at=confirmation_now + 600, execution_environment="testnet",
+    )
+    decision = ledger.decide(
+        proposal_id=proposal["proposal_id"], park_user_id="park",
+        command_text=f"confirm {plan['plan_digest']}", current_binding={
+            "strategy_session_id": plan["strategy_session_id"],
+            "strategy_revision_id": plan["strategy_revision_id"],
+        }, now=confirmation_now,
+    )
+    confirmed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    durable_rows = ledger.rows()
+    durable_decision = {**decision, "confirmed_at": confirmed_at}
+    durable_decision["receipt_digest"] = "sha256:" + hashlib.sha256(
+        f"{proposal['proposal_id']}|{plan['plan_digest']}|confirmed|{confirmed_at}".encode()
+    ).hexdigest()
+    (output / "park_strategy" / "confirmations.jsonl").write_text(
+        "\n".join(json.dumps(durable_decision if row.get("event") == "confirmed" else row)
+                    for row in durable_rows) + "\n", encoding="utf-8"
+    )
+    confirmation = {
+        "event": "confirmed", "execution_authorized": True, "execution_environment": "testnet",
+        "plan_digest": plan["plan_digest"], "confirmation_id": proposal["proposal_id"],
+        "proposal_id": proposal["proposal_id"], "receipt_digest": durable_decision["receipt_digest"],
+        "confirmed_at": confirmed_at, "operator_id": "park",
+        "activation_id": activation_row["activation_id"],
+    }
+    observed_at = datetime.now(timezone.utc).replace(microsecond=0)
+    market = {
+        "execution_ready": True, "fresh": True, "is_synthetic": False, "fallback_policy": "none",
+        "observed_at": observed_at.isoformat(), "bid": "76937", "ask": "76978", "mid": "76957.5",
+        "mark": "76957.5", "oracle": "76957.5", "impact": "76957.5", "depth_notional": "100000",
+        "max_slippage": "50", "max_oracle_deviation_bps": "50", "source": "hyperliquid.external_testnet",
+        "cursor": "replay-proof-facts", "broker_id": "hyperliquid", "environment": "testnet",
+        "instrument_id": "BTC-USD-PERP", "asset_index": 0,
+        "mapping_revision": proof.PROTECTED_CAPABILITY_REVISION,
+        "universe_revision": "hyperliquid-default-perp-v1", "connection_epoch": "replay-proof-epoch",
+    }
+    plan_path = tmp_path / "plan.json"; market_path = tmp_path / "market.json"; confirmation_path = tmp_path / "confirmation.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    market_path.write_text(json.dumps(market), encoding="utf-8")
+    confirmation_path.write_text(json.dumps(confirmation), encoding="utf-8")
+    return output, plan, plan_path, market_path, confirmation_path, observed_at, facts
+
+
+def _proof_broker_factory(tmp_path: Path, exchange: ReplayExchange, *, facts: dict[str, object] | None = None):
+    from types import SimpleNamespace
+    from pipelines import testnet_automation_proof as proof
+    from tests.test_dca_testnet_lifecycle import _broker
+
+    fixture = json.loads((ROOT / "tests/testnet_replay/fixtures/hyperliquid_btc_real_shape.json").read_text())
+    brokers = []
+    def factory(_context):
+        broker, _backend = _broker(tmp_path / f"broker-{len(brokers)}", protection=True)
+        exchange.observe(broker)
+        broker.market_fact = lambda *, instrument_id, now: {
+            **exchange.market(observed_at=now.isoformat()), "instrument_id": instrument_id,
+            "price": exchange.market()["mid"], "observed_at": now.isoformat(),
+            "freshness": "fresh", "transport_state": "external_testnet",
+            "mapping_revision": proof.PROTECTED_CAPABILITY_REVISION,
+        }
+        identity = {
+            "broker_id": "hyperliquid", "environment": "testnet",
+            "transport_profile": proof.PROTECTED_EXTERNAL_PROFILE, "runtime_id": "runtime-proof",
+            "release_sha": "a" * 40, "capability_revision": proof.PROTECTED_CAPABILITY_REVISION,
+            "account_fingerprint": proof._fingerprint("testnet-account"),
+        }
+        broker.broker_config = {**identity, "account_id": "testnet-account", "ledger_namespace": "ledger.replay-proof"}
+        broker.runtime_session = SimpleNamespace(lifecycle_id="runtime-proof")
+        broker.preflight = lambda **_kwargs: {
+            **identity, "ready": True, "protection_ready": True, "account_read_ready": True, "network_io": False,
+            "real_money_eligible": False, "ports": ("order_execution", "protection_order"),
+        }
+        def read_facts(*, instrument_id, now):
+            observed = datetime.now(timezone.utc).replace(microsecond=0)
+            reconciliation = SimpleNamespace(
+                observed_at=observed, passed=False, failure_reasons=("unattributed_fills",),
+                evidence_digest="replay-proof-facts", cursor=SimpleNamespace(value="replay-proof-facts"),
+                positions=SimpleNamespace(fact=SimpleNamespace(data=())),
+                open_orders=SimpleNamespace(fact=SimpleNamespace(data=())),
+            )
+            reconciliation.failure_reasons = ("unattributed_fills",)
+            fill_time = datetime.now(timezone.utc) + timedelta(seconds=1) if facts and facts.get("late") else None
+            reconciliation.unattributed_fills = tuple(
+                SimpleNamespace(fill_id=str(row["tid"]), broker_order_id=str(row["oid"]),
+                                 occurred_at=fill_time or datetime.fromtimestamp(row["time"] / 1000, timezone.utc))
+                for row in fixture["userFills"]
+            )
+            if facts:
+                if facts.get("positions"):
+                    reconciliation.positions.fact.data = (SimpleNamespace(signed_quantity=Decimal("0.001")),)
+                if facts.get("open_orders"):
+                    reconciliation.open_orders.fact.data = (SimpleNamespace(order_id="open-1"),)
+            account = SimpleNamespace(
+                account_address="testnet-account", broker_id="hyperliquid", environment="testnet",
+                equity=Decimal("10000"), exposure=Decimal("0"), margin_used=Decimal("0"),
+                withdrawable=Decimal("10000"), provenance=SimpleNamespace(
+                    source="hyperliquid.external_testnet", transport_state="external_testnet",
+                ),
+            )
+            reconciliation.account = SimpleNamespace(fact=SimpleNamespace(data=account))
+            reconciliation.identity = SimpleNamespace(
+                broker_id="hyperliquid", environment="testnet", account_address="testnet-account",
+                lifecycle_id="runtime-proof", release_sha="a" * 40,
+                capability_revision=proof.PROTECTED_CAPABILITY_REVISION,
+            )
+            return SimpleNamespace(account=account, reconciliation=reconciliation)
+        broker.read_facts = read_facts
+        brokers.append(broker)
+        return broker
+    return factory
+
+
+def test_issue_1257_proof_entry_accepts_historical_fills_and_reaches_grid_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The attended proof main must cross both startup account gates."""
+    from pipelines import testnet_automation_proof as proof
+    output, plan, plan_path, market_path, confirmation_path, _observed_at, _ = _proof_start_inputs(tmp_path)
+    exchange = ReplayExchange()
+    monkeypatch.setattr(proof, "build_broker_execution_port", _proof_broker_factory(tmp_path, exchange))
+    args = ["--action", "start", "--output-root", str(output), "--strategy-plan", str(plan_path),
+            "--market", str(market_path), "--confirmation", str(confirmation_path),
+            "--account-address", "testnet-account", "--runtime-id", "runtime-proof",
+            "--release-sha", "a" * 40, "--approval-id", "approval-proof", "--approved-by", "park",
+            "--secret-file", str(tmp_path / "never-read"), "--execute-testnet",
+            "--acknowledge", proof.ACKNOWLEDGEMENT]
+
+    assert proof.main(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "grid_running"
+    assert result["lifecycle_status"] == "active"
+    assert len(exchange.open_orders) == 5
+    assert result["execution_mutation"] is True
+
+
+@pytest.mark.parametrize("facts", [{"late": True}, {"positions": True}, {"open_orders": True}])
+def test_issue_1257_proof_entry_blocks_untrusted_account_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], facts: dict[str, object]
+) -> None:
+    from pipelines import testnet_automation_proof as proof
+
+    output, _plan, plan_path, market_path, confirmation_path, _observed_at, _ = _proof_start_inputs(tmp_path, facts=facts)
+    exchange = ReplayExchange()
+    monkeypatch.setattr(proof, "build_broker_execution_port", _proof_broker_factory(tmp_path, exchange, facts=facts))
+    args = ["--action", "start", "--output-root", str(output), "--strategy-plan", str(plan_path),
+            "--market", str(market_path), "--confirmation", str(confirmation_path),
+            "--account-address", "testnet-account", "--runtime-id", "runtime-proof",
+            "--release-sha", "a" * 40, "--approval-id", "approval-proof", "--approved-by", "park",
+            "--secret-file", str(tmp_path / "never-read"), "--execute-testnet",
+            "--acknowledge", proof.ACKNOWLEDGEMENT]
+
+    assert proof.main(args) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "BLOCKED"
+    assert result["reason_code"] == "account_facts_unavailable"
+    assert exchange.open_orders == []
 
 
 def test_issue_1251_park_control_tick_callbacks_run_facts_reconcile_and_advance(

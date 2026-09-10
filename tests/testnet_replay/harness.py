@@ -52,7 +52,13 @@ class ReplayExchange:
             }))
 
         broker.read_public_facts = facts
-        broker.read_facts = facts
+        # Keep the typed Standard Broker facts seam intact for proof startup;
+        # lifecycle reconciliation reads the credential-free public projection.
+        broker.market_fact = lambda *, instrument_id, now: {
+            **self.market(), "instrument_id": instrument_id, "price": self.market()["mid"],
+            "observed_at": now.isoformat(), "freshness": "fresh",
+            "transport_state": "local_fixture",
+        }
         original_submit = broker.submit_order
         original_cancel = broker.cancel_order
         original_request = broker.request

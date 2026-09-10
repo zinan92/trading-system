@@ -19295,3 +19295,32 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `scripts/testnet_replay.sh` — 24 passed in 0.24s.
 - `scripts/testnet_replay_mutations.sh` — 15/15 mutations caught, including the #1255 strict `_snapshot` regression.
+# 2026-09-11 — Full proof-entry replay reaches Grid running (#1257)
+
+## Decision
+
+- Add an end-to-end replay at the `pipelines.testnet_automation_proof.main`
+  entry point. It crosses both authoritative account gates, coordinator
+  candidate selection, and `start_grid_session` before asserting `grid_running`
+  and two fake-exchange entry orders.
+- Reuse the redacted real-shape Hyperliquid BTC fixture for two historical
+  user fills. Late fills, non-flat positions, and open orders remain fail-closed
+  as `account_facts_unavailable`.
+- Keep production code unchanged. The only monkeypatch is the broker binding
+  factory: it returns the existing local fixture broker and attaches
+  `ReplayExchange`; typed `read_facts`, market facts, and order operations are
+  supplied at that binding seam. No account判定 helper or snapshot validator is
+  replaced.
+
+## Gotchas
+
+- The proof path requires typed account facts and a matching runtime identity;
+  the replay binding must project the fixture into the Standard Broker fact
+  shape while preserving the lifecycle's public-facts read.
+- The two #1257 mutation cases cover restoring strict `reconciliation.passed`
+  behavior in the authoritative startup gate and `_snapshot`; both must be
+  caught by the same full-entry scenario.
+
+## Verification
+
+- `PYTHONPATH=.:src:/Users/wendy/work/standard-broker/src ... -m pytest tests/testnet_replay/test_replay_scenarios.py -q -k 1257` — 4 passed.
