@@ -68,8 +68,8 @@ def compare_market_observations(
     if (
         slippage <= 0 or bps <= 0 or observation_limit <= 0
         or bid_number >= ask_number
-        or not (bid_number <= binding_number <= ask_number)
         or not (bid_number <= reader_number <= ask_number)
+        or not (bid_number - tolerance <= binding_number <= ask_number + tolerance)
     ):
         check.update({"passed": False, "reason_code": "market_bbo_inconsistent"})
         return check
@@ -79,20 +79,15 @@ def compare_market_observations(
     if binding_observed_at is not None or reader_observed_at is not None:
         binding_text = str(binding_observed_at or "")
         reader_text = str(reader_observed_at or "")
-        if binding_text == reader_text and binding_text and binding_text.lower() == "now":
-            observed_delta = Decimal("0")
-        elif binding_text.lower() == "now" or reader_text.lower() == "now":
-            observed_delta = Decimal("0")
-        else:
-            try:
-                binding_time = datetime.fromisoformat(binding_text.replace("Z", "+00:00"))
-                reader_time = datetime.fromisoformat(reader_text.replace("Z", "+00:00"))
-                if binding_time.tzinfo is None or reader_time.tzinfo is None:
-                    raise ValueError
-                observed_delta = Decimal(str(abs((binding_time - reader_time).total_seconds())))
-            except (TypeError, ValueError):
-                check.update({"passed": False, "reason_code": "market_observation_mismatch"})
-                return check
+        try:
+            binding_time = datetime.fromisoformat(binding_text.replace("Z", "+00:00"))
+            reader_time = datetime.fromisoformat(reader_text.replace("Z", "+00:00"))
+            if binding_time.tzinfo is None or reader_time.tzinfo is None:
+                raise ValueError
+            observed_delta = Decimal(str(abs((binding_time - reader_time).total_seconds())))
+        except (TypeError, ValueError):
+            check.update({"passed": False, "reason_code": "market_observation_mismatch"})
+            return check
         check["observed_delta_s"] = str(observed_delta)
         if observed_delta > observation_limit:
             check.update({"passed": False, "reason_code": "market_observation_mismatch"})

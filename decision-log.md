@@ -19253,7 +19253,8 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Share one `compare_market_observations` rule between the attended startup
   proof and the always-read Testnet tick path: deviation is bounded by
-  `min(max_slippage, 10bps)`, both observations remain inside the BBO, and
+  `min(max_slippage, 10bps)`, the reader price remains inside the raw BBO,
+  the binding price remains inside the BBO expanded by that tolerance, and
   parseable observation timestamps may differ by at most 10 seconds.
 - Keep failures fail-closed and include deviation, tolerance, observation
   delta, and attempt number in tick retry evidence. The I4 replay is now a
@@ -19261,12 +19262,12 @@ auditable datafeed port; broker execution remains a separate port.
 
 ## Gotchas
 
-- Existing local replay fixtures use the opaque equal timestamp sentinel
-  `now`; equal or mixed sentinel samples remain compatible, while real
-  timestamp pairs receive the 10-second check.
+- Observation timestamps must be ISO-8601 values; the old opaque `now`
+  sentinel is not accepted and cannot bypass the 10-second freshness check.
 - The mutation gate changes the shared helper back to strict equality and
-  must be caught by the replay suite. No launchd, HTTP 8100, data source,
-  credential, or live-money path was changed or invoked.
+  changes the binding band back to the raw BBO; both must be caught by the
+  replay suite. No launchd, HTTP 8100, data source, credential, or live-money
+  path was changed or invoked.
 
 ## Verification
 
