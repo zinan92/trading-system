@@ -194,8 +194,8 @@ class HyperliquidOrderAdapter:
             client_order_id=client_order_id,
             state=order_state,
             original_quantity=intent.quantity,
-            filled_quantity=intent.quantity if order_state is OrderState.FILLED else Decimal("0"),
-            remaining_quantity=Decimal("0") if order_state is OrderState.FILLED else intent.quantity,
+            filled_quantity=Decimal("0"),
+            remaining_quantity=intent.quantity,
             broker_order_id=broker_id,
             average_fill_price=None,
             reason="recovered_persisted_identity",
@@ -238,8 +238,8 @@ class HyperliquidOrderAdapter:
             client_order_id=client_id,
             state=order_state,
             original_quantity=intent.quantity,
-            filled_quantity=intent.quantity if order_state is OrderState.FILLED else Decimal("0"),
-            remaining_quantity=Decimal("0") if order_state is OrderState.FILLED else intent.quantity,
+            filled_quantity=Decimal("0"),
+            remaining_quantity=intent.quantity,
             broker_order_id=None,
             average_fill_price=None,
             reason="recovered_persisted_client_identity",
@@ -1343,7 +1343,13 @@ class HyperliquidRuntimeOrderAdapter:
             if self._lifecycle._find_receipt_or_none(row) is None:
                 self._record_unattributed_fill(row)
                 continue
-            self.apply_fill(row)
+            try:
+                self.apply_fill(row)
+            except (KeyError, RuntimeBoundaryError, ValueError):
+                # A malformed, conflicting, or over-counted observation must
+                # remain visible as reconciliation evidence without dropping
+                # the other fills in this instrument-scoped response.
+                self._record_unattributed_fill(row)
         values = tuple(self.fills.values())
         if resolved_order_id is not None:
             values = tuple(item for item in values if item.order_id == resolved_order_id)

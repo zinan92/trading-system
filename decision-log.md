@@ -1,5 +1,29 @@
 # Decision log
 
+## Issue #133: declarative recovered fill state and bounded fill reconciliation
+
+- `recover()` and `recover_client_order()` preserve a persisted `filled` or
+  `partially_filled` state as declarative identity only: they initialize
+  `filled_quantity=0` and `remaining_quantity=original_quantity`, retaining
+  `recovered_persisted_*` as the reason. Broker fills are the sole source that
+  accumulates canonical filled quantity and transitions the receipt to its
+  observed fill state.
+- Runtime fill queries isolate per-observation application failures. A
+  conflicting or over-counted fill is retained as `UnattributedFill`, while
+  other observations in the same instrument-scoped response continue to be
+  applied. Reconciliation therefore returns the available positions, orders,
+  and fills with an explicit non-passed outcome instead of raising from one
+  order.
+
+### Gotchas
+
+- A recovered receipt may report `FILLED` or `PARTIALLY_FILLED` before the
+  Broker has returned a matching fill; this is persisted identity, not local
+  accounting evidence. Do not use its declared state as a filled quantity.
+- A fill application failure is intentionally visible through
+  `unattributed_fills`; it is not silently retried or converted into a valid
+  canonical fill. Repeated valid observations remain idempotent by trade ID.
+
 ## Issue #129: instrument-scoped account fill reconciliation
 
 - Account and instrument reconciliation reads query the Broker's instrument-

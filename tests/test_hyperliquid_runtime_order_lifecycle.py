@@ -855,6 +855,84 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(registered.account_address, "0xmaster")
         self.assertEqual(registered.lifecycle_id, "order-runtime-1")
 
+    def test_recovered_terminal_state_is_declarative_until_fill_is_observed(self) -> None:
+        adapter, backend = self.adapter(profile=capabilities("fills"))
+        intent = self.intent(order_id="recovered-filled", key="cycle:recovered-filled")
+        recovered = adapter.recover(
+            intent,
+            broker_order_id="59671766069",
+            state=OrderState.FILLED,
+        )
+        self.assertEqual(recovered.filled_quantity, Decimal("0"))
+        self.assertEqual(recovered.remaining_quantity, intent.quantity)
+        self.assertEqual(recovered.reason, "recovered_persisted_identity")
+
+        backend.responses["fills"] = {
+            "fills": [
+                {
+                    "coin": "BTC",
+                    "side": "B",
+                    "px": "65000",
+                    "sz": "0.1",
+                    "time": 1787313669000,
+                    "tid": 219949235,
+                    "oid": 59671766069,
+                    "cloid": recovered.client_order_id,
+                }
+            ]
+        }
+
+        fills = adapter.query_fills(instrument_id="BTC-USD-PERP")
+
+        self.assertEqual(len(fills), 1)
+        receipt = adapter._lifecycle.get(intent.order_id)
+        self.assertEqual(receipt.state, OrderState.FILLED)
+        self.assertEqual(receipt.filled_quantity, intent.quantity)
+        self.assertEqual(receipt.remaining_quantity, Decimal("0"))
+        self.assertEqual(len(adapter.query_fills(instrument_id="BTC-USD-PERP")), 1)
+
+    def test_recovered_partial_state_accepts_fill_and_isolates_overcounted_observation(self) -> None:
+        adapter, backend = self.adapter(profile=capabilities("fills"))
+        intent = self.intent(order_id="recovered-partial", key="cycle:recovered-partial")
+        recovered = adapter.recover(
+            intent,
+            broker_order_id="59671766070",
+            state=OrderState.PARTIALLY_FILLED,
+        )
+        self.assertEqual(recovered.filled_quantity, Decimal("0"))
+        self.assertEqual(recovered.remaining_quantity, intent.quantity)
+        backend.responses["fills"] = {
+            "fills": [
+                {
+                    "coin": "BTC",
+                    "side": "B",
+                    "px": "65000",
+                    "sz": "0.05",
+                    "time": 1787313669000,
+                    "tid": 219949236,
+                    "oid": 59671766070,
+                    "cloid": recovered.client_order_id,
+                },
+                {
+                    "coin": "BTC",
+                    "side": "B",
+                    "px": "65001",
+                    "sz": "0.06",
+                    "time": 1787313669001,
+                    "tid": 219949237,
+                    "oid": 59671766070,
+                    "cloid": recovered.client_order_id,
+                },
+            ]
+        }
+
+        fills = adapter.query_fills(instrument_id="BTC-USD-PERP")
+
+        self.assertEqual(len(fills), 1)
+        self.assertEqual(fills[0].quantity, Decimal("0.05"))
+        self.assertEqual(adapter._lifecycle.get(intent.order_id).state, OrderState.PARTIALLY_FILLED)
+        self.assertEqual(len(adapter.unattributed_fills()), 1)
+
     def test_capability_gap_blocks_cancel_before_runtime_backend(self) -> None:
         adapter, backend = self.adapter(profile=capabilities("submit"))
         submitted = adapter.submit(self.intent())
