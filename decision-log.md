@@ -1,5 +1,32 @@
 # Decision Log
 
+# 2026-09-10 — Normalize Testnet fills and recover blocked Grid exposure (#1232)
+
+## Decision
+
+- Normalize the public Standard Broker `OrderFill` projection at the Park tick
+  boundary into the Grid lifecycle vocabulary, retaining canonical and native
+  order identities plus a millisecond timestamp.
+- A blocked Grid caused by a local fill-processing error retries the fill on the
+  next tick without cancelling resting entries. If broker truth proves a
+  matching position, the lifecycle restores the rung, TP, position-following
+  hard-stop, and in-range entries; an unknown or mismatched position remains
+  blocked with `position_open_unprotected` and Park notification required.
+
+## Gotchas
+
+- The recovery fixture is a redacted copy of the reported Testnet state; it is
+  not authorization to query or modify the online runtime.
+- Position recovery requires both a non-zero instrument-matching broker
+  position and fill quantities that reconcile exactly; no inferred position is
+  created from local state alone.
+
+## Verification
+
+- `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_park_control.py` — passed.
+- No launchd service, online output directory, HTTP 8100 interface, data
+  source, Testnet network, or live-money path was changed or invoked.
+
 # 2026-09-10 — Keep paused Grid callbacks attached and make missing callbacks visible (#1230)
 
 ## Decision

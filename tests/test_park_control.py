@@ -483,7 +483,18 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     empty = advance({"kind": "market_heartbeat"})
     empty_2 = advance({"kind": "market_heartbeat"})
     empty_3 = advance({"kind": "market_heartbeat"})
-    broker.fills = [{"order_id": "fake-order", "price": "99", "quantity": "1"}]
+    broker.fills = [{
+        "fill_id": "fill-1232-redacted",
+        "order_id": "fake-order",
+        "broker_order_id": "1000",
+        "client_order_id": "0x" + "1" * 32,
+        "instrument_id": "BTC-USD-PERP",
+        "side": "sell",
+        "price": "99",
+        "quantity": "1",
+        "occurred_at": "2026-09-08T01:00:00+00:00",
+        "hash": "hash-1232-redacted",
+    }]
     filled = advance({"kind": "market_heartbeat"})
 
     assert len(built) == 1
@@ -500,6 +511,10 @@ def test_dashboard_activation_tick_uses_fake_broker_for_empty_and_filled_facts(m
     assert timestamps == ["2026-09-08T01:00:03+00:00"] * 4
     assert all("warning" not in row for row in (empty, empty_2, empty_3, filled))
     assert filled["fill"]["order_id"] == "fake-order"
+    assert filled["fill"]["tid"] == "fill-1232-redacted"
+    assert filled["fill"]["oid"] == "1000"
+    assert filled["fill"]["side"] == "A"
+    assert filled["fill"]["time"] == 1788829200000
 
 
 @pytest.mark.parametrize(

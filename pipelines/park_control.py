@@ -323,6 +323,35 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
     def facts() -> dict[str, Any]:
         return _read_testnet_facts(broker, instrument_id)
 
+    def normalize_fill(fill: Mapping[str, Any]) -> dict[str, Any]:
+        """Adapt the public Standard Broker fill to the Grid wire vocabulary."""
+        if any(key in fill for key in ("tid", "oid", "cloid", "px", "sz", "time")):
+            return dict(fill)
+        from datetime import datetime as DateTime
+        occurred_at = fill.get("occurred_at") or fill.get("timestamp")
+        if isinstance(occurred_at, DateTime):
+            occurred_at = occurred_at.timestamp() * 1000
+        else:
+            try:
+                occurred_at = DateTime.fromisoformat(str(occurred_at).replace("Z", "+00:00")).timestamp() * 1000
+            except (TypeError, ValueError, OverflowError):
+                occurred_at = 0
+        side = str(fill.get("side") or "").lower()
+        instrument = str(fill.get("instrument_id") or instrument_id)
+        return {
+            **dict(fill),
+            "tid": str(fill.get("fill_id") or ""),
+            "hash": fill.get("hash"),
+            "oid": fill.get("broker_order_id"),
+            "cloid": fill.get("client_order_id"),
+            "px": fill.get("price"),
+            "sz": fill.get("quantity"),
+            "side": "B" if side in {"buy", "b"} else "A",
+            "time": int(occurred_at),
+            "coin": instrument.removesuffix("-USD-PERP").removesuffix("-USDT-PERP"),
+            "order_id": fill.get("order_id"),
+        }
+
     def reconcile() -> Mapping[str, Any]:
         evidence = facts()
         if str(evidence.get("reason") or "").startswith("testnet_facts_unavailable:"):
@@ -361,7 +390,9 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         if family == "grid":
             result = coordinator.status()
             for fill in fills:
-                result = coordinator.advance_grid_session(plan, broker=broker, fill=dict(fill), market=tick_market, timestamp=timestamp)
+                if not isinstance(fill, Mapping):
+                    raise ValueError("testnet_fill_fact_invalid")
+                result = coordinator.advance_grid_session(plan, broker=broker, fill=normalize_fill(fill), market=tick_market, timestamp=timestamp)
             result = result if fills else coordinator.advance_grid_session(plan, broker=broker, price=float(tick_market.get("price") or 0), market=tick_market, timestamp=timestamp)
             return {**result, "market_checks": market_checks}
         result = coordinator.status()
