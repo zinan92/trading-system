@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from services.journal_store import load_json
+from services.journal_store import load_json, write_json
 from services.park_ai_provider_gateway import ParkAiProviderGateway
 from services.park_legacy_cutover import load_effective_park_config
 from services.park_legacy_cutover_runtime import run_legacy_cutover_once
@@ -344,6 +344,15 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
             strategy_family=family,
         )
         hydration = hydrate_order_identities(broker, lifecycle_state)
+        if hydration.get("skipped"):
+            # Keep the durable lifecycle aligned with the hydration report;
+            # the next fresh lifecycle instance must not see a rejected row
+            # as an accepted flatten/entry order.
+            family_path = "grid" if family == "grid" else "dca"
+            write_json(
+                Path(output_root) / "dualtrack" / f"{family_path}_testnet_lifecycle" / f"{plan.get('strategy_plan_id')}.json",
+                [lifecycle_state],
+            )
     except OrderIdentityHydrationError as exc:
         reason = f"order_identity_hydration_failed:{exc}"
         return (
