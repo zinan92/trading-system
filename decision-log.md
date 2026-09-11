@@ -1,5 +1,38 @@
 # Decision Log
 
+# 2026-09-11 — Seal a stopping Grid once the venue is flat (#1261)
+
+## Decision
+
+- Hard-stop, emergency-flatten and heartbeat-retry exit orders are recorded in
+  `state["orders"]` before the broker call, with the deterministic client id
+  and the Nautilus Hyperliquid cloid. A lost or unknown submit reply leaves the
+  row as `submit_unknown` instead of erasing the order's identity.
+- When the venue is flat, venue exit fills are attributed to exit rows by exact
+  oid or cloid (never by quantity) and applied as line closes; the Grid then
+  finalizes as `hard_stop`.
+- If the venue is flat with no open orders but the exit cannot be attributed,
+  the Grid seals as `venue_flat_unattributed_exit`, lists the unattributed
+  closing fills in reconciliation, and queues a Park notification. A flat venue
+  is never a reason to wait silently.
+
+## Gotchas
+
+- Live 2026-09-10 23:21Z: flatten IOC oid 59824755533 filled at the venue while
+  its reply was `order_submit_unknown`; the lifecycle stayed blocked for four
+  hours because `_recover_blocked_position` returned early on a flat venue.
+- Fills stay optional on the heartbeat facts read; requiring them would block a
+  flatten retry on brokers that do not project fills.
+- A foreign open order on a flat venue still blocks (loudly), never seals.
+
+## Verification
+
+- `scripts/testnet_replay.sh`: 34 passed; `scripts/testnet_replay_mutations.sh`:
+  21/21 caught, including four #1261 mutations.
+- Offline proof with the real stuck lifecycle and real dashboard plan: main
+  stays blocked with no new events; this branch seals on the first tick with
+  both real close fills listed.
+
 # 2026-09-11 — Make Grid Testnet fill slippage directional (#1259)
 
 ## Decision
