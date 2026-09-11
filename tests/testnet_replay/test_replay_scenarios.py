@@ -162,6 +162,20 @@ def test_issue_1241_each_hard_stop_recovery_path_sets_request_flag(tmp_path: Pat
     retried = lifecycle.on_market_event(plan, price=80_000, timestamp="2026-09-11T01:01:00+00:00")
     assert retried["hard_stop_requested"] is True
 
+    # The flag must already be set when the venue facts read itself fails.
+    lifecycle, broker_obj, exchange, plan, state = _started(tmp_path / "heartbeat-facts-down")
+    state = lifecycle._state(plan)
+    state.update(status="hard_stop_triggered", hard_stop_requested=False)
+    lifecycle._save(state)
+
+    def facts_down(**_kwargs):
+        raise RuntimeError("facts unavailable")
+
+    broker_obj.read_public_facts = facts_down
+    failed = lifecycle.on_market_event(plan, price=80_000, timestamp="2026-09-11T01:01:00+00:00")
+    assert failed["blocker"] == "position_open_unprotected"
+    assert failed["hard_stop_requested"] is True
+
 
 def test_issue_1243_historical_fills_do_not_suppress_heartbeat(tmp_path: Path) -> None:
     lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path)
