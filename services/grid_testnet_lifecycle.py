@@ -646,6 +646,8 @@ class GridTestnetLifecycle:
             self._record_event(state, "blocked_position_recovery_failed", timestamp=timestamp, reason=f"broker_truth_query_failed:{type(exc).__name__}")
             return
         if abs(signed_quantity) <= 1e-9:
+            if state.get("hard_stop_requested") or state.get("blocker") == "position_open_unprotected":
+                self._seal_venue_flat(plan, state, facts["fills"] or (), timestamp=timestamp)
             return
         self._backfill_fact_fills(state, facts["fills"])
         fills = [
@@ -971,8 +973,7 @@ class GridTestnetLifecycle:
                 continue
             command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), market_price=self._flatten_market_price(rung, market, market_price if market_price is not None else state.get("last_market_price")))
             try:
-                receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
-                state["orders"].append(self._order_row(command, receipt))
+                self._submit_exit_order(plan, state, command, timestamp=timestamp)
             except GridTestnetLifecycleError as exc:
                 self._block(state, f"hard_stop_submit_failed:{exc}", timestamp=timestamp)
                 self._submit_emergency_flatten(plan, state, rung, timestamp=timestamp, reason="hard_stop_submit_failed", market=market, market_price=market_price)
@@ -985,8 +986,7 @@ class GridTestnetLifecycle:
             return
         command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop_recovery", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), attempt=int(rung.get("tp_attempt") or 0) + 1, market_price=self._flatten_market_price(rung, market, market_price if market_price is not None else state.get("last_market_price")))
         try:
-            receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
-            state["orders"].append(self._order_row(command, receipt))
+            self._submit_exit_order(plan, state, command, timestamp=timestamp)
             state["status"] = "hard_stop_triggered"
             state["hard_stop_requested"] = True
             state["hard_stop_reason"] = state.get("hard_stop_reason") or reason
@@ -995,6 +995,143 @@ class GridTestnetLifecycle:
             self._block(state, f"emergency_flatten_failed:{exc}", timestamp=timestamp)
             state["blocker"] = "position_open_unprotected"
             state["park_notification_required"] = True
+
+    def _submit_exit_order(self, plan: dict[str, Any], state: dict[str, Any], command: dict[str, Any], *, timestamp: str, submit: Any = None) -> dict[str, Any]:
+        """Record a flatten intent before submit so an unknown reply keeps its identity."""
+        row = {**command, "order_id": str(command["ticket_id"]), "broker_order_id": "", "environment": "testnet", "state": "submit_pending"}
+        native = self._native_client_order_id(str(command.get("client_order_id") or ""))
+        if native:
+            row["native_client_order_id"] = native
+        state["orders"].append(row)
+        try:
+            receipt = submit() if submit is not None else self._submit_with_retries(plan, state, command, timestamp=timestamp)
+            accepted = self._order_row(command, receipt)
+        except Exception as exc:
+            row["state"] = "rejected" if str(exc).startswith("blocked_local_validation:") else "submit_unknown"
+            row["submit_error"] = f"{type(exc).__name__}:{exc}"
+            raise
+        if native and not accepted.get("native_client_order_id"):
+            accepted["native_client_order_id"] = native
+        row.clear()
+        row.update(accepted)
+        return row
+
+    @staticmethod
+    def _native_client_order_id(client_order_id: str) -> str:
+        """Return the Hyperliquid cloid Nautilus derives for a client order id."""
+        if not client_order_id:
+            return ""
+        try:
+            from nautilus_trader.core import nautilus_pyo3
+            return str(nautilus_pyo3.hyperliquid_cloid_from_client_order_id(nautilus_pyo3.ClientOrderId(client_order_id)))
+        except Exception:  # noqa: BLE001 - the local client id stays the identity.
+            return ""
+
+    def _attribute_venue_exit_fills(self, state: dict[str, Any], fact_fills: Any, *, timestamp: str) -> None:
+        """Apply venue exit fills to their exit rows by exact oid or cloid."""
+        seen = {
+            str(value)
+            for fill in state.get("fills", ())
+            for value in (fill.get("fill_id"), *(fill.get("fill_identities") or ()))
+            if value not in (None, "")
+        }
+        exit_rows = [row for row in state.get("orders", ()) if row.get("event") in {"tp", "hard_stop", "hard_stop_recovery"}]
+        for fact in fact_fills or ():
+            if not isinstance(fact, Mapping):
+                continue
+            tid = str(self._fact_value(fact, "tid", "fill_id") or "").strip()
+            if not tid or tid in seen:
+                continue
+            oid = str(self._fact_value(fact, "oid", "broker_order_id") or "").strip()
+            cloid = str(self._fact_value(fact, "cloid", "client_order_id") or "").strip()
+            row = next(
+                (
+                    item for item in exit_rows
+                    if (oid and oid == str(item.get("broker_order_id") or ""))
+                    or (cloid and cloid in {str(item.get("client_order_id") or ""), str(item.get("native_client_order_id") or "")})
+                ),
+                None,
+            )
+            if row is None:
+                continue
+            rung = self._rung(state, str(row.get("rung_id") or ""))
+            line = GridLineLifecycle.from_snapshot(rung["line"])
+            quantity = float(self._fact_value(fact, "sz", "quantity") or 0.0)
+            try:
+                line.apply_close_fill(fill_id=tid, quantity=quantity, at=timestamp, rearm=False, terminal_state="stopped")
+            except ValueError as exc:
+                self._record_event(state, "venue_exit_fill_unapplied", timestamp=timestamp, fill_id=tid, order_id=row.get("order_id"), reason=str(exc))
+                continue
+            rung["line"] = line.snapshot()
+            if oid and not row.get("broker_order_id"):
+                row["broker_order_id"] = oid
+            if row.get("state") in {"submit_pending", "submit_unknown", "accepted"}:
+                row["state"] = "filled"
+            seen.add(tid)
+            state["fills"].append({
+                "event": row.get("event"), "rung_id": row.get("rung_id"), "order_id": row.get("order_id"),
+                "broker_order_id": oid, "client_order_id": row.get("client_order_id"),
+                "quantity": quantity, "price": float(self._fact_value(fact, "px", "price") or 0.0),
+                "side": self._fact_value(fact, "side"), "fill_id": tid,
+                "fill_identities": [value for value in (tid, str(fact.get("hash") or "")) if value],
+                "source": "venue_fact_attribution",
+            })
+            self._record_event(state, "venue_exit_fill_attributed", timestamp=timestamp, fill_id=tid, order_id=row.get("order_id"), quantity=quantity)
+
+    def _unattributed_exit_fills(self, state: Mapping[str, Any], fact_fills: Any) -> list[dict[str, Any]]:
+        """List this activation's closing venue fills that no local row owns."""
+        from datetime import datetime as DateTime
+        try:
+            since = DateTime.fromisoformat(str(state.get("created_at") or "").replace("Z", "+00:00")).timestamp() * 1000
+        except ValueError:
+            since = 0.0
+        direction = str(state.get("direction") or "long")
+        closing = {"long": {"A"}, "short": {"B"}}.get(direction, {"A", "B"})
+        seen = {
+            str(value)
+            for fill in state.get("fills", ())
+            for value in (fill.get("fill_id"), *(fill.get("fill_identities") or ()))
+            if value not in (None, "")
+        }
+        rows = []
+        for fact in fact_fills or ():
+            if not isinstance(fact, Mapping):
+                continue
+            tid = str(self._fact_value(fact, "tid", "fill_id") or "")
+            if tid in seen or str(fact.get("side") or "") not in closing:
+                continue
+            try:
+                occurred = float(fact.get("time") or 0)
+            except (TypeError, ValueError):
+                occurred = 0.0
+            if occurred < since:
+                continue
+            rows.append({key: fact.get(key) for key in ("tid", "oid", "cloid", "px", "sz", "side", "time")})
+        return rows
+
+    def _seal_venue_flat(self, plan: dict[str, Any], state: dict[str, Any], fact_fills: Any, *, timestamp: str) -> None:
+        """End a stopping Grid once the venue is flat; never wait silently."""
+        self._attribute_venue_exit_fills(state, fact_fills, timestamp=timestamp)
+        state["status"] = "hard_stop_triggered"
+        self._mark_hard_stop_requested(state, str(state.get("hard_stop_reason") or "venue_flat_recovery"))
+        self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
+        if state.get("status") != "hard_stop_triggered":
+            return
+        reconciliation = self._terminal_reconciliation(state, timestamp)
+        state["reconciliation"] = reconciliation
+        if reconciliation.get("status") != "ok":
+            self._block(state, "hard_stop_reconciliation_blocked", timestamp=timestamp)
+            state["park_notification_required"] = True
+            return
+        unattributed = self._unattributed_exit_fills(state, fact_fills)
+        reconciliation["unattributed_exit_fills"] = unattributed
+        reconciliation["unattributed_open_quantity"] = sum(
+            GridLineLifecycle.from_snapshot(rung["line"]).open_quantity for rung in state["rungs"]
+        )
+        reason = "venue_flat_unattributed_exit"
+        state.update(status="terminal", sealed=True, terminal_reason=reason, closure_blocker=reason, next_action="notify_park_and_wait", park_notification_required=True)
+        state["park_notification"] = {"notification_id": f"grid-terminal:{state['strategy_plan_id']}:{state['plan_digest']}", "channel": "telegram", "status": "queued", "reason": reason, "strategy_session_id": state["strategy_session_id"], "strategy_revision_id": state["strategy_revision_id"], "plan_digest": state["plan_digest"], "next_action": "notify_park_and_wait"}
+        self._record_event(state, "revision_sealed", timestamp=timestamp, reason=reason, unattributed_exit_fills=unattributed)
 
     def _submission_failure(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str) -> None:
         self._block(state, reason, timestamp=timestamp)
@@ -1311,7 +1448,7 @@ class GridTestnetLifecycle:
             return
         state["exchange_position_quantity"] = broker_quantity
         if abs(broker_quantity) <= 1e-9:
-            self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
+            self._seal_venue_flat(plan, state, facts.get("fills") or (), timestamp=timestamp)
             return
 
         open_ids = self._exchange_order_identities(facts["open_orders"] or ())
@@ -1365,19 +1502,21 @@ class GridTestnetLifecycle:
         )
         state["hard_stop_retry_attempts"] = attempt
         try:
-            receipt = self.broker.submit_order(
-                BrokerOrderRequest(
-                    run_date=state["cycle_id"], ticket=command,
-                    latest_price=float(command.get("price") or 0),
-                    actual_size=float(command.get("quantity") or 0),
-                )
+            self._submit_exit_order(
+                plan, state, command, timestamp=timestamp,
+                submit=lambda: self.broker.submit_order(
+                    BrokerOrderRequest(
+                        run_date=state["cycle_id"], ticket=command,
+                        latest_price=float(command.get("price") or 0),
+                        actual_size=float(command.get("quantity") or 0),
+                    )
+                ),
             )
             state.setdefault("retry_events", []).append({
                 "operation": "hard_stop_recovery", "attempt": attempt,
                 "ticket_id": command["ticket_id"], "status": "accepted",
                 "timestamp": timestamp,
             })
-            state["orders"].append(self._order_row(command, receipt))
             self._record_event(
                 state, "emergency_flatten_submitted", timestamp=timestamp,
                 rung_id=rung["rung_id"], reason="hard_stop_retry",
@@ -1794,7 +1933,7 @@ class GridTestnetLifecycle:
 
     @staticmethod
     def _order_id_for_client(state: Mapping[str, Any], client_id: str) -> str:
-        row = next((item for item in state["orders"] if item.get("client_order_id") == client_id), None)
+        row = next((item for item in state["orders"] if client_id and client_id in {item.get("client_order_id"), item.get("native_client_order_id")}), None)
         if row is None:
             raise GridTestnetLifecycleError("unknown_grid_client_identity")
         return str(row["order_id"])

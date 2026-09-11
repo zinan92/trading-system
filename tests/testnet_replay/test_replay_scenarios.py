@@ -761,3 +761,82 @@ def test_issue_1253_tick_market_pair_uses_tolerance_bbo_and_observation_age() ->
     assert compare_market_observations("76957.5", "76956.5", **common)["reason_code"] == "market_bbo_inconsistent"
     assert compare_market_observations("76957.5", "76957.5", **{**common, "reader_observed_at": "2026-09-11T01:00:11+00:00"})["reason_code"] == "market_observation_mismatch"
     assert compare_market_observations("76957.5", "76957.5", **{**common, "binding_observed_at": "not-a-timestamp"})["reason_code"] == "market_observation_mismatch"
+
+
+def _flatten_reply_lost(tmp_path: Path):
+    """Replay 2026-09-10 23:21Z: the hard-stop IOC reached the venue but its reply was lost."""
+    lifecycle, broker, exchange, plan, state = _started(tmp_path)
+    entry = state["orders"][0]
+    exchange.inject_fill(entry, tid=61, price=80_000)
+    lifecycle.on_fill(plan, fill(entry, tid=61, price=80_000), timestamp="2026-09-11T01:01:00+00:00")
+    original_submit = broker.submit_order
+
+    def submit(request):
+        if request.ticket.get("event") in {"hard_stop", "hard_stop_recovery"}:
+            raise RuntimeError("submit reply lost")
+        return original_submit(request)
+
+    broker.submit_order = submit
+    broker.query_by_idempotency_key = lambda _key: {"state": "unknown"}
+    stopped = lifecycle.on_market_event(plan, price=71_900, market={"bid": "77000", "ask": "77002", "mid": "77001"}, timestamp="2026-09-11T01:02:00+00:00")
+    return lifecycle, exchange, plan, stopped
+
+
+def _venue_flattened(exchange: ReplayExchange, *, cloid: str) -> None:
+    # Real shape of oid 59824755533: one IOC, two partial close fills.
+    exchange.positions.clear()
+    exchange.open_orders.clear()
+    for tid, px, sz in ((653136567960380, "76158.0", "0.00009"), (386804856837645, "76178.0", "0.00015")):
+        exchange.fills.append({"coin": "BTC", "px": px, "sz": sz, "side": "A", "time": 1789123200000 + 120_000,
+                               "dir": "Close Long", "crossed": True, "oid": 59824755533, "cloid": cloid,
+                               "tid": tid, "hash": "0xa77a9d69b085659da8f40429029986010200b54f4b88846f4b4348bc6f893f88"})
+
+
+def test_issue_1261_unknown_flatten_reply_keeps_row_and_seals_attributed(tmp_path: Path) -> None:
+    lifecycle, exchange, plan, stopped = _flatten_reply_lost(tmp_path)
+    assert stopped["status"].startswith("blocked")
+    assert stopped["blocker"] == "position_open_unprotected"
+    row = next(item for item in stopped["orders"] if item["event"] == "hard_stop")
+    assert row["state"] == "submit_unknown"
+    assert row["native_client_order_id"].startswith("0x") and row["native_client_order_id"] != row["client_order_id"]
+
+    _venue_flattened(exchange, cloid=row["native_client_order_id"])
+    sealed = lifecycle.on_market_event(plan, price=76_950, timestamp="2026-09-11T01:03:00+00:00")
+    assert sealed["status"] == "terminal", (sealed.get("reconciliation"), sealed["events"][-4:])
+    assert sealed["sealed"] is True
+    assert sealed["terminal_reason"] == "hard_stop"
+    assert sealed["rungs"][0]["line"]["close_filled_quantity"] == pytest.approx(0.00024)
+    assert sum(event["event"] == "venue_exit_fill_attributed" for event in sealed["events"]) == 2
+    assert_invariants(sealed, exchange, previous=stopped)
+
+
+@pytest.mark.parametrize("status", ["blocked_reconciliation", "hard_stop_triggered"])
+def test_issue_1261_flat_venue_without_exit_row_seals_unattributed(tmp_path: Path, status: str) -> None:
+    lifecycle, exchange, plan, stopped = _flatten_reply_lost(tmp_path)
+    # The live state had no local row for the flatten order at all.
+    state = lifecycle._state(plan)
+    state["orders"] = [row for row in state["orders"] if row["event"] not in {"hard_stop", "hard_stop_recovery"}]
+    state["status"] = status
+    lifecycle._save(state)
+    _venue_flattened(exchange, cloid="0x2386c45d1c8ab5527f68207460c44026")
+    sealed = lifecycle.on_market_event(plan, price=76_950, timestamp="2026-09-11T01:03:00+00:00")
+    assert sealed["status"] == "terminal", (sealed.get("reconciliation"), sealed["events"][-4:])
+    assert sealed["sealed"] is True
+    assert sealed["terminal_reason"] == "venue_flat_unattributed_exit"
+    assert sealed["park_notification_required"] is True
+    assert sealed["park_notification"]["reason"] == "venue_flat_unattributed_exit"
+    assert {row["tid"] for row in sealed["reconciliation"]["unattributed_exit_fills"]} == {653136567960380, 386804856837645}
+    assert sealed["reconciliation"]["unattributed_open_quantity"] == pytest.approx(0.00024)
+
+
+def test_issue_1261_flat_venue_with_foreign_open_order_stays_blocked_loudly(tmp_path: Path) -> None:
+    lifecycle, exchange, plan, stopped = _flatten_reply_lost(tmp_path)
+    _venue_flattened(exchange, cloid="0x2386c45d1c8ab5527f68207460c44026")
+    exchange.open_orders.append({"broker_order_id": 999, "cloid": "0xforeign", "side": "sell"})
+    state = lifecycle._state(plan)
+    state["orders"] = [row for row in state["orders"] if row["event"] not in {"hard_stop", "hard_stop_recovery"}]
+    lifecycle._save(state)
+    result = lifecycle.on_market_event(plan, price=76_950, timestamp="2026-09-11T01:03:00+00:00")
+    assert result["status"].startswith("blocked")
+    assert result.get("sealed") is not True
+    assert result["park_notification_required"] is True
