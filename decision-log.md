@@ -1,5 +1,30 @@
 # Decision log
 
+## Issue #137: exact protection identity recovery after an empty submit response
+
+- Each position-following leg derives its deterministic `SBP-...` ID and the
+  venue CLOID from `nautilus_pyo3.hyperliquid_cloid_from_client_order_id`.
+  Recovery is bounded to five rounds and probes, in order, the SBP ID, the
+  venue CLOID, then the instrument-scoped status-report list. List matching is
+  identity-only (`SBP` or venue CLOID); quantity is never a matching key.
+- An identity hit must have an open/resting/waiting status and matching
+  `side` and `trigger_px`; `reduce_only` is also checked. Multiple list rows
+  for one leg or any conflicting field raises
+  `protection_recovery_conflict`. Successful rows persist the real venue `oid`
+  and venue CLOID for later query/cancel calls.
+- Every recovery round records bounded raw summaries for all three stages,
+  including `status`, `oid`, `cloid`, `side`, `trigger_px`, `quantity`, and
+  `reduce_only`; failures retain the last two rounds and cap evidence at 4000
+  characters. This preserves the original returned rows for the next
+  diagnosis instead of recording only matches.
+- Nautilus 1.230.0's Hyperliquid execution adapter converts pyo3
+  `OrderStatusReport.trigger_price` and `.reduce_only` directly into the
+  public report (`execution.py` `generate_order_status_reports` plus
+  `execution/reports.py` `OrderStatusReport.from_pyo3`). They are therefore
+  reliable consistency fields for this recovery path; quantity remains
+  evidence only because position-following reports can expose a different
+  size, including zero.
+
 ## Issue #135: recover positionTpsl protection after an empty submit response
 
 - When Nautilus `submit_orders` returns an empty or non-list response, the

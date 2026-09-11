@@ -362,79 +362,184 @@ class NautilusHyperliquidTestnetBackend:
     def _recover_protection_rows(
         self, request: Mapping[str, object]
     ) -> tuple[list[dict[str, object]], str]:
-        """Recover both native legs after Nautilus acknowledges no report."""
+        """Recover native legs by deterministic identity, never by quantity."""
 
         instrument = self._instrument(request)
         legs = request["legs"]
         assert isinstance(legs, list)
-        latest: list[dict[str, object]] = []
+        protection_id = str(request.get("protectionId") or "")
+        expected = [
+            (
+                index,
+                leg,
+                self._protection_client_id(
+                    protection_id, index, leg, quantity=request.get("quantity")
+                ),
+            )
+            for index, leg in enumerate(legs)
+            if isinstance(leg, Mapping)
+        ]
+        found: dict[int, dict[str, object]] = {}
+        rounds: list[dict[str, object]] = []
         for attempt in range(5):
+            observed: list[dict[str, object]] = []
+            for index, leg, sbp_id in expected:
+                if index in found:
+                    continue
+                venue_cloid = self._native_protection_cloid(sbp_id)
+                for stage, lookup in (("sbp", sbp_id), ("venue", venue_cloid)):
+                    try:
+                        report = self._call(
+                            "request_order_status_report",
+                            venue_order_id=None,
+                            client_order_id=self._optional_client_order_id({"cloid": lookup}),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - recovery remains fail-closed.
+                        observed.append(
+                            {"stage": stage, "leg": index, "error": type(exc).__name__}
+                        )
+                        continue
+                    if report is None:
+                        observed.append({"stage": stage, "leg": index, "report": None})
+                        continue
+                    row = self._protection_report(report)
+                    observed.append(
+                        {"stage": stage, "leg": index, **self._protection_summary(row)}
+                    )
+                    if self._protection_row_owned(row, sbp_id):
+                        found[index] = self._checked_protection_row(
+                            row, leg, sbp_id, venue_cloid
+                        )
+                        break
+
             try:
                 reports = self._call("request_order_status_reports", str(instrument.id))
             except Exception as exc:  # noqa: BLE001 - recovery remains fail-closed.
-                latest = [{"error": type(exc).__name__}]
+                observed.append({"stage": "list", "error": type(exc).__name__})
             else:
-                latest = self._match_protection_reports(legs, reports, request.get("quantity"))
-                if len(latest) == len(legs):
-                    return latest, self._protection_recovery_evidence(latest)
+                listed = (
+                    [self._protection_report(item) for item in reports]
+                    if isinstance(reports, (list, tuple))
+                    else []
+                )
+                observed.append(
+                    {
+                        "stage": "list",
+                        "count": len(listed),
+                        "reports": [self._protection_summary(row) for row in listed[:20]],
+                    }
+                )
+                for index, leg, sbp_id in expected:
+                    owned = [
+                        row for row in listed if self._protection_row_owned(row, sbp_id)
+                    ]
+                    if len(owned) > 1:
+                        self._raise_recovery_conflict(
+                            sbp_id,
+                            ["identity:multiple_list_reports"],
+                            owned,
+                            rounds + [{"attempt": attempt + 1, "observed": observed}],
+                        )
+                    if owned and index not in found:
+                        found[index] = self._checked_protection_row(
+                            owned[0], leg, sbp_id, self._native_protection_cloid(sbp_id)
+                        )
+            rounds.append({"attempt": attempt + 1, "observed": observed})
+            if len(found) == len(expected):
+                break
             if attempt < 4:
                 sleep(1)
-        return latest, self._protection_recovery_evidence(latest)
-
-    def _match_protection_reports(
-        self, legs: list[object], reports: object, quantity: object
-    ) -> list[dict[str, object]]:
-        if not isinstance(reports, (list, tuple)):
-            return []
-        available = [self._protection_report(report) for report in reports]
-        matched: list[dict[str, object]] = []
-        consumed: set[int] = set()
-        for leg in legs:
-            if not isinstance(leg, Mapping):
-                continue
-            for index, report in enumerate(available):
-                if index in consumed:
-                    continue
-                if self._protection_report_matches_leg(report, leg, quantity):
-                    matched.append(report)
-                    consumed.add(index)
-                    break
-        return matched
+        rows = [found[index] for index, _, _ in expected if index in found]
+        return rows, self._protection_recovery_evidence(rows, rounds)
 
     @classmethod
-    def _protection_report_matches_leg(
-        cls, report: Mapping[str, object], leg: Mapping[str, object], quantity: object
-    ) -> bool:
-        if str(report.get("status") or "").lower() not in {
+    def _native_protection_cloid(cls, client_id: str) -> str:
+        try:
+            from nautilus_trader.core import nautilus_pyo3
+
+            return str(
+                nautilus_pyo3.hyperliquid_cloid_from_client_order_id(
+                    nautilus_pyo3.ClientOrderId(client_id)
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - identity translation is a hard boundary.
+            raise RuntimeBoundaryError(
+                "client_order_identity_normalization_failed",
+                "Nautilus could not derive the native Hyperliquid protection identity",
+            ) from exc
+
+    @classmethod
+    def _protection_row_owned(cls, row: Mapping[str, object], sbp_id: str) -> bool:
+        return str(row.get("cloid") or "").strip() in {
+            sbp_id,
+            cls._native_protection_cloid(sbp_id),
+        }
+
+    @classmethod
+    def _checked_protection_row(
+        cls,
+        row: Mapping[str, object],
+        leg: Mapping[str, object],
+        sbp_id: str,
+        venue_cloid: str,
+    ) -> dict[str, object]:
+        conflicts: list[str] = []
+        if str(row.get("status") or "").lower() not in {
             "resting", "waiting_for_trigger", "waiting_for_fill", "open"
         }:
-            return False
-        if report.get("reduce_only") is not True:
-            return False
-        if str(report.get("side") or "") != str(leg.get("side") or ""):
-            return False
+            conflicts.append("status")
+        if row.get("reduce_only") is not True:
+            conflicts.append("reduce_only")
+        if str(row.get("side") or "") != str(leg.get("side") or ""):
+            conflicts.append("side")
         try:
-            return (
-                Decimal(str(report.get("trigger_px"))) == Decimal(str(leg.get("triggerPx")))
-                and Decimal(str(report.get("quantity"))) == Decimal(str(quantity))
-            )
+            if Decimal(str(row.get("trigger_px"))) != Decimal(str(leg.get("triggerPx"))):
+                conflicts.append("trigger_px")
         except (InvalidOperation, TypeError, ValueError):
-            return False
+            conflicts.append("trigger_px")
+        if conflicts:
+            cls._raise_recovery_conflict(sbp_id, conflicts, [row])
+        return {**dict(row), "cloid": venue_cloid, "client_order_id": sbp_id}
 
-    @staticmethod
-    def _protection_recovery_evidence(rows: list[Mapping[str, object]]) -> str:
-        return json.dumps(
-            [
-                {
-                    key: row.get(key)
-                    for key in ("status", "oid", "cloid", "side", "trigger_px", "quantity")
-                    if row.get(key) is not None
-                }
-                for row in rows
-            ],
+    @classmethod
+    def _raise_recovery_conflict(
+        cls,
+        sbp_id: str,
+        fields: list[str],
+        rows: list[Mapping[str, object]],
+        rounds: list[Mapping[str, object]] = (),
+    ) -> None:
+        evidence = cls._protection_recovery_evidence([], rounds)
+        raise RuntimeBoundaryError(
+            "protection_recovery_conflict",
+            f"protection leg {sbp_id} conflicts on {','.join(fields)}; "
+            f"reports={json.dumps([cls._protection_summary(row) for row in rows], sort_keys=True)}; "
+            f"recovery evidence: {evidence}",
+        )
+
+    @classmethod
+    def _protection_summary(cls, row: Mapping[str, object]) -> dict[str, object]:
+        return {
+            key: row.get(key)
+            for key in (
+                "status", "oid", "cloid", "side", "trigger_px", "quantity", "reduce_only"
+            )
+            if row.get(key) is not None
+        }
+
+    @classmethod
+    def _protection_recovery_evidence(
+        cls,
+        rows: list[Mapping[str, object]],
+        rounds: list[Mapping[str, object]] = (),
+    ) -> str:
+        evidence = json.dumps(
+            {"rows": [cls._protection_summary(row) for row in rows], "rounds": list(rounds)[-2:]},
             sort_keys=True,
             separators=(",", ":"),
+            default=str,
         )
+        return evidence if len(evidence) <= 4000 else evidence[:3990] + "...<cut>"
 
     def _query_protection(self, protection_id: str) -> Mapping[str, object]:
         record = self._protection_orders.get(protection_id)
@@ -1443,7 +1548,7 @@ class NautilusHyperliquidTestnetBackend:
         if not text:
             return ()
         candidates = [text]
-        if len(text) == 34 and text.startswith("0x"):
+        if text.startswith("SBP-") or (len(text) == 34 and text.startswith("0x")):
             try:
                 from nautilus_trader.core import nautilus_pyo3
 

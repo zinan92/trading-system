@@ -190,31 +190,39 @@ def test_external_protection_submit_and_query_are_redacted_and_cursorable(tmp_pa
     assert "reduceOnly" not in str(submitted)
 
 
-def _recovered_orders() -> list[dict[str, object]]:
-    return [
-        {
-            "order": {
-                "oid": 59821879831,
-                "cloid": "0xa0ad802259b69ff96afcc988317353b8",
-                "side": "A",
-                "triggerPx": "61000.0",
-                "sz": "0.001",
-                "reduceOnly": True,
-            },
-            "status": "open",
-        },
-        {
-            "order": {
-                "oid": 59821879832,
-                "cloid": "0xa371b58ce4842e11ca0667abded7dbda",
-                "side": "A",
-                "triggerPx": "59000.0",
-                "sz": "0.001",
-                "reduceOnly": True,
-            },
-            "status": "open",
-        },
-    ]
+def _recovered_orders() -> list[object]:
+    from nautilus_trader.core import nautilus_pyo3
+
+    request = _supported_request()
+    reports = []
+    for index, leg in enumerate(request["legs"]):
+        assert isinstance(leg, dict)
+        sbp_id = NautilusHyperliquidTestnetBackend._protection_client_id(
+            request["protectionId"], index, leg, quantity=request["quantity"]
+        )
+        reports.append(
+            nautilus_pyo3.OrderStatusReport(
+                nautilus_pyo3.AccountId("HYPERLIQUID-001"),
+                nautilus_pyo3.InstrumentId.from_str("BTC-USD-PERP.HYPERLIQUID"),
+                nautilus_pyo3.VenueOrderId(str(59821879831 + index)),
+                nautilus_pyo3.OrderSide.SELL,
+                nautilus_pyo3.OrderType.MARKET,
+                nautilus_pyo3.TimeInForce.GTC,
+                nautilus_pyo3.OrderStatus.ACCEPTED,
+                nautilus_pyo3.Quantity.from_str("0.00024"),
+                nautilus_pyo3.Quantity.from_str("0"),
+                1,
+                2,
+                3,
+                client_order_id=nautilus_pyo3.ClientOrderId(
+                    NautilusHyperliquidTestnetBackend._native_protection_cloid(sbp_id)
+                ),
+                trigger_price=nautilus_pyo3.Price.from_str(str(leg["triggerPx"])),
+                trigger_type=nautilus_pyo3.TriggerType.MARK_PRICE,
+                reduce_only=True,
+            )
+        )
+    return reports
 
 
 @pytest.mark.parametrize(
@@ -224,7 +232,7 @@ def _recovered_orders() -> list[dict[str, object]]:
 def test_empty_protection_submit_recovers_or_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    orders: list[dict[str, object]],
+    orders: list[object],
     reason: str | None,
 ) -> None:
     backend = _backend(tmp_path)
@@ -241,6 +249,8 @@ def test_empty_protection_submit_recovers_or_fails_closed(
             return []
         if method == "request_order_status_reports":
             return orders
+        if method == "request_order_status_report" and kwargs.get("venue_order_id") is None:
+            return None
         if method == "cancel_order":
             return {"status": "ok"}
         if method == "request_order_status_report":
@@ -261,14 +271,133 @@ def test_empty_protection_submit_recovers_or_fails_closed(
         backend.invoke("protection_order", "cancel", {"protectionId": "dca-protection:1"})
         cancel_calls = [kwargs for method, kwargs in calls if method == "cancel_order"]
         assert {str(kwargs["client_order_id"]) for kwargs in cancel_calls} == {
-            "0xa0ad802259b69ff96afcc988317353b8",
-            "0xa371b58ce4842e11ca0667abded7dbda",
+            NautilusHyperliquidTestnetBackend._native_protection_cloid(
+                NautilusHyperliquidTestnetBackend._protection_client_id(
+                    "dca-protection:1", 0, _supported_request()["legs"][0], quantity="0.001"
+                )
+            ),
+            NautilusHyperliquidTestnetBackend._native_protection_cloid(
+                NautilusHyperliquidTestnetBackend._protection_client_id(
+                    "dca-protection:1", 1, _supported_request()["legs"][1], quantity="0.001"
+                )
+            ),
         }
     else:
         with pytest.raises(RuntimeBoundaryError) as raised:
             backend.invoke("protection_order", "submit", _supported_request())
         assert raised.value.reason_code == reason
-        assert "59821879831" in str(raised.value) if orders else "[]" in str(raised.value)
+        assert "recovery evidence" in str(raised.value)
+        if orders:
+            assert "59821879831" in str(raised.value)
+
+
+def _clone_status_report(
+    report: object,
+    *,
+    trigger: str | None = None,
+    cloid: str | None = None,
+    reduce_only: bool | None = None,
+) -> object:
+    from nautilus_trader.core import nautilus_pyo3
+
+    return nautilus_pyo3.OrderStatusReport(
+        report.account_id,
+        report.instrument_id,
+        report.venue_order_id,
+        report.order_side,
+        report.order_type,
+        report.time_in_force,
+        report.order_status,
+        report.quantity,
+        report.filled_qty,
+        report.ts_accepted,
+        report.ts_last,
+        report.ts_init,
+        client_order_id=nautilus_pyo3.ClientOrderId(cloid) if cloid else report.client_order_id,
+        trigger_price=nautilus_pyo3.Price.from_str(trigger) if trigger else report.trigger_price,
+        trigger_type=report.trigger_type,
+        reduce_only=report.reduce_only if reduce_only is None else reduce_only,
+    )
+
+
+def test_protection_recovery_uses_sbp_then_venue_identity_and_ignores_foreign_quantity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _backend(tmp_path)
+    backend.activate(release_sha="a" * 40)
+    backend._build_protection_orders = lambda request: ["tp-order", "sl-order"]
+    backend._instrument = lambda request: SimpleNamespace(id="BTC-USD-PERP.HYPERLIQUID")
+    monkeypatch.setattr(external_module, "sleep", lambda seconds: None)
+    reports = _recovered_orders()
+    request = _supported_request()
+    sbp_ids = [
+        backend._protection_client_id("dca-protection:1", i, leg, quantity="0.001")
+        for i, leg in enumerate(request["legs"])
+    ]
+    venue_ids = [backend._native_protection_cloid(value) for value in sbp_ids]
+    foreign = _clone_status_report(reports[0], cloid="0x" + "f" * 32)
+
+    def call(method: str, *args, **kwargs):
+        del args
+        if method == "submit_orders":
+            return []
+        if method == "request_order_status_report":
+            lookup = str(kwargs.get("client_order_id") or "")
+            if lookup == sbp_ids[0]:
+                return reports[0]
+            if lookup == venue_ids[1]:
+                return reports[1]
+            return None
+        if method == "request_order_status_reports":
+            return [foreign]
+        raise AssertionError(method)
+
+    backend._call = call
+    submitted = backend.invoke("protection_order", "submit", request)
+
+    assert submitted["state"] == "submitted"
+    assert submitted["order_ids"] == ["59821879831", "59821879832"]
+    assert [row["cloid"] for row in backend._protection_orders["dca-protection:1"]["rows"]] == venue_ids
+
+
+@pytest.mark.parametrize("bad_kind", ["duplicate", "trigger", "reduce_only"])
+def test_protection_recovery_identity_conflicts_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_kind: str
+) -> None:
+    backend = _backend(tmp_path)
+    backend.activate(release_sha="a" * 40)
+    backend._build_protection_orders = lambda request: ["tp-order", "sl-order"]
+    backend._instrument = lambda request: SimpleNamespace(id="BTC-USD-PERP.HYPERLIQUID")
+    monkeypatch.setattr(external_module, "sleep", lambda seconds: None)
+    reports = _recovered_orders()
+    listed = list(reports)
+    if bad_kind == "duplicate":
+        listed.append(reports[0])
+    elif bad_kind == "trigger":
+        listed[0] = _clone_status_report(reports[0], trigger="62000")
+    else:
+        listed[0] = _clone_status_report(reports[0], reduce_only=False)
+
+    def call(method: str, *args, **kwargs):
+        del args, kwargs
+        if method == "submit_orders":
+            return []
+        if method == "request_order_status_report":
+            return None
+        if method == "request_order_status_reports":
+            return listed
+        raise AssertionError(method)
+
+    backend._call = call
+    with pytest.raises(RuntimeBoundaryError) as raised:
+        backend.invoke("protection_order", "submit", _supported_request())
+
+    assert raised.value.reason_code == "protection_recovery_conflict"
+    assert (
+        "trigger_px" in str(raised.value)
+        or "reduce_only" in str(raised.value)
+        or "multiple_list_reports" in str(raised.value)
+    )
 
 
 def test_external_protection_accepts_group_level_submit_report_and_queries_child_cloids(tmp_path: Path) -> None:
