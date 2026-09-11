@@ -854,3 +854,39 @@ def test_issue_1261_flat_venue_with_foreign_open_order_stays_blocked_loudly(tmp_
     assert result["status"].startswith("blocked")
     assert result.get("sealed") is not True
     assert result["park_notification_required"] is True
+
+
+def test_issue_1261_review_unknown_flatten_still_open_is_not_resubmitted(tmp_path: Path) -> None:
+    lifecycle, exchange, plan, stopped = _flatten_reply_lost(tmp_path)
+    row = next(item for item in stopped["orders"] if item["event"] == "hard_stop")
+    # The lost-reply IOC is still resting at the venue: the open order carries oid and native cloid.
+    exchange.open_orders[:] = [{"oid": 59824755533, "cloid": row["native_client_order_id"], "side": "A"}]
+    state = lifecycle._state(plan)
+    state["status"] = "hard_stop_triggered"
+    lifecycle._save(state)
+    submitted = []
+    lifecycle.broker.submit_order = lambda request: submitted.append(dict(request.ticket))
+    lifecycle.on_market_event(plan, price=76_950, market={"bid": "77000", "ask": "77002", "mid": "77001"}, timestamp="2026-09-11T01:03:00+00:00")
+    assert submitted == []
+
+
+def test_issue_1261_review_unapplied_exit_fill_blocks_instead_of_sealing(tmp_path: Path) -> None:
+    lifecycle, exchange, plan, stopped = _flatten_reply_lost(tmp_path)
+    row = next(item for item in stopped["orders"] if item["event"] == "hard_stop")
+    _venue_flattened(exchange, cloid=row["native_client_order_id"])
+    exchange.fills[-1]["sz"] = "0.5"  # exceeds the local open quantity
+    result = lifecycle.on_market_event(plan, price=76_950, timestamp="2026-09-11T01:03:00+00:00")
+    assert result.get("sealed") is not True
+    assert result["blocker"] == "venue_exit_fill_unapplied"
+    assert result["park_notification_required"] is True
+
+
+def test_issue_1261_review_flat_blocked_without_hard_stop_request_is_not_sealed(tmp_path: Path) -> None:
+    lifecycle, _broker_obj, exchange, plan, state = _started(tmp_path)
+    exchange.open_orders.clear()
+    state = lifecycle._state(plan)
+    state.update(status="blocked_reconciliation", blocker="position_open_unprotected", hard_stop_requested=False)
+    lifecycle._save(state)
+    result = lifecycle.on_market_event(plan, price=80_000, timestamp="2026-09-11T01:01:00+00:00")
+    assert result.get("sealed") is not True
+    assert result.get("terminal_reason") is None

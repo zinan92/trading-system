@@ -646,7 +646,7 @@ class GridTestnetLifecycle:
             self._record_event(state, "blocked_position_recovery_failed", timestamp=timestamp, reason=f"broker_truth_query_failed:{type(exc).__name__}")
             return
         if abs(signed_quantity) <= 1e-9:
-            if state.get("hard_stop_requested") or state.get("blocker") == "position_open_unprotected":
+            if state.get("hard_stop_requested"):
                 self._seal_venue_flat(plan, state, facts["fills"] or (), timestamp=timestamp)
             return
         self._backfill_fact_fills(state, facts["fills"])
@@ -1027,8 +1027,9 @@ class GridTestnetLifecycle:
         except Exception:  # noqa: BLE001 - the local client id stays the identity.
             return ""
 
-    def _attribute_venue_exit_fills(self, state: dict[str, Any], fact_fills: Any, *, timestamp: str) -> None:
-        """Apply venue exit fills to their exit rows by exact oid or cloid."""
+    def _attribute_venue_exit_fills(self, state: dict[str, Any], fact_fills: Any, *, timestamp: str) -> int:
+        """Apply venue exit fills to their exit rows by exact oid or cloid; return unapplied count."""
+        unapplied = 0
         seen = {
             str(value)
             for fill in state.get("fills", ())
@@ -1061,6 +1062,7 @@ class GridTestnetLifecycle:
                 line.apply_close_fill(fill_id=tid, quantity=quantity, at=timestamp, rearm=False, terminal_state="stopped")
             except ValueError as exc:
                 self._record_event(state, "venue_exit_fill_unapplied", timestamp=timestamp, fill_id=tid, order_id=row.get("order_id"), reason=str(exc))
+                unapplied += 1
                 continue
             rung["line"] = line.snapshot()
             if oid and not row.get("broker_order_id"):
@@ -1077,6 +1079,7 @@ class GridTestnetLifecycle:
                 "source": "venue_fact_attribution",
             })
             self._record_event(state, "venue_exit_fill_attributed", timestamp=timestamp, fill_id=tid, order_id=row.get("order_id"), quantity=quantity)
+        return unapplied
 
     def _unattributed_exit_fills(self, state: Mapping[str, Any], fact_fills: Any) -> list[dict[str, Any]]:
         """List this activation's closing venue fills that no local row owns."""
@@ -1086,6 +1089,7 @@ class GridTestnetLifecycle:
         except ValueError:
             since = 0.0
         direction = str(state.get("direction") or "long")
+        coin = str(state.get("instrument_id") or "").split("-")[0]
         closing = {"long": {"A"}, "short": {"B"}}.get(direction, {"A", "B"})
         seen = {
             str(value)
@@ -1100,6 +1104,8 @@ class GridTestnetLifecycle:
             tid = str(self._fact_value(fact, "tid", "fill_id") or "")
             if tid in seen or str(fact.get("side") or "") not in closing:
                 continue
+            if fact.get("coin") not in (None, "") and str(fact.get("coin")) != coin:
+                continue
             try:
                 occurred = float(fact.get("time") or 0)
             except (TypeError, ValueError):
@@ -1111,7 +1117,10 @@ class GridTestnetLifecycle:
 
     def _seal_venue_flat(self, plan: dict[str, Any], state: dict[str, Any], fact_fills: Any, *, timestamp: str) -> None:
         """End a stopping Grid once the venue is flat; never wait silently."""
-        self._attribute_venue_exit_fills(state, fact_fills, timestamp=timestamp)
+        if self._attribute_venue_exit_fills(state, fact_fills, timestamp=timestamp):
+            self._block(state, "venue_exit_fill_unapplied", timestamp=timestamp)
+            state["park_notification_required"] = True
+            return
         state["status"] = "hard_stop_triggered"
         self._mark_hard_stop_requested(state, str(state.get("hard_stop_reason") or "venue_flat_recovery"))
         self._maybe_finalize_hard_stop(plan, state, timestamp=timestamp)
@@ -1255,6 +1264,24 @@ class GridTestnetLifecycle:
         except Exception:  # noqa: BLE001 - unknown venue truth must remain open.
             return None
         return self._exchange_order_identities(rows)
+
+    @staticmethod
+    def _all_exchange_order_identities(rows: Any) -> set[str]:
+        """Every oid and cloid a venue open order carries, not just the first."""
+        identities: set[str] = set()
+        for row in rows:
+            for field in ("broker_order_id", "oid", "order_id", "cloid", "client_order_id"):
+                value = row.get(field) if isinstance(row, Mapping) else getattr(row, field, None)
+                if value not in (None, ""):
+                    identities.add(str(value))
+        return identities
+
+    @classmethod
+    def _exit_row_identities(cls, row: Mapping[str, Any]) -> set[str]:
+        identities = cls._order_identities(row)
+        if row.get("native_client_order_id") not in (None, ""):
+            identities.add(str(row["native_client_order_id"]))
+        return identities
 
     @staticmethod
     def _exchange_order_identities(rows: Any) -> set[str]:
@@ -1451,11 +1478,11 @@ class GridTestnetLifecycle:
             self._seal_venue_flat(plan, state, facts.get("fills") or (), timestamp=timestamp)
             return
 
-        open_ids = self._exchange_order_identities(facts["open_orders"] or ())
+        open_ids = self._all_exchange_order_identities(facts["open_orders"] or ())
         has_open_flatten = any(
-            row.get("state") == "accepted"
+            row.get("state") in {"accepted", "submit_pending", "submit_unknown"}
             and row.get("event") in {"hard_stop", "hard_stop_recovery"}
-            and self._order_identities(row).intersection(open_ids)
+            and self._exit_row_identities(row).intersection(open_ids)
             for row in state.get("orders", ())
         )
         if has_open_flatten:
