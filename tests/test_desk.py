@@ -323,3 +323,22 @@ def test_review_card_shows_reading_call_and_verdict(config, sources, store, fetc
     assert page.status_code == 200
     assert "Park 的交易复盘" in page.text and "看空" in page.text and "跌破7.7万" in page.text
     assert "今天还没下判断" in page.text  # XAU has no call today
+
+
+def test_tunnel_requests_need_the_passcode_and_local_ones_do_not(config, sources, store, fetch, tmp_path):
+    import dataclasses, os
+    secret = tmp_path / "passcode"
+    secret.write_text("orchid-47")
+    os.chmod(secret, 0o600)
+    cfg = dataclasses.replace(config, remote_passcode=secret)
+    client = TestClient(create_app(cfg, sources, store, FakeExecutor(cfg, fetch)), base_url="https://testserver")
+    tunnel = {"cf-connecting-ip": "203.0.113.9"}
+    assert client.get("/api/health").status_code == 200  # the Mac itself
+    assert client.get("/api/health", headers=tunnel).status_code == 401
+    assert client.get("/", headers=tunnel, follow_redirects=False).headers["location"] == "/login"
+    assert client.post("/login", data={"passcode": "wrong"}, headers=tunnel).status_code == 401
+    ok = client.post("/login", data={"passcode": "orchid-47"}, headers=tunnel, follow_redirects=False)
+    assert ok.status_code == 303 and "desk_session" in ok.headers["set-cookie"]
+    assert client.get("/api/health", headers=tunnel).status_code == 200
+    os.chmod(secret, 0o644)
+    assert client.get("/api/health", headers=tunnel).status_code == 403

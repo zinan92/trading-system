@@ -21,6 +21,7 @@ class Config:
     morning_archive: Path = Path(os.getenv("TRADING_DESK_MORNING_ARCHIVE", str(Path.home() / "park-hands/009_morning brief")))
     kline_latest_html: Path = Path(os.getenv("TRADING_DESK_KLINE_HTML", str(Path.home() / "Desktop/K线日报/latest.html")))
     weekly_latest_html: Path = Path(os.getenv("TRADING_DESK_WEEKLY_HTML", str(Path.home() / "Desktop/宏观K线周报/latest.html")))
+    remote_passcode: Path = Path(os.getenv("TRADING_DESK_REMOTE_PASSCODE", str(Path.home() / "park-data/trading-desk/remote-passcode")))
     paused_manifest: Path = Path(os.getenv("TRADING_DESK_PAUSED", str(Path.home() / "park-data/trading-desk/paused-services.md")))
     # Execution (Hyperliquid Testnet only): the desk reuses the operator's proven preview -> confirm -> driver path.
     trading_system_checkout: Path = Path(os.getenv("TRADING_DESK_TS_CHECKOUT", str(Path.home() / "work/trading-system-park-paper-main")))

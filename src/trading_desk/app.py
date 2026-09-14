@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import plans, review
 from .config import Config
-from . import card
+from . import card, remote
 from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
 from .sources import Sources, http_json
 from .store import Store
@@ -74,6 +74,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     store = store or Store(config.db_path)
     executor = executor or Executor(config, lambda url, body: http_json(url, body, timeout=150))
     app = FastAPI(title="Park 交易台", docs_url=None, redoc_url=None)
+    remote.install(app, config.remote_passcode)
 
     def asset_or_404(key: str) -> dict[str, Any]:
         asset = store.asset(key.upper())
