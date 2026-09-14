@@ -29,7 +29,7 @@ from services.park_paper_runtime import (
 )
 from services.park_safety_evidence import build_park_safety_evidence
 from services.broker_port import BrokerOrderRequest
-from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketError, HyperliquidTestnetMarketReader
 from services.hyperliquid_testnet_runtime import (
     HyperliquidTestnetRuntimeConfig,
     TESTNET_PROFILE,
@@ -313,7 +313,7 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
             "coordinator_activation_id": coordinator_activation_id,
             "paper_only": True,
         }
-    if scheduler_status.get("status") not in {"active", "reconcile_required"}:
+    if scheduler_status.get("status") not in {"active", "reconcile_required"} and not scheduler._read_side_blocked(scheduler_status):
         return {"status": "not_applicable", "reason": "testnet_scheduler_not_active", "paper_only": True}
     tick_id = "park-control:" + datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     callbacks = None
@@ -325,10 +325,16 @@ def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") 
             # bind the redacted type now so the deferred callback cannot raise
             # a secondary NameError on the scheduler tick.
             error_type = type(exc).__name__
+            # A market read that fails during setup is a read-side outage, not an execution failure.
+            reason = (
+                f"testnet_facts_unavailable:testnet_tick_setup_failed:{error_type}"
+                if isinstance(exc, HyperliquidTestnetMarketError)
+                else f"testnet_tick_setup_failed:{error_type}"
+            )
             callbacks = (
-                lambda _event, error_type=error_type: {
+                lambda _event, reason=reason: {
                     "status": "blocked",
-                    "reason": f"testnet_tick_setup_failed:{error_type}",
+                    "reason": reason,
                 },
                 None,
             )

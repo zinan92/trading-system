@@ -60,3 +60,4 @@ mutate '09-11 market gate counts as execution strike' services/testnet_scheduler
 mutate '09-11 read-side block never resumes' services/testnet_scheduler.py 'and not (self._read_side_blocked(current) and event is not None and callable(advance)):' ':'
 mutate '09-11 read-side block resumes without a probe' services/testnet_scheduler.py 'and not (self._read_side_blocked(current) and event is not None and callable(advance)):' 'and not self._read_side_blocked(current):'
 mutate '09-14 reconcile_stop ignores lifecycle orders' services/testnet_automation_coordinator.py 'if self._lifecycle_has_open_exposure(current):' 'if False:'
+mutate '09-11 control pass skips read-side block' pipelines/park_control.py 'and not scheduler._read_side_blocked(scheduler_status):' ':'

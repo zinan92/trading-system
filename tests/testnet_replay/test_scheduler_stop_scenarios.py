@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -126,3 +127,45 @@ def test_reconcile_stop_refuses_while_grid_lifecycle_orders_are_live(tmp_path: P
          "orders": [{"state": "cancelled", "broker_order_id": "59841174347"}]},
     ]))
     assert coordinator.command("reconcile_stop", {"reason": "zero_orders"}, command_id="reconcile-clean")["status"] == "idle"
+
+
+def test_control_pass_probes_and_resumes_a_market_gate_block(monkeypatch, tmp_path: Path) -> None:
+    # Full production path: park_control must not skip a read-side block, or nothing ever resumes it.
+    import pipelines.park_control as module
+    from services.strategy_control_plane import StrategyControlMachineError
+    from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+    from services.testnet_scheduler import TestnetScheduler, TestnetSchedulerOwnershipStore
+
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+    coordinator = TestnetAutomationCoordinator(output)
+    activation = {**_activation(), "strategy_family": "grid"}
+    coordinator.activate(activation, command_id="activate")
+    TestnetScheduler(output, coordinator, owner_id="local-mac", runtime_mode="local").activate(
+        activation, command_id="scheduler-activate"
+    )
+    current = coordinator.status()
+    current.update({"status": "grid_running", "execution_enabled": True})
+    coordinator._record(current)
+    gate = {"ok": False}
+
+    def advance(_event):
+        if not gate["ok"]:
+            raise StrategyControlMachineError("testnet_market_not_authoritative", {"reason": "market_quality_gate_failed"})
+        return {"status": "ok"}
+
+    monkeypatch.setattr(module, "_build_testnet_tick_callbacks", lambda *_args: (advance, None))
+    scheduler = TestnetScheduler(output, coordinator, owner_id="local-mac", runtime_mode="local")
+    state = scheduler.status()
+    state.update(status="blocked", blocker="testnet_facts_unavailable:testnet_market_not_authoritative:market_quality_gate_failed",
+                 facts_unavailable_since="2026-09-11T14:00:00+00:00", next_action="notify_park_and_wait")
+    scheduler._save_state(state)
+
+    still_blocked = module.run_testnet_control_tick(output)
+    gate["ok"] = True
+    time.sleep(1.1)  # control-pass tick ids have one-second resolution
+    resumed = module.run_testnet_control_tick(output)
+
+    assert still_blocked["status"] == "blocked"
+    assert resumed["status"] == "active"
+    assert resumed["blocker"] is None
