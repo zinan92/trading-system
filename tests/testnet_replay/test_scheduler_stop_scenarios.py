@@ -255,6 +255,7 @@ def test_operator_stop_cancels_the_ladder_and_flattens(tmp_path: Path) -> None:
     assert not any(row["state"] == "accepted" and row["event"] in {"entry", "entry_rearm", "tp"} for row in lifecycle["orders"])
     assert any(row["event"] == "hard_stop" for row in lifecycle["orders"])
     assert stopped["status"] != "stop_requested"
+    assert stopped["execution_enabled"] is False  # still flattening: entries must stay closed
 
 
 def test_control_pass_builds_callbacks_for_a_grid_stop_request(monkeypatch, tmp_path: Path) -> None:
@@ -295,3 +296,18 @@ def test_operator_stop_on_an_unfilled_ladder_seals_and_closes_to_idle(tmp_path: 
     assert stopped["lifecycle"]["sealed"] is True
     assert all(row["state"] == "cancelled" for row in stopped["lifecycle"]["orders"])
     assert coordinator.command("close_terminal", {}, command_id="desk-close")["status"] == "idle"
+
+
+def test_operator_stop_flattens_a_fill_seen_in_the_same_tick(tmp_path: Path) -> None:
+    # A rung can fill between the stop press and the control pass; the flatten must cover it.
+    from tests.test_testnet_grid_coordinator import NOW as GRID_NOW, _market_at, _setup
+
+    coordinator, plan, confirmation, broker, _backend, market, fill = _setup(tmp_path)
+    started = coordinator.start_grid_session(plan, confirmation=confirmation, market=_market_at(market, GRID_NOW), broker=broker, timestamp=GRID_NOW)
+    coordinator.command("stop", {"reason": "park_desk_stop"}, command_id="desk-stop")
+    stopped = coordinator.stop_grid_session(plan, broker=broker, market=_market_at(market, "2026-08-26T01:02:00+00:00"),
+                                            fills=[fill(started["lifecycle"]["orders"][0], price=65000.0, tid=7)],
+                                            timestamp="2026-08-26T01:02:00+00:00")
+
+    assert len(stopped["lifecycle"]["fills"]) == 1
+    assert any(row["event"] == "hard_stop" for row in stopped["lifecycle"]["orders"])

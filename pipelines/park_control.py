@@ -608,7 +608,7 @@ def _build_testnet_tick_callbacks(output_root: Path, coordinator_status: Mapping
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         if family == "grid" and coordinator.status().get("status") == "stop_requested":
             # Park's stop: cancel the ladder and flatten; later ticks drive the hard stop to terminal.
-            result = coordinator.stop_grid_session(plan, broker=broker, market=tick_market, timestamp=timestamp)
+            result = coordinator.stop_grid_session(plan, broker=broker, market=tick_market, fills=new_fills, timestamp=timestamp)
             return {**result, "fills_seen": len(fills), "fills_new": len(new_fills), "market_checks": market_checks, "hydration": hydration}
         if family == "grid":
             result = coordinator.status()

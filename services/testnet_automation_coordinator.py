@@ -1616,9 +1616,12 @@ class TestnetAutomationCoordinator:
         *,
         broker: object,
         market: Mapping[str, Any],
+        fills: Sequence[Mapping[str, Any]] = (),
         timestamp: str | datetime | None = None,
     ) -> dict[str, Any]:
         """Carry out a recorded operator stop against the live Grid lifecycle.
+
+        Fills observed in the same tick are applied first so the flatten covers them.
 
         2026-09-14: ``stop`` only recorded intent, nothing cancelled the ladder,
         and ``reconcile_stop`` then closed the activation with orders still live.
@@ -1633,7 +1636,10 @@ class TestnetAutomationCoordinator:
         self._validate_lifecycle_preflight(broker, strategy_family="grid", current=current)
         from services.grid_testnet_lifecycle import GridTestnetLifecycle
 
-        state = GridTestnetLifecycle(self.output_root, broker).operator_stop(
+        lifecycle = GridTestnetLifecycle(self.output_root, broker)
+        for fill in fills:
+            lifecycle.on_fill(execution_plan, dict(fill), market=market, timestamp=observed_at)
+        state = lifecycle.operator_stop(
             execution_plan,
             timestamp=observed_at,
             market=market,
@@ -1691,7 +1697,8 @@ class TestnetAutomationCoordinator:
             enabled = False
         else:
             status = "grid_running"
-            enabled = True
+            # A hard stop (automatic or Park's stop) is still flattening: keep it managed, never re-open entries.
+            enabled = lifecycle_state != "hard_stop_triggered"
         next_action = str(lifecycle.get("next_action") or "await_fill_or_grid_event")
         if lifecycle.get("park_notification_required") or lifecycle_state in {"terminal", "stopped"}:
             next_action = "notify_park_and_wait"
