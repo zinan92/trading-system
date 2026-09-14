@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Park 交易台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=4">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Park 交易台</div>
+  <nav class="tabs" role="tablist" aria-label="页面">
+    <button type="button" role="tab" data-page="trade" aria-selected="true">交易</button>
+    <button type="button" role="tab" data-page="news" aria-selected="false">日报</button>
+    <button type="button" role="tab" data-page="system" aria-selected="false">系统</button>
+  </nav>
+  <div class="assets" id="assets" role="group" aria-label="品种"></div>
+  <ol class="steps" id="steps" aria-label="今天的流程"></ol>
+  <div class="ticker">
+    <div><div class="lbl" id="venue"></div><div class="px num" id="px">—</div></div>
+    <div><div class="lbl">今日（北京时间 8 点起）</div><div class="num" id="chg">—</div></div>
+  </div>
+</header>
+
+<div id="page-trade">
+<section class="accts" id="accts" aria-label="持仓盈亏"></section>
+
+<main class="desk">
+  <section class="panel col-news" aria-labelledby="h-news">
+    <div class="ph"><h2 id="h-news">今天的新闻</h2>
+      <div class="seg" role="group" aria-label="新闻筛选">
+        <button type="button" data-f="key" aria-pressed="true">重要+关注</button><button type="button" data-f="all" aria-pressed="false">全部</button>
+      </div>
+    </div>
+    <div class="ph" style="padding-top:0"><span class="meta">点一条，引用到你的判断里</span><span class="meta">Intel 分级</span></div>
+    <ul class="news" id="news"><li class="empty">正在读取新闻…</li></ul>
+  </section>
+
+  <section class="panel col-chart" aria-labelledby="h-chart">
+    <div class="ph"><h2 id="h-chart">K 线 · 你的网格</h2>
+      <div class="seg" role="group" aria-label="周期">
+        <button type="button" data-tf="1h" aria-pressed="false">1 小时</button><button type="button" data-tf="4h" aria-pressed="true">4 小时</button><button type="button" data-tf="1d" aria-pressed="false">日线</button>
+      </div>
+    </div>
+    <div class="kline" id="kline"></div>
+    <div class="chart-wrap"><svg id="chart" viewBox="0 0 760 420" width="100%" role="img" aria-label="K 线与网格价位"></svg></div>
+    <div class="chart-src" id="chart-src"></div>
+    <div class="legend" id="legend"></div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <section class="panel col-judge" aria-labelledby="h-judge">
+    <div class="ph"><h2 id="h-judge">你的判断</h2><span class="meta" id="today"></span></div>
+    <div class="form">
+      <div class="dir" role="group" aria-label="方向">
+        <button type="button" data-d="long" aria-pressed="false">做多</button>
+        <button type="button" data-d="flat" aria-pressed="false">观望</button>
+        <button type="button" data-d="short" aria-pressed="false">做空</button>
+      </div>
+      <label class="f" for="reason">一句理由
+        <textarea id="reason" placeholder="你为什么这么判断？比如：美联储可能加息，ETF 转为净流出，先不追多"></textarea>
+      </label>
+      <label class="f" for="conf">信心 <input id="conf" type="range" min="1" max="5" value="3"></label>
+      <div class="conf"><span>没把握</span><span id="confv">3 / 5</span><span>很确定</span></div>
+      <div class="f">引用的新闻<div class="cites" id="cites"><em>还没有引用</em></div></div>
+    </div>
+    <div class="plan" id="plan"><div class="empty" style="padding:0">先选一个方向，系统按它生成计划。</div></div>
+    <div class="ph" style="padding-top:4px"><h2 style="font-size:14px">随手记</h2><span class="meta">看盘时的零碎想法</span></div>
+    <div class="notes">
+      <form id="note-form"><input id="note" placeholder="比如：4 小时线三次试 78,000 没过" autocomplete="off"><button type="submit">记下</button></form>
+      <ul id="notes"></ul>
+    </div>
+  </section>
+</main>
+
+<section class="panel review" aria-labelledby="h-review">
+  <div class="ph"><h2 id="h-review">复盘 · 你的判断准不准</h2><span class="summary" id="review-summary"></span></div>
+  <div class="scroll"><table>
+    <thead><tr><th>时间</th><th>品种</th><th>判断</th><th>信心</th><th>理由</th><th>批准</th><th class="num">当时价</th><th class="num">到期价</th><th>结果</th></tr></thead>
+    <tbody id="review"></tbody>
+  </table></div>
+</section>
+</div>
+
+<div id="page-news" hidden>
+  <div class="nl-bar">
+    <div class="seg" role="group" aria-label="日报">
+      <button type="button" data-nl="morning" aria-pressed="true">今日晨报</button>
+      <button type="button" data-nl="kline" aria-pressed="false">K 线日报</button>
+      <button type="button" data-nl="weekly" aria-pressed="false">宏观 K 线周报</button>
+      <button type="button" data-nl="card" aria-pressed="false">复盘卡</button>
+    </div>
+    <label class="f inline" for="nl-archive">往期晨报 <select id="nl-archive"><option value="">选择日期</option></select></label>
+    <span class="meta" id="nl-meta"></span>
+  </div>
+  <iframe id="nl-frame" title="日报" src="about:blank"></iframe>
+</div>
+
+<div id="page-system" hidden>
+  <section class="panel sys" aria-labelledby="h-health"><div class="ph"><h2 id="h-health">数据和服务</h2><span class="meta" id="sys-time"></span></div><ul class="checks" id="checks"></ul></section>
+  <section class="panel sys" aria-labelledby="h-assets"><div class="ph"><h2 id="h-assets">品种管理</h2><span class="meta">加减品种只影响交易台，不动交易所上的挂单和持仓</span></div><div id="asset-admin"></div></section>
+  <section class="panel sys" aria-labelledby="h-exec"><div class="ph"><h2 id="h-exec">执行记录</h2><span class="meta">预览、执行、拒绝都记在这里</span></div><div class="scroll"><table><thead><tr><th>时间</th><th>品种</th><th>环节</th><th>内容</th></tr></thead><tbody id="exec-log"></tbody></table></div></section>
+  <section class="panel sys" aria-labelledby="h-paused"><div class="ph"><h2 id="h-paused">已暂停的服务</h2><span class="meta">每天用不到，先停；需要时可恢复</span></div><div class="scroll"><table><thead><tr><th>服务</th><th>原来做什么</th><th>为什么暂停</th></tr></thead><tbody id="paused"></tbody></table></div><p class="note" style="padding:0 14px 14px" id="restore"></p></section>
+</div>
+
+<dialog id="add-dialog">
+  <form method="dialog" id="add-form">
+    <h3>添加品种 · Hyperliquid 测试盘</h3>
+    <label class="f" for="add-search">搜索代码<input id="add-search" placeholder="例如 ETH、SOL、HYPE" autocomplete="off"></label>
+    <ul class="pick" id="add-list"></ul>
+    <label class="f" for="add-news">新闻关键词（用逗号分隔）<input id="add-news" placeholder="例如 以太坊, ETH, 加密"></label>
+    <div class="toast" id="add-toast" role="status"></div>
+    <div class="approve"><button type="button" class="btn-primary" id="add-submit" disabled>添加</button><button type="submit" class="btn-ghost" value="cancel">取消</button></div>
+  </form>
+</dialog>
+<script src="/static/app.js?v=4"></script>
+</body>
+</html>

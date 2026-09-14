@@ -1,0 +1,250 @@
+"""Approve -> preview -> human-pressed execute, for Hyperliquid Testnet grids only.
+
+Nothing here runs on a timer or page load. `preview` never places orders. `execute` is
+only reachable from the 执行 button Park presses, and refuses while any grid is live.
+"""
+from __future__ import annotations
+
+import json
+import math
+import plistlib
+import re
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+from .config import Config
+
+LIVE_COORDINATOR_STATES = {"grid_running", "grid_paused_range", "grid_blocked", "dca_running", "candidate_selected", "stop_requested"}
+STOPPABLE_COORDINATOR_STATES = {"grid_running", "grid_paused_range", "grid_blocked", "grid_interrupted"}
+TERMINAL_COORDINATOR_STATES = {"grid_terminal"}
+BLOCKER_TEXT = {
+    "account_not_clean": "测试盘账户上还有挂单或持仓（先停掉当前网格）",
+    "instrument_not_eligible": "这个品种暂不满足下单条件",
+    "market_facts_pending": "行情数据还没准备好",
+    "market_facts_required": "缺少实时行情",
+    "preview_notional_missing": "每格金额没算出来",
+    "risk_gate_exceeded": "超过风险上限",
+    "max_loss_exceeded": "最多亏损超过上限",
+    "instrument_catalog_unavailable": "交易所品种目录暂时读不到",
+    "account_equity_unavailable": "账户权益暂时读不到",
+    "testnet_account_unavailable": "测试盘账户暂时读不到",
+    "mid_outside_bbo": "盘口价格暂时不一致（稍后重试）",
+}
+RETRYABLE = ("market_price_mismatch", "market_fact_unavailable", "market_observation_mismatch", "market_bbo_inconsistent", "mid_outside_bbo")
+
+
+class ExecutionRefused(Exception):
+    def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.detail = detail or {}
+
+
+def strategy_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    if plan.get("kind") != "new" or plan.get("direction") not in {"long", "short"}:
+        raise ExecutionRefused("这份计划不需要执行（沿用现有网格或观望）。")
+    low, high = plan["range"]
+    return {
+        "direction": plan["direction"],
+        "range": {"low": round(float(low), 1), "high": round(float(high), 1)},
+        "grid": {"count": len(plan["rungs"]), "notional_per_grid": float(plan.get("notional_per_rung") or 19), "notional_mode": "manual"},
+        "hard_stop": round(float(plan["hard_stop"]), 1),
+    }
+
+
+class Executor:
+    def __init__(self, config: Config, fetch: Callable[[str, dict[str, Any] | None], Any],
+                 run: Callable[..., subprocess.CompletedProcess] | None = None) -> None:
+        self.config = config
+        self.fetch = fetch
+        self.run = run or subprocess.run
+
+    # ---- read ----------------------------------------------------------------
+    def coordinator(self) -> dict[str, Any]:
+        path = self.config.paper_output / "testnet_automation" / "current.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"status": "unknown"}
+        data = data[-1] if isinstance(data, list) and data else data
+        return data if isinstance(data, dict) else {"status": "unknown"}
+
+    # ---- preview (no orders) ---------------------------------------------------
+    def preview(self, asset: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+        if asset["kind"] == "xau_paper":
+            return self.preview_gold(plan)
+        if asset["kind"] != "hl_testnet":
+            raise ExecutionRefused("这个品种暂不支持从交易台执行，只能记录判断。")
+        strategy = strategy_from_plan(plan)
+        body = {"venue_profile_id": asset["venue_profile_id"], "instrument_id": asset["instrument_id"], "strategy_family": "grid", "strategy": strategy}
+        response = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/preview", body)
+        preview = (response or {}).get("preview") or {}
+        inner = preview.get("preview") or {}
+        return {
+            "strategy": strategy,
+            "execution_ready": preview.get("execution_ready") is True,
+            "blockers": [BLOCKER_TEXT.get(str(b), str(b)) for b in preview.get("blockers") or []],
+            "preview_digest": preview.get("preview_digest"),
+            "range": inner.get("range"),
+            "orders": [{"price": o.get("price"), "notional": o.get("notional")} for o in inner.get("orders") or []],
+            "max_loss": (inner.get("risk") or {}).get("max_loss"),
+        }
+
+    # ---- stop (only from the human-pressed button) -----------------------------
+    def stop_grid(self) -> dict[str, Any]:
+        """Record Park's stop; the 60s control pass cancels every order and flattens."""
+        coordinator = self.coordinator()
+        status = coordinator.get("status")
+        if status == "stop_requested":
+            return {"status": "stop_requested", "message": "停止已经在进行，约 1 分钟内撤完挂单。"}
+        if status not in STOPPABLE_COORDINATOR_STATES:
+            raise ExecutionRefused("现在没有可以停止的网格。", {"coordinator_status": status})
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        response = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/control",
+                              {"action": "stop", "reason": f"Park 在交易台亲自按下「停止网格」{stamp}"})
+        control = (response or {}).get("control") or {}
+        if control.get("status") != "stop_requested":
+            raise ExecutionRefused("交易后台没有接受停止指令。", {"blockers": control.get("blockers"), "status": control.get("status")})
+        return {"status": "stop_requested", "message": "已下达停止：约 1 分钟内撤掉全部挂单，有持仓会市价平掉。"}
+
+    def close_terminal(self) -> dict[str, Any]:
+        """Close a sealed, venue-flat terminal grid so a new one can start."""
+        env = self._driver_env()
+        code = ("import json,sys;from pathlib import Path;"
+                "from services.testnet_automation_coordinator import TestnetAutomationCoordinator as T;"
+                "r=T(Path(sys.argv[1])).command('close_terminal',{},command_id=sys.argv[2]);"
+                "print(json.dumps({'status':r.get('status')}))")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        done = self.run([str(self.config.nautilus_python), "-c", code, str(self.config.paper_output), f"park-desk-close-{stamp}"],
+                        cwd=str(self.config.trading_system_checkout), env=env, capture_output=True, text=True, timeout=60)
+        if done.returncode != 0 or self.coordinator().get("status") != "idle":
+            raise ExecutionRefused("上一个网格还没对账收尾，暂时不能开新网格。", {"stderr": (done.stderr or "")[-300:]})
+        return {"status": "idle"}
+
+    # ---- execute (only from the human-pressed button) --------------------------
+    def execute(self, asset: dict[str, Any], plan: dict[str, Any], *, shown_max_loss: float | None, judgment_id: int) -> dict[str, Any]:
+        if asset["kind"] == "xau_paper":
+            return self.execute_gold(plan, shown_max_loss=shown_max_loss)
+        coordinator = self.coordinator()
+        if coordinator.get("status") in LIVE_COORDINATOR_STATES:
+            raise ExecutionRefused("测试盘上已经有网格在跑。先按「停止网格」，撤完单后再执行新计划。",
+                                   {"coordinator_status": coordinator.get("status")})
+        if coordinator.get("status") == "unknown":
+            raise ExecutionRefused("读不到交易后台状态，为安全起见不执行。")
+        if coordinator.get("status") in TERMINAL_COORDINATOR_STATES:
+            self.close_terminal()
+        fresh = self.preview(asset, plan)
+        if not fresh["execution_ready"] or not fresh["preview_digest"]:
+            raise ExecutionRefused("预览没有通过风险检查，没有下单。", {"blockers": fresh["blockers"]})
+        if shown_max_loss is not None and fresh["max_loss"] is not None and float(fresh["max_loss"]) > float(shown_max_loss) * 1.05:
+            raise ExecutionRefused("价格变动后最多亏损变大了，请看新的预览后重新按执行。", {"preview": fresh})
+        digest = fresh["preview_digest"]
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        confirmation = {"preview_digest": digest, "acknowledged": True, "operator_id": "park",
+                        "statement": f"Park 在交易台亲自按下「执行」：判断 #{judgment_id}，{asset['key']} {plan['direction']} 网格，{stamp}"}
+        confirmed = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/confirm", {"preview_digest": digest, "confirmation": confirmation})
+        confirmed = (confirmed or {}).get("confirmation", confirmed) or {}
+        if confirmed.get("status") != "confirmed" or not confirmed.get("activation_id"):
+            raise ExecutionRefused("确认没有通过，没有下单。", {"confirmation": {k: confirmed.get(k) for k in ("status", "blockers")}})
+        receipts = self._drive(confirmed["activation_id"], approval_id=f"park-desk-{asset['key'].lower()}-{stamp}", tag=stamp)
+        final = receipts[-1] if receipts else {}
+        return {"preview": fresh, "activation_id": confirmed["activation_id"], "attempts": receipts,
+                "status": final.get("status"), "started": final.get("status") == "grid_running"}
+
+    # ---- gold paper grid (Dashboard AI draft -> Park-pressed confirm) ------------
+    def _gold_active(self) -> bool:
+        try:
+            model = self.fetch(f"{self.config.dashboard_url}/api/park-paper/read-model", None) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise ExecutionRefused("读不到黄金纸面盘状态，为安全起见不执行。") from exc
+        return (model.get("strategy") or {}).get("active") is True
+
+    @staticmethod
+    def gold_message(plan: dict[str, Any]) -> str:
+        lower, upper = plan["range"]
+        side = "做多" if plan["direction"] == "long" else "做空"
+        return (f"{side}网格 Grid，XAUUSDT Paper，区间 {lower}~{upper}，{len(plan['rungs'])}格，最大3倍杠杆，"
+                f"硬止损 {plan['hard_stop']}，最大可接受亏损 {math.ceil(float(plan['max_loss']))} USDT，没有旧仓。")
+
+    def preview_gold(self, plan: dict[str, Any]) -> dict[str, Any]:
+        if self._gold_active():
+            raise ExecutionRefused("黄金纸面盘已经有网格在跑，一次只跑一个。")
+        chat = f"{self.config.dashboard_url}/api/park-paper/ai-chat"
+        pending = (self.fetch(chat, None) or {}).get("pending_draft") or {}
+        if pending.get("draft_id"):
+            # One draft at a time: a stale draft would swallow this message as a follow-up.
+            self.fetch(chat, {"action": "reject", "draft_id": pending["draft_id"]})
+        reply = self.fetch(chat, {"action": "message", "message": self.gold_message(plan)}) or {}
+        draft = reply.get("draft") or {}
+        risk = (draft.get("plan") or {}).get("risk") or {}
+        ready = reply.get("confirmable") is True and bool(draft.get("plan_digest"))
+        entry = risk.get("grid_entry_range") or {}
+        rungs = risk.get("grid_rung_prices") or []
+        notional = float(risk.get("maximum_notional") or 0) / len(rungs) if rungs else None
+        return {
+            "strategy": {"venue": "paper", "message": self.gold_message(plan)},
+            "execution_ready": ready,
+            "blockers": [] if ready else [str(reply.get("message") or reply.get("code") or "预览没有通过")],
+            "preview_digest": draft.get("plan_digest") if ready else None,
+            "draft_id": draft.get("draft_id"),
+            "range": [entry.get("lower"), entry.get("upper")] if entry else plan["range"],
+            "orders": [{"price": price, "notional": notional} for price in rungs],
+            "max_loss": risk.get("theoretical_max_loss"),
+        }
+
+    def execute_gold(self, plan: dict[str, Any], *, shown_max_loss: float | None) -> dict[str, Any]:
+        fresh = self.preview_gold(plan)
+        if not fresh["execution_ready"]:
+            raise ExecutionRefused("预览没有通过风险检查，没有下单。", {"blockers": fresh["blockers"]})
+        if shown_max_loss is not None and fresh["max_loss"] is not None and float(fresh["max_loss"]) > float(shown_max_loss) * 1.05:
+            raise ExecutionRefused("价格变动后最多亏损变大了，请看新的预览后重新按执行。", {"preview": fresh})
+        confirmed = self.fetch(f"{self.config.dashboard_url}/api/park-paper/ai-chat",
+                               {"action": "confirm", "draft_id": fresh["draft_id"], "plan_digest": fresh["preview_digest"]}) or {}
+        if confirmed.get("status") != "confirmed":
+            raise ExecutionRefused("确认没有通过，没有下单。", {"confirmation": {"status": confirmed.get("status"), "message": confirmed.get("message")}})
+        return {"preview": fresh, "status": "confirmed", "started": True, "venue": "paper",
+                "snapshot_id": (confirmed.get("snapshot") or {}).get("snapshot_id")}
+
+    def _drive(self, activation_id: str, *, approval_id: str, tag: str) -> list[dict[str, Any]]:
+        env = self._driver_env()
+        receipts_dir = self.config.db_path.parent / "receipts"
+        receipts_dir.mkdir(parents=True, exist_ok=True)
+        results = []
+        for attempt in range(1, 5):
+            receipt = receipts_dir / f"{tag}-{attempt}.json"
+            args = [str(self.config.nautilus_python), "-m", "pipelines.testnet_proof_driver",
+                    "--output-root", str(self.config.paper_output), "--activation-id", activation_id,
+                    "--approved-by", "park", "--approval-id", approval_id,
+                    "--secret-file", env["HYPERLIQUID_TESTNET_SECRET_FILE"], "--account-address", env["HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS"],
+                    "--runtime-id", env["HYPERLIQUID_TESTNET_RUNTIME_ID"], "--release-sha", env["TRADING_ORCHESTRATOR_RELEASE_SHA"],
+                    "--receipt", str(receipt)]
+            self.run(args, cwd=str(self.config.trading_system_checkout), env=env, capture_output=True, text=True, timeout=240)
+            try:
+                data = json.loads(receipt.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {"status": "no_receipt"}
+            summary = {"attempt": attempt, "status": data.get("status"), "reason_code": data.get("reason_code"),
+                       "lifecycle_status": (data.get("result") or {}).get("lifecycle_status")}
+            results.append(summary)
+            text = json.dumps(summary)
+            if not (summary["status"] == "no_receipt" or any(code in text for code in RETRYABLE)):
+                break
+        return results
+
+    def _driver_env(self) -> dict[str, str]:
+        with self.config.dashboard_plist.open("rb") as handle:
+            env = dict(plistlib.load(handle).get("EnvironmentVariables") or {})
+        try:
+            for line in self.config.control_script.read_text(encoding="utf-8").splitlines():
+                match = re.match(r"^export (TRADING_ORCHESTRATOR_NAUTILUS\w*)=(.*)$", line.strip())
+                if match:
+                    env[match.group(1)] = match.group(2).strip().strip('"').strip("'")
+        except OSError:
+            pass
+        env["PYTHONPATH"] = f"{self.config.trading_system_checkout}:{self.config.standard_broker_src}"
+        env.setdefault("HOME", str(Path.home()))
+        missing = [k for k in ("HYPERLIQUID_TESTNET_SECRET_FILE", "HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS", "HYPERLIQUID_TESTNET_RUNTIME_ID", "TRADING_ORCHESTRATOR_RELEASE_SHA") if not env.get(k)]
+        if missing:
+            raise ExecutionRefused("执行环境配置不完整，没有下单。", {"missing": missing})
+        return env
