@@ -6,6 +6,7 @@ const DIR = {long: "做多", short: "做空", flat: "观望"};
 const STEPS = [["look","看"],["judge","判断"],["plan","计划"],["approve","批准"],["watch","盯"],["review","复盘"]];
 const S = {asset: "BTC", tf: "4h", filter: "key", d: null, cites: [], desk: null, news: [], bars: null, plan: null};
 try { const saved = JSON.parse(localStorage.getItem("desk-ui") || "{}"); if (saved.asset) S.asset = saved.asset; if (saved.tf) S.tf = saved.tf; } catch (e) {}
+const qsAsset = new URLSearchParams(location.search).get("asset"); if (qsAsset === "BTC" || qsAsset === "XAU") S.asset = qsAsset;
 const persistUi = () => { try { localStorage.setItem("desk-ui", JSON.stringify({asset: S.asset, tf: S.tf})); } catch (e) {} };
 
 async function api(path, body) {
