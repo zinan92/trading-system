@@ -128,5 +128,6 @@ input[type=range]{accent-color:var(--brass);width:100%}
 .news li.empty,.news li.degraded{display:block;cursor:default}
 .status{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 .status .pill{white-space:nowrap}
-.status{grid-template-columns:1.7fr 1.5fr 1fr 1fr 1fr}
-@media (max-width:1300px){.status{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}}
+.status{grid-template-columns:repeat(3,minmax(0,1fr))}
+.status div{border-bottom:1px solid var(--line)}
+.status .v{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
