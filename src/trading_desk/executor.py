@@ -16,6 +16,19 @@ from typing import Any, Callable
 from .config import Config
 
 LIVE_COORDINATOR_STATES = {"grid_running", "grid_paused_range", "grid_blocked", "dca_running", "candidate_selected", "stop_requested"}
+BLOCKER_TEXT = {
+    "account_not_clean": "测试盘账户上还有挂单或持仓（先停掉当前网格）",
+    "instrument_not_eligible": "这个品种暂不满足下单条件",
+    "market_facts_pending": "行情数据还没准备好",
+    "market_facts_required": "缺少实时行情",
+    "preview_notional_missing": "每格金额没算出来",
+    "risk_gate_exceeded": "超过风险上限",
+    "max_loss_exceeded": "最多亏损超过上限",
+    "instrument_catalog_unavailable": "交易所品种目录暂时读不到",
+    "account_equity_unavailable": "账户权益暂时读不到",
+    "testnet_account_unavailable": "测试盘账户暂时读不到",
+    "mid_outside_bbo": "盘口价格暂时不一致（稍后重试）",
+}
 RETRYABLE = ("market_price_mismatch", "market_fact_unavailable", "market_observation_mismatch", "market_bbo_inconsistent", "mid_outside_bbo")
 
 
@@ -66,7 +79,7 @@ class Executor:
         return {
             "strategy": strategy,
             "execution_ready": preview.get("execution_ready") is True,
-            "blockers": preview.get("blockers") or [],
+            "blockers": [BLOCKER_TEXT.get(str(b), str(b)) for b in preview.get("blockers") or []],
             "preview_digest": preview.get("preview_digest"),
             "range": inner.get("range"),
             "orders": [{"price": o.get("price"), "notional": o.get("notional")} for o in inner.get("orders") or []],
