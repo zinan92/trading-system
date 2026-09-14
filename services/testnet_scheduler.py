@@ -21,6 +21,9 @@ _TERMINAL_COORDINATOR_STATES = frozenset({"dca_terminal", "grid_terminal"})
 _SAMPLING_RACE_REASONS = frozenset({"market_price_mismatch", "market_bbo_inconsistent"})
 _FACTS_UNAVAILABLE_PREFIX = "testnet_facts_unavailable:"
 _FACTS_UNAVAILABLE_BLOCK_SECONDS = 600
+# A market that fails the authority/quality gate is a read-side fact outage, not
+# an execution failure: it gets the facts-unavailable window and self-recovers.
+_READ_SIDE_ERROR_CODES = frozenset({"testnet_market_not_authoritative"})
 
 
 def close_scheduler_session(
@@ -464,7 +467,7 @@ class TestnetScheduler:
                 "next_action": "await_activation",
                 "blocker": None,
             })
-        if current.get("status") not in {"active", "reconcile_required"}:
+        if current.get("status") not in {"active", "reconcile_required"} and not (self._read_side_blocked(current) and event is not None and callable(advance)):
             return self._record_tick(
                 tick_key,
                 self._blocked("testnet_scheduler_not_active", timestamp),
@@ -560,6 +563,14 @@ class TestnetScheduler:
                 advanced = dict(advance(dict(event)))
             except Exception as exc:  # noqa: BLE001 - preserve safe retry policy.
                 advance_result = _exception_advance_result(exc)
+                if str(getattr(exc, "code", "") or "") in _READ_SIDE_ERROR_CODES:
+                    evidence = getattr(exc, "evidence", None)
+                    detail = str(evidence.get("reason") or "") if isinstance(evidence, Mapping) else ""
+                    return self._record_facts_unavailable(
+                        current, tick_key, now, coordinator_state, restart_reconciled,
+                        f"{_FACTS_UNAVAILABLE_PREFIX}{exc.code}:{detail}",
+                        advance_result,
+                    )
                 return self._record_advance_failure(
                     current, tick_key, now, coordinator_state, restart_reconciled,
                     f"scheduler_advance_failed:{type(exc).__name__}:{_redacted_exception_message(exc)}",
@@ -634,6 +645,13 @@ class TestnetScheduler:
             "alerts_authorize_actions": False,
         }
         return self._record_tick(tick_id, result)
+
+    @staticmethod
+    def _read_side_blocked(current: Mapping[str, Any]) -> bool:
+        """A block caused only by unavailable venue facts keeps probing so it can resume."""
+        return current.get("status") == "blocked" and str(current.get("blocker") or "").startswith(
+            _FACTS_UNAVAILABLE_PREFIX
+        )
 
     @staticmethod
     def _is_facts_unavailable(result: Mapping[str, Any]) -> bool:

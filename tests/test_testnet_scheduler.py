@@ -314,8 +314,7 @@ def test_scheduler_failure_receipt_preserves_redacted_typed_error_evidence(tmp_p
     )
 
     assert result["warning"] == (
-        "scheduler_advance_failed:StrategyControlMachineError:"
-        "testnet_market_not_authoritative"
+        "testnet_facts_unavailable:testnet_market_not_authoritative:market_stale"
     )
     assert result["advance_result"] == {
         "error": {
@@ -588,3 +587,4 @@ def test_dead_man_marks_missing_heartbeat_without_authorizing_actions(tmp_path: 
     assert result["dead_man"]["status"] == "execution_tick_scheduler_down"
     assert result["next_action"] == "notify_park_and_wait"
     assert result["alerts_authorize_actions"] is False
+

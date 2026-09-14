@@ -1318,3 +1318,4 @@ def test_dashboard_runtime_status_builder_projects_authoritative_coordinator_sta
     assert result["runtime"]["execution_mutation"] is False
     assert result["runtime"]["reconciliation"]["status"] == "unknown"
     assert result["safety"]["orders_submitted"] is False
+

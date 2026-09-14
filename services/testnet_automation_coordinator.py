@@ -808,6 +808,8 @@ class TestnetAutomationCoordinator:
             raise TestnetCoordinatorError("submitted_orders_require_reconciliation")
         if int(current.get("canonical_order_count") or 0) != 0 or current.get("execution_receipts"):
             raise TestnetCoordinatorError("submitted_orders_require_reconciliation")
+        if self._lifecycle_has_open_exposure(current):
+            raise TestnetCoordinatorError("submitted_orders_require_reconciliation")
         never_executed = self._never_executed_activation(current)
         if current.get("execution_profile") != "standard-broker-paper" and not never_executed:
             raise TestnetCoordinatorError("paper_stop_reconciliation_required")
@@ -914,6 +916,30 @@ class TestnetAutomationCoordinator:
 
         close_scheduler_session(self.output_root, activation_id, timestamp=timestamp)
         return self._record(state)
+
+    _OPEN_LIFECYCLE_ORDER_STATES = frozenset({"accepted", "cancel_pending", "submit_pending", "submit_unknown"})
+
+    def _lifecycle_has_open_exposure(self, current: Mapping[str, Any]) -> bool:
+        """Grid/DCA orders live in the lifecycle, not the coordinator counters; check them too."""
+
+        digest = str(current.get("plan_digest") or "").strip()
+        if not digest:
+            return False
+        for family in ("grid", "dca"):
+            for path in (self.output_root / "dualtrack" / f"{family}_testnet_lifecycle").glob("*.json"):
+                try:
+                    rows = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    return True  # unreadable lifecycle truth must not be closed as zero-order
+                state = rows[-1] if isinstance(rows, list) and rows else rows
+                if not isinstance(state, Mapping) or str(state.get("plan_digest") or "") != digest:
+                    continue
+                if any(
+                    isinstance(row, Mapping) and row.get("state") in self._OPEN_LIFECYCLE_ORDER_STATES
+                    for row in state.get("orders", ())
+                ):
+                    return True
+        return False
 
     def _never_executed_activation(self, current: Mapping[str, Any]) -> bool:
         """Allow local closure only when this activation never enabled execution."""
