@@ -325,6 +325,71 @@ def queue_testnet_scheduler_notice(
     return ledger.queue_outbound(idempotency_key=key, message_type="park_blocker", text=text)
 
 
+_FILL_EVENT_TEXT = {
+    "entry": "开仓",
+    "entry_rearm": "开仓",
+    "entry_catch_up": "开仓",
+    "tp": "止盈",
+    "target": "止盈",
+    "hard_stop": "止损平仓",
+    "hard_stop_recovery": "止损平仓",
+    "stop": "止损平仓",
+}
+
+
+def queue_testnet_fill_notices(
+    output_root: Path,
+    *,
+    park_user_id: str,
+    chat_id: str,
+) -> list[dict[str, Any]]:
+    """Tell Park once per Testnet fill the running lifecycle has applied.
+
+    Blocks and resumes already notify (#1264); a fill did not, so Park away
+    from the desk had no way to learn the grid finally traded.
+    """
+    if not park_user_id or not chat_id:
+        return []
+    try:
+        current = TestnetAutomationCoordinator(output_root).status()
+    except Exception:  # noqa: BLE001 - a notice must never break the control pass.
+        return []
+    family = str(current.get("strategy_family") or "").lower()
+    lifecycle = current.get(f"{family}_lifecycle") if family in {"grid", "dca"} else None
+    plan_id = str((lifecycle or {}).get("strategy_plan_id") or "") if isinstance(lifecycle, Mapping) else ""
+    if not plan_id:
+        return []
+    path = Path(output_root) / "dualtrack" / f"{family}_testnet_lifecycle" / f"{plan_id}.json"
+    try:
+        rows = load_json(path)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return []
+    state = rows[-1] if isinstance(rows, list) and rows else rows
+    if not isinstance(state, Mapping):
+        return []
+    from services.park_telegram_control import ParkTelegramLedger
+
+    ledger = ParkTelegramLedger(output_root, park_user_id=park_user_id, chat_id=chat_id)
+    instrument = str(state.get("instrument_id") or current.get("selected_instrument_id") or "")
+    coin = instrument.split("-")[0] or "Testnet"
+    queued: list[dict[str, Any]] = []
+    for fill in state.get("fills") or ():
+        if not isinstance(fill, Mapping) or not fill.get("fill_id"):
+            continue
+        side = "买入" if str(fill.get("side") or "").lower() in {"b", "buy"} else "卖出"
+        action = _FILL_EVENT_TEXT.get(str(fill.get("event") or ""), "成交")
+        text = (
+            f"🔔 {coin} 测试盘成交（{action}）：{side} {float(fill.get('quantity') or 0):g}"
+            f" @ {float(fill.get('price') or 0):,.1f}。当前网格状态：{state.get('status')}。"
+        )
+        queued.append(ledger.queue_outbound(
+            idempotency_key=f"testnet-fill:{plan_id}:{fill['fill_id']}",
+            message_type="park_fill",
+            text=text,
+        ))
+    return queued
+
+
 def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") -> dict[str, Any]:
     """Run the local Testnet scheduler heartbeat in the Park control pass.
 
@@ -620,6 +685,9 @@ def main(argv: list[str] | None = None) -> int:
         queue_testnet_scheduler_notice(
             output_root, scheduler_before, testnet_control,
             park_user_id=args.park_user_id, chat_id=args.chat_id,
+        )
+        queue_testnet_fill_notices(
+            output_root, park_user_id=args.park_user_id, chat_id=args.chat_id,
         )
         legacy_cutover = run_legacy_cutover_once(
             output_root,

@@ -194,3 +194,38 @@ def test_issue_1264_scheduler_block_and_resume_each_notify_park_once(tmp_path: P
     assert len(rows) == 2
     assert "market_quality_gate_failed" in rows[0]["text"]
     assert "恢复" in rows[1]["text"]
+
+
+def test_testnet_fill_notifies_park_once_per_fill(monkeypatch, tmp_path: Path) -> None:
+    # 2026-09-14: Park was away from the desk and only blocks/resumes reached Telegram, never a fill.
+    import pipelines.park_control as module
+    from services.park_telegram_control import ParkTelegramLedger
+
+    plan_id = "dashboard-plan:abcdb97b5a089ed7"
+    status = {"status": "grid_running", "strategy_family": "grid", "selected_instrument_id": "BTC-USD-PERP",
+              "grid_lifecycle": {"strategy_plan_id": plan_id}}
+
+    class Coordinator:
+        def __init__(self, _root):
+            pass
+
+        def status(self):
+            return status
+
+    monkeypatch.setattr(module, "TestnetAutomationCoordinator", Coordinator)
+    lifecycle = tmp_path / "dualtrack" / "grid_testnet_lifecycle" / f"{plan_id}.json"
+    lifecycle.parent.mkdir(parents=True)
+    fills = [{"fill_id": "tid-1", "event": "entry", "side": "B", "quantity": 0.00024, "price": 76500.0}]
+    lifecycle.write_text(json.dumps([{"instrument_id": "BTC-USD-PERP", "status": "active", "fills": fills}]))
+    binding = {"park_user_id": "741098667", "chat_id": "8831262827"}
+
+    module.queue_testnet_fill_notices(tmp_path, **binding)
+    module.queue_testnet_fill_notices(tmp_path, **binding)  # next control pass, same fill
+    fills.append({"fill_id": "tid-2", "event": "tp", "side": "A", "quantity": 0.00024, "price": 77200.0})
+    lifecycle.write_text(json.dumps([{"instrument_id": "BTC-USD-PERP", "status": "active", "fills": fills}]))
+    module.queue_testnet_fill_notices(tmp_path, **binding)
+
+    rows = [row for row in ParkTelegramLedger(tmp_path, **binding).outbox_rows() if row.get("event") == "outbound_queued"]
+    assert [row["message_type"] for row in rows] == ["park_fill", "park_fill"]
+    assert "开仓" in rows[0]["text"] and "买入" in rows[0]["text"] and "76,500.0" in rows[0]["text"]
+    assert "止盈" in rows[1]["text"] and "卖出" in rows[1]["text"]

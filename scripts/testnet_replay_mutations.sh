@@ -63,3 +63,5 @@ mutate '09-14 reconcile_stop ignores lifecycle orders' services/testnet_automati
 mutate '09-11 control pass skips read-side block' pipelines/park_control.py 'and not scheduler._read_side_blocked(scheduler_status):' ':'
 mutate '#1264 scheduler block never notifies Park' pipelines/park_control.py 'if current == "blocked" and previous != "blocked":' 'if False:'
 mutate '#1264 scheduler resume never notifies Park' pipelines/park_control.py 'elif previous == "blocked" and current == "active":' 'elif False:'
+mutate '09-14 fills never notify Park' pipelines/park_control.py 'if not isinstance(fill, Mapping) or not fill.get("fill_id"):' 'if True:'
+mutate '09-14 fill notice collapses to one per plan' pipelines/park_control.py 'idempotency_key=f"testnet-fill:{plan_id}:{fill[\x27fill_id\x27]}",' 'idempotency_key=f"testnet-fill:{plan_id}",'
