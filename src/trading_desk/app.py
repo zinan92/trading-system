@@ -78,11 +78,11 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     def asset_state(asset: dict[str, Any]) -> dict[str, Any]:
         if asset["kind"] == "xau_paper":
             paper = sources.xau_paper()
-            if not paper.get("ok"):
-                return {"grid": {"ok": False, "reason": paper.get("reason")}, "price": None}
-            return {"grid": paper["grid"], "price": paper.get("price")}
-        grid = sources.hl_grid(asset)
-        price = grid.get("price") if grid.get("ok") else None
+            grid = paper["grid"] if paper.get("ok") else {"ok": False, "reason": paper.get("reason")}
+            price = paper.get("price") if paper.get("ok") else None
+        else:
+            grid = sources.hl_grid(asset)
+            price = grid.get("price") if grid.get("ok") else None
         if price is None:
             latest = sources.bars(asset, "1h", limit=2)
             price = latest["bars"][-1][4] if latest.get("ok") else None
