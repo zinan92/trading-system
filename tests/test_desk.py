@@ -314,3 +314,12 @@ def test_execute_closes_an_ended_grid_before_starting_a_new_one(config, sources,
     saved = _approve_short(client)
     ok = client.post("/api/execute", json={"judgment_id": saved["id"], "shown_max_loss": 4.2, "confirm_text": "执行"}).json()
     assert len(ex.close_calls) == 1 and ok["started"] is True
+
+
+def test_review_card_shows_reading_call_and_verdict(config, sources, store, fetch):
+    client, _ex = client_for(config, sources, store, fetch)
+    client.post("/api/judgments", json={"asset": "BTC", "direction": "short", "confidence": 4, "reason": "跌破7.7万", "action": "recorded"})
+    page = client.get("/newsletter/card")
+    assert page.status_code == 200
+    assert "Park 的交易复盘" in page.text and "看空" in page.text and "跌破7.7万" in page.text
+    assert "今天还没下判断" in page.text  # XAU has no call today

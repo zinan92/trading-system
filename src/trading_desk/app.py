@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import plans, review
 from .config import Config
+from . import card
 from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
 from .sources import Sources, http_json
 from .store import Store
@@ -310,6 +311,22 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
 
     @app.get("/newsletter/{name}", response_class=HTMLResponse)
     def newsletter(name: str) -> HTMLResponse:
+        if name == "card":
+            reviewed = review_list()
+            rows = []
+            for meta in store.assets():
+                state = asset_state(meta)
+                price, move = card.change_24h(sources.bars(meta, "1h", limit=48).get("bars") or [])
+                mine = [j for j in reviewed["items"] if j["asset"] == meta["key"]]
+                today = datetime.now(timezone.utc).astimezone().date().isoformat()
+                kline = sources.kline_view(meta)
+                grid = state["grid"]
+                rows.append({"label": meta["label"], "price": price if price is not None else state["price"], "move": move,
+                             "reading": card.first_sentence(kline.get("synthesis")) if kline.get("ok") else None,
+                             "judgment": next((j for j in mine if _local_date(j["created_at"]) == today), None),
+                             "last": next((j for j in mine if j.get("outcome")), None),
+                             "grid": grid.get("status_label") if grid.get("ok") else None})
+            return HTMLResponse(card.render(datetime.now(timezone.utc).astimezone().date().isoformat(), rows, reviewed["summary"]))
         if name == "kline":
             dated = sorted(config.kline_archive.glob("20??-??-??-kline-daily-newsletter.md")) if config.kline_archive.exists() else []
             if dated:

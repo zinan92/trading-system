@@ -304,8 +304,8 @@ async function loadNewsletters() {
   try {
     const n = await api("/api/newsletters");
     $("#nl-archive").innerHTML = `<option value="">选择日期</option>` + n.morning.archive.map(d => `<option value="${d}">${d}</option>`).join("");
-    const meta = {morning: n.morning.latest, kline: n.kline.latest, weekly: n.weekly.latest}[S.nl];
-    $("#nl-meta").textContent = meta ? `更新于 ${meta}` : "还没有生成";
+    const meta = {morning: n.morning.latest, kline: n.kline.latest, weekly: n.weekly.latest, card: "打开时实时生成"}[S.nl];
+    $("#nl-meta").textContent = S.nl === "card" ? meta : meta ? `更新于 ${meta}` : "还没有生成";
   } catch (e) { $("#nl-meta").textContent = e.message; }
   if ($("#nl-frame").getAttribute("src") === "about:blank") $("#nl-frame").src = `/newsletter/${S.nl}`;
 }
