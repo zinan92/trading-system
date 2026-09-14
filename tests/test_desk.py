@@ -98,3 +98,26 @@ def test_notes_and_health(config, sources, store):
     assert client.post("/api/notes", json={"asset": "XAU", "body": "  金价守 4300  "}).json()["body"] == "金价守 4300"
     assert client.get("/api/desk/XAU").json()["notes"][0]["body"] == "金价守 4300"
     assert client.get("/").status_code == 200
+
+
+def test_price_at_refuses_stale_bar_and_flags_unverifiable():
+    bars = [["2026-09-10T00:00:00+00:00", 1, 1, 1, 100.0], ["2026-09-10T01:00:00+00:00", 1, 1, 1, 101.0]]
+    assert review.price_at(bars, datetime(2026, 9, 10, 1, 30, tzinfo=timezone.utc)) == 101.0
+    assert review.price_at(bars, datetime(2026, 9, 12, tzinfo=timezone.utc)) is None
+    assert review.out_of_window(bars, datetime(2026, 9, 1, tzinfo=timezone.utc)) is True
+
+
+def test_review_marks_judgment_older_than_history_unverifiable(config, sources, store):
+    client = TestClient(create_app(config, sources, store))
+    store.add_judgment(asset="XAU", direction="long", confidence=3, reason="ancient", cited=[], price_at=101.0, plan=None, action="recorded", created_at="2026-08-01T00:00:00+00:00")
+    row = [i for i in client.get("/api/review").json()["items"] if i["reason"] == "ancient"][0]
+    assert row["outcome"] == "unverifiable"
+
+
+def test_btc_grid_prefers_newest_updated_at_over_mtime(config, sources):
+    import json, os, time
+    folder = config.paper_output / "dualtrack" / "grid_testnet_lifecycle"
+    old = folder / "dashboard-plan:old.json"
+    old.write_text(json.dumps([{"status": "terminal", "updated_at": "2026-09-01T00:00:00+00:00", "rungs": [], "orders": []}]))
+    os.utime(old, (time.time() + 60, time.time() + 60))
+    assert sources.btc_grid()["status"] == "paused_above_range"

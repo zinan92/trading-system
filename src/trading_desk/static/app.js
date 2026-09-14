@@ -170,7 +170,7 @@ async function loadReview() {
   try { data = await api("/api/review"); } catch (e) { $("#review").innerHTML = `<tr><td colspan="9" class="degraded">${esc(e.message)}</td></tr>`; return; }
   const sm = data.summary;
   $("#review-summary").textContent = sm.resolved ? `已到期 ${sm.resolved} 条，说中 ${sm.hits} 条 · 待验证 ${sm.pending} 条` : `判断记录 ${sm.pending} 条，${data.review_hours} 小时后自动对照价格`;
-  const OUT = {hit: ["outcome-hit", "✓ 说中了"], miss: ["outcome-miss", "✗ 没说中"], even: ["outcome-even", "△ 基本没动"]};
+  const OUT = {hit: ["outcome-hit", "✓ 说中了"], miss: ["outcome-miss", "✗ 没说中"], even: ["outcome-even", "△ 基本没动"], unverifiable: ["outcome-miss", "无法验证：到期时的行情已查不到"]};
   $("#review").innerHTML = data.items.length ? data.items.map(j => {
     const o = j.outcome ? OUT[j.outcome] : ["", `等 ${data.review_hours} 小时`];
     return `<tr><td class="num">${new Date(j.created_at).toLocaleString("zh-CN", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"})}</td>

@@ -139,14 +139,21 @@ class Sources:
     # ---- BTC: Hyperliquid Testnet grid + account ---------------------------
     def btc_grid(self) -> dict[str, Any]:
         folder = self.config.paper_output / "dualtrack" / "grid_testnet_lifecycle"
-        files = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True) if folder.exists() else []
-        if not files:
-            return {"ok": False, "reason": "没有找到 BTC 网格记录"}
-        try:
-            state = json.loads(files[0].read_text(encoding="utf-8"))
-            state = state[-1] if isinstance(state, list) else state
-        except (OSError, ValueError):
-            return {"ok": False, "reason": "BTC 网格记录正在写入，稍后自动刷新"}
+        # The live grid is the state with the newest updated_at; file mtime can be touched by hand edits.
+        candidates = []
+        unreadable = False
+        for path in folder.glob("*.json") if folder.exists() else ():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                unreadable = True
+                continue
+            loaded = loaded[-1] if isinstance(loaded, list) and loaded else loaded
+            if isinstance(loaded, dict):
+                candidates.append(loaded)
+        if not candidates:
+            return {"ok": False, "reason": "BTC 网格记录正在写入，稍后自动刷新" if unreadable else "没有找到 BTC 网格记录"}
+        state = max(candidates, key=lambda s: str(s.get("updated_at") or ""))
         rungs = [r for r in state.get("rungs") or [] if isinstance(r, dict)]
         orders = [o for o in state.get("orders") or [] if isinstance(o, dict)]
         open_orders = [o for o in orders if o.get("state") in {"accepted", "cancel_pending", "submit_pending", "submit_unknown"}]

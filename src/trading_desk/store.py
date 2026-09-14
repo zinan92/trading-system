@@ -80,7 +80,7 @@ class Store:
                 rows = conn.execute("select * from judgments order by id desc limit ?", (limit,)).fetchall()
         return [_judgment(r) for r in rows]
 
-    def resolve(self, judgment_id: int, *, price_after: float, move_pct: float, outcome: str) -> None:
+    def resolve(self, judgment_id: int, *, price_after: float | None, move_pct: float | None, outcome: str) -> None:
         with self._conn() as conn:
             conn.execute(
                 "update judgments set resolved_at=?, price_after=?, move_pct=?, outcome=? where id=? and resolved_at is null",

@@ -129,5 +129,6 @@ input[type=range]{accent-color:var(--brass);width:100%}
 .status{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 .status .pill{white-space:nowrap}
 .status{grid-template-columns:repeat(3,minmax(0,1fr))}
-.status div{border-bottom:1px solid var(--line)}
+.status div:nth-child(-n+3){border-bottom:1px solid var(--line)}
+.status div:nth-child(3){border-right:0}
 .status .v{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

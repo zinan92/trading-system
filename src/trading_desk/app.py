@@ -135,15 +135,19 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
                 bars_cache[row["asset"]] = got.get("bars") or []
             after = review.price_at(bars_cache[row["asset"]], target)
             if after is None:
+                if review.out_of_window(bars_cache[row["asset"]], target):
+                    store.resolve(row["id"], price_after=None, move_pct=None, outcome="unverifiable")
+                    resolved_now += 1
                 continue
             move = (after - float(row["price_at"])) / float(row["price_at"]) * 100
             store.resolve(row["id"], price_after=after, move_pct=round(move, 3), outcome=review.outcome(row["direction"], move))
             resolved_now += 1
         rows = store.judgments(asset, limit=100) if resolved_now else rows
-        done = [r for r in rows if r.get("outcome")]
+        done = [r for r in rows if r.get("outcome") in {"hit", "miss", "even"}]
         hits = sum(1 for r in done if r["outcome"] == "hit")
         return {"items": rows, "review_hours": config.review_hours,
-                "summary": {"resolved": len(done), "hits": hits, "pending": sum(1 for r in rows if not r.get("outcome"))}}
+                "summary": {"resolved": len(done), "hits": hits, "pending": sum(1 for r in rows if not r.get("outcome")),
+                            "unverifiable": sum(1 for r in rows if r.get("outcome") == "unverifiable")}}
 
     @app.post("/api/notes")
     def add_note(body: NoteIn) -> dict[str, Any]:
