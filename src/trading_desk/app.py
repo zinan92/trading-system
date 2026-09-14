@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import plans, review
 from .config import Config
-from .executor import ExecutionRefused, Executor
+from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
 from .sources import Sources, http_json
 from .store import Store
 
@@ -53,6 +53,11 @@ class AssetIn(BaseModel):
 
 class NewsQueriesIn(BaseModel):
     news_queries: list[str] = Field(min_length=1, max_length=10)
+
+
+class StopIn(BaseModel):
+    asset: str
+    confirm_text: Literal["停止"]
 
 
 class ExecuteIn(BaseModel):
@@ -167,7 +172,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         return {"asset": asset["key"], "meta": {"label": asset["label"], "venue": venue[0], "money": venue[1], "kind": asset["kind"]},
                 "price": state["price"], "grid": grid, "today_judgment": latest, "steps": steps,
                 "notes": store.notes(asset["key"], limit=10), "executions": runs, "kline": sources.kline_view(asset),
-                "news_queries": asset["news_queries"]}
+                "news_queries": asset["news_queries"], "control": _grid_control(asset, executor.coordinator())}
 
     @app.get("/api/news/{key}")
     def news(key: str) -> dict[str, Any]:
@@ -226,6 +231,20 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         store.log_execution(asset=asset["key"], stage="executed" if result.get("started") else "execute_failed", judgment_id=judgment["id"],
                             preview_digest=(result.get("preview") or {}).get("preview_digest"), detail=result)
         return {**result, "message": "网格已经挂上测试盘，系统接管盯盘。" if result.get("started") else f"下单没有完成（{result.get('status')}），请看系统页记录。"}
+
+    @app.post("/api/grid/stop")
+    def stop_grid(body: StopIn) -> dict[str, Any]:
+        asset = asset_or_404(body.asset)
+        coordinator = executor.coordinator()
+        if asset["kind"] != "hl_testnet" or coordinator.get("selected_instrument_id") != asset["instrument_id"]:
+            raise HTTPException(409, "这个品种现在没有在测试盘跑网格")
+        try:
+            result = executor.stop_grid()
+        except ExecutionRefused as exc:
+            store.log_execution(asset=asset["key"], stage="stop_refused", judgment_id=None, preview_digest=None, detail={"reason": str(exc), **exc.detail})
+            raise HTTPException(409, str(exc)) from None
+        store.log_execution(asset=asset["key"], stage="stop_requested", judgment_id=None, preview_digest=None, detail=result)
+        return result
 
     # ---- review / notes ------------------------------------------------------------
     @app.get("/api/review")
@@ -346,6 +365,16 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
+
+
+def _grid_control(asset: dict[str, Any], coordinator: dict[str, Any]) -> dict[str, Any]:
+    """What the stop button may do for this asset right now."""
+    status = str(coordinator.get("status") or "unknown")
+    mine = asset["kind"] == "hl_testnet" and coordinator.get("selected_instrument_id") == asset["instrument_id"]
+    lifecycle = str((coordinator.get("grid_lifecycle") or {}).get("status") or "")
+    stopping = mine and (status == "stop_requested" or lifecycle == "hard_stop_triggered")
+    return {"coordinator_status": status, "can_stop": mine and not stopping and status in STOPPABLE_COORDINATOR_STATES,
+            "stopping": stopping, "ended": mine and status == "grid_terminal"}
 
 
 def _json_last(path: Path) -> dict[str, Any]:

@@ -166,3 +166,7 @@ dialog input{font:inherit;font-size:14px;color:var(--ink);background:var(--groun
 .exec .btn-exec{font:inherit;font-weight:700;font-size:15px;padding:10px;border-radius:6px;border:0;background:var(--up);color:#fff;cursor:pointer}
 .exec .btn-exec:disabled{opacity:.5;cursor:not-allowed}
 .exec .warn{font-size:12.5px;color:var(--warn)}
+.status .stop{grid-column:1/-1;border-top:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-top:4px}
+.btn-stop{font:inherit;font-weight:700;font-size:13.5px;padding:7px 14px;border-radius:6px;border:1px solid var(--warn);background:transparent;color:var(--warn);cursor:pointer}
+.btn-stop:disabled{opacity:.5;cursor:not-allowed}
+.status .stop .toast{margin-top:0}

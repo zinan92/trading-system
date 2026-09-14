@@ -15,8 +15,13 @@ class FakeExecutor(Executor):
     def __init__(self, config, fetch):
         super().__init__(config, fetch, run=self._run)
         self.driver_calls = []
+        self.close_calls = []
 
     def _run(self, args, **kwargs):
+        if "-c" in args:  # close_terminal
+            self.close_calls.append(args)
+            (self.config.paper_output / "testnet_automation" / "current.json").write_text(json.dumps({"status": "idle"}))
+            return type("Done", (), {"returncode": 0, "stderr": ""})()
         self.driver_calls.append(args)
         receipt = args[args.index("--receipt") + 1]
         open(receipt, "w").write(json.dumps({"status": "grid_running"}))
@@ -266,3 +271,46 @@ def test_kline_page_renders_archive_markdown_with_local_images(config, sources, 
     page = client.get("/newsletter/kline").text
     assert "宏观 K 线日报" in page and f"/newsletter-asset/kline/{img}" in page
     assert client.get("/newsletter-asset/kline/..%2F..%2Fsecret.png").status_code == 404
+
+
+def _coordinator(paper_output, **state):
+    (paper_output / "testnet_automation").mkdir(parents=True, exist_ok=True)
+    (paper_output / "testnet_automation" / "current.json").write_text(json.dumps(state))
+
+
+def test_stop_grid_needs_the_typed_word_and_records_parks_press(config, sources, store, fetch, paper_output):
+    _coordinator(paper_output, status="grid_paused_range", selected_instrument_id="BTC-USD-PERP")
+    fetch.routes["/api/dashboard-control/control"] = {"control": {"status": "stop_requested", "blockers": []}}
+    client, ex = client_for(config, sources, store, fetch)
+    assert client.get("/api/desk/BTC").json()["control"]["can_stop"] is True
+    assert client.post("/api/grid/stop", json={"asset": "BTC", "confirm_text": "ok"}).status_code == 422
+    assert not any("control" in u for u, _ in fetch.calls)
+
+    done = client.post("/api/grid/stop", json={"asset": "BTC", "confirm_text": "停止"}).json()
+    body = next(b for u, b in fetch.calls if u.endswith("/api/dashboard-control/control"))
+    assert done["status"] == "stop_requested" and body["action"] == "stop" and "亲自按下" in body["reason"]
+    assert store.executions("BTC", limit=1)[0]["stage"] == "stop_requested"
+    assert ex.driver_calls == []
+
+    _coordinator(paper_output, status="stop_requested", selected_instrument_id="BTC-USD-PERP")
+    control = client.get("/api/desk/BTC").json()["control"]
+    assert control["stopping"] is True and control["can_stop"] is False
+
+
+def test_stop_grid_refuses_other_assets_and_idle_account(config, sources, store, fetch, paper_output):
+    _coordinator(paper_output, status="idle")
+    client, _ex = client_for(config, sources, store, fetch)
+    assert client.post("/api/grid/stop", json={"asset": "BTC", "confirm_text": "停止"}).status_code == 409
+    _coordinator(paper_output, status="grid_running", selected_instrument_id="BTC-USD-PERP")
+    assert client.post("/api/grid/stop", json={"asset": "XAU", "confirm_text": "停止"}).status_code == 409
+    assert not any("control" in u for u, _ in fetch.calls)
+
+
+def test_execute_closes_an_ended_grid_before_starting_a_new_one(config, sources, store, fetch, paper_output):
+    _coordinator(paper_output, status="grid_terminal", selected_instrument_id="BTC-USD-PERP")
+    fetch.routes["/api/dashboard-control/preview"] = PREVIEW_OK
+    fetch.routes["/api/dashboard-control/confirm"] = {"confirmation": {"status": "confirmed", "activation_id": "sha256:act"}}
+    client, ex = client_for(config, sources, store, fetch)
+    saved = _approve_short(client)
+    ok = client.post("/api/execute", json={"judgment_id": saved["id"], "shown_max_loss": 4.2, "confirm_text": "执行"}).json()
+    assert len(ex.close_calls) == 1 and ok["started"] is True

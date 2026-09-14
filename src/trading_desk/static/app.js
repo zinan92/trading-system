@@ -66,10 +66,25 @@ function renderStatus() {
     <div><div class="k">方向 · 区间</div><div class="v num">${DIR[g.direction] || "—"} ${fmt(g.lower)}–${fmt(g.upper)}</div></div>
     <div><div class="k">挂单 / 成交</div><div class="v num">${fmt(g.open_orders, 0)} / ${fmt(g.fills, 0)}</div></div>
     <div><div class="k">硬止损</div><div class="v num">${fmt(g.hard_stop)}</div></div>
-    <div><div class="k">系统上次检查</div><div class="v num">${updated}</div></div>`;
+    <div><div class="k">系统上次检查</div><div class="v num">${updated}</div></div>${stopControl(S.desk.control)}`;
+  const stop = $("#stop-btn");
+  if (stop) stop.onclick = async () => {
+    if (!confirm(`确认停止 ${S.asset} 测试盘网格？\n会撤掉全部挂单；如果有持仓，会按市价平掉。`)) return;
+    stop.disabled = true;
+    try { const r = await api("/api/grid/stop", {asset: S.asset, confirm_text: "停止"}); $("#stop-toast").textContent = r.message; setTimeout(loadDesk, 1500); }
+    catch (e) { $("#stop-toast").textContent = e.message; stop.disabled = false; }
+  };
   $("#legend").innerHTML = `<span><i style="border-color:var(--brass);border-top-style:dashed"></i>网格价位（${g.rungs.length} 格）</span>
     <span><i style="border-color:var(--ink-2)"></i>区间 ${fmt(g.lower)} – ${fmt(g.upper)}</span>
     <span><i style="border-color:var(--warn)"></i>硬止损 ${fmt(g.hard_stop)}</span><span>红涨绿跌</span>`;
+}
+
+function stopControl(c) {
+  if (!c) return "";
+  if (c.stopping) return `<div class="stop"><span class="pill warn">正在停止：撤单、平仓中，约 1–2 分钟</span></div>`;
+  if (c.ended) return `<div class="stop"><span class="pill idle">网格已结束，可以执行新计划</span></div>`;
+  if (!c.can_stop) return "";
+  return `<div class="stop"><button type="button" class="btn-stop" id="stop-btn">停止网格</button><div class="toast" id="stop-toast" role="status"></div></div>`;
 }
 
 // ---- news ----------------------------------------------------------------
@@ -297,7 +312,7 @@ async function loadNewsletters() {
 document.querySelectorAll("[data-nl]").forEach(b => b.onclick = () => { S.nl = b.dataset.nl; document.querySelectorAll("[data-nl]").forEach(x => x.setAttribute("aria-pressed", x === b)); $("#nl-archive").value = ""; $("#nl-frame").src = `/newsletter/${S.nl}`; loadNewsletters(); });
 $("#nl-archive").onchange = () => { if ($("#nl-archive").value) $("#nl-frame").src = `/newsletter/${$("#nl-archive").value}`; };
 
-const STAGE = {preview: "预览", execute_started: "按下执行", executed: "已执行", execute_failed: "执行未完成", refused: "被拒绝"};
+const STAGE = {preview: "预览", execute_started: "按下执行", executed: "已执行", execute_failed: "执行未完成", refused: "被拒绝", stop_requested: "按下停止", stop_refused: "停止被拒绝"};
 async function loadSystem() {
   let s;
   try { s = await api("/api/system"); } catch (e) { $("#checks").innerHTML = `<li class="degraded">${esc(e.message)}</li>`; return; }

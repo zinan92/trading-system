@@ -16,6 +16,8 @@ from typing import Any, Callable
 from .config import Config
 
 LIVE_COORDINATOR_STATES = {"grid_running", "grid_paused_range", "grid_blocked", "dca_running", "candidate_selected", "stop_requested"}
+STOPPABLE_COORDINATOR_STATES = {"grid_running", "grid_paused_range", "grid_blocked", "grid_interrupted"}
+TERMINAL_COORDINATOR_STATES = {"grid_terminal"}
 BLOCKER_TEXT = {
     "account_not_clean": "测试盘账户上还有挂单或持仓（先停掉当前网格）",
     "instrument_not_eligible": "这个品种暂不满足下单条件",
@@ -86,14 +88,47 @@ class Executor:
             "max_loss": (inner.get("risk") or {}).get("max_loss"),
         }
 
+    # ---- stop (only from the human-pressed button) -----------------------------
+    def stop_grid(self) -> dict[str, Any]:
+        """Record Park's stop; the 60s control pass cancels every order and flattens."""
+        coordinator = self.coordinator()
+        status = coordinator.get("status")
+        if status == "stop_requested":
+            return {"status": "stop_requested", "message": "停止已经在进行，约 1 分钟内撤完挂单。"}
+        if status not in STOPPABLE_COORDINATOR_STATES:
+            raise ExecutionRefused("现在没有可以停止的网格。", {"coordinator_status": status})
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        response = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/control",
+                              {"action": "stop", "reason": f"Park 在交易台亲自按下「停止网格」{stamp}"})
+        control = (response or {}).get("control") or {}
+        if control.get("status") != "stop_requested":
+            raise ExecutionRefused("交易后台没有接受停止指令。", {"blockers": control.get("blockers"), "status": control.get("status")})
+        return {"status": "stop_requested", "message": "已下达停止：约 1 分钟内撤掉全部挂单，有持仓会市价平掉。"}
+
+    def close_terminal(self) -> dict[str, Any]:
+        """Close a sealed, venue-flat terminal grid so a new one can start."""
+        env = self._driver_env()
+        code = ("import json,sys;from pathlib import Path;"
+                "from services.testnet_automation_coordinator import TestnetAutomationCoordinator as T;"
+                "r=T(Path(sys.argv[1])).control('close_terminal',{},command_id=sys.argv[2]);"
+                "print(json.dumps({'status':r.get('status')}))")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        done = self.run([str(self.config.nautilus_python), "-c", code, str(self.config.paper_output), f"park-desk-close-{stamp}"],
+                        cwd=str(self.config.trading_system_checkout), env=env, capture_output=True, text=True, timeout=60)
+        if done.returncode != 0 or self.coordinator().get("status") != "idle":
+            raise ExecutionRefused("上一个网格还没对账收尾，暂时不能开新网格。", {"stderr": (done.stderr or "")[-300:]})
+        return {"status": "idle"}
+
     # ---- execute (only from the human-pressed button) --------------------------
     def execute(self, asset: dict[str, Any], plan: dict[str, Any], *, shown_max_loss: float | None, judgment_id: int) -> dict[str, Any]:
         coordinator = self.coordinator()
         if coordinator.get("status") in LIVE_COORDINATOR_STATES:
-            raise ExecutionRefused("测试盘上已经有网格在跑。交易台暂不支持从前端停止网格，请先让执行员按流程停掉当前网格。",
+            raise ExecutionRefused("测试盘上已经有网格在跑。先按「停止网格」，撤完单后再执行新计划。",
                                    {"coordinator_status": coordinator.get("status")})
         if coordinator.get("status") == "unknown":
             raise ExecutionRefused("读不到交易后台状态，为安全起见不执行。")
+        if coordinator.get("status") in TERMINAL_COORDINATOR_STATES:
+            self.close_terminal()
         fresh = self.preview(asset, plan)
         if not fresh["execution_ready"] or not fresh["preview_digest"]:
             raise ExecutionRefused("预览没有通过风险检查，没有下单。", {"blockers": fresh["blockers"]})
