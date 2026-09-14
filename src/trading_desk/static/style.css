@@ -58,8 +58,8 @@ svg text{font-family:"JetBrains Mono",monospace;font-size:11px}
 .legend{display:flex;gap:16px;flex-wrap:wrap;padding:0 14px 12px;font-size:12px;color:var(--ink-2)}
 .legend i{display:inline-block;width:14px;height:0;border-top:2px solid;vertical-align:middle;margin-right:5px}
 .status{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0;border-top:1px solid var(--line)}
-.status div{padding:10px 14px;border-right:1px solid var(--line)}
-.status div:last-child{border-right:0}
+.status>div{padding:10px 14px;border-right:1px solid var(--line)}
+.status>div:last-child{border-right:0}
 .status .k{font-size:11.5px;color:var(--ink-3)}
 .status .v{font-size:15px;font-weight:600;margin-top:2px}
 .pill{display:inline-block;font-size:12px;font-weight:500;padding:1px 8px;border-radius:999px}
@@ -129,6 +129,6 @@ input[type=range]{accent-color:var(--brass);width:100%}
 .status{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 .status .pill{white-space:nowrap}
 .status{grid-template-columns:repeat(3,minmax(0,1fr))}
-.status div:nth-child(-n+3){border-bottom:1px solid var(--line)}
-.status div:nth-child(3){border-right:0}
+.status>div:nth-child(-n+3){border-bottom:1px solid var(--line)}
+.status>div:nth-child(3){border-right:0}
 .status .v{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
