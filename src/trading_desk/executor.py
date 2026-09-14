@@ -110,7 +110,7 @@ class Executor:
         env = self._driver_env()
         code = ("import json,sys;from pathlib import Path;"
                 "from services.testnet_automation_coordinator import TestnetAutomationCoordinator as T;"
-                "r=T(Path(sys.argv[1])).control('close_terminal',{},command_id=sys.argv[2]);"
+                "r=T(Path(sys.argv[1])).command('close_terminal',{},command_id=sys.argv[2]);"
                 "print(json.dumps({'status':r.get('status')}))")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         done = self.run([str(self.config.nautilus_python), "-c", code, str(self.config.paper_output), f"park-desk-close-{stamp}"],
