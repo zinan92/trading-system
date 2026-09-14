@@ -1,0 +1,15 @@
+[project]
+name = "trading-desk"
+version = "0.1.0"
+description = "Park 交易台：新闻、K 线、判断、计划、批准、盯盘、复盘一页完成"
+requires-python = ">=3.11"
+dependencies = ["fastapi", "uvicorn"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+trading_desk = ["static/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
