@@ -49,11 +49,13 @@ def build_plan(kind: str, direction: str, price: float | None, grid: dict[str, A
     tpl = TEMPLATE[kind]
     tick = _tick_for(price)
     width = price * tpl["range_pct"]
+    # The paper engine only accepts a grid whose range contains the current price.
+    above = 0.1 if kind == "xau_paper" else 0.0
     if direction == "long":
-        lower, upper = price - width, price
+        lower, upper = price - width * (1 - above), price + width * above
         stop = lower * (1 - tpl["stop_pct"])
     else:
-        lower, upper = price, price + width
+        lower, upper = price - width * above, price + width * (1 - above)
         stop = upper * (1 + tpl["stop_pct"])
     step = (upper - lower) / tpl["rungs"]
     rungs = sorted(_tick(lower + step * i if direction == "long" else upper - step * i, tick) for i in range(tpl["rungs"]))
@@ -64,10 +66,10 @@ def build_plan(kind: str, direction: str, price: float | None, grid: dict[str, A
     return {
         "kind": "new", "title": f"{'做多' if direction == 'long' else '做空'}网格 · 新参数，需要你批准", "direction": direction,
         "range": [_tick(lower, tick), _tick(upper, tick)], "rungs": rungs, "hard_stop": stop, "max_loss": loss,
-        "notional_per_rung": tpl.get("notional"), "executable": kind == "hl_testnet",
+        "notional_per_rung": tpl.get("notional"), "executable": True,
         "lines": [["区间", f"{_fmt(lower)} – {_fmt(upper)}"], [f"{'买单' if direction == 'long' else '卖单'}", f"{len(rungs)} 张 × {size}"],
                   ["硬止损", _fmt(stop)], ["最多亏", f"{loss:,.2f} {tpl['unit']}"]],
-        "note": replace_note + ("批准后先做预览（不下单），预览通过后需要你亲自按「执行」。" if kind == "hl_testnet" else "黄金纸面盘暂不支持从交易台执行，批准只做记录。"),
+        "note": replace_note + "批准后先做预览（不下单），预览通过后需要你亲自按「执行」。",
     }
 
 

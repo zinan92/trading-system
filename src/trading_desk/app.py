@@ -211,7 +211,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             saved["handoff"] = ("预览通过：以下是交易所会挂的真实价位。确认没问题再按「执行」，不按不会下单。" if preview.get("execution_ready")
                                 else "预览没有通过，不能执行：" + "；".join(map(str, preview.get("blockers") or [])))
         elif body.action == "approved":
-            saved["handoff"] = "已记录批准。这份计划不需要下单（沿用现有网格、观望，或纸面盘暂不支持执行）。"
+            saved["handoff"] = "已记录批准。这份计划不需要下单（沿用现有网格或观望）。"
         else:
             saved["handoff"] = "判断已记录，到期后自动出现在复盘里。"
         return saved
@@ -232,7 +232,8 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             raise HTTPException(409, str(exc)) from None
         store.log_execution(asset=asset["key"], stage="executed" if result.get("started") else "execute_failed", judgment_id=judgment["id"],
                             preview_digest=(result.get("preview") or {}).get("preview_digest"), detail=result)
-        return {**result, "message": "网格已经挂上测试盘，系统接管盯盘。" if result.get("started") else f"下单没有完成（{result.get('status')}），请看系统页记录。"}
+        started_text = "计划已确认，黄金纸面盘约 1 分钟内挂单，系统接管盯盘。" if asset["kind"] == "xau_paper" else "网格已经挂上测试盘，系统接管盯盘。"
+        return {**result, "message": started_text if result.get("started") else f"下单没有完成（{result.get('status')}），请看系统页记录。"}
 
     @app.post("/api/grid/stop")
     def stop_grid(body: StopIn) -> dict[str, Any]:

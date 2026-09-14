@@ -243,6 +243,24 @@ class Sources:
         }
 
     # ---- XAU: Nautilus paper grid ------------------------------------------
+    def _paper_ledger(self) -> dict[str, Any]:
+        """The paper account's own ledger; the read-model only covers the active session."""
+        folder = self.config.paper_output / "dualtrack" / "nautilus_authoritative" / "snapshots"
+        files = sorted(folder.glob("*.json"), key=lambda path: path.stat().st_mtime) if folder.exists() else []
+        if not files:
+            return {}
+        try:
+            rows = json.loads(files[-1].read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        snap = rows[-1] if isinstance(rows, list) and rows else rows
+        account, pnl = snap.get("account") or {}, snap.get("pnl") or {}
+        positions = [{"asset": "XAU", "side": p.get("side"), "size": p.get("remaining_units"), "entry": p.get("entry_price"),
+                      "tp": p.get("tp"), "sl": p.get("sl")}
+                     for p in snap.get("positions") or [] if str(p.get("status") or "").lower() == "open"]
+        return {"equity": account.get("equity"), "starting_cash": account.get("starting_cash"),
+                "realized": pnl.get("realized"), "unrealized": pnl.get("unrealized"), "positions": positions}
+
     def xau_paper(self) -> dict[str, Any]:
         try:
             model = self.fetch(f"{self.config.dashboard_url}/api/park-paper/read-model", None)
@@ -259,9 +277,13 @@ class Sources:
             ended_text = f"：{reason}，{len(receipts)} 笔在 {terminal.get('observed_price')} 平仓" if terminal else ""
             grid = {"ok": False, "none": True, "ended": True, "reason": f"黄金网格已结束{ended_text}。现在没有运行中的黄金网格。",
                     "ended_at": ended, "status": "TERMINAL", "price": price}
-            account_view = {"ok": True, "venue": "Binance 纸面盘 · 黄金网格", "money": "纸面模拟", "equity": None, "starting_cash": None,
-                            "realized": None, "unrealized": None, "positions": [], "trades": None, "reconciliation": "ok",
-                            "note": f"网格已结束（{reason}）· 无持仓"}
+            ledger = self._paper_ledger()
+            open_positions = ledger.get("positions") or []
+            account_view = {"ok": True, "venue": "Binance 纸面盘 · 黄金网格", "money": "纸面模拟",
+                            "equity": ledger.get("equity"), "starting_cash": ledger.get("starting_cash"),
+                            "realized": ledger.get("realized"), "unrealized": ledger.get("unrealized"),
+                            "positions": open_positions, "trades": None, "reconciliation": "ok",
+                            "note": (f"网格已结束（{reason}）· " + (f"仍有 {len(open_positions)} 笔持仓无人管理" if open_positions else "无持仓"))}
             return {"ok": True, "grid": grid, "account": account_view, "price": price}
         account = execution.get("account") or {}
         pnl = execution.get("pnl") or {}

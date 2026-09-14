@@ -201,12 +201,55 @@ def test_execute_requires_explicit_confirm_text_and_approved_plan(config, source
     assert ex.driver_calls == []
 
 
-def test_gold_is_never_executable(config, sources, store, fetch):
-    client, ex = client_for(config, sources, store, fetch)
+GOLD_DRAFT = {"status": "draft", "confirmable": True, "message": "ok",
+              "draft": {"draft_id": "draft-1", "plan_digest": "sha256:gold",
+                        "plan": {"risk": {"theoretical_max_loss": 270.0, "grid_rung_prices": [4150.0, 4300.0],
+                                          "maximum_notional": 1700.0, "grid_entry_range": {"lower": 4150.0, "upper": 4300.0}}}}}
+
+
+def _gold_chat(fetch, *, pending=None):
+    original = fetch.__call__
+    chat = []
+
+    def call(url, body):
+        if url.endswith("/api/park-paper/ai-chat"):
+            fetch.calls.append((url, body))
+            chat.append(body)
+            if body is None:
+                return {"pending_draft": pending}
+            return {"message": {**GOLD_DRAFT}, "reject": {"status": "rejected"}, "confirm": {"status": "confirmed", "snapshot": {"snapshot_id": "s1"}}}[body["action"]]
+        return original(url, body)
+
+    fetch.__class__ = type("GoldFetch", (fetch.__class__,), {"__call__": lambda self, url, body: call(url, body)})
+    return chat
+
+
+def test_gold_preview_refused_while_a_gold_grid_runs(config, sources, store, fetch):
+    client, _ex = client_for(config, sources, store, fetch)
+    chat = _gold_chat(fetch)
     saved = client.post("/api/judgments", json={"asset": "XAU", "direction": "short", "confidence": 3, "action": "approved"}).json()
-    assert saved["plan"]["executable"] is False and "preview" not in saved
-    with pytest.raises(ExecutionRefused):
-        ex.preview(store.asset("XAU"), saved["plan"])
+    assert saved["plan"]["executable"] is True
+    assert saved["preview"]["execution_ready"] is False and "已经有网格在跑" in saved["preview"]["blockers"][0]
+    assert chat == []
+
+
+def test_gold_approval_drafts_only_and_execute_confirms_once(config, sources, store, fetch):
+    fetch.routes["/api/park-paper/read-model"] = {"strategy": {"active": False}, "market": {"price": 4304.0}, "terminal": {}}
+    client, ex = client_for(config, sources, store, fetch)
+    chat = _gold_chat(fetch, pending={"draft_id": "draft-old"})
+    saved = client.post("/api/judgments", json={"asset": "XAU", "direction": "long", "confidence": 3, "action": "approved"}).json()
+    plan = saved["plan"]
+    assert plan["range"][0] < 4304.0 < plan["range"][1]  # the paper engine needs the price inside the range
+    assert saved["preview"]["execution_ready"] is True and saved["preview"]["max_loss"] == 270.0
+    assert [b and b["action"] for b in chat] == [None, "reject", "message"]
+    assert "做多网格" in chat[-1]["message"] and "XAUUSDT Paper" in chat[-1]["message"]
+    assert not any(b and b.get("action") == "confirm" for b in chat)
+
+    ok = client.post("/api/execute", json={"judgment_id": saved["id"], "shown_max_loss": 270.0, "confirm_text": "执行"}).json()
+    confirms = [b for b in chat if b and b.get("action") == "confirm"]
+    assert ok["started"] is True and "纸面盘" in ok["message"]
+    assert confirms == [{"action": "confirm", "draft_id": "draft-1", "plan_digest": "sha256:gold"}]
+    assert ex.driver_calls == []  # never the Testnet driver
 
 
 # ---- assets, newsletters, system ---------------------------------------------------------

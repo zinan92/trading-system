@@ -244,17 +244,19 @@ function renderExec(judgmentId, preview, done) {
   const plan = $("#plan"); plan.querySelector(".exec")?.remove();
   const box = document.createElement("div"); box.className = "exec";
   if (done) {
-    const txt = {executed: "已执行：网格已挂上测试盘。", execute_started: "执行中或上次中断，请到系统页查看记录。", execute_failed: "上次执行没有完成，请到系统页查看记录。", refused: `上次执行被拒绝：${done.detail?.reason || ""}`}[done.stage];
+    const paper = S.desk?.meta?.kind === "xau_paper";
+    const txt = {executed: paper ? "已执行：计划已确认，纸面盘约 1 分钟内挂单。" : "已执行：网格已挂上测试盘。", execute_started: "执行中或上次中断，请到系统页查看记录。", execute_failed: "上次执行没有完成，请到系统页查看记录。", refused: `上次执行被拒绝：${done.detail?.reason || ""}`}[done.stage];
     box.innerHTML = `<div class="note">${esc(txt)}</div>`; plan.appendChild(box); return;
   }
   if (!preview.execution_ready) { box.innerHTML = `<div class="warn">预览没通过，不能执行：${esc((preview.blockers || []).join("；"))}</div>`; plan.appendChild(box); return; }
   const orders = (preview.orders || []).map(o => `<span>${fmt(o.price)}</span>`).join("");
-  box.innerHTML = `<div class="kv"><dt>交易所预览价位</dt><dd class="rungs num">${orders}</dd><dt>预览最多亏</dt><dd class="num">${fmt(preview.max_loss)} USDC</dd></div>
-    <div class="warn">按下后会在 Hyperliquid 测试盘真实挂单（假钱）。已有网格在跑时系统会拒绝。</div>
+  const paper = S.desk?.meta?.kind === "xau_paper", unit = paper ? "USDT" : "USDC";
+  box.innerHTML = `<div class="kv"><dt>${paper ? "纸面盘预览价位" : "交易所预览价位"}</dt><dd class="rungs num">${orders}</dd><dt>预览最多亏</dt><dd class="num">${fmt(preview.max_loss)} ${unit}</dd></div>
+    <div class="warn">${paper ? "按下后确认这份黄金纸面盘计划（模拟资金），约 1 分钟内挂单。已有黄金网格在跑时系统会拒绝。" : "按下后会在 Hyperliquid 测试盘真实挂单（假钱）。已有网格在跑时系统会拒绝。"}</div>
     <button type="button" class="btn-exec" id="exec-btn">执行</button><div class="toast" id="exec-toast" role="status"></div>`;
   plan.appendChild(box);
   $("#exec-btn").onclick = async () => {
-    if (!confirm(`确认在测试盘执行这份计划？\n最多亏 ${fmt(preview.max_loss)} USDC`)) return;
+    if (!confirm(`确认在${paper ? "黄金纸面盘" : "测试盘"}执行这份计划？\n最多亏 ${fmt(preview.max_loss)} ${unit}`)) return;
     $("#exec-btn").disabled = true; $("#exec-toast").textContent = "正在复核预览并下单，可能需要一两分钟…";
     try { const r = await api("/api/execute", {judgment_id: judgmentId, shown_max_loss: preview.max_loss, confirm_text: "执行"}); $("#exec-toast").textContent = r.message; loadDesk(); }
     catch (e) { $("#exec-toast").textContent = e.message; }

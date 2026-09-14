@@ -6,6 +6,7 @@ only reachable from the 执行 button Park presses, and refuses while any grid i
 from __future__ import annotations
 
 import json
+import math
 import plistlib
 import re
 import subprocess
@@ -71,8 +72,10 @@ class Executor:
 
     # ---- preview (no orders) ---------------------------------------------------
     def preview(self, asset: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+        if asset["kind"] == "xau_paper":
+            return self.preview_gold(plan)
         if asset["kind"] != "hl_testnet":
-            raise ExecutionRefused("黄金纸面盘暂不支持从交易台执行，只能记录判断。")
+            raise ExecutionRefused("这个品种暂不支持从交易台执行，只能记录判断。")
         strategy = strategy_from_plan(plan)
         body = {"venue_profile_id": asset["venue_profile_id"], "instrument_id": asset["instrument_id"], "strategy_family": "grid", "strategy": strategy}
         response = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/preview", body)
@@ -121,6 +124,8 @@ class Executor:
 
     # ---- execute (only from the human-pressed button) --------------------------
     def execute(self, asset: dict[str, Any], plan: dict[str, Any], *, shown_max_loss: float | None, judgment_id: int) -> dict[str, Any]:
+        if asset["kind"] == "xau_paper":
+            return self.execute_gold(plan, shown_max_loss=shown_max_loss)
         coordinator = self.coordinator()
         if coordinator.get("status") in LIVE_COORDINATOR_STATES:
             raise ExecutionRefused("测试盘上已经有网格在跑。先按「停止网格」，撤完单后再执行新计划。",
@@ -146,6 +151,60 @@ class Executor:
         final = receipts[-1] if receipts else {}
         return {"preview": fresh, "activation_id": confirmed["activation_id"], "attempts": receipts,
                 "status": final.get("status"), "started": final.get("status") == "grid_running"}
+
+    # ---- gold paper grid (Dashboard AI draft -> Park-pressed confirm) ------------
+    def _gold_active(self) -> bool:
+        try:
+            model = self.fetch(f"{self.config.dashboard_url}/api/park-paper/read-model", None) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise ExecutionRefused("读不到黄金纸面盘状态，为安全起见不执行。") from exc
+        return (model.get("strategy") or {}).get("active") is True
+
+    @staticmethod
+    def gold_message(plan: dict[str, Any]) -> str:
+        lower, upper = plan["range"]
+        side = "做多" if plan["direction"] == "long" else "做空"
+        return (f"{side}网格 Grid，XAUUSDT Paper，区间 {lower}~{upper}，{len(plan['rungs'])}格，最大3倍杠杆，"
+                f"硬止损 {plan['hard_stop']}，最大可接受亏损 {math.ceil(float(plan['max_loss']))} USDT，没有旧仓。")
+
+    def preview_gold(self, plan: dict[str, Any]) -> dict[str, Any]:
+        if self._gold_active():
+            raise ExecutionRefused("黄金纸面盘已经有网格在跑，一次只跑一个。")
+        chat = f"{self.config.dashboard_url}/api/park-paper/ai-chat"
+        pending = (self.fetch(chat, None) or {}).get("pending_draft") or {}
+        if pending.get("draft_id"):
+            # One draft at a time: a stale draft would swallow this message as a follow-up.
+            self.fetch(chat, {"action": "reject", "draft_id": pending["draft_id"]})
+        reply = self.fetch(chat, {"action": "message", "message": self.gold_message(plan)}) or {}
+        draft = reply.get("draft") or {}
+        risk = (draft.get("plan") or {}).get("risk") or {}
+        ready = reply.get("confirmable") is True and bool(draft.get("plan_digest"))
+        entry = risk.get("grid_entry_range") or {}
+        rungs = risk.get("grid_rung_prices") or []
+        notional = float(risk.get("maximum_notional") or 0) / len(rungs) if rungs else None
+        return {
+            "strategy": {"venue": "paper", "message": self.gold_message(plan)},
+            "execution_ready": ready,
+            "blockers": [] if ready else [str(reply.get("message") or reply.get("code") or "预览没有通过")],
+            "preview_digest": draft.get("plan_digest") if ready else None,
+            "draft_id": draft.get("draft_id"),
+            "range": [entry.get("lower"), entry.get("upper")] if entry else plan["range"],
+            "orders": [{"price": price, "notional": notional} for price in rungs],
+            "max_loss": risk.get("theoretical_max_loss"),
+        }
+
+    def execute_gold(self, plan: dict[str, Any], *, shown_max_loss: float | None) -> dict[str, Any]:
+        fresh = self.preview_gold(plan)
+        if not fresh["execution_ready"]:
+            raise ExecutionRefused("预览没有通过风险检查，没有下单。", {"blockers": fresh["blockers"]})
+        if shown_max_loss is not None and fresh["max_loss"] is not None and float(fresh["max_loss"]) > float(shown_max_loss) * 1.05:
+            raise ExecutionRefused("价格变动后最多亏损变大了，请看新的预览后重新按执行。", {"preview": fresh})
+        confirmed = self.fetch(f"{self.config.dashboard_url}/api/park-paper/ai-chat",
+                               {"action": "confirm", "draft_id": fresh["draft_id"], "plan_digest": fresh["preview_digest"]}) or {}
+        if confirmed.get("status") != "confirmed":
+            raise ExecutionRefused("确认没有通过，没有下单。", {"confirmation": {"status": confirmed.get("status"), "message": confirmed.get("message")}})
+        return {"preview": fresh, "status": "confirmed", "started": True, "venue": "paper",
+                "snapshot_id": (confirmed.get("snapshot") or {}).get("snapshot_id")}
 
     def _drive(self, activation_id: str, *, approval_id: str, tag: str) -> list[dict[str, Any]]:
         env = self._driver_env()
