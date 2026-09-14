@@ -4,13 +4,15 @@ const fmt = (n, d) => n == null || isNaN(n) ? "—" : Number(n).toLocaleString("
 const signed = (n, d = 2) => n == null ? "—" : `<span class="${n > 0 ? "pos" : n < 0 ? "neg" : ""}">${n > 0 ? "+" : ""}${fmt(n, d)}</span>`;
 const DIR = {long: "做多", short: "做空", flat: "观望"};
 const STEPS = [["look","看"],["judge","判断"],["plan","计划"],["approve","批准"],["watch","盯"],["review","复盘"]];
-const S = {asset: "BTC", tf: "4h", filter: "key", d: null, cites: [], desk: null, news: [], bars: null, plan: null};
+const S = {asset: "BTC", tf: "4h", filter: "key", d: null, cites: [], desk: null, news: [], bars: null, plan: null, assets: [], page: "trade", nl: "morning", pending: null};
 try { const saved = JSON.parse(localStorage.getItem("desk-ui") || "{}"); if (saved.asset) S.asset = saved.asset; if (saved.tf) S.tf = saved.tf; } catch (e) {}
-const qsAsset = new URLSearchParams(location.search).get("asset"); if (qsAsset === "BTC" || qsAsset === "XAU") S.asset = qsAsset;
+const qsAsset = new URLSearchParams(location.search).get("asset"); if (qsAsset) S.asset = qsAsset.toUpperCase();
 const persistUi = () => { try { localStorage.setItem("desk-ui", JSON.stringify({asset: S.asset, tf: S.tf})); } catch (e) {} };
 
-async function api(path, body) {
-  const res = await fetch(path, body ? {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)} : {});
+async function api(path, body, method) {
+  const opts = method ? {method} : body ? {method: "POST"} : {};
+  if (body) { opts.headers = {"content-type": "application/json"}; opts.body = JSON.stringify(body); }
+  const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "请求失败，请稍后再试");
   return data;
@@ -22,6 +24,7 @@ async function loadAccounts() {
   try { data = await api("/api/accounts"); } catch (e) { $("#accts").innerHTML = `<div class="panel degraded">持仓盈亏读不到：${esc(e.message)}</div>`; return; }
   $("#accts").innerHTML = data.accounts.map(a => {
     if (!a.ok) return `<div class="panel acct"><div class="name">${esc(a.venue)}</div><div class="degraded" style="grid-column:2/-1;padding:0">${esc(a.reason)}</div></div>`;
+    if (a.note) return `<div class="panel acct"><div class="name">${esc(a.venue)}<small>${esc(a.money)}</small></div><div class="empty" style="grid-column:2/-1;padding:0">${esc(a.note)}</div></div>`;
     const rec = a.reconciliation === "ok" ? "" : `<span class="pill bad">对账异常，数字可能不准</span>`;
     const pos = a.positions.length ? `${a.positions.length} 笔持仓` : "无持仓";
     return `<div class="panel acct">
@@ -42,15 +45,20 @@ async function loadDesk() {
   $("#px").textContent = fmt(d.price, S.asset === "BTC" ? 1 : 2);
   $("#steps").innerHTML = STEPS.map(([k, label], i) => `<li class="${d.steps[k] ? "done" : ""}"><b>${i + 1}</b>${label}</li>`).join("");
   $("#today").textContent = new Date().toLocaleDateString("zh-CN", {month: "long", day: "numeric"});
-  renderStatus(); renderNotes();
+  renderStatus(); renderNotes(); renderKline();
   const tj = d.today_judgment;
-  if (tj && S.d === null) { S.d = tj.direction; $("#reason").value = tj.reason || ""; $("#conf").value = tj.confidence; $("#confv").textContent = `${tj.confidence} / 5`; S.cites = tj.cited || []; syncDir(); renderCites(); loadPlan(); }
+  if (tj && S.d === null) {
+    S.d = tj.direction; $("#reason").value = tj.reason || ""; $("#conf").value = tj.confidence; $("#confv").textContent = `${tj.confidence} / 5`; S.cites = tj.cited || []; syncDir(); renderCites();
+    const runs = (d.executions || []).filter(e => e.judgment_id === tj.id);
+    const preview = runs.find(e => e.stage === "preview"), done = runs.find(e => ["executed", "execute_started", "execute_failed", "refused"].includes(e.stage));
+    loadPlan().then(() => { if (tj.action === "approved" && preview) renderExec(tj.id, preview.detail, done); });
+  }
   renderChart();
 }
 
 function renderStatus() {
   const g = S.desk.grid;
-  if (!g.ok) { $("#status").innerHTML = `<div class="degraded">${esc(g.reason || "网格状态读不到")}</div>`; return; }
+  if (!g.ok) { $("#status").innerHTML = `<div class="${g.none ? "empty" : "degraded"}">${esc(g.reason || "网格状态读不到")}</div>`; $("#legend").innerHTML = ""; return; }
   const tone = /卡住|止损/.test(g.status_label) ? "bad" : /暂停|高于|低于/.test(g.status_label) ? "warn" : /结束|停止/.test(g.status_label) ? "idle" : "ok";
   const updated = g.updated_at ? new Date(g.updated_at).toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"}) : "—";
   $("#status").innerHTML = `
@@ -156,7 +164,8 @@ async function submit(action) {
   try {
     const saved = await api("/api/judgments", {asset: S.asset, direction: S.d, confidence: +$("#conf").value, reason: $("#reason").value, cited: S.cites, action});
     $("#toast").textContent = saved.handoff;
-    loadDesk(); loadReview();
+    if (saved.preview) renderExec(saved.id, saved.preview, null);
+    loadReview(); refreshSteps();
   } catch (e) { $("#toast").textContent = e.message; }
   finally { btns.forEach(b => b.disabled = false); }
 }
@@ -175,7 +184,7 @@ async function loadReview() {
   $("#review").innerHTML = data.items.length ? data.items.map(j => {
     const o = j.outcome ? OUT[j.outcome] : ["", `等 ${data.review_hours} 小时`];
     return `<tr><td class="num">${new Date(j.created_at).toLocaleString("zh-CN", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"})}</td>
-      <td>${j.asset === "XAU" ? "黄金" : "BTC"}</td><td class="d-${j.direction}">${DIR[j.direction]}</td><td class="num">${j.confidence}/5</td>
+      <td>${esc((S.assets.find(a => a.key === j.asset) || {}).label || j.asset)}</td><td class="d-${j.direction}">${DIR[j.direction]}</td><td class="num">${j.confidence}/5</td>
       <td>${esc(j.reason) || "—"}${j.cited.length ? `<div class="meta" style="font-size:11.5px;color:var(--ink-3)">引用 ${j.cited.length} 条新闻</div>` : ""}</td>
       <td>${j.action === "approved" ? "已批准" : "只记录"}</td><td class="num">${fmt(j.price_at)}</td><td class="num">${j.price_after ? fmt(j.price_after) + ` (${j.move_pct > 0 ? "+" : ""}${j.move_pct.toFixed(2)}%)` : "—"}</td>
       <td class="${o[0]}">${o[1]}</td></tr>`;
@@ -186,11 +195,11 @@ async function loadReview() {
 function selectAsset(asset) {
   S.asset = asset; S.d = null; S.cites = []; S.plan = null; persistUi();
   document.querySelectorAll("[data-asset]").forEach(b => b.setAttribute("aria-pressed", b.dataset.asset === asset));
+  $("#kline").innerHTML = "";
   $("#reason").value = ""; $("#conf").value = 3; $("#confv").textContent = "3 / 5"; syncDir(); renderCites();
   $("#plan").innerHTML = `<div class="empty" style="padding:0">先选一个方向，系统按它生成计划。</div>`;
   loadDesk().then(() => { loadBars(); loadDayChange(); }); loadNews();
 }
-document.querySelectorAll("[data-asset]").forEach(b => b.onclick = () => selectAsset(b.dataset.asset));
 document.querySelectorAll("[data-tf]").forEach(b => b.onclick = () => { S.tf = b.dataset.tf; persistUi(); document.querySelectorAll("[data-tf]").forEach(x => x.setAttribute("aria-pressed", x === b)); loadBars(); });
 document.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { S.filter = b.dataset.f; document.querySelectorAll("[data-f]").forEach(x => x.setAttribute("aria-pressed", x === b)); renderNews(); });
 document.querySelectorAll("[data-d]").forEach(b => b.onclick = () => { S.d = b.dataset.d; syncDir(); loadPlan(); });
@@ -199,5 +208,111 @@ $("#news").addEventListener("keydown", e => { const li = e.target.closest("li[da
 $("#conf").oninput = () => { $("#confv").textContent = `${$("#conf").value} / 5`; };
 $("#note-form").onsubmit = async e => { e.preventDefault(); const body = $("#note").value.trim(); if (!body) return; try { await api("/api/notes", {asset: S.asset, body}); $("#note").value = ""; loadDesk(); } catch (err) { alert(err.message); } };
 document.querySelectorAll("[data-tf]").forEach(x => x.setAttribute("aria-pressed", x.dataset.tf === S.tf));
-selectAsset(S.asset); loadAccounts(); loadReview();
-setInterval(() => { loadAccounts(); loadDesk(); }, 60000);
+loadAssets().then(() => selectAsset(S.asset)).catch(e => alert(e.message)); loadAccounts(); loadReview();
+setInterval(() => { loadAccounts(); if (S.page === "trade") loadDesk(); if (S.page === "system") loadSystem(); }, 60000);
+
+async function refreshSteps() {
+  try { const d = await api(`/api/desk/${S.asset}`); $("#steps").innerHTML = STEPS.map(([k, label], i) => `<li class="${d.steps[k] ? "done" : ""}"><b>${i + 1}</b>${label}</li>`).join(""); S.desk.executions = d.executions; } catch (e) {}
+}
+
+// ---- K-line daily reading ---------------------------------------------------------
+function renderKline() {
+  const k = S.desk.kline;
+  if (!k || !k.ok) { $("#kline").innerHTML = `<div class="src">K 线日报解读：${esc(k?.reason || "暂无")}</div>`; return; }
+  $("#kline").innerHTML = `<div class="src">K 线日报解读 · ${esc(k.date)}（模型生成，未经人工复核）</div>
+    <div class="row">${esc(k.position)}</div><div class="row">${esc(k.structure)}</div><div><b>${esc(k.synthesis)}</b></div>
+    ${k.periods.length ? `<details><summary>分周期看</summary>${k.periods.map(p => `<div class="row">${esc(p.label)}：${esc(p.text)}</div>`).join("")}</details>` : ""}`;
+}
+
+// ---- execution gate ---------------------------------------------------------------
+function renderExec(judgmentId, preview, done) {
+  const plan = $("#plan"); plan.querySelector(".exec")?.remove();
+  const box = document.createElement("div"); box.className = "exec";
+  if (done) {
+    const txt = {executed: "已执行：网格已挂上测试盘。", execute_started: "执行中或上次中断，请到系统页查看记录。", execute_failed: "上次执行没有完成，请到系统页查看记录。", refused: `上次执行被拒绝：${done.detail?.reason || ""}`}[done.stage];
+    box.innerHTML = `<div class="note">${esc(txt)}</div>`; plan.appendChild(box); return;
+  }
+  if (!preview.execution_ready) { box.innerHTML = `<div class="warn">预览没通过，不能执行：${esc((preview.blockers || []).join("；"))}</div>`; plan.appendChild(box); return; }
+  const orders = (preview.orders || []).map(o => `<span>${fmt(o.price)}</span>`).join("");
+  box.innerHTML = `<div class="kv"><dt>交易所预览价位</dt><dd class="rungs num">${orders}</dd><dt>预览最多亏</dt><dd class="num">${fmt(preview.max_loss)} USDC</dd></div>
+    <div class="warn">按下后会在 Hyperliquid 测试盘真实挂单（假钱）。已有网格在跑时系统会拒绝。</div>
+    <button type="button" class="btn-exec" id="exec-btn">执行</button><div class="toast" id="exec-toast" role="status"></div>`;
+  plan.appendChild(box);
+  $("#exec-btn").onclick = async () => {
+    if (!confirm(`确认在测试盘执行这份计划？\n最多亏 ${fmt(preview.max_loss)} USDC`)) return;
+    $("#exec-btn").disabled = true; $("#exec-toast").textContent = "正在复核预览并下单，可能需要一两分钟…";
+    try { const r = await api("/api/execute", {judgment_id: judgmentId, shown_max_loss: preview.max_loss, confirm_text: "执行"}); $("#exec-toast").textContent = r.message; loadDesk(); }
+    catch (e) { $("#exec-toast").textContent = e.message; }
+  };
+}
+
+// ---- assets ---------------------------------------------------------------------------
+async function loadAssets() {
+  S.assets = (await api("/api/assets")).assets;
+  if (!S.assets.some(a => a.key === S.asset)) S.asset = S.assets[0].key;
+  $("#assets").innerHTML = S.assets.map(a => `<button type="button" data-asset="${esc(a.key)}" aria-pressed="${a.key === S.asset}">${esc(a.label)}</button>`).join("") + `<button type="button" class="add" id="add-asset">＋ 品种</button>`;
+  document.querySelectorAll("[data-asset]").forEach(b => b.onclick = () => { showPage("trade"); selectAsset(b.dataset.asset); });
+  $("#add-asset").onclick = openAdd;
+}
+let catalog = [], picked = null;
+async function openAdd() {
+  $("#add-dialog").showModal(); picked = null; $("#add-submit").disabled = true; $("#add-toast").textContent = "正在读取交易所品种…";
+  try { const c = await api("/api/catalog"); if (!c.ok) throw new Error(c.reason); catalog = c.instruments; $("#add-toast").textContent = `共 ${catalog.length} 个品种`; renderPick(); }
+  catch (e) { $("#add-toast").textContent = e.message; }
+}
+function renderPick() {
+  const q = $("#add-search").value.trim().toUpperCase();
+  const list = catalog.filter(i => !q || i.coin.toUpperCase().includes(q)).slice(0, 60);
+  $("#add-list").innerHTML = list.map(i => `<li><button type="button" data-coin="${esc(i.coin)}" aria-pressed="${picked === i.coin}" ${i.added ? "disabled title='已添加'" : ""}>${esc(i.coin)}</button></li>`).join("") || `<li class="empty">没有匹配的品种</li>`;
+  $("#add-list").querySelectorAll("button[data-coin]").forEach(b => b.onclick = () => { picked = b.dataset.coin; $("#add-news").value = $("#add-news").value || `${picked}, 加密, 美联储`; $("#add-submit").disabled = false; renderPick(); });
+}
+$("#add-search").oninput = renderPick;
+$("#add-submit").onclick = async () => {
+  if (!picked) return;
+  const news = $("#add-news").value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  try { const a = await api("/api/assets", {coin: picked, news_queries: news}); $("#add-dialog").close(); $("#add-news").value = ""; $("#add-search").value = ""; S.asset = a.key; await loadAssets(); selectAsset(a.key); loadSystem(); }
+  catch (e) { $("#add-toast").textContent = e.message; }
+};
+
+// ---- pages -----------------------------------------------------------------------------
+function showPage(page) {
+  S.page = page;
+  document.querySelectorAll("[data-page]").forEach(b => b.setAttribute("aria-selected", b.dataset.page === page));
+  $("#page-trade").hidden = page !== "trade"; $("#page-news").hidden = page !== "news"; $("#page-system").hidden = page !== "system";
+  for (const id of ["#assets", "#steps", ".ticker"]) document.querySelector(id).style.visibility = page === "trade" ? "visible" : "hidden";
+  if (page === "news") loadNewsletters();
+  if (page === "system") loadSystem();
+}
+document.querySelectorAll("[data-page]").forEach(b => b.onclick = () => showPage(b.dataset.page));
+
+async function loadNewsletters() {
+  try {
+    const n = await api("/api/newsletters");
+    $("#nl-archive").innerHTML = `<option value="">选择日期</option>` + n.morning.archive.map(d => `<option value="${d}">${d}</option>`).join("");
+    const meta = {morning: n.morning.latest, kline: n.kline.latest, weekly: n.weekly.latest}[S.nl];
+    $("#nl-meta").textContent = meta ? `更新于 ${meta}` : "还没有生成";
+  } catch (e) { $("#nl-meta").textContent = e.message; }
+  if ($("#nl-frame").getAttribute("src") === "about:blank") $("#nl-frame").src = `/newsletter/${S.nl}`;
+}
+document.querySelectorAll("[data-nl]").forEach(b => b.onclick = () => { S.nl = b.dataset.nl; document.querySelectorAll("[data-nl]").forEach(x => x.setAttribute("aria-pressed", x === b)); $("#nl-archive").value = ""; $("#nl-frame").src = `/newsletter/${S.nl}`; loadNewsletters(); });
+$("#nl-archive").onchange = () => { if ($("#nl-archive").value) $("#nl-frame").src = `/newsletter/${$("#nl-archive").value}`; };
+
+const STAGE = {preview: "预览", execute_started: "按下执行", executed: "已执行", execute_failed: "执行未完成", refused: "被拒绝"};
+async function loadSystem() {
+  let s;
+  try { s = await api("/api/system"); } catch (e) { $("#checks").innerHTML = `<li class="degraded">${esc(e.message)}</li>`; return; }
+  $("#sys-time").textContent = `检查于 ${new Date().toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"})}`;
+  $("#checks").innerHTML = s.checks.map(c => `<li><span><span class="pill ${c.ok ? "ok" : "bad"}">${c.ok ? "正常" : "异常"}</span> ${esc(c.name)}</span><span>${esc(c.detail ?? "")}</span></li>`).join("");
+  $("#paused").innerHTML = s.paused.map(p => `<tr><td class="num">${esc(p.label)}</td><td>${esc(p.what)}</td><td>${esc(p.why)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">没有暂停的服务</td></tr>`;
+  $("#restore").textContent = `恢复方法：告诉执行员要恢复哪一项，或在终端运行 ${s.restore}`;
+  $("#exec-log").innerHTML = s.executions.map(e => `<tr><td class="num">${new Date(e.created_at).toLocaleString("zh-CN", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"})}</td><td>${esc(e.asset)}</td><td>${STAGE[e.stage] || esc(e.stage)}</td><td>${esc(e.detail?.reason || e.detail?.message || (e.detail?.blockers || []).join("；") || (e.detail?.execution_ready ? `预览通过，最多亏 ${fmt(e.detail.max_loss)}` : e.detail?.status || ""))}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">还没有执行记录</td></tr>`;
+  const assets = (await api("/api/assets")).assets;
+  $("#asset-admin").innerHTML = assets.map(a => `<div class="admin-row" data-key="${esc(a.key)}"><b>${esc(a.label)} <span class="meta" style="font-weight:400;color:var(--ink-3)">${a.kind === "xau_paper" ? "纸面盘" : "测试盘"}</span></b>
+    <input value="${esc(a.news_queries.join(", "))}" aria-label="${esc(a.label)} 新闻关键词">
+    <span class="acts"><button type="button" data-act="save">保存关键词</button><button type="button" class="danger" data-act="del">移除</button></span></div>`).join("");
+  $("#asset-admin").querySelectorAll(".admin-row").forEach(row => {
+    const key = row.dataset.key;
+    row.querySelector('[data-act="save"]').onclick = async () => { try { await api(`/api/assets/${key}/news`, {news_queries: row.querySelector("input").value.split(/[,，]/)}, "PUT"); row.querySelector('[data-act="save"]').textContent = "已保存"; } catch (e) { alert(e.message); } };
+    row.querySelector('[data-act="del"]').onclick = async () => { if (!confirm(`从交易台移除 ${key}？交易所上的挂单和持仓不受影响。`)) return; try { await api(`/api/assets/${key}`, null, "DELETE"); await loadAssets(); loadSystem(); } catch (e) { alert(e.message); } };
+  });
+}
