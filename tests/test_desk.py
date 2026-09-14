@@ -119,6 +119,7 @@ def test_price_at_refuses_stale_bar_and_flags_unverifiable():
 
 def test_plan_without_price_cannot_be_approved(config, sources, store, fetch):
     fetch.routes["/api/park-paper/read-model"] = ConnectionError("down")
+    fetch.routes["/api/dualtrack/market/bars"] = ConnectionError("down")
     client, _ = client_for(config, sources, store, fetch)
     assert client.post("/api/judgments", json={"asset": "XAU", "direction": "long", "confidence": 3, "action": "approved"}).status_code == 409
 
