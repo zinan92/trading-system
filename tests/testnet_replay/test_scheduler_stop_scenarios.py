@@ -169,3 +169,28 @@ def test_control_pass_probes_and_resumes_a_market_gate_block(monkeypatch, tmp_pa
     assert still_blocked["status"] == "blocked"
     assert resumed["status"] == "active"
     assert resumed["blocker"] is None
+
+
+def test_issue_1264_scheduler_block_and_resume_each_notify_park_once(tmp_path: Path) -> None:
+    import pipelines.park_control as module
+    from services.park_telegram_control import ParkTelegramLedger
+
+    active = {"status": "active", "activation_id": "sha256:" + "8" * 64, "occurred_at": "2026-09-11T13:59:00+00:00"}
+    blocked = {**active, "status": "blocked", "occurred_at": "2026-09-11T14:10:00+00:00",
+               "blocker": "testnet_facts_unavailable:testnet_market_not_authoritative:market_quality_gate_failed"}
+    still = {**blocked, "occurred_at": "2026-09-11T14:11:00+00:00"}
+    resumed = {**active, "occurred_at": "2026-09-11T14:12:00+00:00"}
+    binding = {"park_user_id": "741098667", "chat_id": "8831262827"}
+
+    first = module.queue_testnet_scheduler_notice(tmp_path, active, blocked, **binding)
+    module.queue_testnet_scheduler_notice(tmp_path, active, blocked, **binding)  # replayed pass
+    silent = module.queue_testnet_scheduler_notice(tmp_path, blocked, still, **binding)
+    back = module.queue_testnet_scheduler_notice(tmp_path, still, resumed, **binding)
+    healthy = module.queue_testnet_scheduler_notice(tmp_path, resumed, {**resumed, "occurred_at": "x"}, **binding)
+
+    rows = [row for row in ParkTelegramLedger(tmp_path, **binding).outbox_rows() if row.get("event") == "outbound_queued"]
+    assert first is not None and back is not None
+    assert silent is None and healthy is None
+    assert len(rows) == 2
+    assert "market_quality_gate_failed" in rows[0]["text"]
+    assert "恢复" in rows[1]["text"]

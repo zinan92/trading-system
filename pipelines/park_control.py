@@ -277,6 +277,54 @@ def _fill_identities(fill: Mapping[str, Any]) -> set[str]:
     }
 
 
+def _testnet_scheduler_snapshot(output_root: Path) -> dict[str, Any]:
+    path = Path(output_root) / "testnet_automation" / "scheduler" / "current.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    value = value[-1] if isinstance(value, list) and value else value
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def queue_testnet_scheduler_notice(
+    output_root: Path,
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    *,
+    park_user_id: str,
+    chat_id: str,
+) -> dict[str, Any] | None:
+    """Tell Park once when the Testnet scheduler blocks, and once when it resumes.
+
+    2026-09-11 the scheduler blocked with next_action=notify_park_and_wait and
+    nothing ever queued the notification; the grid sat unmanaged for 2.5 days.
+    """
+    previous = str(before.get("status") or "")
+    current = str(after.get("status") or "")
+    activation = str(after.get("activation_id") or before.get("activation_id") or "")
+    if not activation or not park_user_id or not chat_id:
+        return None
+    occurred_at = str(after.get("occurred_at") or "")
+    if current == "blocked" and previous != "blocked":
+        blocker = str(after.get("blocker") or "unknown")
+        key = f"testnet-scheduler-blocked:{activation}:{occurred_at}"
+        text = (
+            f"⚠️ Testnet 网格已停止自动管理：{blocker}。"
+            f"{'行情类故障，恢复后会自动续跑。' if blocker.startswith('testnet_facts_unavailable:') else '需要处理后才能继续。'}"
+            f"交易所上的挂单此时无人管理。activation={activation[:19]}"
+        )
+    elif previous == "blocked" and current == "active":
+        key = f"testnet-scheduler-resumed:{activation}:{occurred_at}"
+        text = f"✅ Testnet 网格已恢复自动管理（此前阻塞：{before.get('blocker')}）。activation={activation[:19]}"
+    else:
+        return None
+    from services.park_telegram_control import ParkTelegramLedger
+
+    ledger = ParkTelegramLedger(output_root, park_user_id=park_user_id, chat_id=chat_id)
+    return ledger.queue_outbound(idempotency_key=key, message_type="park_blocker", text=text)
+
+
 def run_testnet_control_tick(output_root: Path, *, owner_id: str = "local-mac") -> dict[str, Any]:
     """Run the local Testnet scheduler heartbeat in the Park control pass.
 
@@ -567,7 +615,12 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
         )
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
+        scheduler_before = _testnet_scheduler_snapshot(output_root)
         testnet_control = run_testnet_control_tick(output_root)
+        queue_testnet_scheduler_notice(
+            output_root, scheduler_before, testnet_control,
+            park_user_id=args.park_user_id, chat_id=args.chat_id,
+        )
         legacy_cutover = run_legacy_cutover_once(
             output_root,
             config=config,
