@@ -1610,6 +1610,37 @@ class TestnetAutomationCoordinator:
         )
         return self._publish_grid_state(current, execution_plan, state, observed_at=observed_at)
 
+    def stop_grid_session(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        broker: object,
+        market: Mapping[str, Any],
+        timestamp: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Carry out a recorded operator stop against the live Grid lifecycle.
+
+        2026-09-14: ``stop`` only recorded intent, nothing cancelled the ladder,
+        and ``reconcile_stop`` then closed the activation with orders still live.
+        """
+
+        current = self._require_strategy_slice(plan, family="grid")
+        if current.get("status") != "stop_requested":
+            raise TestnetCoordinatorError("grid_stop_not_requested")
+        execution_plan = self._execution_plan(plan, current)
+        observed_at = self._timestamp(timestamp)
+        self._validate_authoritative_market(market, current=current, observed_at=observed_at)
+        self._validate_lifecycle_preflight(broker, strategy_family="grid", current=current)
+        from services.grid_testnet_lifecycle import GridTestnetLifecycle
+
+        state = GridTestnetLifecycle(self.output_root, broker).operator_stop(
+            execution_plan,
+            timestamp=observed_at,
+            market=market,
+            market_price=float(market.get("price") or 0) or None,
+        )
+        return self._publish_grid_state(current, execution_plan, state, observed_at=observed_at)
+
     def resume_grid_session(
         self,
         plan: Mapping[str, Any],

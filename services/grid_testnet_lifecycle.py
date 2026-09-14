@@ -136,6 +136,31 @@ class GridTestnetLifecycle:
         self._save(state)
         return self.snapshot(plan)
 
+    def operator_stop(
+        self,
+        plan: dict[str, Any],
+        *,
+        timestamp: str,
+        market: Mapping[str, Any] | None = None,
+        market_price: float | None = None,
+    ) -> dict[str, Any]:
+        """End a Grid on Park's stop: cancel every order and flatten through the hard-stop path."""
+
+        state = self._state(plan)
+        if state["status"] in {"terminal", "sealed", "hard_stop_triggered"}:
+            return self.snapshot(plan)
+        self._hard_stop(
+            plan,
+            state,
+            timestamp=timestamp,
+            reason="operator_stop",
+            market=market,
+            market_price=market_price,
+        )
+        state["updated_at"] = timestamp
+        self._save(state)
+        return self.snapshot(plan)
+
     def resume(self, plan: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
         """Resume an interrupted Grid after host-side revalidation."""
 

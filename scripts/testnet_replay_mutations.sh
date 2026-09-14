@@ -65,3 +65,6 @@ mutate '#1264 scheduler block never notifies Park' pipelines/park_control.py 'if
 mutate '#1264 scheduler resume never notifies Park' pipelines/park_control.py 'elif previous == "blocked" and current == "active":' 'elif False:'
 mutate '09-14 fills never notify Park' pipelines/park_control.py 'if not isinstance(fill, Mapping) or not fill.get("fill_id"):' 'if True:'
 mutate '09-14 fill notice collapses to one per plan' pipelines/park_control.py 'idempotency_key=f"testnet-fill:{plan_id}:{fill[\x27fill_id\x27]}",' 'idempotency_key=f"testnet-fill:{plan_id}",'
+mutate '09-14 operator stop never cancels the ladder' services/grid_testnet_lifecycle.py 'if state["status"] in {"terminal", "sealed", "hard_stop_triggered"}:\n            return self.snapshot(plan)\n        self._hard_stop(' 'if True:\n            return self.snapshot(plan)\n        self._hard_stop('
+mutate '09-14 grid stop runs without a recorded stop' services/testnet_automation_coordinator.py 'if current.get("status") != "stop_requested":\n            raise TestnetCoordinatorError("grid_stop_not_requested")' 'if False:\n            raise TestnetCoordinatorError("grid_stop_not_requested")'
+mutate '09-14 control pass skips a grid stop request' pipelines/park_control.py 'in TICK_CALLBACK_COORDINATOR_STATES or grid_stop_requested:' 'in TICK_CALLBACK_COORDINATOR_STATES:'

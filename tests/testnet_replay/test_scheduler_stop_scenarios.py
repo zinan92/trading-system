@@ -229,3 +229,53 @@ def test_testnet_fill_notifies_park_once_per_fill(monkeypatch, tmp_path: Path) -
     assert [row["message_type"] for row in rows] == ["park_fill", "park_fill"]
     assert "开仓" in rows[0]["text"] and "买入" in rows[0]["text"] and "76,500.0" in rows[0]["text"]
     assert "止盈" in rows[1]["text"] and "卖出" in rows[1]["text"]
+
+
+def test_operator_stop_cancels_the_ladder_and_flattens(tmp_path: Path) -> None:
+    # 2026-09-14: "stop" only recorded intent; the f107 ladder stayed live on the venue.
+    from tests.test_testnet_grid_coordinator import NOW as GRID_NOW, _market_at, _setup
+
+    coordinator, plan, confirmation, broker, _backend, market, fill = _setup(tmp_path)
+    started = coordinator.start_grid_session(plan, confirmation=confirmation, market=_market_at(market, GRID_NOW),
+                                             broker=broker, timestamp=GRID_NOW)
+    opened = coordinator.advance_grid_session(plan, broker=broker, fill=fill(started["lifecycle"]["orders"][0], price=65000.0, tid=5),
+                                              market=_market_at(market, "2026-08-26T01:01:00+00:00"),
+                                              timestamp="2026-08-26T01:01:00+00:00")
+    assert any(row["state"] == "accepted" for row in opened["lifecycle"]["orders"])
+
+    with pytest.raises(Exception, match="grid_stop_not_requested"):
+        coordinator.stop_grid_session(plan, broker=broker, market=_market_at(market, "2026-08-26T01:02:00+00:00"),
+                                      timestamp="2026-08-26T01:02:00+00:00")
+    coordinator.command("stop", {"reason": "park_desk_stop"}, command_id="desk-stop")
+    stopped = coordinator.stop_grid_session(plan, broker=broker, market=_market_at(market, "2026-08-26T01:02:00+00:00"),
+                                            timestamp="2026-08-26T01:02:00+00:00")
+
+    lifecycle = stopped["lifecycle"]
+    assert lifecycle["hard_stop_reason"] == "operator_stop"
+    assert not any(row["state"] == "accepted" and row["event"] in {"entry", "entry_rearm", "tp"} for row in lifecycle["orders"])
+    assert any(row["event"] == "hard_stop" for row in lifecycle["orders"])
+    assert stopped["status"] != "stop_requested"
+
+
+def test_control_pass_builds_callbacks_for_a_grid_stop_request(monkeypatch, tmp_path: Path) -> None:
+    # The stop is carried out by the 60s control pass; it must not skip a stop_requested coordinator.
+    import pipelines.park_control as module
+    from services.testnet_automation_coordinator import TestnetAutomationCoordinator
+    from services.testnet_scheduler import TestnetScheduler, TestnetSchedulerOwnershipStore
+
+    output = tmp_path / "outputs"
+    TestnetSchedulerOwnershipStore(output).initialize_local(owner_id="local-mac")
+    coordinator = TestnetAutomationCoordinator(output)
+    activation = {**_activation(), "strategy_family": "grid"}
+    coordinator.activate(activation, command_id="activate")
+    TestnetScheduler(output, coordinator, owner_id="local-mac", runtime_mode="local").activate(activation, command_id="scheduler-activate")
+    current = coordinator.status()
+    current.update({"status": "stop_requested", "execution_enabled": False, "grid_lifecycle": {"strategy_plan_id": "dashboard-plan:x"}})
+    coordinator._record(current)
+    calls = []
+    monkeypatch.setattr(module, "_build_testnet_tick_callbacks",
+                        lambda *_args: (lambda _event: calls.append("advance") or {"status": "ok"}, None))
+
+    module.run_testnet_control_tick(output)
+
+    assert calls == ["advance"]
