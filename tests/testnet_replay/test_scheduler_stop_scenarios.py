@@ -279,3 +279,19 @@ def test_control_pass_builds_callbacks_for_a_grid_stop_request(monkeypatch, tmp_
     module.run_testnet_control_tick(output)
 
     assert calls == ["advance"]
+
+
+def test_operator_stop_on_an_unfilled_ladder_seals_and_closes_to_idle(tmp_path: Path) -> None:
+    # The live 09-14 case: five resting entries, no fill. Stop must finish, not latch in hard_stop_triggered.
+    from tests.test_testnet_grid_coordinator import NOW as GRID_NOW, _market_at, _setup
+
+    coordinator, plan, confirmation, broker, _backend, market, _fill = _setup(tmp_path)
+    coordinator.start_grid_session(plan, confirmation=confirmation, market=_market_at(market, GRID_NOW), broker=broker, timestamp=GRID_NOW)
+    coordinator.command("stop", {"reason": "park_desk_stop"}, command_id="desk-stop")
+    stopped = coordinator.stop_grid_session(plan, broker=broker, market=_market_at(market, "2026-08-26T01:02:00+00:00"),
+                                            timestamp="2026-08-26T01:02:00+00:00")
+
+    assert stopped["status"] == "grid_terminal"
+    assert stopped["lifecycle"]["sealed"] is True
+    assert all(row["state"] == "cancelled" for row in stopped["lifecycle"]["orders"])
+    assert coordinator.command("close_terminal", {}, command_id="desk-close")["status"] == "idle"
