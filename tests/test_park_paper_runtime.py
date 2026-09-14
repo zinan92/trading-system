@@ -1217,3 +1217,41 @@ def test_boundary_close_keeps_session_open_while_owned_positions_remain(tmp_path
     assert blocked["status"] == "blocked"
     assert blocked["code"] == "terminal_positions_still_open"
     assert ParkStrategyIdentityJournal(output).active_session() is not None
+
+
+def test_idle_runtime_finishes_a_boundary_close_that_left_positions_open(tmp_path: Path) -> None:
+    # 2026-09-14 gold: terminal_paused was recorded and the session closed with 2.0 oz still open.
+    output = tmp_path / "outputs"
+    market = {"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "provider": "paper-provider",
+              "observed_at": "2026-08-14T10:00:00+00:00", "symbol": "GOLD"}
+    adapter = ReplayOrderedPaperAdapter()
+    clock = {"now": "2026-08-14T10:00:00+00:00"}
+    runtime = ParkPaperRuntime(output, adapter=adapter, park_user_id="park-user", chat_id="park-chat", config=_config(),
+                               market_reader=lambda: dict(market), now=lambda: clock["now"], safety_evidence_reader=_evidence)
+    digest = _confirm_on_dashboard(tmp_path)
+    assert runtime.run_once()["status"] == "active"
+    session = ParkStrategyIdentityJournal(output).active_session()
+    rearm = "nautilus-command-rearm3"
+    adapter.orders.append({"order_id": rearm, "state": "filled", "event": "entry", "strategy_plan_id": digest,
+                           "source_fill_id": f"nautilus-grid-rearm:{session['strategy_revision_id']}:grid:3:generation:2"})
+    adapter.positions.append({"position_id": f"POS-{rearm}", "trade_id": rearm, "status": "open", "side": "short",
+                              "remaining_units": 0.2, "strategy_plan_id": digest})
+    key = f"{session['strategy_session_id']}:{session['strategy_revision_id']}:stop_price"
+    with (output / "park_strategy" / "executions.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"event": "terminal_paused", "terminal_key": key, "plan_digest": digest,
+                                 "strategy_session_id": session["strategy_session_id"],
+                                 "strategy_revision_id": session["strategy_revision_id"],
+                                 "result": {"terminal_reason": "stop_price", "positions_preserved": 1}}) + "\n")
+    ParkStrategyIdentityJournal(output).close_session(strategy_session_id=session["strategy_session_id"],
+                                                      strategy_revision_id=session["strategy_revision_id"],
+                                                      observed_at="2026-08-14T10:01:00+00:00", reason="stop_price")
+    market.update({"price": 4444.0, "observed_at": "2026-08-14T10:05:00+00:00"})
+    clock["now"] = "2026-08-14T10:05:20+00:00"
+
+    finished = runtime.run_once()
+
+    assert finished["status"] == "terminal_close_completed", finished
+    assert finished["exits"] == 1
+    assert adapter.positions[0]["status"] == "closed"
+    assert runtime.run_once()["status"] == "idle"
+    assert len([c for c in adapter.submit_calls if c["event"] == "stop"]) == 1

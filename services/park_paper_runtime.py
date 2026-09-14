@@ -290,6 +290,9 @@ class ParkPaperRuntime:
                 observed_at=observed_at,
             )
         if not active:
+            finished = self._finish_incomplete_terminal_close(observed_at)
+            if finished is not None:
+                return finished
             return self._result(
                 "idle",
                 observed_at=observed_at,
@@ -962,6 +965,102 @@ class ParkPaperRuntime:
             result["recording_failures"] = [facts_failure]
             result["recording_blocker"] = facts_blocker
         return result
+
+    _CLOSING_TERMINAL_REASONS = frozenset({
+        "stop_price", "take_profit_price", "upper_boundary_invalidated", "lower_boundary_invalidated",
+    })
+
+    def _finish_incomplete_terminal_close(self, observed_at: str) -> dict[str, Any] | None:
+        """Flatten positions a confirmed boundary close left open before its session was closed.
+
+        Before #1270 a boundary could record ``terminal_paused`` with owned positions
+        still open (2026-09-14 gold: 2.0 oz). The close was Park-confirmed plan intent,
+        so finish it with the same idempotent exits instead of leaving exposure orphaned.
+        """
+        rows = _read_jsonl(self.execution_path)
+        terminal = next((row for row in reversed(rows) if row.get("event") == "terminal_paused"), None)
+        if not terminal:
+            return None
+        result = dict(terminal.get("result") or {})
+        key = str(terminal.get("terminal_key") or "")
+        if str(result.get("terminal_reason") or "") not in self._CLOSING_TERMINAL_REASONS:
+            return None
+        if any(row.get("event") == "terminal_close_completed" and row.get("terminal_key") == key for row in rows):
+            return None
+        session = str(terminal.get("strategy_session_id") or result.get("session") or "")
+        revision = str(terminal.get("strategy_revision_id") or result.get("revision") or "")
+        digest = str(terminal.get("plan_digest") or result.get("plan_digest") or "")
+        plan = self._plan_for_digest(digest)
+        confirmation = self._confirmed_for(digest, session, revision)
+        if not session or not revision or plan is None or confirmation is None:
+            return None
+        cycle_id = park_paper_namespace(session)
+        try:
+            market = dict(self.market_reader() if self.market_reader else self._default_market_reader())
+            current_price = float(market.get("price"))
+        except Exception as exc:  # noqa: BLE001 - fail closed, retry next pass.
+            return self._blocked("terminal_close_market_unavailable", _safe_exception_detail(exc),
+                                 session=session, revision=revision, digest=digest, observed_at=observed_at)
+        if market.get("trusted") is not True or market.get("fresh") is not True:
+            return self._blocked("terminal_close_market_unavailable", "trusted fresh market required to finish the close",
+                                 session=session, revision=revision, digest=digest, observed_at=observed_at, market=market)
+        with production_mutation_lock(self.output_root):
+            if self.identity.active_session():
+                return None
+            snapshot = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
+            orders = snapshot.get("orders")
+            open_positions = [
+                dict(row) for row in snapshot.get("positions") or []
+                if str(row.get("status") or "").lower() == "open"
+                and self._position_owned(row, session, revision, digest, orders)
+            ]
+            if not open_positions:
+                _append_jsonl(self.execution_path, {"schema_version": PARK_PAPER_RUNTIME_SCHEMA, "event": "terminal_close_completed",
+                                                    "terminal_key": key, "recorded_at": observed_at, "exits": 0})
+                return None
+            reconciliation = dict(self.adapter.reconcile(cycle_id))
+            gate = self._admission(market=market, snapshot=snapshot, reconciliation=reconciliation, confirmation=confirmation)
+            if gate.get("status") != "pass":
+                return self._blocked("terminal_close_blocked", ",".join(str(v) for v in gate.get("blockers") or []),
+                                     session=session, revision=revision, digest=digest, observed_at=observed_at,
+                                     market=market, snapshot=snapshot, reconciliation=reconciliation, gate=gate)
+            self._grant_adapter_mutation(session=session, revision=revision, digest=digest, cycle_id=cycle_id,
+                                         confirmation=confirmation, gate=gate)
+            try:
+                reason = str(result.get("terminal_reason"))
+                exits = [
+                    self.adapter.submit_order(self._exit_command(
+                        position, plan=plan, session=session, revision=revision, digest=digest, cycle_id=cycle_id,
+                        current_price=current_price, market=market, observed_at=observed_at, reason=reason,
+                    ))
+                    for position in open_positions
+                ]
+                event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at, fills_commands_at=observed_at)
+                event["event_id"] = _digest({"base_event_id": event["event_id"], "terminal_close": key})
+                self.adapter.process_market_event(event)
+                final = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
+            finally:
+                self._revoke_adapter_mutation()
+        remaining = [
+            row for row in final.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+            and self._position_owned(row, session, revision, digest, final.get("orders"))
+        ]
+        if remaining:
+            return self._blocked("terminal_positions_still_open", f"{len(remaining)} owned positions remain open after finishing the close",
+                                 session=session, revision=revision, digest=digest, observed_at=observed_at, snapshot=final)
+        _append_jsonl(self.execution_path, {"schema_version": PARK_PAPER_RUNTIME_SCHEMA, "event": "terminal_close_completed",
+                                            "terminal_key": key, "recorded_at": observed_at, "exits": len(exits),
+                                            "observed_price": current_price})
+        self.telegram.queue_outbound(
+            idempotency_key=f"park-terminal-close-completed:{key}",
+            message_type="park_terminal",
+            text=f"Park 纸面盘：上次 {reason} 未平掉的 {len(exits)} 笔持仓已按 {current_price} 平仓，账户已无该策略持仓。",
+            binding={"strategy_session_id": session, "strategy_revision_id": revision},
+        )
+        return self._result("terminal_close_completed", observed_at=observed_at, session=session, revision=revision,
+                            digest=digest, exits=len(exits), observed_price=current_price,
+                            next_action="await_new_park_strategy")
 
     def _exit_command(
         self,
