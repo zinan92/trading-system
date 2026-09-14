@@ -110,6 +110,33 @@ def park_paper_namespace(strategy_session_id: str) -> str:
     return f"park-{safe[:120]}"
 
 
+def _later(left: str, right: str) -> bool:
+    try:
+        return datetime.fromisoformat(left.replace("Z", "+00:00")) > datetime.fromisoformat(right.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+
+
+def _grid_rearm_ids(orders: Any, revision: str, digest: str) -> set[str]:
+    """Order and position IDs of grid re-arm entries the engine generated for this revision.
+
+    Re-arms carry the plan digest but no session/revision fields and never pass
+    through ``entry_submitted``; 2026-09-14 seven of ten gold positions were
+    re-arms, so the boundary close skipped them.
+    """
+    prefix = f"nautilus-grid-rearm:{revision}:"
+    result: set[str] = set()
+    for row in orders or ():
+        if (
+            isinstance(row, Mapping)
+            and str(row.get("strategy_plan_id") or "") == digest
+            and str(row.get("source_fill_id") or "").startswith(prefix)
+            and row.get("order_id")
+        ):
+            result.update({str(row["order_id"]), f"POS-{row['order_id']}"})
+    return result
+
+
 def _owned(artifact: Mapping[str, Any], session: str, revision: str, digest: str) -> bool:
     return (
         str(artifact.get("strategy_session_id") or "") == session
@@ -786,7 +813,7 @@ class ParkPaperRuntime:
             dict(row)
             for row in snapshot.get("positions") or []
             if str(row.get("status") or "").lower() == "open"
-            and self._position_owned(row, session, revision, digest)
+            and self._position_owned(row, session, revision, digest, snapshot.get("orders"))
         ]
         exit_receipts: list[dict[str, Any]] = []
         if boundary.get("close_positions"):
@@ -812,6 +839,7 @@ class ParkPaperRuntime:
                 market,
                 cycle_id=cycle_id,
                 observed_at=observed_at,
+                fills_commands_at=observed_at,
             )
             terminal_event["event_id"] = _digest(
                 {"base_event_id": terminal_event["event_id"], "terminal": terminal_key}
@@ -832,6 +860,25 @@ class ParkPaperRuntime:
             if str(row.get("state") or "").lower() == "accepted"
             and self._order_owned(row, session, revision, digest)
         ]
+        still_open = [
+            row
+            for row in final_snapshot.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+            and self._position_owned(row, session, revision, digest, final_snapshot.get("orders"))
+        ]
+        if boundary.get("close_positions") and still_open:
+            # Never close the session over exposure the boundary was meant to flatten;
+            # the next pass resubmits the same (idempotent) exits and retries.
+            return self._blocked(
+                "terminal_positions_still_open",
+                f"{len(still_open)} owned positions remain open after terminal exits",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+                snapshot=final_snapshot,
+                reconciliation=final_reconciliation,
+            )
         if remaining_accepted or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
             return self._blocked(
                 "terminal_reconciliation_blocked",
@@ -857,7 +904,7 @@ class ParkPaperRuntime:
                 1
                 for row in final_snapshot.get("positions") or []
                 if str(row.get("status") or "").lower() == "open"
-                and self._position_owned(row, session, revision, digest)
+                and self._position_owned(row, session, revision, digest, final_snapshot.get("orders"))
             ),
             "reconciliation": final_reconciliation,
             "paper_only": True,
@@ -1066,7 +1113,7 @@ class ParkPaperRuntime:
                 if str(row.get("state") or "").lower() == "accepted" and not self._order_owned(row, session, revision, digest):
                     foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "order", "id": row.get("order_id")})
             for row in positions:
-                if str(row.get("status") or "").lower() == "open" and not self._position_owned(row, session, revision, digest):
+                if str(row.get("status") or "").lower() == "open" and not self._position_owned(row, session, revision, digest, orders):
                     foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "position", "id": row.get("position_id")})
         return foreign
 
@@ -1118,7 +1165,7 @@ class ParkPaperRuntime:
         foreign_positions = [
             row for row in snapshot.get("positions") or []
             if str(row.get("status") or "").lower() == "open"
-            and not self._position_owned(row, old_session, old_revision, old_digest)
+            and not self._position_owned(row, old_session, old_revision, old_digest, snapshot.get("orders"))
         ]
         if foreign_orders or foreign_positions:
             return self._reverse_blocked(request, "reverse_foreign_exposure", "非旧策略的挂单或持仓仍存在；新 revision 保持 inactive。", observed_at=observed_at)
@@ -1177,7 +1224,7 @@ class ParkPaperRuntime:
                 self.adapter.process_market_event(entry_cancel_event)
             exits: list[dict[str, Any]] = []
             for position in snapshot.get("positions") or []:
-                if str(position.get("status") or "").lower() == "open" and self._position_owned(position, old_session, old_revision, old_digest):
+                if str(position.get("status") or "").lower() == "open" and self._position_owned(position, old_session, old_revision, old_digest, snapshot.get("orders")):
                     exits.append(self.adapter.submit_order(self._exit_command(
                         position,
                         plan=self._plan_for_digest(old_digest) or {},
@@ -1191,7 +1238,7 @@ class ParkPaperRuntime:
                         reason="reverse",
                     )))
             if exits:
-                event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at)
+                event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at, fills_commands_at=observed_at)
                 event["event_id"] = _digest({"base_event_id": event["event_id"], "reverse": request.get("request_id")})
                 self.adapter.process_market_event(event)
             final_snapshot = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
@@ -1222,7 +1269,7 @@ class ParkPaperRuntime:
                 reason="park_reverse_orphaned_exits",
             ) if exit_ids else {"status": "idempotent", "cancelled_order_ids": []}
             if exit_ids:
-                orphan_event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at)
+                orphan_event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at, fills_commands_at=observed_at)
                 orphan_event["event_id"] = _digest({"base_event_id": orphan_event["event_id"], "orphan_cancel": request.get("request_id")})
                 self.adapter.process_market_event(orphan_event)
             cancel = {**cancel, "orphaned_exit_cancel": orphan_cancel}
@@ -1400,13 +1447,25 @@ class ParkPaperRuntime:
             or "GOLD"
         )
 
-    def _market_event(self, market: Mapping[str, Any], *, cycle_id: str, observed_at: str) -> dict[str, Any]:
+    def _market_event(
+        self,
+        market: Mapping[str, Any],
+        *,
+        cycle_id: str,
+        observed_at: str,
+        fills_commands_at: str | None = None,
+    ) -> dict[str, Any]:
         price = float(market.get("price"))
         source = str(market.get("source") or "")
         provider = str(market.get("provider") or source)
         if not source or not provider:
             raise ParkPaperRuntimeError("market_evidence_incomplete", "market source/provider is required")
         timestamp = str(market.get("observed_at") or observed_at)
+        if fills_commands_at and _later(fills_commands_at, timestamp):
+            # Nautilus replays commands against events in time order. 2026-09-14 the
+            # terminal exits were stamped 09:19:35 but the only event was the 09:19
+            # candle, so the exits stayed accepted forever and 2.0 oz stayed open.
+            timestamp = fills_commands_at
         return {
             "cycle_id": cycle_id,
             "ts_event": timestamp,
@@ -1552,6 +1611,8 @@ class ParkPaperRuntime:
     def _order_owned(self, row: Mapping[str, Any], session: str, revision: str, digest: str) -> bool:
         if _owned(row, session, revision, digest):
             return True
+        if str(row.get("order_id") or "") in _grid_rearm_ids([row], revision, digest):
+            return True
         order_id = str(row.get("order_id") or "")
         return any(
             str(item.get("receipt", {}).get("order_id") or item.get("receipt", {}).get("fill_id") or "") == order_id
@@ -1560,11 +1621,22 @@ class ParkPaperRuntime:
             if item.get("event") == "entry_submitted"
         )
 
-    def _position_owned(self, row: Mapping[str, Any], session: str, revision: str, digest: str) -> bool:
+    def _position_owned(
+        self,
+        row: Mapping[str, Any],
+        session: str,
+        revision: str,
+        digest: str,
+        orders: Any = (),
+    ) -> bool:
         if _owned(row, session, revision, digest):
             return True
         position_id = str(row.get("position_id") or "")
         trade_id = str(row.get("trade_id") or "")
+        if str(row.get("strategy_plan_id") or "") == digest and (
+            {position_id, trade_id} & _grid_rearm_ids(orders, revision, digest)
+        ):
+            return True
         if str(row.get("strategy_plan_id") or "") == digest and (
             position_id in self._derived_position_ids(session, revision, digest)
             or trade_id in self._derived_position_ids(session, revision, digest)

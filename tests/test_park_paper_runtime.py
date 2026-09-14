@@ -1124,3 +1124,96 @@ def test_multi_session_recording_close_keeps_new_active_identity_open(tmp_path: 
     assert package["strategy_session_ids"] == ["session-new", "session-old"]
     assert package["strategy_revision_ids"] == ["revision-new", "revision-old"]
     assert package["execution_mutations"] == []
+
+
+def _confirm_on_dashboard(tmp_path: Path) -> str:
+    """Telegram no longer creates strategies; confirm the short DCA through the Dashboard AI path."""
+    from tests.test_park_ai_chat import _service
+
+    service = _service(tmp_path)
+    draft = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")
+    assert service.confirm(draft["draft"]["draft_id"], draft["draft"]["plan_digest"])["status"] == "confirmed"
+    return draft["draft"]["plan_digest"]
+
+
+class ReplayOrderedPaperAdapter(FakePaperAdapter):
+    """Like Nautilus replay: a market exit fills only on an event at or after its command ts."""
+
+    def submit_order(self, command: dict) -> dict:
+        self.submit_calls.append(copy.deepcopy(command))
+        order_id = f"paper-order-{len(self.submit_calls)}"
+        receipt = {"order_id": order_id, "state": "accepted", "cycle_id": command["cycle_id"], "side": command["side"],
+                   "event": command["event"], "price": command["price"], "quantity": command["quantity"], "ts": command["ts"],
+                   "target_position_id": command.get("target_position_id")}
+        self.orders.append({**receipt, **{key: command[key] for key in ("strategy_session_id", "strategy_revision_id", "plan_digest")}})
+        return receipt
+
+    def process_market_event(self, event: dict) -> dict:
+        self.process_calls.append(copy.deepcopy(event))
+        for order in self.orders:
+            if order.get("event") in {"stop", "target", "flatten"} and order.get("state") == "accepted" and order["ts"] <= event["ts_event"]:
+                order["state"] = "filled"
+                for position in self.positions:
+                    if position["position_id"] == order["target_position_id"]:
+                        position.update(status="closed", remaining_units=0.0)
+        return {"status": "processed", "event_id": event["event_id"]}
+
+
+def test_boundary_close_fills_exits_and_includes_grid_rearm_positions(tmp_path: Path) -> None:
+    # 2026-09-14 gold paper grid: exits stamped after the last candle never filled, and
+    # seven grid re-arm positions (no session/revision fields) were never closed.
+    output = tmp_path / "outputs"
+    market = {"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "provider": "paper-provider",
+              "observed_at": "2026-08-14T10:00:00+00:00", "symbol": "GOLD"}
+    adapter = ReplayOrderedPaperAdapter()
+    clock = {"now": "2026-08-14T10:00:00+00:00"}
+    runtime = ParkPaperRuntime(output, adapter=adapter, park_user_id="park-user", chat_id="park-chat", config=_config(),
+                               market_reader=lambda: dict(market), now=lambda: clock["now"], safety_evidence_reader=_evidence)
+    digest = _confirm_on_dashboard(tmp_path)
+    assert runtime.run_once()["status"] == "active"
+    session = ParkStrategyIdentityJournal(output).active_session()
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.1, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    rearm = "nautilus-command-rearm7"
+    adapter.orders.append({"order_id": rearm, "state": "filled", "event": "entry", "strategy_plan_id": digest,
+                           "source_fill_id": f"nautilus-grid-rearm:{session['strategy_revision_id']}:grid:7:generation:2"})
+    adapter.positions.append({"position_id": f"POS-{rearm}", "trade_id": rearm, "status": "open", "side": "short",
+                              "remaining_units": 0.1, "strategy_session_id": None, "strategy_revision_id": None,
+                              "strategy_plan_id": digest})
+
+    market.update({"price": 4444.0, "observed_at": "2026-08-14T10:01:00+00:00"})
+    clock["now"] = "2026-08-14T10:01:35+00:00"  # control pass runs after the candle closes
+    paused = runtime.run_once()
+
+    assert paused["status"] == "paused", paused
+    assert paused["positions_preserved"] == 0
+    assert {c["target_position_id"] for c in adapter.submit_calls if c["event"] == "stop"} == {"park-position-1", f"POS-{rearm}"}
+    assert all(p["status"] == "closed" for p in adapter.positions)
+
+
+def test_boundary_close_keeps_session_open_while_owned_positions_remain(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    market = {"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "provider": "paper-provider",
+              "observed_at": "2026-08-14T10:00:00+00:00", "symbol": "GOLD"}
+
+    class NeverFills(ReplayOrderedPaperAdapter):
+        def process_market_event(self, event: dict) -> dict:
+            self.process_calls.append(copy.deepcopy(event))
+            return {"status": "processed", "event_id": event["event_id"]}
+
+    adapter = NeverFills()
+    runtime = _runtime(output, adapter, market)
+    digest = _confirm_on_dashboard(tmp_path)
+    assert runtime.run_once()["status"] == "active"
+    session = ParkStrategyIdentityJournal(output).active_session()
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.1, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    market.update({"price": 4444.0, "observed_at": "2026-08-14T10:01:00+00:00"})
+
+    blocked = runtime.run_once()
+
+    assert blocked["status"] == "blocked"
+    assert blocked["code"] == "terminal_positions_still_open"
+    assert ParkStrategyIdentityJournal(output).active_session() is not None
