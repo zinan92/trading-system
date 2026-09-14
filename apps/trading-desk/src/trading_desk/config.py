@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+PLATFORM_ROOT = Path(__file__).resolve().parents[4]
+
+
 @dataclass(frozen=True)
 class Config:
     intel_url: str = os.getenv("TRADING_DESK_INTEL_URL", "http://127.0.0.1:8001")
@@ -24,8 +27,9 @@ class Config:
     remote_passcode: Path = Path(os.getenv("TRADING_DESK_REMOTE_PASSCODE", str(Path.home() / "park-data/trading-desk/remote-passcode")))
     paused_manifest: Path = Path(os.getenv("TRADING_DESK_PAUSED", str(Path.home() / "park-data/trading-desk/paused-services.md")))
     # Execution (Hyperliquid Testnet only): the desk reuses the operator's proven preview -> confirm -> driver path.
-    trading_system_checkout: Path = Path(os.getenv("TRADING_DESK_TS_CHECKOUT", str(Path.home() / "work/trading-system-park-paper-main")))
-    standard_broker_src: Path = Path(os.getenv("TRADING_DESK_SB_SRC", str(Path.home() / "work/standard-broker/src")))
+    # The desk lives in the trading platform repo: apps/trading-desk/src/trading_desk/config.py -> repo root.
+    trading_system_checkout: Path = Path(os.getenv("TRADING_DESK_TS_CHECKOUT", str(PLATFORM_ROOT)))
+    standard_broker_src: Path = Path(os.getenv("TRADING_DESK_SB_SRC", str(PLATFORM_ROOT / "packages" / "standard-broker" / "src")))
     nautilus_python: Path = Path(os.getenv("TRADING_DESK_NAUTILUS_PY", str(Path.home() / ".local/share/trading-orchestrator/nautilus-1.230.0/bin/python")))
     dashboard_plist: Path = Path(os.getenv("TRADING_DESK_DASHBOARD_PLIST", str(Path.home() / "Library/LaunchAgents/com.wendy.trading-orchestrator.dashboard.plist")))
     control_script: Path = Path(os.getenv("TRADING_DESK_CONTROL_SCRIPT", str(Path.home() / ".config/trading-system/run-park-paper-control.sh")))

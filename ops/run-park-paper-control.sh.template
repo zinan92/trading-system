@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT="/Users/wendy/work/trading-system-park-paper-main"
+ROOT="/Users/wendy/work/trading-platform"
 OUTPUT_ROOT="/Users/wendy/work/park-paper-output"
 PARK_CONFIG="/Users/wendy/.config/trading-system/park_strategy_track.paper.json"
 TOKEN_FILE="/Users/wendy/.config/trading-system/park-paper-bot-token"
@@ -41,7 +41,7 @@ export HYPERLIQUID_TESTNET_RUNTIME_ID="park-paper-testnet-f80fa54"
 export TRADING_ORCHESTRATOR_RELEASE_SHA="f80fa54b1e03a5d5dd7493a3f63a9f04e3f3dd22"
 export STANDARD_BROKER_RELEASE_SHA="2d3a5cc26538b24fb31ab81201facd5ee46476ba"
 export CODEX_HOME="/Users/wendy/.codex"
-export PYTHONPATH="$ROOT:/Users/wendy/work/standard-broker/src"
+export PYTHONPATH="$ROOT:$ROOT/packages/standard-broker/src"
 
 NAUTILUS_PYTHON="/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python"
 if [[ ! -x "$NAUTILUS_PYTHON" ]]; then
