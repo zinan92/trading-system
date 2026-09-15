@@ -627,3 +627,11 @@ def test_gridmind_idle_strategy_card_is_quiet_between_sessions() -> None:
     assert '"active_strategy_missing","grid_geometry_invalid","authoritative_snapshot_missing"' in html
     assert 'status.textContent=idleOnly?"暂无运行策略"' in html
     assert "上一个策略的记录" in html
+
+
+def test_gridmind_shows_unknown_pnl_as_unknown_not_zero() -> None:
+    html = _html()
+
+    assert 'function knownSigned(value){return value==null?"--":signed(value)}' in html
+    assert '["已实现盈亏",knownSigned(pnl.net_realized)' in html
+    assert "盈亏尚未核算" in html
