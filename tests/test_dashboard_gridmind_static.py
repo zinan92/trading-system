@@ -619,3 +619,11 @@ def test_gridmind_surfaces_layered_cloud_health_in_production_status() -> None:
     assert '["Cloud 7×24",cloudHealthText(data)]' in html
     assert "function cloudSchedulerOwnerText(data)" in html
     assert '["调度器所有者",cloudSchedulerOwnerText(data)]' in html
+
+
+def test_gridmind_idle_strategy_card_is_quiet_between_sessions() -> None:
+    html = _html()
+
+    assert '"active_strategy_missing","grid_geometry_invalid","authoritative_snapshot_missing"' in html
+    assert 'status.textContent=idleOnly?"暂无运行策略"' in html
+    assert "上一个策略的记录" in html
