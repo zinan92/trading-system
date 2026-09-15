@@ -1322,6 +1322,7 @@ def test_read_model_distinguishes_missing_park_evidence_from_clean_idle() -> Non
             "plan_digest": None,
         },
         "execution": {"counts": {}, "reconciliation": {"status": "missing"}},
+        "ledger": {"session": "park-session-x", "active": False, "equity": 9877.86, "starting_cash": 10000.0},
         "market": {},
         "safety": {"status": "missing"},
     }
@@ -1339,6 +1340,7 @@ def test_read_model_distinguishes_missing_park_evidence_from_clean_idle() -> Non
     ).to_dict()
 
     current = model["current_strategy"]
+    assert current["ledger"]["equity"] == 9877.86 and current["ledger"]["active"] is False
     assert current["status"] == "evidence_blocked"
     assert current["status_label"] == "证据阻塞"
     assert current["contract_status"] == "blocked"
