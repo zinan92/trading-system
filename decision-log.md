@@ -19383,3 +19383,37 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 - `PYTHONPATH=.:src:/Users/wendy/work/standard-broker/src ... -m pytest tests/testnet_replay/test_replay_scenarios.py -q -k 1257` — 4 passed.
+
+# 2026-09-15 — Mainnet dry-run observer, loss monitor and Park-only lock (#1277)
+
+- Park approved Hyperliquid Mainnet BTC with a 500 USD sub-account, API wallet,
+  daily loss 25 USD (realized + unrealized, reset 08:00 Asia/Shanghai), total
+  loss 75 USD, and a lock only he clears on a later date.
+- `services/mainnet_observer.py` reads equity every minute through
+  standard-broker's read-only profile `hyperliquid-mainnet-btc-readonly`
+  (zinan92/standard-broker#139) and independently through Hyperliquid's public
+  `clearinghouseState`. There is no order path in this issue; execution and
+  automatic flatten are #1278.
+- Loss is measured as equity change, not by summing realized/unrealized/fees:
+  equity already contains all of them, and one number cannot double count.
+- Existing `live_money_guardrails` was not reused: its limits are percentages of
+  a reference equity with order-count caps for the Binance path, and it reads
+  the Testnet/live reconciliation ledger. Park's rule is absolute USD on one
+  sub-account with a date-bound manual unlock.
+- The observer runs from its own standard-broker checkout at the merged Mainnet
+  profile, so the running Testnet dashboard's broker checkout is untouched.
+
+## Gotchas
+
+- An unreadable `baseline.json` must never re-seed starting equity: that would
+  silently erase the total loss. The observer reports `baseline_unreadable`
+  and leaves the file alone.
+- An unreadable `lock.json` counts as locked and cannot be cleared through
+  `unlock`; fixing it is a manual, visible act.
+- The dry-run report compares the two readers. If Nautilus' `AccountState`
+  total differs from Hyperliquid's `accountValue` (for example by excluding
+  unrealized PnL), the report fails and #1278 must not start.
+
+## Verification
+
+- `PYTHONPATH=.:<standard-broker main>/src ... -m pytest tests/test_mainnet_observer.py -q` — 14 passed.
