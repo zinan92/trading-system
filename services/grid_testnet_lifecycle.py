@@ -14,6 +14,8 @@ from services.journal_store import load_json, write_json
 from services.testnet_continuation_reconciliation import reconcile_before_continuation
 from services.grid_risk import full_depth_loss
 
+OPERATOR_HOLDS_PATH = Path("testnet_automation") / "operator_holds.json"
+
 
 class GridTestnetLifecycleError(RuntimeError):
     """A durable Grid Testnet blocker; callers must not add exposure."""
@@ -192,7 +194,8 @@ class GridTestnetLifecycle:
             self._save(state)
             return self.snapshot(plan)
         try:
-            self._rearm_missing_rungs(plan, state, timestamp=timestamp)
+            if not self._rearm_held(state, timestamp=timestamp):
+                self._rearm_missing_rungs(plan, state, timestamp=timestamp)
         except Exception as exc:  # noqa: BLE001 - keep the blocker durable.
             self._block(state, f"resume_submit_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
             self._save(state)
@@ -386,7 +389,7 @@ class GridTestnetLifecycle:
                 self._save(state)
                 raise GridTestnetLifecycleError(state["blocker"]) from exc
             rung["line"] = line.snapshot()
-            if order.get("event") == "tp" and line.state == "rearmed" and state.get("status") != "paused_above_range":
+            if order.get("event") == "tp" and line.state == "rearmed" and state.get("status") != "paused_above_range" and not self._rearm_held(state, timestamp=timestamp):
                 reconciliation = reconcile_before_continuation(
                     self.broker,
                     state,
@@ -505,7 +508,8 @@ class GridTestnetLifecycle:
                 state["status"] = "active"
                 self._record_event(state, "range_reenter", timestamp=timestamp, market_price=market_price)
                 try:
-                    self._rearm_missing_rungs(plan, state, timestamp=timestamp)
+                    if not self._rearm_held(state, timestamp=timestamp):
+                        self._rearm_missing_rungs(plan, state, timestamp=timestamp)
                 except Exception as exc:  # noqa: BLE001 - retain the existing fail-closed submit path.
                     self._submission_failure(plan, state, timestamp=timestamp, reason=f"range_reenter_submit_failed:{type(exc).__name__}:{exc}")
             # Above-range pause deliberately leaves entries and protection alone.
@@ -523,6 +527,13 @@ class GridTestnetLifecycle:
         else:
             self._skip_missed_rungs(plan, state, price=float(price), timestamp=timestamp)
             self._expire_partial_entries(plan, state, timestamp=timestamp)
+            was_held = bool(state.get("rearm_hold"))
+            if not self._rearm_held(state, timestamp=timestamp) and (was_held or state.get("rearm_pending_after_hold")):
+                try:
+                    self._rearm_missing_rungs(plan, state, timestamp=timestamp, passive_below=market_price if direction != "short" else None,
+                                              passive_above=market_price if direction == "short" else None)
+                except Exception as exc:  # noqa: BLE001 - retain the existing fail-closed submit path.
+                    self._submission_failure(plan, state, timestamp=timestamp, reason=f"rearm_hold_release_submit_failed:{type(exc).__name__}:{exc}")
         state["updated_at"] = timestamp
         self._save(state)
         return self.snapshot(plan)
@@ -705,7 +716,8 @@ class GridTestnetLifecycle:
             state["park_notification_required"] = True
             return
         if price < float(state["upper_boundary"]) and price > float(state["lower_boundary"]):
-            self._rearm_missing_rungs(plan, state, timestamp=timestamp)
+            if not self._rearm_held(state, timestamp=timestamp):
+                self._rearm_missing_rungs(plan, state, timestamp=timestamp)
             state["status"] = "active"
             state["blocker"] = None
             state["park_notification_required"] = False
@@ -964,11 +976,47 @@ class GridTestnetLifecycle:
             except Exception as exc:  # noqa: BLE001 - unresolved cancellation cannot be silently chased.
                 self._submission_failure(plan, state, timestamp=timestamp, reason=f"missed_rung_cancel_failed:{type(exc).__name__}:{exc}")
 
-    def _rearm_missing_rungs(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
-        """Restore entry orders for eligible lines without duplicating accepted orders."""
+    def _rearm_held(self, state: dict[str, Any], *, timestamp: str) -> bool:
+        """Park's 暂停补单: while held, no entry is re-armed (after a take-profit, on range re-entry, on resume).
+
+        Resting entries, take-profits and hard-stop protection are left exactly as they are. The hold is
+        an operator file written by the trading desk when Park presses the button; an unreadable file
+        holds (fail closed). Changes are recorded once as lifecycle events.
+        """
+        path = self.output_root / OPERATOR_HOLDS_PATH
+        try:
+            rows = load_json(path) if path.exists() else {}
+            row = (rows or {}).get(str(state.get("instrument_id") or "")) if isinstance(rows, Mapping) else None
+            held = bool(row.get("rearm_paused")) if isinstance(row, Mapping) else False
+            detail = {"reason": row.get("reason"), "by": row.get("by")} if isinstance(row, Mapping) else {}
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            held, detail = True, {"reason": "operator_holds_unreadable", "by": None}
+        if held != bool(state.get("rearm_hold")):
+            state["rearm_hold"] = held
+            if held:
+                self._record_event(state, "operator_rearm_paused", timestamp=timestamp, **detail)
+            else:
+                state["rearm_pending_after_hold"] = True
+                self._record_event(state, "operator_rearm_resumed", timestamp=timestamp, **detail)
+        return held
+
+    def _rearm_missing_rungs(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str,
+                             passive_below: float | None = None, passive_above: float | None = None) -> None:
+        """Restore entry orders for eligible lines without duplicating accepted orders.
+
+        After Park's hold is released, only rungs still on the passive side of the market are re-armed
+        (a long grid's buys below price), so a hold through a sell-off does not turn into market buys;
+        the rest wait for a later tick with ``rearm_pending_after_hold``.
+        """
+        waiting = False
         for rung in state["rungs"]:
             line = GridLineLifecycle.from_snapshot(rung["line"])
             if not line.can_enter:
+                continue
+            if (passive_below is not None and float(rung["price"]) >= passive_below) or (
+                passive_above is not None and float(rung["price"]) <= passive_above
+            ):
+                waiting = True
                 continue
             if any(
                 row.get("state") == "accepted"
@@ -977,6 +1025,8 @@ class GridTestnetLifecycle:
             ):
                 continue
             self._submit_rung_entry(plan, state, rung, timestamp=timestamp, event="entry_rearm")
+        if passive_below is not None or passive_above is not None:
+            state["rearm_pending_after_hold"] = waiting
 
     def _hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str, market: Mapping[str, Any] | None = None, market_price: float | None = None) -> None:
         if state["status"] in {"terminal", "sealed"}:

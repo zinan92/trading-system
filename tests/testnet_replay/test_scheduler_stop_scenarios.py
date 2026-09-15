@@ -311,3 +311,69 @@ def test_operator_stop_flattens_a_fill_seen_in_the_same_tick(tmp_path: Path) -> 
 
     assert len(stopped["lifecycle"]["fills"]) == 1
     assert any(row["event"] == "hard_stop" for row in stopped["lifecycle"]["orders"])
+
+
+# ---- Park's 暂停补单 (operator re-arm hold) -------------------------------------------------
+
+def _hold(tmp_path: Path, paused: bool) -> None:
+    path = tmp_path / "outputs" / "testnet_automation" / "operator_holds.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"BTC-USD-PERP": {"rearm_paused": paused, "by": "park", "reason": "FOMC"}}))
+
+
+def test_rearm_hold_skips_rearm_after_take_profit_and_releases_only_passive_rungs(tmp_path: Path) -> None:
+    from tests.test_dca_testnet_lifecycle import _broker
+    from tests.testnet_replay.harness import ReplayExchange, assert_invariants, fill, grid_plan, new_lifecycle
+
+    broker, _backend = _broker(tmp_path)
+    exchange = ReplayExchange(); exchange.observe(broker)
+    lifecycle = new_lifecycle(tmp_path / "outputs", broker)
+    plan = grid_plan()
+    state = lifecycle.start(plan, timestamp="2026-09-11T01:00:00+00:00")
+    entry = state["orders"][0]
+    exchange.inject_fill(entry, tid=3, price=80_000)
+    opened = lifecycle.on_fill(plan, fill(entry, tid=3, price=80_000), timestamp="2026-09-11T01:01:00+00:00")
+    tp = next(row for row in opened["orders"] if row["event"] == "tp" and row["state"] == "accepted")
+    _hold(tmp_path, True)
+    exchange.inject_fill(tp, tid=4, price=80_500)
+    closed = lifecycle.on_fill(plan, fill(tp, tid=4, price=80_500), timestamp="2026-09-11T01:02:00+00:00")
+    assert closed["rearm_hold"] is True
+    assert any(e["event"] == "operator_rearm_paused" and e.get("by") == "park" for e in closed["events"])
+    assert not any(row["event"] == "entry_rearm" for row in closed["orders"])  # no new buy while held
+    rung2_entry = next(row for row in closed["orders"] if row["event"] == "entry" and row["state"] == "accepted")
+    assert rung2_entry["price"] == 78_000.0  # the resting ladder is left alone
+    assert_invariants(closed, exchange, previous=opened)
+
+    held_tick = lifecycle.on_market_event(plan, price=81_000, timestamp="2026-09-11T01:03:00+00:00")
+    assert not any(row["event"] == "entry_rearm" for row in held_tick["orders"])
+
+    # Released while price sits below the 80,000 rung: re-arming now would buy above market, so it waits.
+    _hold(tmp_path, False)
+    below = lifecycle.on_market_event(plan, price=79_500, timestamp="2026-09-11T01:04:00+00:00")
+    assert any(e["event"] == "operator_rearm_resumed" for e in below["events"])
+    assert below["rearm_pending_after_hold"] is True
+    assert not any(row["event"] == "entry_rearm" for row in below["orders"])
+    back = lifecycle.on_market_event(plan, price=80_600, timestamp="2026-09-11T01:05:00+00:00")
+    rearms = [row for row in back["orders"] if row["event"] == "entry_rearm"]
+    assert len(rearms) == 1 and rearms[0]["price"] == 80_000.0 and back["rearm_pending_after_hold"] is False
+    assert_invariants(back, exchange, previous=below)
+
+
+def test_rearm_hold_survives_range_reentry_and_unreadable_file_holds(tmp_path: Path) -> None:
+    from tests.test_dca_testnet_lifecycle import _broker
+    from tests.testnet_replay.harness import ReplayExchange, grid_plan, new_lifecycle
+
+    broker, _backend = _broker(tmp_path)
+    exchange = ReplayExchange(); exchange.observe(broker)
+    lifecycle = new_lifecycle(tmp_path / "outputs", broker)
+    plan = grid_plan()
+    state = lifecycle.start(plan, timestamp="2026-09-11T01:00:00+00:00")
+    assert state.get("rearm_hold") in (None, False)
+    path = tmp_path / "outputs" / "testnet_automation" / "operator_holds.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json")
+    paused = lifecycle.on_market_event(plan, price=84_100, timestamp="2026-09-11T01:01:00+00:00")
+    assert paused["status"] == "paused_above_range"
+    reentered = lifecycle.on_market_event(plan, price=83_900, timestamp="2026-09-11T01:02:00+00:00")
+    assert reentered["rearm_hold"] is True
+    assert any(e["event"] == "operator_rearm_paused" and e.get("reason") == "operator_holds_unreadable" for e in reentered["events"])
