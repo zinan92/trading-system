@@ -203,16 +203,28 @@ def test_gridmind_adds_an_additive_park_ai_chat_without_replacing_existing_contr
     assert "Local stop" in html
 
 
-def test_gridmind_places_park_ai_chat_at_the_top_of_the_console() -> None:
+def test_gridmind_keeps_the_chart_above_the_fold_and_park_ai_chat_in_the_control_rail() -> None:
     html = _html()
 
     ai_card = html.index('id="parkAiChatCard"')
-    yesterday_card = html.index('id="yesterdayPnlCard"')
     metrics = html.index('<section class="metrics"')
     workspace = html.index('<main class="workspace"')
-    assert yesterday_card < ai_card < metrics < workspace
-    assert 'class="card park-ai-chat-card top-ai-card"' in html
+    rail = html.index('<aside class="control-rail">')
+    control = html.index('id="dashboardControlCard"')
+    market_card = html.index('<section class="card market-card">')
+    assert metrics < workspace < rail < control < ai_card < market_card
+    assert 'class="card park-ai-chat-card top-ai-card rail-ai-card"' in html
     assert ".top-ai-card{border:1px solid rgba(63,208,224,.42)" in html
+
+
+def test_gridmind_draws_the_testnet_grid_lifecycle_when_no_production_plan_exists() -> None:
+    html = _html()
+
+    assert "function lifecycleDisplayPlan(runtime)" in html
+    assert "function displayPlan(data)" in html
+    assert 'renderChart(market,livePlan,execution)' in html
+    assert 'title:"硬止损"' in html
+    assert 'row.eligibility==="eligible"||row.instrument_id===control.selection?.instrument_id' in html
 
 
 def test_gridmind_labels_a_running_strategy_with_a_stale_execution_tick_as_degraded() -> None:

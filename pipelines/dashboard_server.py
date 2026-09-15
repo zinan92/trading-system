@@ -925,12 +925,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         end = str((params.get("end") or [""])[0]).strip() or None
         try:
             limit = int((params.get("limit") or [240])[0])
-            result = build_dashboard_control_market_bars_response(
-                venue_profile_id=profile_id,
-                instrument_id=instrument_id,
-                timeframe=timeframe,
-                limit=limit,
-                end=end,
+            result = _MARKET_BARS_CACHE.read(
+                (profile_id, instrument_id, timeframe, limit, end),
+                lambda: build_dashboard_control_market_bars_response(
+                    venue_profile_id=profile_id,
+                    instrument_id=instrument_id,
+                    timeframe=timeframe,
+                    limit=limit,
+                    end=end,
+                ),
             )
         except ValueError as exc:
             reason = str(exc) or "dashboard_control_market_bars_invalid"
@@ -4133,6 +4136,54 @@ def build_dashboard_control_selection_response(
             "orders_submitted": False,
         },
     }
+
+
+class MarketBarsCache:
+    """Share one upstream candle read across polls and keep the last good page.
+
+    Every open Dashboard tab polls candles every few seconds and the public
+    Hyperliquid Testnet endpoint intermittently refuses bursts. A short fresh
+    window collapses duplicate reads; when a refresh fails, the last good page
+    is returned for a bounded time, explicitly marked untrusted so no start or
+    order path treats it as live market evidence.
+    """
+
+    def __init__(self, *, fresh_seconds: float = 4.0, stale_seconds: float = 180.0,
+                 max_entries: int = 64, clock: Callable[[], float] = time.monotonic) -> None:
+        self.fresh_seconds = fresh_seconds
+        self.stale_seconds = stale_seconds
+        self.max_entries = max_entries
+        self.clock = clock
+        self._rows: dict[Hashable, tuple[float, dict[str, Any]]] = {}
+        self._lock = threading.Lock()
+
+    def read(self, key: Hashable, fetch: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        now = self.clock()
+        with self._lock:
+            cached = self._rows.get(key)
+        if cached and now - cached[0] < self.fresh_seconds:
+            return cached[1]
+        try:
+            result = fetch()
+        except ValueError as exc:
+            if str(exc) in {"testnet_market_unavailable", "testnet_candles_missing"} and cached and now - cached[0] < self.stale_seconds:
+                return {
+                    **cached[1],
+                    "fresh": False,
+                    "trusted": False,
+                    "retained_last_trusted": True,
+                    "retained_age_seconds": round(now - cached[0], 1),
+                }
+            raise
+        with self._lock:
+            self._rows[key] = (now, result)
+            if len(self._rows) > self.max_entries:
+                oldest = min(self._rows, key=lambda row: self._rows[row][0])
+                self._rows.pop(oldest, None)
+        return result
+
+
+_MARKET_BARS_CACHE = MarketBarsCache()
 
 
 def build_dashboard_control_market_bars_response(
