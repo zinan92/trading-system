@@ -766,3 +766,30 @@ def test_public_read_model_clears_recovered_same_window_blocker(tmp_path: Path) 
 
     assert result["recording"]["status"] == "complete"
     assert result["recording"]["blocker_code"] is None
+
+
+def test_public_read_model_keeps_the_last_session_ledger_between_sessions(tmp_path: Path) -> None:
+    folder = tmp_path / "dualtrack" / "nautilus_authoritative" / "snapshots"
+    write_json(folder / "park-session-old.json", [{"account": {"equity": 9990.0, "starting_cash": 10000.0}, "pnl": {"realized": -10.0}}])
+    write_json(
+        folder / "park-session-new.json",
+        [{"account": {"equity": 9877.86, "starting_cash": 10000.0, "fees": 4.5}, "pnl": {"realized": -122.14, "unrealized": 0},
+          "positions": [{"status": "closed"}]}],
+    )
+    newer = folder / "park-session-new.json"
+    import os
+    os.utime(newer, (newer.stat().st_mtime + 10, newer.stat().st_mtime + 10))
+
+    payload = build_park_public_read_model(tmp_path, now=lambda: NOW)
+
+    assert payload["execution"]["account"] == {}
+    assert payload["ledger"] == {
+        "session": "park-session-new",
+        "active": False,
+        "equity": 9877.86,
+        "starting_cash": 10000.0,
+        "realized": -122.14,
+        "unrealized": 0,
+        "fees": 4.5,
+        "open_positions": 0,
+    }

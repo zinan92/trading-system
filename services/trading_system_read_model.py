@@ -711,6 +711,9 @@ def _project_current_strategy(
         projected["terminal"] = terminal
     if reverse:
         projected["reverse"] = reverse
+    ledger = _json_copy(_mapping(park.get("ledger")))
+    if ledger:
+        projected["ledger"] = ledger
     return projected
 
 

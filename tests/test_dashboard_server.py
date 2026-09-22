@@ -66,6 +66,33 @@ def test_dashboard_control_market_bars_route_uses_selected_testnet_identity(
     ]
 
 
+def test_market_bars_cache_collapses_polls_and_keeps_last_good_page_marked_not_fresh() -> None:
+    clock = [100.0]
+    calls: list[int] = []
+    cache = dashboard_server.MarketBarsCache(fresh_seconds=4, stale_seconds=180, clock=lambda: clock[0])
+
+    def good():
+        calls.append(1)
+        return {"bars": [1], "fresh": True}
+
+    def down():
+        calls.append(1)
+        raise ValueError("testnet_market_unavailable")
+
+    assert cache.read("k", good) == {"bars": [1], "fresh": True}
+    clock[0] = 102
+    assert cache.read("k", down) == {"bars": [1], "fresh": True}
+    assert len(calls) == 1
+    clock[0] = 110
+    retained = cache.read("k", down)
+    assert retained["fresh"] is False and retained["trusted"] is False and retained["retained_last_trusted"] is True
+    clock[0] = 400
+    with pytest.raises(ValueError):
+        cache.read("k", down)
+    with pytest.raises(ValueError):
+        cache.read("other", lambda: (_ for _ in ()).throw(ValueError("bad_timeframe")))
+
+
 def test_dashboard_external_dca_loader_reads_latest_authoritative_row_without_network(tmp_path: Path) -> None:
     path = tmp_path / "standard_broker_external_dca" / "current.json"
     write_json(path, [{"status": "WAITING_ENTRY", "plan_id": "old"}, {"status": "BLOCKED", "plan_id": "current"}])

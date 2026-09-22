@@ -228,6 +228,50 @@ def _recording_projection(
     }
 
 
+def _latest_paper_ledger(
+    root: Path,
+    *,
+    snapshot: Mapping[str, Any],
+    session_id: str,
+) -> dict[str, Any]:
+    """Account figures of the active session, else of the most recent one.
+
+    Between sessions the execution block is empty, yet Park still needs to see
+    what the paper account ended at. Read-only: the newest persisted snapshot.
+    """
+
+    row: Mapping[str, Any] = snapshot
+    source_session = session_id
+    if not row:
+        folder = root / "dualtrack" / "nautilus_authoritative" / "snapshots"
+        try:
+            candidates = sorted(folder.glob("park-session-*.json"), key=lambda path: path.stat().st_mtime)
+        except OSError:
+            candidates = []
+        for path in reversed(candidates):
+            try:
+                row = _latest_array_row(path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if row:
+                source_session = path.stem
+                break
+    account = row.get("account") if row and isinstance(row.get("account"), Mapping) else {}
+    pnl = row.get("pnl") if row and isinstance(row.get("pnl"), Mapping) else {}
+    if not account:
+        return {}
+    return {
+        "session": source_session or None,
+        "active": bool(snapshot),
+        "equity": account.get("equity"),
+        "starting_cash": account.get("starting_cash"),
+        "realized": pnl.get("realized", account.get("realized_pnl")),
+        "unrealized": pnl.get("unrealized"),
+        "fees": account.get("fees"),
+        "open_positions": sum(1 for item in row.get("positions") or [] if isinstance(item, Mapping) and item.get("status") == "open"),
+    }
+
+
 def _empty_execution() -> dict[str, Any]:
     return {
         "engine": "unavailable",
@@ -644,6 +688,7 @@ def build_park_public_read_model(
         }
 
     unique_blockers = list(dict.fromkeys(blockers))
+    ledger = _latest_paper_ledger(root, snapshot=snapshot, session_id=session_id)
     return {
         "schema_version": PARK_PUBLIC_READ_MODEL_SCHEMA,
         "generated_at": checked_at.replace(microsecond=0).isoformat(),
@@ -662,6 +707,7 @@ def build_park_public_read_model(
         "reverse": reverse,
         "market": mark,
         "execution": execution,
+        "ledger": ledger,
         "safety": {
             "status": safety.get("status") or "missing",
             "checked_at": safety.get("checked_at"),
