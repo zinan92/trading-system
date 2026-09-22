@@ -161,3 +161,37 @@
   the transport boundary.
 - An instrument alias is only a lookup convenience. It does not change the
   canonical `OrderFill.instrument_id` or create a second instrument identity.
+
+## Issue #139: read-only Mainnet BTC sub-account profile
+
+- Mainnet is admitted only for an exact registered read-only capability
+  revision (`MAINNET_READ_ONLY_REVISIONS`, currently
+  `hyperliquid-mainnet-btc-readonly-v1`) and only with an
+  `ExternalEnvironmentApproval` bound to Mainnet, release SHA, sub-account and
+  lifecycle. Every other Mainnet session keeps `mainnet_not_in_runtime_v1` /
+  `mainnet_not_in_external_host`.
+- Read-only comes first so the 2-day dry run cannot place an order by
+  construction. Capped submit is a separate contract (#140).
+- `NautilusHyperliquidMainnetReadOnlyBackend` reuses the reviewed Testnet read
+  mapping, requires `AccountScope.SUBACCOUNT`, reads BTC-USD-PERP only, and
+  refuses every order/protection write in `invoke` and in the write methods.
+- Runtime and receipt transport labels now come from the backend
+  (`transport_state`, `provenance_source`) instead of a Testnet default.
+
+- No Mainnet `ExternalCanaryBinding` / reconciliation snapshot yet. The 2-day
+  dry run reads account, positions and ticker through individual
+  `host.read_fact()` calls with no cursor-bound coherence. Acceptable because
+  the dry run only observes and compares against the exchange's own reported
+  equity; the capped submit profile (#140) must add a coherent snapshot before
+  any loss guard acts on Mainnet facts.
+
+### Gotchas
+
+- `ExternalTransportProfile.validate` compares the runtime's transport label
+  with the profile; a hardcoded `external_testnet` in the bridge would make any
+  Mainnet profile fail as a mismatch (or, worse, mislabel Mainnet receipts).
+- Several bridge steps were written as `if environment is TESTNET` with no else
+  (approval check, `activate`). Mainnet now takes the same branch; an
+  unactivated backend still refuses `invoke`.
+- Mainnet approvals must carry account and lifecycle; Testnet approvals may
+  still omit them.

@@ -27,7 +27,7 @@ create table if not exists judgments (
 create table if not exists assets (
   key text primary key,
   label text not null,
-  kind text not null check (kind in ('hl_testnet','xau_paper')),
+  kind text not null check (kind in ('hl_testnet','xau_paper','watch')),
   venue_profile_id text not null,
   instrument_id text not null,
   coin text not null,
@@ -46,6 +46,10 @@ create table if not exists executions (
   preview_digest text,
   detail text not null default '{}'
 );
+create table if not exists meta (
+  key text primary key,
+  value text not null
+);
 create table if not exists notes (
   id integer primary key autoincrement,
   created_at text not null,
@@ -63,6 +67,18 @@ DEFAULT_ASSETS = [
      "news_queries": ["黄金", "金价", "美联储", "加息", "降息", "美元", "原油", "避险", "地缘"],
      "primary": ["黄金", "金价", "贵金属", "白银", "避险", "央行购金", "XAU"], "kline_key": "gold", "position": 2},
 ]
+# 2026-09-15 Park: add ETH (Hyperliquid Testnet) and silver / WTI (judgment and review only, no venue yet).
+V4_ASSETS = [
+    {"key": "ETH", "label": "ETH", "kind": "hl_testnet", "venue_profile_id": "hyperliquid.testnet", "instrument_id": "ETH-USD-PERP", "coin": "ETH",
+     "news_queries": ["以太坊", "ETH", "加密", "美联储", "ETF", "稳定币"],
+     "primary": ["以太坊", "ETH", "加密", "稳定币", "链", "巨鲸"], "kline_key": "ethereum", "position": 3},
+    {"key": "SILVER", "label": "白银", "kind": "watch", "venue_profile_id": "", "instrument_id": "SIL", "coin": "SILVER",
+     "news_queries": ["白银", "银价", "贵金属", "美联储", "美元"],
+     "primary": ["白银", "银价", "贵金属", "工业金属"], "kline_key": "silver", "position": 4},
+    {"key": "WTI", "label": "原油", "kind": "watch", "venue_profile_id": "", "instrument_id": "CL", "coin": "WTI",
+     "news_queries": ["原油", "油价", "OPEC", "霍尔木兹", "中东"],
+     "primary": ["原油", "油价", "OPEC", "欧佩克", "霍尔木兹", "布伦特", "WTI"], "kline_key": "wti", "position": 5},
+]
 KLINE_KEYS = {"BTC": "bitcoin", "ETH": "ethereum", "HYPE": "hype", "XAU": "gold", "PAXG": "gold", "SILVER": "silver"}
 
 
@@ -75,9 +91,23 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
+            self._migrate_asset_kinds(conn)
             conn.executescript(SCHEMA)
-            if conn.execute("select count(*) from assets").fetchone()[0] == 0:
-                for row in DEFAULT_ASSETS:
+            if "author" not in {row[1] for row in conn.execute("pragma table_info(judgments)")}:
+                # 'park' = Park's own call; 'ai' = the model's daily suggestion, scored the same way.
+                try:
+                    conn.execute("alter table judgments add column author text not null default 'park'")
+                except sqlite3.OperationalError as exc:  # the server and a scheduled job migrated at the same moment
+                    if "duplicate column" not in str(exc):
+                        raise
+            fresh = conn.execute("select count(*) from assets").fetchone()[0] == 0
+            seeded = conn.execute("select value from meta where key='v4_assets'").fetchone()
+            rows = (DEFAULT_ASSETS + V4_ASSETS) if fresh else ([] if seeded else V4_ASSETS)
+            conn.execute("insert or ignore into meta (key, value) values ('v4_assets', ?)", (now_iso(),))
+            if rows:
+                for row in rows:
+                    if conn.execute("select 1 from assets where key=?", (row["key"],)).fetchone():
+                        continue
                     conn.execute(
                         "insert into assets (key,label,kind,venue_profile_id,instrument_id,coin,news_queries,primary_words,kline_key,position,created_at)"
                         " values (?,?,?,?,?,?,?,?,?,?,?)",
@@ -86,23 +116,48 @@ class Store:
                          row["kline_key"], row["position"], now_iso()),
                     )
 
+    @staticmethod
+    def _migrate_asset_kinds(conn: sqlite3.Connection) -> None:
+        """Widen the assets.kind check to allow 'watch' (judgment-only assets) on databases created before it."""
+        row = conn.execute("select sql from sqlite_master where type='table' and name='assets'").fetchone()
+        if not row or "'watch'" in row[0]:
+            return
+        conn.execute("alter table assets rename to assets_before_watch")
+        conn.executescript(SCHEMA)
+        conn.execute("insert into assets select * from assets_before_watch")
+        conn.execute("drop table assets_before_watch")
+
     def _conn(self) -> sqlite3.Connection:
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def add_judgment(self, *, asset: str, direction: str, confidence: int, reason: str,
                      cited: list[dict[str, Any]], price_at: float | None, plan: dict[str, Any] | None,
-                     action: str, created_at: str | None = None) -> dict[str, Any]:
+                     action: str, created_at: str | None = None, author: str = "park") -> dict[str, Any]:
         with self._conn() as conn:
             cur = conn.execute(
-                "insert into judgments (created_at, asset, direction, confidence, reason, cited, price_at, plan, action)"
-                " values (?,?,?,?,?,?,?,?,?)",
+                "insert into judgments (created_at, asset, direction, confidence, reason, cited, price_at, plan, action, author)"
+                " values (?,?,?,?,?,?,?,?,?,?)",
                 (created_at or now_iso(), asset, direction, int(confidence), reason.strip(),
                  json.dumps(cited, ensure_ascii=False), price_at,
-                 json.dumps(plan, ensure_ascii=False) if plan else None, action),
+                 json.dumps(plan, ensure_ascii=False) if plan else None, action, author),
             )
             return self.judgment(cur.lastrowid, conn)
+
+    def revise_judgment(self, judgment_id: int, *, direction: str, confidence: int, reason: str,
+                        cited: list[dict[str, Any]], price_at: float | None, plan: dict[str, Any] | None,
+                        action: str) -> dict[str, Any]:
+        """Park changed his mind the same day: one call per asset per day, timed and priced from the latest change."""
+        with self._conn() as conn:
+            conn.execute(
+                "update judgments set created_at=?, direction=?, confidence=?, reason=?, cited=?, price_at=?, plan=?, action=?"
+                " where id=? and resolved_at is null",
+                (now_iso(), direction, int(confidence), reason.strip(), json.dumps(cited, ensure_ascii=False), price_at,
+                 json.dumps(plan, ensure_ascii=False) if plan else None, action, judgment_id),
+            )
+            return self.judgment(judgment_id, conn)
 
     def judgment(self, judgment_id: int, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
         own = conn is None
@@ -114,12 +169,16 @@ class Store:
             if own:
                 conn.close()
 
-    def judgments(self, asset: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    def judgments(self, asset: str | None = None, limit: int = 100, author: str | None = "park") -> list[dict[str, Any]]:
+        """Newest first. author='park' (default), 'ai', or None for both."""
+        clauses, params = [], []
+        if asset:
+            clauses.append("asset=?"); params.append(asset)
+        if author:
+            clauses.append("author=?"); params.append(author)
+        where = f" where {' and '.join(clauses)}" if clauses else ""
         with self._conn() as conn:
-            if asset:
-                rows = conn.execute("select * from judgments where asset=? order by id desc limit ?", (asset, limit)).fetchall()
-            else:
-                rows = conn.execute("select * from judgments order by id desc limit ?", (limit,)).fetchall()
+            rows = conn.execute(f"select * from judgments{where} order by id desc limit ?", (*params, limit)).fetchall()
         return [_judgment(r) for r in rows]
 
     def resolve(self, judgment_id: int, *, price_after: float | None, move_pct: float | None, outcome: str) -> None:

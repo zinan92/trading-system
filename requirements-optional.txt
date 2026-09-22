@@ -1,0 +1,13 @@
+# Optional extras. Install only what you use.
+
+# Hyperliquid Testnet execution backend (standard-broker[testnet]) and the paper ledger runner.
+# Heavy; keep it in its own venv (see scripts/bootstrap.sh --with-nautilus).
+nautilus_trader==1.230.0
+
+# Cloud gateway / signed-session helpers (services/cloud_*): not needed on a laptop.
+PyJWT[crypto]>=2.8,<3
+
+# Research-only modules (services/lab_meta_model.py, services/chan_vendor/DataAPI).
+scikit-learn>=1.5
+ccxt>=4
+baostock>=0.9

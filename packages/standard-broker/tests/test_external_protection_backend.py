@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("nautilus_trader", reason="Testnet backend tests need the optional nautilus extra")
+
 from standard_broker.adapters.hyperliquid.external import (
     HyperliquidTestnetBackendConfig,
     NautilusHyperliquidTestnetBackend,

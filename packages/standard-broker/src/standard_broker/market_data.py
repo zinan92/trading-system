@@ -32,7 +32,7 @@ class FreshnessPolicy:
         *,
         transport_state: str = "connected",
     ) -> FreshnessState:
-        if transport_state not in {"connected", "local_fixture", "external_testnet"}:
+        if transport_state not in {"connected", "local_fixture", "external_testnet", "external_mainnet"}:
             return FreshnessState.UNKNOWN
         age = now - received_at
         if age < timedelta(0):

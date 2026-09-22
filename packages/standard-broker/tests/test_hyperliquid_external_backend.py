@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from importlib.util import find_spec
 
 from standard_broker.adapters.hyperliquid.credentials import LocalFileSecretProvider
 from standard_broker.adapters.hyperliquid.external import (
@@ -516,6 +517,7 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
                 self.assertFalse(result["accepted"])
                 self.assertEqual(result["covered_quantity"], "0")
 
+    @unittest.skipUnless(find_spec("nautilus_trader"), "needs the optional nautilus extra")
     def test_cancel_protection_reseals_digest_and_rejects_failed_cancel(self) -> None:
         class StatusClient(FakeClient):
             def __init__(self, status: str) -> None:
@@ -583,6 +585,7 @@ class HyperliquidExternalBackendTests(unittest.TestCase):
                 }
                 self.assertEqual(result["observation_digest"], digest_canonical(digest_input))
 
+    @unittest.skipUnless(find_spec("nautilus_trader"), "needs the optional nautilus extra")
     def test_replace_protection_reseals_final_digest(self) -> None:
         class ReplaceClient(FakeClient):
             async def cancel_order(self, *args: object, **kwargs: object) -> object:

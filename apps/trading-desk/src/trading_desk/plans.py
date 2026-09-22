@@ -23,6 +23,10 @@ def build_plan(kind: str, direction: str, price: float | None, grid: dict[str, A
     if direction not in {"long", "short", "flat"}:
         raise ValueError("direction_invalid")
     grid = grid or {}
+    if kind == "watch":
+        return {"kind": "record_only", "title": f"{'做多' if direction == 'long' else '做空' if direction == 'short' else '观望'} · 只记判断", "direction": direction,
+                "lines": [["现价", _fmt(price) if price is not None else "读不到"], ["下单", "这个品种还没有可以下单的交易所"]],
+                "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。"}
     running = bool(grid.get("ok")) and grid.get("status") not in {None, "terminal", "stopped_by_operator", "TERMINAL"} and not grid.get("sealed")
     if direction == "flat":
         return {

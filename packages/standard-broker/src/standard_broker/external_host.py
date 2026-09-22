@@ -19,12 +19,18 @@ from .runtime import (
     BrokerRuntimeSession,
     ExternalEnvironmentApproval,
     RuntimePreflight,
+    is_mainnet_read_only_session_capabilities,
 )
 from .security import find_secret_like_literals
 
 
 _SHA1 = re.compile(r"[0-9a-f]{40}")
-_ALLOWED_TRANSPORT_STATES = frozenset({"local_fixture", "external_testnet"})
+_ALLOWED_TRANSPORT_STATES = frozenset({"local_fixture", "external_testnet", "external_mainnet"})
+_NETWORK_TRANSPORT_STATES = frozenset({"external_testnet", "external_mainnet"})
+_ENVIRONMENT_TRANSPORT_STATES = {
+    BrokerEnvironment.TESTNET: frozenset({"local_fixture", "external_testnet"}),
+    BrokerEnvironment.MAINNET: frozenset({"external_mainnet"}),
+}
 
 
 def _canonicalize(value: object) -> object:
@@ -101,7 +107,7 @@ class ExternalRuntimeIdentity:
         if self.transport_state not in _ALLOWED_TRANSPORT_STATES:
             raise RuntimeBoundaryError(
                 "external_identity_invalid",
-                "transport_state must be local_fixture or external_testnet",
+                "transport_state must be local_fixture, external_testnet or external_mainnet",
             )
 
 
@@ -140,10 +146,20 @@ class ExternalTransportProfile:
         if self.transport_state not in _ALLOWED_TRANSPORT_STATES:
             raise RuntimeBoundaryError(
                 "external_profile_invalid",
-                "profile transport_state must be local_fixture or external_testnet",
+                "profile transport_state must be local_fixture, external_testnet or external_mainnet",
             )
         if not isinstance(self.capabilities, CapabilityDescriptor):
             raise TypeError("profile capabilities must be a CapabilityDescriptor")
+        if self.transport_state not in _ENVIRONMENT_TRANSPORT_STATES.get(self.environment, {self.transport_state}):
+            raise RuntimeBoundaryError(
+                "external_profile_invalid",
+                "profile transport_state does not belong to the profile environment",
+            )
+        if self.environment is BrokerEnvironment.MAINNET and not is_mainnet_read_only_session_capabilities(self.capabilities):
+            raise RuntimeBoundaryError(
+                "mainnet_not_in_external_host",
+                "Mainnet/live requires a separate activation specification",
+            )
         if self.protection_capabilities is not None and not isinstance(
             self.protection_capabilities,
             ProtectionCapabilityMatrix,
@@ -179,7 +195,7 @@ class ExternalTransportProfile:
             if context.approval is None:
                 raise RuntimeBoundaryError(
                     "external_approval_required",
-                    "exact external Testnet profile requires an approval artifact",
+                    "exact external profile requires an approval artifact",
                 )
             _validate_approval_identity(
                 approval=context.approval,
@@ -204,9 +220,21 @@ class ExternalBrokerBuildContext:
             raise TypeError("external host context requires an ExternalRuntimeIdentity")
         _require_sha(self.release_sha, "release SHA")
         if self.session.environment is BrokerEnvironment.MAINNET:
+            if not is_mainnet_read_only_session_capabilities(self.session.capabilities):
+                raise RuntimeBoundaryError(
+                    "mainnet_not_in_external_host",
+                    "Mainnet/live requires a separate activation specification",
+                )
+            if self.approval is None:
+                raise RuntimeBoundaryError(
+                    "external_approval_required",
+                    "Mainnet read-only host contexts require an approval artifact",
+                )
+        allowed_transports = _ENVIRONMENT_TRANSPORT_STATES.get(self.session.environment)
+        if allowed_transports is not None and self.runtime_identity.transport_state not in allowed_transports:
             raise RuntimeBoundaryError(
-                "mainnet_not_in_external_host",
-                "Mainnet/live requires a separate activation specification",
+                "external_transport_environment_mismatch",
+                "runtime transport state does not belong to the session environment",
             )
         if self.session.environment is BrokerEnvironment.PAPER and self.runtime_identity.transport_state != "local_fixture":
             raise RuntimeBoundaryError(
@@ -424,10 +452,10 @@ class ExternalBrokerHost:
             raise TypeError("ExternalBrokerHost requires an ExternalBrokerBuildContext")
         if not isinstance(runtime, _ExternalRuntimePort):
             raise TypeError("ExternalBrokerHost runtime must expose the public runtime port")
-        if context.session.environment is BrokerEnvironment.TESTNET and profile is None:
+        if context.session.environment in {BrokerEnvironment.TESTNET, BrokerEnvironment.MAINNET} and profile is None:
             raise RuntimeBoundaryError(
                 "external_profile_required",
-                "Testnet hosts must be built through an exact external transport profile",
+                "Testnet and Mainnet hosts must be built through an exact external transport profile",
             )
         if runtime.session != context.session:
             raise RuntimeBoundaryError(
@@ -575,7 +603,7 @@ class ExternalBrokerHost:
             runtime_identity=self.runtime_identity,
             capability_revision=self.capabilities.revision,
             accepted=result.accepted,
-            network_io=self.runtime_identity.transport_state == "external_testnet",
+            network_io=self.runtime_identity.transport_state in _NETWORK_TRANSPORT_STATES,
             real_money_eligible=False,
             required_operations=normalized,
             provenance=provenance,
@@ -617,7 +645,7 @@ class ExternalBrokerHost:
         )
         self._validate_runtime_receipt(runtime_receipt, request.request)
         provenance = runtime_receipt.provenance
-        network_io = provenance.transport_state == "external_testnet"
+        network_io = provenance.transport_state in _NETWORK_TRANSPORT_STATES
         receipt_data = {
             "request_id": request.request_id,
             "request_digest": request_digest,
@@ -825,10 +853,13 @@ def _validate_approval_identity(
     session: BrokerRuntimeSession,
     release_sha: str,
 ) -> None:
-    if approval.environment is not BrokerEnvironment.TESTNET:
+    if approval.environment is not session.environment or approval.environment not in {
+        BrokerEnvironment.TESTNET,
+        BrokerEnvironment.MAINNET,
+    }:
         raise RuntimeBoundaryError(
             "external_approval_invalid",
-            "the current external host only accepts Testnet approval artifacts",
+            "approval environment does not match the external host session",
         )
     if (
         approval.release_sha != release_sha

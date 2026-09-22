@@ -9,6 +9,22 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-09-22, 平台单仓化 #1280)
+
+- `main` 现在就是整个 `/trade` 产品：`apps/trading-desk`（交易台 8790）、
+  `packages/standard-broker`、`packages/trading-strategy`、`packages/standard-kline`
+  都在本仓，同步到各自独立仓的 `origin/main`（desk `27c8a82`、broker `5d37c1a`、
+  strategy `d4daae9`）。独立仓仍存在，但本仓是唯一可 fork 的整体。
+- 新人路径：`scripts/bootstrap.sh` → `make dashboard` + `make desk` → 打开
+  `/trade`。根 `README.md` 面向要 fork 的人；`.env.example` 是唯一配置入口；
+  `deploy/local/` 是去个人化的 launchd + cloudflared 模板。
+- 本机 launchd 仍指向 `trading-system-park-paper-main` 与 `~/work/trading-desk`
+  这两个旧 checkout，未切换（超出 #1280 范围，另开票）。
+- 需要 `nautilus_trader` 的测试在缺少该 extra 时 skip，不再报 collection error。
+
+_下一步_：把本机 launchd 切到本仓 checkout（新票）；独立仓 `trading-desk` /
+`standard-broker` 归档或只读，避免双写。
+
 ## 现在在哪里(2026-09-08, Park Paper owner and status heartbeat)
 
 _数据截至 2026-09-08；代码事实取 `origin/main` 自 2026-09-07 以来的合并记录，线上事实取 owner 在 [Issue #1129](https://github.com/zinan92/trading-system/issues/1129) 的实测记录。_

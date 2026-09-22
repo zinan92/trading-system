@@ -45,3 +45,28 @@ def due(judgment: dict[str, Any], hours: int, now: datetime | None = None) -> da
     created = datetime.fromisoformat(str(judgment["created_at"]).replace("Z", "+00:00"))
     target = created + timedelta(hours=hours)
     return target if (now or datetime.now(timezone.utc)) >= target else None
+
+
+def resolve_due(store: Any, sources: Any, hours: int, *, asset: str | None = None) -> int:
+    """Score every call (Park's and the AI's) whose review time has come. Returns how many were resolved."""
+    resolved = 0
+    bars_cache: dict[str, list] = {}
+    for row in store.judgments(asset, limit=200, author=None):
+        target = due(row, hours)
+        if target is None:
+            continue
+        meta = store.asset(row["asset"])
+        if meta is None:
+            continue
+        if row["asset"] not in bars_cache:
+            bars_cache[row["asset"]] = sources.bars(meta, "1h", limit=300).get("bars") or []
+        after = price_at(bars_cache[row["asset"]], target)
+        if after is None:
+            if out_of_window(bars_cache[row["asset"]], target):
+                store.resolve(row["id"], price_after=None, move_pct=None, outcome="unverifiable")
+                resolved += 1
+            continue
+        move = (after - float(row["price_at"])) / float(row["price_at"]) * 100
+        store.resolve(row["id"], price_after=after, move_pct=round(move, 3), outcome=outcome(row["direction"], move))
+        resolved += 1
+    return resolved

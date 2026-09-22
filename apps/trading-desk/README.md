@@ -1,13 +1,13 @@
 # Park 交易台 · trading-desk
 
-Park 做交易的唯一入口，分三个标签页：**交易**（看新闻、看 K 线、判断、出计划、批准并执行、盯盘、复盘）、**日报**（晨报、K 线日报、宏观周报）、**系统**（数据是否正常、品种管理、执行记录、已暂停的服务）。品种可以在前端增加或删除。需求说明见 `docs/spec-v2.md`。
+Park 做交易的唯一入口。**交易**（`/trade`）就是 GridMind 工作台本身（trading-system 8765，经交易台同源转发、同一道口令），交易台只在上面加左侧滚动新闻和右侧「今日判断 · 执行」；**日报**（`/desk#news`）是晨报（开头是「昨天判断对了吗」和今天的一键判断）、K 线日报卡片、宏观周报卡片，原版全文可展开；**系统**（`/desk#system`）是数据是否正常、品种管理、执行记录、已暂停的服务。需求说明见 `docs/spec-v2.md`。
 
 ```
 in   Intel 新闻（本机 8001，带重要/关注/噪音分级）
      Dashboard（本机 8765）：BTC Testnet K 线、黄金 XAUUSDT K 线、黄金纸面盘持仓与盈亏
      trading-system 的网格记录（~/work/park-paper-output）
      Hyperliquid 测试盘公开账户接口（只读）
-out  一页交易台，地址 http://127.0.0.1:8790
+out  http://127.0.0.1:8790/trade（交易）· /desk（日报、系统）
      Park 的判断、批准和随手记，存在 ~/park-data/trading-desk/desk.db
 
 fail 新闻服务连不上     → 新闻栏显示上一次读到的列表并标明；一次都没读到过就写明原因

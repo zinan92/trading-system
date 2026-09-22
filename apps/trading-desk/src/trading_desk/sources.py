@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.parse
 import threading
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .config import Config
+from .digest import latest_kline_file
 
 BUCKET_RANK = {"high_impact": 0, "watch": 1, "unrated": 2, "noise": 3}
 SOURCE_LABEL = {"blockbeats_newsflash": "律动", "cls_telegraph": "财联社", "eastmoney_global_news": "东方财富", "reddit": "Reddit"}
@@ -42,26 +44,79 @@ class Sources:
     def __init__(self, config: Config, fetch: Fetch | None = None) -> None:
         self.config = config
         self.fetch = fetch or http_json
+        self.slow_fetch = fetch or (lambda url, body: http_json(url, body, timeout=120))
         self._news_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._news_lock = threading.Lock()
 
     # ---- news -------------------------------------------------------------
-    NEWS_TTL_SECONDS = 300
+    NEWS_TTL_SECONDS = 45
 
-    def news(self, asset: dict[str, Any], limit: int = 30) -> dict[str, Any]:
-        """Cached for five minutes per asset and keyword set; when Intel fails, the last good list is served and marked stale."""
+    def news(self, asset: dict[str, Any], limit: int = 60) -> dict[str, Any]:
+        """Rolling list, newest first, from Intel's realtime feed; the browser polls it every minute.
+
+        The realtime feed is shared by all assets and cached ~45s. Assets the feed does not map
+        (no exposure key) fall back to keyword search. When Intel fails the last good list is served
+        and marked stale.
+        """
         cache_key = f"{asset['key']}:{'|'.join(asset['news_queries'])}"
         with self._news_lock:
             cached = self._news_cache.get(cache_key)
             if cached and time.monotonic() - cached[0] < self.NEWS_TTL_SECONDS:
                 return cached[1]
-            fresh = self._news_uncached(asset, limit)
+            fresh = self._news_rolling(asset, limit)
             if fresh.get("ok"):
                 self._news_cache[cache_key] = (time.monotonic(), fresh)
                 return fresh
             if cached:
                 return {**cached[1], "stale": True, "reason": fresh.get("reason")}
             return fresh
+
+    def _realtime_feed(self) -> list[dict[str, Any]] | None:
+        cached = self._news_cache.get("__realtime__")
+        if cached and time.monotonic() - cached[0] < self.NEWS_TTL_SECONDS:
+            return cached[1]
+        try:
+            data = self.fetch(f"{self.config.intel_url}/api/ui/realtime?" + urllib.parse.urlencode({"window": "24h", "limit": 200}), None)
+        except Exception:  # noqa: BLE001
+            return None
+        rows = [row for row in (data or {}).get("items") or [] if isinstance(row, dict)]
+        self._news_cache["__realtime__"] = (time.monotonic(), rows)
+        return rows
+
+    def _news_item(self, asset: dict[str, Any], row: dict[str, Any]) -> dict[str, Any] | None:
+        if row.get("source") == "reddit":
+            return None
+        # Wire services prefix the same flash with "财联社9月15日电，周一（9月14日），"; strip it so duplicates collapse.
+        title = re.sub(r"^(财联社)?\d{1,2}月\d{1,2}日电[，,]\s*(周.（\d{1,2}月\d{1,2}日），)?", "", str(row.get("title") or "")).strip()
+        if not title:
+            return None
+        triage = row.get("triage") if isinstance(row.get("triage"), dict) else {}
+        bucket = str(triage.get("bucket") or row.get("bucket") or "unrated")
+        if bucket not in BUCKET_RANK:
+            bucket = "unrated"
+        primary = any(str(word).lower() in title.lower() for word in asset["primary"])
+        stamp = str(row.get("collected_at") or row.get("published_at") or "")
+        return {"topic": asset["label"] if primary else "宏观", "id": row.get("id"), "title": title,
+                "source": SOURCE_LABEL.get(row.get("source"), row.get("source")), "url": row.get("url"),
+                "bucket": bucket, "collected_at": stamp}
+
+    def _news_rolling(self, asset: dict[str, Any], limit: int) -> dict[str, Any]:
+        feed = self._realtime_feed()
+        key = asset.get("kline_key")
+        if feed is not None and key:
+            items: dict[str, dict[str, Any]] = {}
+            for row in feed:
+                title = str(row.get("title") or "")
+                related = key in (row.get("exposure_assets") or []) or any(str(w).lower() in title.lower() for w in asset["primary"])
+                item = self._news_item(asset, row) if related else None
+                if item and item["title"][:22] not in items:
+                    items[item["title"][:22]] = item
+            ordered = sorted(items.values(), key=lambda i: _utc_key(i["collected_at"]), reverse=True)
+            return {"ok": True, "rolling": True, "items": ordered[:limit]}
+        fallback = self._news_uncached(asset, limit)
+        if fallback.get("ok"):
+            fallback["items"].sort(key=lambda i: _utc_key(i.get("collected_at")), reverse=True)
+        return fallback
 
     def _news_uncached(self, asset: dict[str, Any], limit: int) -> dict[str, Any]:
         items: dict[str, dict[str, Any]] = {}
@@ -105,7 +160,6 @@ class Sources:
             return {"ok": False, "reason": "Intel 新闻服务连不上（本机 8001），新闻暂时看不到。", "items": []}
         ordered = sorted(items.values(), key=lambda i: str(i.get("collected_at") or ""), reverse=True)
         ordered = [i for i in ordered if _same_day_window(i.get("collected_at"))] or ordered
-        ordered.sort(key=lambda i: (BUCKET_RANK[i["bucket"]], i["topic"] == "宏观"))
         return {"ok": True, "items": ordered[:limit]}
 
     # ---- bars (venue-native: the chart that carries the grid uses the grid's own prices)
@@ -127,6 +181,8 @@ class Sources:
             if not bars:
                 return {"ok": False, "reason": "K 线暂时没有数据", "bars": [], "source": source}
             return {"ok": True, "bars": bars, "source": source, "fresh": True, "latest_timestamp": bars[-1][0]}
+        if asset["kind"] == "watch":
+            return self._overview_bars(asset, timeframe, limit)
         url = f"{self.config.dashboard_url}/api/dualtrack/market/bars?" + urllib.parse.urlencode({"symbol": "XAUUSDT", "timeframe": timeframe, "limit": limit})
         source = "Binance XAUUSDT 永续（纸面网格用的同一个价格）"
         try:
@@ -161,11 +217,11 @@ class Sources:
         if not key:
             return {"ok": False, "reason": "K 线日报不覆盖这个品种"}
         folder = self.config.kline_archive
-        files = sorted(folder.glob("*-kline-daily-newsletter.article.json")) if folder.exists() else []
-        if not files:
+        latest = latest_kline_file(folder, ".article.json")
+        if latest is None:
             return {"ok": False, "reason": "还没有 K 线日报"}
         try:
-            article = json.loads(files[-1].read_text(encoding="utf-8"))
+            article = json.loads(latest.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {"ok": False, "reason": "K 线日报正在生成，稍后刷新"}
         blocks = [b for b in article.get("blocks") or [] if b.get("asset_key") == key]
@@ -173,9 +229,67 @@ class Sources:
         if not summary:
             return {"ok": False, "reason": "今天的 K 线日报没有这个品种"}
         periods = [{"label": b.get("label"), "text": b.get("text")} for b in blocks if b.get("type") == "period_text" and b.get("text")]
-        return {"ok": True, "date": files[-1].name[:10], "cutoff_at": article.get("cutoff_at"),
+        return {"ok": True, "date": latest.name[:10], "cutoff_at": article.get("cutoff_at"),
                 "position": summary.get("position"), "structure": summary.get("structure"), "synthesis": summary.get("synthesis"),
                 "odds": summary.get("odds"), "periods": periods}
+
+    # ---- judgment-only assets (silver, WTI): the K-line review service's candles ---------
+    OVERVIEW_TF = {"1h": "thirty_minute", "4h": "four_hour", "1d": "daily"}
+    OVERVIEW_TTL_SECONDS = 600
+    OVERVIEW_STALE = timedelta(hours=2)
+
+    def refresh_futures(self, keys: list[str], now: datetime | None = None) -> dict[str, Any]:
+        """Ask 8932 to re-download intraday candles when the newest 30-minute candle of any judgment-only
+        asset is older than two hours. Runs on the 20-minute job, never in a page request: a refresh takes
+        ~20 seconds. Without it silver and oil calls would be recorded and scored against the same frozen
+        candle from the morning brief."""
+        now = now or datetime.now(timezone.utc)
+        url = f"{self.config.kline_review_url}/api/overview"
+        try:
+            rows = {row.get("asset_key"): row for row in (self.fetch(url, None) or {}).get("assets") or [] if isinstance(row, dict)}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "reason": type(exc).__name__}
+        newest = []
+        for key in keys:
+            frame = next((tf for tf in (rows.get(key) or {}).get("timeframes") or [] if tf.get("timeframe") == "thirty_minute"), None)
+            candles = (frame or {}).get("candles") or []
+            newest.append(datetime.fromisoformat(str(candles[-1]["timestamp"]).replace("Z", "+00:00")) if candles else None)
+        if all(stamp and now - stamp <= self.OVERVIEW_STALE for stamp in newest):
+            return {"ok": True, "refreshed": False}
+        try:
+            self.slow_fetch(url + "?refresh=true", None)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "reason": type(exc).__name__}
+        self._news_cache.pop("__overview__", None)
+        return {"ok": True, "refreshed": True}
+
+    def _overview_bars(self, asset: dict[str, Any], timeframe: str, limit: int) -> dict[str, Any]:
+        """Futures candles from Human K-line Review (8932), the same data the K-line daily reads.
+        1h requests get 30-minute candles: finer, and enough for the 72-hour review. The service refreshes
+        its intraday cache when the morning brief asks, so the latest candle can be hours old."""
+        source = "期货 K 线（K 线日报同一数据源，可能延迟）"
+        cached = self._news_cache.get("__overview__")
+        if not cached or time.monotonic() - cached[0] > self.OVERVIEW_TTL_SECONDS:
+            try:
+                payload = self.fetch(f"{self.config.kline_review_url}/api/overview", None)
+                cached = (time.monotonic(), {row.get("asset_key"): row for row in (payload or {}).get("assets") or [] if isinstance(row, dict)})
+                self._news_cache["__overview__"] = cached
+            except Exception as exc:  # noqa: BLE001
+                if not cached:
+                    return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
+        row = cached[1].get(asset.get("kline_key") or "")
+        frame = next((tf for tf in (row or {}).get("timeframes") or [] if tf.get("timeframe") == self.OVERVIEW_TF.get(timeframe)), None)
+        bars = []
+        for candle in (frame or {}).get("candles") or []:
+            stamp = str(candle.get("timestamp") or "")
+            if len(stamp) == 10:
+                stamp += "T00:00:00+00:00"
+            if all(candle.get(k) is not None for k in ("open", "high", "low", "close")):
+                bars.append([stamp, float(candle["open"]), float(candle["high"]), float(candle["low"]), float(candle["close"])])
+        bars = bars[-limit:]
+        if not bars:
+            return {"ok": False, "reason": "K 线暂时没有数据", "bars": [], "source": source}
+        return {"ok": True, "bars": bars, "source": source, "fresh": False, "latest_timestamp": bars[-1][0]}
 
     # ---- BTC: Hyperliquid Testnet grid + account ---------------------------
     def hl_grid(self, asset: dict[str, Any]) -> dict[str, Any]:
@@ -338,3 +452,9 @@ def _same_day_window(collected_at: Any, hours: int = 30) -> bool:
     if at.tzinfo is None:
         at = at.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - at).total_seconds() <= hours * 3600
+
+
+def _utc_key(stamp: Any) -> str:
+    """Intel mixes naive and Z-suffixed UTC stamps; compare them as the same clock."""
+    text = str(stamp or "")
+    return text.replace("Z", "").replace("+00:00", "")[:26]

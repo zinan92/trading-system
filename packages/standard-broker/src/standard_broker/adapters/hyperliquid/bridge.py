@@ -305,6 +305,15 @@ class NautilusHyperliquidRuntime:
                 "testnet_backend_boundary_invalid",
                 "Testnet runtime requires either a local fixture or an explicitly external backend",
             )
+        if session.environment is BrokerEnvironment.MAINNET and not (
+            getattr(backend, "local_only", False) is False
+            and getattr(backend, "external_network", False) is True
+            and getattr(backend, "transport_state", None) == "external_mainnet"
+        ):
+            raise NautilusRuntimeError(
+                "mainnet_backend_boundary_invalid",
+                "Mainnet runtime requires an explicitly external Mainnet backend",
+            )
         if not callable(getattr(backend, "invoke", None)):
             raise NautilusRuntimeError("backend_invoke_missing", "backend must expose invoke(port, operation, request)")
 
@@ -322,7 +331,7 @@ class NautilusHyperliquidRuntime:
     def transport_state(self) -> str:
         """Return the non-secret transport profile bound to this runtime."""
 
-        return "local_fixture" if getattr(self._backend, "local_only", False) else "external_testnet"
+        return _backend_transport_state(self._backend)
 
     @property
     def health(self) -> NautilusRuntimeHealth:
@@ -348,8 +357,12 @@ class NautilusHyperliquidRuntime:
                 required_operations=required_operations or {},
                 policy=self._config.policy,
             )
-            if self._session.environment is BrokerEnvironment.TESTNET:
-                approval = self._config.policy.testnet_approval
+            if self._session.environment in {BrokerEnvironment.TESTNET, BrokerEnvironment.MAINNET}:
+                approval = (
+                    self._config.policy.testnet_approval
+                    if self._session.environment is BrokerEnvironment.TESTNET
+                    else self._config.policy.mainnet_approval
+                )
                 if self._config.expected_release_sha is None:
                     raise RuntimeBoundaryError(
                         "testnet_release_binding_required",
@@ -398,7 +411,7 @@ class NautilusHyperliquidRuntime:
         # startup does not authorize an unrequested read operation.
         self.preflight(required_operations=required_operations)
         activate = getattr(self._backend, "activate", None)
-        if self._session.environment is BrokerEnvironment.TESTNET and not getattr(
+        if self._session.environment in {BrokerEnvironment.TESTNET, BrokerEnvironment.MAINNET} and not getattr(
             self._backend,
             "local_only",
             False,
@@ -516,14 +529,10 @@ class NautilusHyperliquidRuntime:
                 source=(
                     "nautilus-hyperliquid.bridge"
                     if getattr(self._backend, "local_only", False)
-                    else "nautilus-hyperliquid.testnet"
+                    else getattr(self._backend, "provenance_source", "nautilus-hyperliquid.testnet")
                 ),
                 execution_scope=self._session.execution_scope,
-                transport_state=(
-                    "local_fixture"
-                    if getattr(self._backend, "local_only", False)
-                    else "external_testnet"
-                ),
+                transport_state=_backend_transport_state(self._backend),
                 mapping_revision=self._session.capabilities.revision,
             ),
             state=state,
@@ -575,3 +584,13 @@ class NautilusHyperliquidRuntime:
 
         self._state = NautilusRuntimeState.CLOSED
         return self.health
+
+
+def _backend_transport_state(backend: object) -> str:
+    """Derive the transport label from the backend, never from a Testnet default."""
+
+    if getattr(backend, "local_only", False):
+        return "local_fixture"
+    if getattr(backend, "transport_state", None) == "external_mainnet":
+        return "external_mainnet"
+    return "external_testnet"

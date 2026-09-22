@@ -16,7 +16,8 @@ from time import sleep, time_ns
 from ...capabilities import CapabilityDescriptor
 from ...external_host import digest_canonical
 from ...models import BrokerEnvironment, Provenance, SignerKind
-from ...runtime import BrokerRuntimeSession, RuntimeBoundaryError, SignerReference
+from ...models import AccountScope
+from ...runtime import BrokerRuntimeSession, RuntimeBoundaryError, SignerReference, is_read_only_capabilities
 from .bridge import NautilusAdapterMetadata
 from .credentials import LocalFileSecretProvider
 from .protection import enabled_external_testnet_position_protection_capabilities
@@ -64,6 +65,66 @@ def enabled_testnet_position_protection_capabilities(
         operations=operations,
         revision=revision,
     )
+
+
+MAINNET_BTC_READONLY_REVISION = "hyperliquid-mainnet-btc-readonly-v1"
+MAINNET_BTC_INSTRUMENTS = frozenset({"BTC-USD-PERP.HYPERLIQUID"})
+
+
+def mainnet_btc_readonly_capabilities(revision: str = MAINNET_BTC_READONLY_REVISION) -> CapabilityDescriptor:
+    """Mainnet reads for one BTC sub-account; no submit, cancel, replace or protection."""
+
+    return CapabilityDescriptor(
+        broker_id="hyperliquid",
+        environment=BrokerEnvironment.MAINNET,
+        operations={
+            "market_data": frozenset({"ticker"}),
+            "instrument": frozenset({"read"}),
+            "account": frozenset({"read", "positions"}),
+            "order_execution": frozenset({"query", "open_orders", "fills"}),
+            "fee": frozenset({"read", "schedule", "fill"}),
+        },
+        revision=revision,
+    )
+
+
+@dataclass(frozen=True)
+class HyperliquidMainnetReadOnlyBackendConfig:
+    """Public, non-secret identity for the read-only Mainnet BTC sub-account."""
+
+    account_address: str
+    expected_version: str = NAUTILUS_HYPERLIQUID_VERSION
+    expected_commit: str = NAUTILUS_HYPERLIQUID_COMMIT
+    execution_scope: str = "hypercore:default"
+    capability_revision: str = MAINNET_BTC_READONLY_REVISION
+    capabilities: CapabilityDescriptor = field(default_factory=mainnet_btc_readonly_capabilities)
+
+    def __post_init__(self) -> None:
+        if not _ADDRESS.fullmatch(self.account_address):
+            raise RuntimeBoundaryError(
+                "account_address_invalid",
+                "Hyperliquid Mainnet sub-account address must be a 20-byte hex address",
+            )
+        if (
+            self.capabilities.environment is not BrokerEnvironment.MAINNET
+            or self.capabilities.broker_id != "hyperliquid"
+            or self.capabilities.revision != self.capability_revision
+            or self.capabilities != mainnet_btc_readonly_capabilities(self.capability_revision)
+            or self.capability_revision != MAINNET_BTC_READONLY_REVISION
+            or not is_read_only_capabilities(self.capabilities)
+        ):
+            raise RuntimeBoundaryError(
+                "mainnet_capabilities_invalid",
+                "Mainnet backend accepts only the exact read-only BTC capability set",
+            )
+        if (
+            self.expected_version != NAUTILUS_HYPERLIQUID_VERSION
+            or self.expected_commit != NAUTILUS_HYPERLIQUID_COMMIT
+        ):
+            raise RuntimeBoundaryError(
+                "nautilus_release_not_pinned",
+                "Mainnet backend must use the reviewed Nautilus 1.230.0 release commit",
+            )
 
 
 @dataclass(frozen=True)
@@ -118,6 +179,10 @@ class NautilusHyperliquidTestnetBackend:
 
     local_only = False
     external_network = True
+    transport_state = "external_testnet"
+    provenance_source = "nautilus-hyperliquid.testnet"
+    _session_environment = BrokerEnvironment.TESTNET
+    _hyperliquid_environment = "TESTNET"
 
     def __init__(
         self,
@@ -127,10 +192,10 @@ class NautilusHyperliquidTestnetBackend:
         secrets: LocalFileSecretProvider,
         client_factory: Callable[[str, str], object] | None = None,
     ) -> None:
-        if session.environment is not BrokerEnvironment.TESTNET:
+        if session.environment is not self._session_environment:
             raise RuntimeBoundaryError(
                 "external_environment_invalid",
-                "Nautilus Hyperliquid external backend is Testnet-only",
+                f"this Nautilus Hyperliquid external backend is {self._session_environment.value}-only",
             )
         if session.signer.kind is not SignerKind.API_AGENT:
             raise RuntimeBoundaryError(
@@ -1280,7 +1345,9 @@ class NautilusHyperliquidTestnetBackend:
                 # wait below will fail closed rather than using partial data.
                 return
 
-        client = HyperliquidWebSocketClient(environment=HyperliquidEnvironment.TESTNET)
+        client = HyperliquidWebSocketClient(
+            environment=getattr(HyperliquidEnvironment, self._hyperliquid_environment)
+        )
         try:
             await client.connect(asyncio.get_running_loop(), [instrument], on_message)
             await client.subscribe_book(instrument.id)
@@ -1351,28 +1418,7 @@ class NautilusHyperliquidTestnetBackend:
 
     @staticmethod
     def _default_client_factory(private_key: str, account_address: str) -> object:
-        try:
-            from nautilus_trader.core.nautilus_pyo3 import HyperliquidEnvironment
-            from nautilus_trader.core.nautilus_pyo3 import HyperliquidHttpClient
-            installed_version = package_version("nautilus-trader")
-        except (ImportError, PackageNotFoundError) as exc:
-            raise RuntimeBoundaryError(
-                "nautilus_runtime_missing",
-                "nautilus_trader 1.230.0 is required for external Testnet execution",
-            ) from exc
-        if installed_version != NAUTILUS_HYPERLIQUID_VERSION:
-            raise RuntimeBoundaryError(
-                "nautilus_version_mismatch",
-                "installed Nautilus version does not match the reviewed Testnet adapter",
-            )
-        client = HyperliquidHttpClient(
-            private_key=private_key,
-            account_address=account_address,
-            environment=HyperliquidEnvironment.TESTNET,
-            include_builder_attribution=False,
-        )
-        client.set_account_id(f"{account_address}-HYPERLIQUID")
-        return client
+        return _nautilus_http_client(private_key, account_address, "TESTNET")
 
     def _call(self, method: str, *args: object, **kwargs: object) -> object:
         client = self._client_for_use()
@@ -1764,9 +1810,9 @@ class NautilusHyperliquidTestnetBackend:
 
     def _provenance(self) -> Provenance:
         return Provenance(
-            source="nautilus-hyperliquid.testnet",
+            source=self.provenance_source,
             execution_scope=self._session.execution_scope,
-            transport_state="external_testnet",
+            transport_state=self.transport_state,
             mapping_revision=self._config.capability_revision,
         )
 
@@ -1858,3 +1904,96 @@ def _resolve(value: object) -> object:
         return asyncio.run(value)
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, value).result()
+
+
+def _nautilus_http_client(private_key: str, account_address: str, environment_name: str) -> object:
+    try:
+        from nautilus_trader.core.nautilus_pyo3 import HyperliquidEnvironment
+        from nautilus_trader.core.nautilus_pyo3 import HyperliquidHttpClient
+        installed_version = package_version("nautilus-trader")
+    except (ImportError, PackageNotFoundError) as exc:
+        raise RuntimeBoundaryError(
+            "nautilus_runtime_missing",
+            "nautilus_trader 1.230.0 is required for external Testnet execution",
+        ) from exc
+    if installed_version != NAUTILUS_HYPERLIQUID_VERSION:
+        raise RuntimeBoundaryError(
+            "nautilus_version_mismatch",
+            "installed Nautilus version does not match the reviewed Testnet adapter",
+        )
+    client = HyperliquidHttpClient(
+        private_key=private_key,
+        account_address=account_address,
+        environment=getattr(HyperliquidEnvironment, environment_name),
+        include_builder_attribution=False,
+    )
+    client.set_account_id(f"{account_address}-HYPERLIQUID")
+    return client
+
+
+class NautilusHyperliquidMainnetReadOnlyBackend(NautilusHyperliquidTestnetBackend):
+    """Read-only Mainnet reads for one BTC sub-account.
+
+    Reuses the reviewed Testnet read mapping.  Every write path is refused
+    here as well as being absent from the capability descriptor, so a direct
+    backend call cannot place, cancel or protect a real-money order.
+    """
+
+    transport_state = "external_mainnet"
+    provenance_source = "nautilus-hyperliquid.mainnet"
+    _session_environment = BrokerEnvironment.MAINNET
+    _hyperliquid_environment = "MAINNET"
+    _WRITE_ORDER_OPERATIONS = frozenset({"submit", "cancel", "replace", "cancel_replace", "modify"})
+
+    def __init__(
+        self,
+        *,
+        session: BrokerRuntimeSession,
+        config: HyperliquidMainnetReadOnlyBackendConfig,
+        secrets: LocalFileSecretProvider,
+        client_factory: Callable[[str, str], object] | None = None,
+    ) -> None:
+        if not isinstance(config, HyperliquidMainnetReadOnlyBackendConfig):
+            raise RuntimeBoundaryError(
+                "mainnet_config_required",
+                "Mainnet backend requires the read-only Mainnet configuration",
+            )
+        if session.account.scope is not AccountScope.SUBACCOUNT:
+            raise RuntimeBoundaryError(
+                "mainnet_subaccount_required",
+                "Mainnet access is limited to one sub-account",
+            )
+        super().__init__(session=session, config=config, secrets=secrets, client_factory=client_factory)
+
+    def invoke(self, port: str, operation: str, request: object) -> object:
+        if port == "protection_order" or (port == "order_execution" and operation in self._WRITE_ORDER_OPERATIONS):
+            raise RuntimeBoundaryError("mainnet_read_only", "the Mainnet profile cannot write orders")
+        return super().invoke(port, operation, request)
+
+    def _submit(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        raise RuntimeBoundaryError("mainnet_read_only", "the Mainnet profile cannot write orders")
+
+    def _cancel(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        raise RuntimeBoundaryError("mainnet_read_only", "the Mainnet profile cannot write orders")
+
+    def _replace(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        raise RuntimeBoundaryError("mainnet_read_only", "the Mainnet profile cannot write orders")
+
+    def _invoke_protection(self, operation: str, request: Mapping[str, object]) -> object:
+        raise RuntimeBoundaryError("mainnet_read_only", "the Mainnet profile cannot write orders")
+
+    def _instrument(self, request: Mapping[str, object]) -> object:
+        instrument = super()._instrument(request)
+        if str(instrument.id) not in MAINNET_BTC_INSTRUMENTS:
+            raise RuntimeBoundaryError("mainnet_instrument_not_allowed", "the Mainnet profile reads BTC-USD-PERP only")
+        return instrument
+
+    def _instrument_id(self, value: object) -> object:
+        instrument_id = super()._instrument_id(value)
+        if str(instrument_id) not in MAINNET_BTC_INSTRUMENTS:
+            raise RuntimeBoundaryError("mainnet_instrument_not_allowed", "the Mainnet profile reads BTC-USD-PERP only")
+        return instrument_id
+
+    @staticmethod
+    def _default_client_factory(private_key: str, account_address: str) -> object:
+        return _nautilus_http_client(private_key, account_address, "MAINNET")

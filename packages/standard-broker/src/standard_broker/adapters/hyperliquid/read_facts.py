@@ -318,7 +318,7 @@ class HyperliquidExternalFactAdapter:
             unrealized_pnl=None,
             positions=(),
             provenance=provenance,
-            environment=BrokerEnvironment.TESTNET,
+            environment=self._context.identity.environment,
             observation_id=observation_id,
         )
         return ExternalFactEnvelope.create(

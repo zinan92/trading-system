@@ -15,8 +15,10 @@ from ...runtime_facts import RuntimeFactLedger
 from .external import (
     NAUTILUS_HYPERLIQUID_COMMIT,
     NAUTILUS_HYPERLIQUID_VERSION,
+    MAINNET_BTC_READONLY_REVISION,
     default_testnet_capabilities,
     enabled_testnet_position_protection_capabilities,
+    mainnet_btc_readonly_capabilities,
 )
 from .bridge import NautilusHyperliquidRuntime
 from .instruments import HyperliquidInstrumentAdapter
@@ -69,6 +71,22 @@ HYPERLIQUID_TESTNET_POSITION_PROTECTION_PROFILE = ExternalTransportProfile(
 )
 
 
+HYPERLIQUID_MAINNET_BTC_READONLY_PROFILE = ExternalTransportProfile(
+    profile_id="hyperliquid-mainnet-btc-readonly",
+    broker_id="hyperliquid",
+    environment=BrokerEnvironment.MAINNET,
+    execution_scope="hypercore:default",
+    adapter_id="nautilus-hyperliquid",
+    version=NAUTILUS_HYPERLIQUID_VERSION,
+    commit=NAUTILUS_HYPERLIQUID_COMMIT,
+    mapping_revision=MAINNET_BTC_READONLY_REVISION,
+    transport_state="external_mainnet",
+    signer_kind=SignerKind.API_AGENT,
+    capabilities=mainnet_btc_readonly_capabilities(),
+    protection_capabilities=None,
+)
+
+
 def resolve_external_profile(profile_id: str) -> ExternalTransportProfile:
     """Resolve one exact Hyperliquid profile without wildcard fallback."""
 
@@ -89,6 +107,29 @@ def resolve_external_position_protection_profile(profile_id: str) -> ExternalTra
             f"no exact external protection profile is registered for {profile_id!r}",
         )
     return HYPERLIQUID_TESTNET_POSITION_PROTECTION_PROFILE
+
+
+def resolve_mainnet_readonly_profile(profile_id: str) -> ExternalTransportProfile:
+    """Resolve the read-only Mainnet BTC profile exactly; nothing else resolves here."""
+
+    if profile_id != HYPERLIQUID_MAINNET_BTC_READONLY_PROFILE.profile_id:
+        raise RuntimeBoundaryError(
+            "external_profile_unsupported",
+            f"no exact Mainnet read-only profile is registered for {profile_id!r}",
+        )
+    return HYPERLIQUID_MAINNET_BTC_READONLY_PROFILE
+
+
+def build_hyperliquid_mainnet_readonly_host(
+    *,
+    context: ExternalBrokerBuildContext,
+    runtime: _ExternalRuntimePort,
+) -> ExternalBrokerHost:
+    """Build the read-only Mainnet BTC host; requires a bound Mainnet approval."""
+
+    profile = resolve_mainnet_readonly_profile(HYPERLIQUID_MAINNET_BTC_READONLY_PROFILE.profile_id)
+    profile.validate(context=context, runtime=runtime, require_approval=True)
+    return ExternalBrokerHost(context=context, runtime=runtime, profile=profile)
 
 
 def build_hyperliquid_testnet_host(

@@ -2,6 +2,7 @@
 
 ## Now
 
+- Issue #139 (in review): read-only Hyperliquid Mainnet BTC sub-account profile `hyperliquid-mainnet-btc-readonly`; no write path. Capped submit is #140, gated on #139 and a completed Testnet grid cycle.
 - The approved canonical Broker vocabulary and architecture are recorded in `CONTEXT.md` and `docs/adr/`.
 - Hyperliquid research and the accepted build Spec are recorded in the repository documentation and GitHub Spec Issue #2.
 - T01 is merged in PR #11 and establishes the six-port Paper Broker Contract seam with local-only transport and fail-closed capability checks.

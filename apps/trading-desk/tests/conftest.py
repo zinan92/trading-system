@@ -59,6 +59,13 @@ def fetch() -> FakeFetch:
     f.routes["candleSnapshot"] = [{"t": 1788998400000 + d * 86_400_000, "o": str(100 + d), "h": str(102 + d), "l": str(99 + d), "c": str(101 + d)} for d in range(14)]
     f.routes["/api/dashboard-control/catalog"] = {"venue_profiles": [{"id": "hyperliquid.testnet", "instruments": [
         {"asset": "BTC", "instrument_id": "BTC-USD-PERP", "eligibility": "eligible"}, {"asset": "ETH", "instrument_id": "ETH-USD-PERP", "eligibility": "unknown"}]}]}
+    f.routes["/api/ui/realtime"] = {"items": [
+        {"id": 11, "title": "美联储9月降息预期升温", "source": "cls_telegraph", "collected_at": "2099-01-01T08:00:00Z", "triage": {"bucket": "high_impact"}, "exposure_assets": ["bitcoin", "gold"]},
+        {"id": 12, "title": "比特币跌破7.7万", "source": "blockbeats_newsflash", "collected_at": "2099-01-01T09:30:00Z", "triage": {"bucket": "watch"}, "exposure_assets": ["bitcoin"]},
+        {"id": 13, "title": "苹果推出Siri人工智能", "source": "eastmoney_global_news", "collected_at": "2099-01-01T09:40:00Z", "triage": {"bucket": "watch"}, "exposure_assets": ["nasdaq"]},
+        {"id": 14, "title": "比特币跌破7.7万", "source": "cls_telegraph", "collected_at": "2099-01-01T09:29:00Z", "triage": {"bucket": "noise"}, "exposure_assets": ["bitcoin"]},
+        {"id": 15, "title": "Reddit chatter about BTC", "source": "reddit", "collected_at": "2099-01-01T09:50:00Z", "triage": {"bucket": "high_impact"}, "exposure_assets": ["bitcoin"]},
+    ]}
     f.routes["/api/articles/search"] = [
         {"id": 1, "title": "周一「开门黑」，比特币跌破7.7万", "source": "blockbeats_newsflash", "collected_at": "2099-01-01T00:00:00", "triage": {"bucket": "watch"}},
         {"id": 2, "title": "汇丰：预计美联储9月加息25个基点", "source": "cls_telegraph", "collected_at": "2099-01-01T00:00:00", "triage": {"bucket": "high_impact"}},
@@ -71,7 +78,8 @@ def fetch() -> FakeFetch:
 def config(tmp_path: Path, paper_output: Path) -> Config:
     return Config(paper_output=paper_output, db_path=tmp_path / "desk.db", intel_url="http://intel", dashboard_url="http://dash", hyperliquid_info_url="http://hl",
                   kline_archive=tmp_path / "kline", morning_latest=tmp_path / "morning" / "latest.html", morning_archive=tmp_path / "morning",
-                  kline_latest_html=tmp_path / "kline.html", weekly_latest_html=tmp_path / "weekly.html", paused_manifest=tmp_path / "paused.md")
+                  kline_latest_html=tmp_path / "kline.html", weekly_latest_html=tmp_path / "weekly.html", paused_manifest=tmp_path / "paused.md",
+                  watch_folder=tmp_path / "watch")
 
 
 @pytest.fixture

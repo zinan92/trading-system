@@ -13,6 +13,37 @@ from .models import AccountScope, BrokerEnvironment, BrokerIdentity, SignerKind
 _WRITE_OPERATIONS = frozenset({"submit", "cancel", "replace", "cancel_replace", "modify"})
 _RAW_PRIVATE_KEY = re.compile(r"^(?:0x)?[0-9a-fA-F]{64}$")
 _FORBIDDEN_REQUEST_KEYS = frozenset({"private_key", "secret", "signature", "signed_payload"})
+_WRITE_PORTS = frozenset({"protection_order"})
+
+
+# Exact capability revisions admitted on Mainnet.  Each must be read-only;
+# a write-capable Mainnet revision needs its own specification.
+MAINNET_READ_ONLY_REVISIONS = frozenset({"hyperliquid-mainnet-btc-readonly-v1"})
+
+
+def is_mainnet_read_only_session_capabilities(capabilities: CapabilityDescriptor) -> bool:
+    """Return whether a descriptor is an exact registered read-only Mainnet revision."""
+
+    return (
+        capabilities.environment is BrokerEnvironment.MAINNET
+        and capabilities.revision in MAINNET_READ_ONLY_REVISIONS
+        and is_read_only_capabilities(capabilities)
+    )
+
+
+def is_read_only_capabilities(capabilities: CapabilityDescriptor) -> bool:
+    """Return whether a descriptor declares no write operation on any port.
+
+    Mainnet is admitted only for read-only descriptors: a session that cannot
+    express a write cannot place, cancel, or protect a real-money order.
+    """
+
+    for port, operations in capabilities.operations.items():
+        if not operations:
+            continue
+        if port in _WRITE_PORTS or operations & _WRITE_OPERATIONS:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -152,11 +183,16 @@ class RuntimeActivationPolicy:
     """Explicit external-environment approval policy; all external access is denied by default."""
 
     testnet_approval: "ExternalEnvironmentApproval | None" = None
+    mainnet_approval: "ExternalEnvironmentApproval | None" = None
 
 
 @dataclass(frozen=True)
 class ExternalEnvironmentApproval:
-    """Human-approved, release-bound artifact required before testnet readiness."""
+    """Human-approved, release-bound artifact required before external readiness.
+
+    Testnet approvals may be unbound; Mainnet approvals must name the exact
+    account and lifecycle they authorize.
+    """
 
     environment: BrokerEnvironment
     approval_id: str
@@ -167,10 +203,17 @@ class ExternalEnvironmentApproval:
     lifecycle_id: str | None = None
 
     def __post_init__(self) -> None:
-        if self.environment is not BrokerEnvironment.TESTNET:
+        if self.environment not in {BrokerEnvironment.TESTNET, BrokerEnvironment.MAINNET}:
             raise RuntimeBoundaryError(
                 "external_approval_invalid",
-                "runtime v1 only accepts an explicit testnet approval artifact",
+                "runtime v1 only accepts an explicit testnet or mainnet approval artifact",
+            )
+        if self.environment is BrokerEnvironment.MAINNET and (
+            self.account_address is None or self.lifecycle_id is None
+        ):
+            raise RuntimeBoundaryError(
+                "external_approval_invalid",
+                "a mainnet approval must be bound to one account and lifecycle",
             )
         for name in ("approval_id", "release_sha", "approved_by"):
             value = getattr(self, name)
@@ -219,10 +262,22 @@ def preflight_runtime_session(
                 "testnet requires a separate human-approved environment artifact",
             )
     if session.environment is BrokerEnvironment.MAINNET:
-        raise RuntimeBoundaryError(
-            "mainnet_not_in_runtime_v1",
-            "mainnet requires a separate specification and activation boundary",
-        )
+        if not is_mainnet_read_only_session_capabilities(capabilities):
+            raise RuntimeBoundaryError(
+                "mainnet_not_in_runtime_v1",
+                "mainnet requires a separate specification and activation boundary",
+            )
+        approval = selected_policy.mainnet_approval
+        if (
+            approval is None
+            or approval.environment is not BrokerEnvironment.MAINNET
+            or approval.account_address != session.account.address
+            or approval.lifecycle_id != session.lifecycle_id
+        ):
+            raise RuntimeBoundaryError(
+                "external_environment_denied",
+                "mainnet read-only access requires an approval bound to this account and lifecycle",
+            )
 
     normalized_operations: list[tuple[str, str]] = []
     for port, operations in required_operations.items():

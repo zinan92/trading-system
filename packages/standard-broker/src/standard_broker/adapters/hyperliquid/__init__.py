@@ -17,8 +17,12 @@ from .bridge import (
 from .errors import UnknownInstrumentError, UnsupportedProductError
 from .credentials import LocalFileSecretProvider
 from .external import (
+    MAINNET_BTC_READONLY_REVISION,
+    HyperliquidMainnetReadOnlyBackendConfig,
     HyperliquidTestnetBackendConfig,
+    NautilusHyperliquidMainnetReadOnlyBackend,
     NautilusHyperliquidTestnetBackend,
+    mainnet_btc_readonly_capabilities,
     default_testnet_capabilities,
     enabled_testnet_position_protection_capabilities,
 )
@@ -43,7 +47,10 @@ from .protection import (
     ProtectionRetryPlan,
 )
 from .profile import (
+    HYPERLIQUID_MAINNET_BTC_READONLY_PROFILE,
     HYPERLIQUID_TESTNET_PROFILE,
+    build_hyperliquid_mainnet_readonly_host,
+    resolve_mainnet_readonly_profile,
     HYPERLIQUID_TESTNET_POSITION_PROTECTION_PROFILE,
     build_hyperliquid_testnet_host,
     build_hyperliquid_testnet_order_adapter,
@@ -92,7 +99,10 @@ __all__ = [
     "ProtectionLifecycleState",
     "ProtectionLifecycleStatus",
     "ProtectionRetryPlan",
+    "HYPERLIQUID_MAINNET_BTC_READONLY_PROFILE",
     "HYPERLIQUID_TESTNET_PROFILE",
+    "build_hyperliquid_mainnet_readonly_host",
+    "resolve_mainnet_readonly_profile",
     "HYPERLIQUID_TESTNET_POSITION_PROTECTION_PROFILE",
     "build_hyperliquid_testnet_host",
     "build_hyperliquid_testnet_order_adapter",
@@ -133,6 +143,10 @@ __all__ = [
     "LocalFileSecretProvider",
     "HyperliquidTestnetBackendConfig",
     "NautilusHyperliquidTestnetBackend",
+    "MAINNET_BTC_READONLY_REVISION",
+    "HyperliquidMainnetReadOnlyBackendConfig",
+    "NautilusHyperliquidMainnetReadOnlyBackend",
+    "mainnet_btc_readonly_capabilities",
     "default_testnet_capabilities",
     "enabled_testnet_position_protection_capabilities",
     "TestnetProofPlan",
