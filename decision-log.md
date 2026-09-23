@@ -19446,3 +19446,46 @@ auditable datafeed port; broker execution remains a separate port.
   subtree links. Changes belong here; the standalone repos should go read-only.
 - Production launchd agents still run from the old sibling checkouts. Switching
   them is a separate ticket, not part of this merge.
+
+# 2026-09-23 — Production launchd runs from the single repo (#1282)
+
+## Decision
+
+- One clean production checkout at `~/work/trading-platform`, kept on
+  `origin/main` with a clean tracked tree; development happens elsewhere.
+  Six agents point at it; the interpreter stays `/usr/local/bin/python3`
+  (dashboard, desk) and the shared Nautilus venv (control loop, observer), so
+  the predeploy gate's plist probe keeps seeing a Python executable.
+- The Mainnet observer now shares `packages/standard-broker` with the Testnet
+  dashboard instead of a second `standard-broker-mainnet` checkout; the merged
+  package is the superset (`5d37c1a`).
+- Desk plists set `TRADING_DESK_PAPER_OUTPUT=~/work/park-paper-output`
+  because the desk's new default is `<repo>/outputs`.
+
+## Gotchas
+
+- `python -m pipelines.paper_predeploy_gate` writes its receipt under
+  `<cwd>/outputs/release_gates`, while the dashboard reads
+  `$TRADING_ORCHESTRATOR_OUTPUT_ROOT/release_gates`. With a custom output root
+  copy the receipt across (or run the gate from a checkout whose `outputs/`
+  is the root). Symptom otherwise: `paper_predeploy_source_sha_mismatch`.
+- The 60-second control loop re-runs the gate from *its* checkout, so stop
+  the old control loop before writing the receipt for the new one, or the old
+  SHA wins.
+- Order used: bootout six agents → gate from new checkout → copy receipt →
+  install new plists → bootstrap → kickstart dashboard.
+
+## Rollback
+
+```bash
+cd ~/Library/LaunchAgents
+for l in com.wendy.trading-orchestrator.dashboard com.wendy.trading-orchestrator.park-paper-control \
+         com.wendy.trading-mainnet-observer com.wendy.trading-desk com.wendy.trading-desk-advice com.wendy.trading-desk-watch; do
+  launchctl bootout gui/$(id -u)/$l; cp $l.plist.pre-1282-*.bak $l.plist; done
+cp ~/.config/trading-system/run-park-paper-control.sh.pre-1282-*.bak ~/.config/trading-system/run-park-paper-control.sh
+cp ~/.config/trading-system/run-mainnet-observer.sh.pre-1282-*.bak ~/.config/trading-system/run-mainnet-observer.sh
+(cd ~/work/trading-system-park-paper-main && TRADING_ORCHESTRATOR_OUTPUT_ROOT=~/work/park-paper-output \
+  PYTHONPATH=.:$HOME/work/standard-broker/src /usr/local/bin/python3 -m pipelines.paper_predeploy_gate --python /usr/local/bin/python3 --json >/dev/null \
+  && cp outputs/release_gates/paper_predeploy_current.json ~/work/park-paper-output/release_gates/)
+for l in ...same six...; do launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$l.plist; done
+```

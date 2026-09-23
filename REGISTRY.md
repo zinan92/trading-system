@@ -9,6 +9,23 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-09-23, 本机 launchd 切到单仓 #1282)
+
+- 六个 launchd 任务（dashboard、park-paper-control、mainnet-observer、
+  trading-desk、trading-desk-advice、trading-desk-watch）全部从
+  `~/work/trading-platform`（本仓 `main` = `8d530d4`）运行；
+  `~/.config/trading-system/run-park-paper-control.sh` 与 `run-mainnet-observer.sh`
+  同步指向新 checkout。旧 plist / 脚本备份为 `*.pre-1282-<日期>.bak`。
+- 切换后实测：dashboard boot receipt `pass`，`/dashboard-v5.html` 200，
+  desk `/api/health` ok，本机 `/trade` 200，隧道 `trade.park-ai-intel.com/trade`
+  303 到口令页；paper read-model 仍是切换前的 `active_strategy_missing`。
+- 旧 checkout `trading-system-park-paper-main`、`~/work/trading-desk`、
+  `~/work/standard-broker(-mainnet)` 未删除，仅不再被引用；可用于回滚。
+- 仓库已于 2026-09-23 公开。
+
+_下一步_：观察一天无异常后删除旧 checkout；把独立仓 `trading-desk` /
+`standard-broker` 归档。
+
 ## 现在在哪里(2026-09-22, 平台单仓化 #1280)
 
 - `main` 现在就是整个 `/trade` 产品：`apps/trading-desk`（交易台 8790）、

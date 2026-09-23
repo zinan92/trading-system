@@ -53,6 +53,14 @@ umask 077; printf '%s\n' 'choose-a-long-passcode' > ~/park-data/trading-desk/rem
 Requests that arrive through the tunnel must hold a session derived from that
 passcode. Requests from the Mac itself never need it.
 
+## Gotcha: where the boot receipt lives
+
+`make gate` writes `outputs/release_gates/paper_predeploy_current.json` under
+the repo, and the dashboard reads it from `$TRADING_ORCHESTRATOR_OUTPUT_ROOT`.
+With the default root they are the same directory. If you point the root
+elsewhere, copy the receipt there after every `make gate`, or the dashboard
+exits with `paper_predeploy_source_sha_mismatch`.
+
 ## 3. Check
 
 ```bash
