@@ -22,7 +22,7 @@ if text.count(old) != 1:
     raise SystemExit(f"mutation pattern count {text.count(old)} != 1: {path}")
 path.write_text(text.replace(old, new, 1))
 PY
-  if (cd "$tmp_root" && PYTHONPATH="$tmp_root:$tmp_root/src:/Users/wendy/work/standard-broker/src" "$python_bin" -m pytest tests/testnet_replay -q >/dev/null 2>&1); then
+  if (cd "$tmp_root" && PYTHONPATH="$tmp_root:$tmp_root/src:$tmp_root/packages/standard-broker/src" "$python_bin" -m pytest tests/testnet_replay -q >/dev/null 2>&1); then
     printf '%-46s survived\n' "$name"
     return 1
   fi

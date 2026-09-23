@@ -16,7 +16,7 @@ FLOAT_ABS_TOLERANCE = 1e-9
 FLOAT_REL_TOLERANCE = 1e-9
 TRADING_STRATEGY_SHA = "d4daae915c549fe657a98b6cbf0e539886af355c"
 
-_PACKAGE_ROOT = "/Users/wendy/work/trading-strategy"
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[2] / "packages" / "trading-strategy")
 if _PACKAGE_ROOT not in sys.path:
     sys.path.insert(0, _PACKAGE_ROOT)
 

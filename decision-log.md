@@ -19417,3 +19417,32 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 - `PYTHONPATH=.:<standard-broker main>/src ... -m pytest tests/test_mainnet_observer.py -q` — 14 passed.
+
+# 2026-09-22 — One repository behind /trade (#1280)
+
+## Decision
+
+- Merge `claude/monorepo-rehearsal` into `main` and re-sync the imported
+  subtrees from each standalone repo's current `origin/main`. The rehearsal
+  imports were squashes, not history-preserving, and the desk had moved on
+  (GridMind same-origin proxy, Mainnet read-only setup, notify/watch/advice).
+- Desk defaults resolve inside the repo: `trading_system_checkout` and
+  `standard_broker_src` come from `PLATFORM_ROOT`; `paper_output` follows
+  `TRADING_ORCHESTRATOR_OUTPUT_ROOT` so dashboard and desk share one root.
+  Every value stays env-overridable.
+- Ship a product surface: root README, `.env.example`, `Makefile`,
+  `scripts/bootstrap.sh`, `scripts/run-*.sh`, `deploy/local/`. The old
+  gold-pipeline README moved to `docs/gold-pipeline-readme.md`.
+- Tests that need `nautilus_trader` skip when the extra is missing
+  (`importorskip` / `skipUnless`), so a laptop without Nautilus gets a green
+  suite instead of a collection error.
+
+## Gotchas
+
+- The dashboard refuses to boot without `outputs/release_gates/paper_predeploy_current.json`;
+  `make gate` writes it. The gate also attests the tracked tree, so commit or
+  stash before booting.
+- `apps/trading-desk` and `packages/standard-broker` are now copies, not
+  subtree links. Changes belong here; the standalone repos should go read-only.
+- Production launchd agents still run from the old sibling checkouts. Switching
+  them is a separate ticket, not part of this merge.

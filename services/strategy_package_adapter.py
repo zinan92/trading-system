@@ -19,7 +19,7 @@ from typing import Any, Callable
 MODE_ENV = "TRADING_ORCHESTRATOR_STRATEGY_IMPL"
 INTERNAL = "internal"
 SHADOW = "shadow"
-PACKAGE_ROOT = "/Users/wendy/work/trading-strategy"
+PACKAGE_ROOT = str(Path(__file__).resolve().parents[1] / "packages" / "trading-strategy")
 RECEIPT_PATH = Path("strategy_adapter") / "mismatch_receipts.json"
 ABS_TOLERANCE = 1e-9
 REL_TOLERANCE = 1e-9

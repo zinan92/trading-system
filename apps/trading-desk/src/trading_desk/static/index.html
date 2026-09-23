@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Park 交易台 · 日报</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=9">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Park 交易台</div>
+  <nav class="tabs" aria-label="页面">
+    <a class="tab-link" href="/trade">交易</a>
+    <button type="button" data-page="news" aria-selected="true">日报</button>
+    <button type="button" data-page="system" aria-selected="false">系统</button>
+    <a class="passcode-link" href="/passcode">改口令</a>
+  </nav>
+</header>
+
+<div id="page-news">
+  <div class="nl-bar">
+    <div class="seg" role="group" aria-label="日报">
+      <button type="button" data-nl="morning" aria-pressed="true">今日晨报</button>
+      <button type="button" data-nl="kline" aria-pressed="false">K 线日报</button>
+      <button type="button" data-nl="weekly" aria-pressed="false">宏观 K 线周报</button>
+    </div>
+    <label class="f inline" for="nl-archive">往期晨报 <select id="nl-archive"><option value="">选择日期</option></select></label>
+    <span class="meta" id="nl-meta"></span>
+  </div>
+  <iframe id="nl-frame" title="日报" src="about:blank"></iframe>
+</div>
+
+<div id="page-system" hidden>
+  <section class="panel sys mainnet" aria-labelledby="h-mainnet"><div class="ph"><h2 id="h-mainnet"><span class="real-money">真钱</span> Hyperliquid 正式盘</h2><span class="meta" id="mn-mode"></span></div>
+    <div id="mn-body" class="mn-body"></div>
+    <form id="mn-form" class="mn-form" autocomplete="off" hidden>
+      <p class="note">在 Hyperliquid 网页上先建好 API 钱包（只能交易、不能提币）和子账户，并往子账户转入 500 美元。密钥只存在这台 Mac 上一个只有你能读的文件里，交易台不会再显示它。</p>
+      <label class="f" for="mn-sub">子账户地址<input id="mn-sub" name="subaccount" placeholder="0x…" spellcheck="false" autocomplete="off"></label>
+      <label class="f" for="mn-key">API 钱包私钥<input id="mn-key" name="key" type="password" placeholder="64 位十六进制" spellcheck="false" autocomplete="new-password"></label>
+      <div class="approve"><button type="submit" class="btn-primary" id="mn-save">保存</button><span class="toast" id="mn-toast" role="status"></span></div>
+    </form>
+  </section>
+  <section class="panel sys" aria-labelledby="h-health"><div class="ph"><h2 id="h-health">数据和服务</h2><span class="meta" id="sys-time"></span></div><ul class="checks" id="checks"></ul></section>
+  <section class="panel sys" aria-labelledby="h-assets"><div class="ph"><h2 id="h-assets">品种管理</h2><span class="meta">加减品种只影响交易台，不动交易所上的挂单和持仓</span><button type="button" class="small-btn" id="add-asset">＋ 品种</button></div><div id="asset-admin"></div></section>
+  <section class="panel sys" aria-labelledby="h-exec"><div class="ph"><h2 id="h-exec">执行记录</h2><span class="meta">预览、执行、拒绝都记在这里</span></div><div class="scroll"><table><thead><tr><th>时间</th><th>品种</th><th>环节</th><th>内容</th></tr></thead><tbody id="exec-log"></tbody></table></div></section>
+  <section class="panel sys" aria-labelledby="h-paused"><div class="ph"><h2 id="h-paused">已暂停的服务</h2><span class="meta">每天用不到，先停；需要时可恢复</span></div><div class="scroll"><table><thead><tr><th>服务</th><th>原来做什么</th><th>为什么暂停</th></tr></thead><tbody id="paused"></tbody></table></div><p class="note" style="padding:0 14px 14px" id="restore"></p></section>
+</div>
+
+<dialog id="add-dialog">
+  <form method="dialog" id="add-form">
+    <h3>添加品种 · Hyperliquid 测试盘</h3>
+    <label class="f" for="add-search">搜索代码<input id="add-search" placeholder="例如 ETH、SOL、HYPE" autocomplete="off"></label>
+    <ul class="pick" id="add-list"></ul>
+    <label class="f" for="add-news">新闻关键词（用逗号分隔）<input id="add-news" placeholder="例如 以太坊, ETH, 加密"></label>
+    <div class="toast" id="add-toast" role="status"></div>
+    <div class="approve"><button type="button" class="btn-primary" id="add-submit" disabled>添加</button><button type="submit" class="btn-ghost" value="cancel">取消</button></div>
+  </form>
+</dialog>
+<script src="/static/app.js?v=8"></script>
+</body>
+</html>

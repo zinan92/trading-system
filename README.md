@@ -1,343 +1,114 @@
-# Trading Orchestrator
+# Trading Platform
 
-Gold-first MVP for the Trading OS eight-stage pipeline:
+Everything behind **trade.park-ai-intel.com/trade** lives in this one repository:
+the trading console (GridMind), the desk that wraps it, the broker adapters, the
+strategy engine and the K-line widget. Clone it, run one script, open `/trade`.
 
-```text
-kline -> intel -> signal -> copilot -> backtest -> risk -> local paper executor -> journal
+```
+in   Hyperliquid Testnet (public account reads, K-line bars, optional signed orders)
+     Binance XAUUSDT perpetual bars (gold paper track)
+     optional: a news service on :8001, daily newsletter HTML files, Telegram/Feishu
+out  http://127.0.0.1:8790/trade   交易：GridMind console + news rail + judgment/execution panel
+     http://127.0.0.1:8790/desk    日报 / 系统：morning brief, K-line cards, health, execution log
+     outputs/                      every receipt, ledger, read model and boot gate, append-only JSON
+
+fail no pre-deploy receipt          → dashboard refuses to boot (exit 79); run `make gate`
+fail dashboard down                 → desk /trade shows the reason; /desk still works
+fail news service absent            → news rail shows "no source"; nothing else changes
+fail Testnet key file absent        → everything is read-only; execute buttons stay disabled
+fail preview digest ≠ confirm       → order path rejects; no retry, no auto-next-plan
 ```
 
-This first version focuses on the product loop:
+## What is in the box
 
-- read a gold-first watchlist (GOLD tradable, DXY / real yield / GLD flow / Fed-CPI event factors)
-- fetch GOLD 5m snapshots from the local market store plus `gold-api.com` live XAU price; intraday history can be backfilled from Yahoo `GC=F` as a clearly flagged futures proxy
-- clean raw bars into auditable datasets
-- generate normalized gold intraday 5m signals
-- route each signal through a methodology analysis layer
-- attach backtest-style evidence
-- create risk-aware manual trade tickets
-- create local paper orders after an executed_paper decision
-- seed journal pending records
-- write a daily briefing, daily report, and strategy review notes
+| Path | What | Talks to |
+|---|---|---|
+| `pipelines/dashboard_server.py` + `services/` | **GridMind** trading console and control plane (`:8765`). Venue → instrument → strategy → preview → confirm & run. Stdlib HTTP server. | `packages/*` |
+| `apps/trading-desk` | **交易台** (`:8790`). Same-origin proxy of GridMind at `/trade` behind a passcode gate, plus judgments, plans, 72-hour review, daily cards. FastAPI. | dashboard, news, Hyperliquid public API |
+| `packages/standard-broker` | Provider-neutral broker ports and fail-closed adapters (Hyperliquid Testnet via Nautilus, read-only Mainnet observer). | exchange |
+| `packages/trading-strategy` | Engine-neutral canonical DCA / Grid planner: deterministic plans, previews, replays, receipts. | nothing |
+| `packages/standard-kline` | OHLCV candlestick widget over TradingView Lightweight Charts, served to the console. | browser |
+| `configs/` | Strategy, risk, pipeline and asset YAML (JSON-compatible; stdlib only). | |
+| `deploy/local` | launchd + Cloudflare Tunnel templates that reproduce the production setup on a Mac. | |
+| `docs/` | Specs, ADRs, runbooks, evidence. Start with `docs/north-star.md` and `docs/runbooks/`. | |
 
-## Run
+```
+browser ──▶ trading-desk :8790 ──/trade──▶ dashboard_server :8765 ──▶ services/ ──▶ standard-broker ──▶ Hyperliquid Testnet
+                │                                │                        │
+                │ desk.db (judgments, plans)      │ outputs/ (receipts)    └── trading-strategy (plans, previews)
+                └── optional news :8001           └── data/market_data.db
+```
 
-Collect a live GOLD 5m snapshot into the local SQLite market database:
+## Quick start
+
+Requirements: Python 3.13+, `make`, git. Node is optional (only for the K-line widget's own tests).
 
 ```bash
-python3 -m pipelines.collect --date 2026-05-26
+git clone https://github.com/zinan92/trading-system.git
+cd trading-system
+scripts/bootstrap.sh          # venv, deps, all test suites, boot receipt
+make dashboard                # terminal 1 → http://127.0.0.1:8765
+make desk                     # terminal 2 → http://127.0.0.1:8790/trade
 ```
 
-Backfill several days of GOLD 5m history into the same local SQLite database:
+`scripts/bootstrap.sh --with-nautilus` additionally builds an isolated venv with
+`nautilus_trader`, which is only needed to **send** Testnet orders or run the
+paper ledger. Without it the whole product runs read-only.
+
+Configuration is one file: copy `.env.example` to `.env` (bootstrap does this)
+and edit. Every path and port has a default inside the repo, so the only thing
+you must add to trade on Testnet is your own account address and a `0600` key
+file.
+
+## Boundaries
+
+- **Testnet and Paper only.** Mainnet is a read-only observer with a loss
+  monitor; there is no code path that places a real-money order. The North Star
+  (`NORTH_STAR.md`) says any live capability is a separate, explicitly approved
+  destination.
+- **Every order is preview → confirm → run, digest-bound, once.** Timers, page
+  loads and refreshes never place orders. The desk only calls the dashboard's
+  proven control path; it does not talk to a broker itself.
+- **Fail closed.** Missing receipt, stale account facts, unknown fills, a
+  changed source tree: each blocks rather than guesses. Read `docs/runbooks/`
+  before "fixing" a blocker.
+- **Secrets never enter git.** `.gitignore` + gitleaks in `make gitleaks`;
+  keys live in `0600` files referenced from `.env`.
+
+## Day-to-day
 
 ```bash
-python3 -m pipelines.backfill_gold --date 2026-05-26 --yahoo-symbol 'GC=F' --range 5d
+make test           # root, desk, broker, strategy, kline suites
+make gate           # refresh the paper pre-deploy receipt after pulling
+make gitleaks       # before every commit
 ```
 
-This writes `GOLD` 5m bars with provider `yahoo_chart:GC=F` and quality flags `historical_5m,futures_proxy`. It is useful for local intraday context and strategy development, while the latest spot snapshot remains `gold-api.com` when reachable.
+Testnet execution replay and mutation gates: `scripts/testnet_replay.sh`,
+`scripts/testnet_replay_mutations.sh`.
 
-You can also import broker, MT5, or TradingView exported XAUUSD 5m CSV:
+## Deploy
 
-```bash
-python3 -m pipelines.import_bars /path/to/XAUUSD_5m.csv --symbol GOLD --timeframe 5m --provider broker_csv --date 2026-05-26
-```
+`deploy/local/README.md` reproduces production: two launchd agents and one
+Cloudflare Tunnel that exposes only the desk. `deploy/cloud/` is the retired
+Linux/systemd variant, kept as reference.
 
-For a broker/MT5 feed bridge, drop exported XAUUSD 5m CSV files into:
+## Optional upstreams
 
-```text
-data/broker_feeds/gold_5m/
-```
+Separate repositories the production instance also runs; the platform degrades
+gracefully without them.
 
-Then import every new file into the local SQLite market database:
+| Service | Repo | Used by |
+|---|---|---|
+| News feed on `:8001` | [zinan92/intel](https://github.com/zinan92/intel) | desk news rail |
+| Market data on `:8100` | [zinan92/datafeed](https://github.com/zinan92/datafeed) | cloud paper preflight only |
+| Morning brief / K-line newsletters | [zinan92/park-morning](https://github.com/zinan92/park-morning), [zinan92/daily-newsletter](https://github.com/zinan92/daily-newsletter) | `/desk#news` cards |
 
-```bash
-python3 -m pipelines.broker_feed_doctor --date 2026-05-26
-python3 -m pipelines.data_gap_doctor --date 2026-05-26
-python3 -m pipelines.data_gap_repair_request --date 2026-05-26
-python3 -m pipelines.broker_feed --date 2026-05-26
-python3 -m pipelines.broker_feed_smoke --date 2026-05-26
-```
+## Project records
 
-The expected CSV headers are:
+`REGISTRY.md` is where the project is now and what is next. `decision-log.md`
+holds the reasons and the traps. `NORTH_STAR.md` holds the destination. The
+original gold-pipeline documentation moved to `docs/gold-pipeline-readme.md`.
 
-```text
-timestamp,open,high,low,close,volume
-```
+## License
 
-`timestamp`, `datetime`, `time`, or `date` are accepted for the time column. The default bridge provider is `mt5_csv`, which is treated as an official broker feed candidate by data-source preflight.
-
-Check whether the current local GOLD 5m data is paper-only public data or official broker data:
-
-```bash
-python3 -m pipelines.data_source_preflight --date 2026-05-26
-```
-
-For a lightweight live loop, keep it running on a five-minute cadence:
-
-```bash
-python3 -m pipelines.collect --date 2026-05-26 --iterations 12 --interval-seconds 300
-```
-
-Run the full daily trading pipeline:
-
-```bash
-python3 -m pipelines.daily --date 2026-05-07
-```
-
-Or run one complete Bot cycle: collect data, generate signal/ticket, optionally execute the first paper ticket, and write the daily review.
-
-```bash
-python3 -m pipelines.bot --date 2026-05-26 --paper-auto-approve
-```
-
-Run the local bot runner on a five-minute cadence and write heartbeat status:
-
-```bash
-python3 -m pipelines.runner --date 2026-05-26 --paper-auto-approve --iterations 0 --interval-seconds 300
-```
-
-For a single runner cycle during testing:
-
-```bash
-python3 -m pipelines.runner --date 2026-05-26 --paper-auto-approve --iterations 1
-```
-
-Outputs:
-
-```text
-outputs/daily_briefings/YYYY-MM-DD.md
-outputs/raw_snapshots/YYYY-MM-DD/*
-outputs/clean_bars/YYYY-MM-DD/*
-outputs/signals/YYYY-MM-DD.json
-outputs/analyses/YYYY-MM-DD.json
-outputs/backtests/YYYY-MM-DD.json
-outputs/trade_tickets/YYYY-MM-DD.json
-outputs/paper_orders/YYYY-MM-DD.json
-outputs/paper_positions/current.json
-outputs/journal_pending/YYYY-MM-DD.json
-outputs/journals/YYYY-MM-DD.md
-outputs/reports/YYYY-MM-DD.md
-outputs/review_notes/YYYY-MM-DD.md
-outputs/collector_runs/YYYY-MM-DD.json
-outputs/backfills/YYYY-MM-DD.json
-outputs/imports/YYYY-MM-DD.json
-outputs/broker_feed_doctor/current.json
-outputs/broker_feed_imports/YYYY-MM-DD.json
-outputs/broker_feed_smoke/current.json
-outputs/data_source_preflight/current.json
-outputs/data_gaps/current.json
-outputs/data_gap_repair_requests/YYYY-MM-DD.md
-outputs/data_gap_repair_requests/current.json
-outputs/runner_status/current.json
-outputs/runner_status/YYYY-MM-DD.json
-```
-
-## Record Manual Decision
-
-After reviewing a ticket, mark it as executed_paper, skipped, or rejected:
-
-```bash
-python3 -m pipelines.decision \
-  --date 2026-05-07 \
-  --ticket-id ticket_gold_20260507_ef10f510b3 \
-  --decision executed_paper \
-  --notes "Approved local paper test."
-```
-
-This moves the item from:
-
-```text
-outputs/journal_pending/YYYY-MM-DD.json
-```
-
-to:
-
-```text
-outputs/journal_decisions/YYYY-MM-DD.json
-```
-
-`executed_paper` also writes:
-
-```text
-outputs/paper_orders/YYYY-MM-DD.json
-outputs/paper_positions/current.json
-```
-
-Execution is routed through a broker adapter. The default config is:
-
-```json
-"execution_mode": "paper",
-"live_trading_enabled": false
-```
-
-The live adapter is intentionally guarded and will refuse orders until a real broker integration is wired and explicitly enabled.
-
-Run broker readiness checks and write a local preflight artifact:
-
-```bash
-python3 -m pipelines.broker_preflight
-```
-
-Outputs:
-
-```text
-outputs/broker_preflight/current.json
-```
-
-When `execution_mode` is switched to `live` and `live_trading_enabled` is explicitly true, the live adapter can record dry-run live order requests under:
-
-```text
-outputs/live_order_requests/YYYY-MM-DD.json
-```
-
-Dry-run requests are local artifacts only; they do not send real broker orders.
-
-For a local MT5 bridge, set:
-
-```json
-"execution_mode": "live",
-"live_trading_enabled": true,
-"broker": {
-  "provider": "mt5_file_bridge",
-  "dry_run": true,
-  "outbox_dir": "data/broker_outbox/mt5"
-}
-```
-
-With `dry_run: true`, orders are written to the MT5 outbox as artifacts but should not be executed by an EA. With `dry_run: false`, the system writes `submitted_to_bridge` order files into the outbox; a separate MT5 EA or manual executor must consume those files. The Python bot still does not place broker orders directly.
-
-The MT5 EA or manual bridge can write execution receipts into:
-
-```text
-data/broker_inbox/mt5/
-```
-
-Receipt JSON should include at least:
-
-```json
-{
-  "order_id": "live_dryrun_...",
-  "broker_order_id": "mt5-ticket-id",
-  "status": "filled",
-  "fill_price": 4572.5,
-  "filled_quantity": 1.2,
-  "timestamp": "2026-05-26T01:00:00Z"
-}
-```
-
-Import receipts manually:
-
-```bash
-python3 -m pipelines.broker_receipts --date 2026-05-26
-```
-
-The runner and doctor also import pending receipts automatically. Imported receipts are stored under:
-
-```text
-outputs/broker_receipts/current.json
-outputs/broker_receipts/YYYY-MM-DD.json
-```
-
-Run a local-only MT5 bridge smoke test:
-
-```bash
-python3 -m pipelines.mt5_bridge_smoke --date 2026-05-26
-```
-
-This uses `data/broker_bridge_smoke/`, writes one dry-run MT5 outbox order, creates a mock receipt, imports it, and records:
-
-```text
-outputs/mt5_bridge_smoke/current.json
-outputs/mt5_bridge_smoke/YYYY-MM-DD.json
-```
-
-It is an integration smoke test for the file bridge path; it does not contact MT5 or place a real order.
-
-## Health Check
-
-Run a local end-to-end artifact health check:
-
-```bash
-python3 -m pipelines.health --date 2026-05-26
-```
-
-Outputs:
-
-```text
-outputs/health/current.json
-outputs/health/YYYY-MM-DD.json
-```
-
-The dashboard shows this status in the System Health panel.
-
-Run the one-command system doctor before or after a trading session:
-
-```bash
-python3 -m pipelines.doctor --date 2026-05-26
-```
-
-For the full JSON payload:
-
-```bash
-python3 -m pipelines.doctor --date 2026-05-26 --json
-```
-
-Outputs:
-
-```text
-outputs/doctor/current.json
-outputs/doctor/YYYY-MM-DD.json
-```
-
-Doctor refreshes broker preflight, data-source preflight, health, and completion audit, then returns the current readiness state plus concrete next actions. A `warn` state is expected when the system is paper-ready but still lacks an official broker/MT5 market-data feed.
-
-## Daily Review
-
-Generate a compact daily report, human-readable Trading Journal, and self-review notes from signals, tickets, pending items, manual decisions, and paper PnL:
-
-```bash
-python3 -m pipelines.review --date 2026-05-07
-```
-
-Outputs:
-
-```text
-outputs/reports/YYYY-MM-DD.md
-outputs/journals/YYYY-MM-DD.md
-outputs/review_notes/YYYY-MM-DD.md
-```
-
-## Dashboard
-
-Serve the project root with the local dashboard API and open the dashboard:
-
-```bash
-python3 -m pipelines.dashboard_server --host 127.0.0.1 --port 8765
-```
-
-Then visit:
-
-```text
-http://127.0.0.1:8765/dashboard-v4.html
-```
-
-The API endpoint behind the page is:
-
-```text
-http://127.0.0.1:8765/api/dashboard?date=YYYY-MM-DD
-```
-
-The dashboard auto-refreshes every 30 seconds and displays the latest GOLD provider plus quality flags, open paper trades, risk envelope, journal feed, and local database coverage. The first bootstrapped 5m history may include `local_synthetic_seed` rows anchored to the live XAU price; the latest bar should show `gold-api.com` when the live API is reachable. Historical coverage may include `yahoo_chart:GC=F`, which is a futures proxy and is shown separately in the Data Coverage panel.
-
-## Strategy Config
-
-The active gold intraday strategy is configured in:
-
-```text
-configs/strategy.yaml
-```
-
-It controls the 5m MA windows, signal thresholds, factor weights, local backtest stop/target model, max holding bars, and verdict thresholds. The dashboard and daily reports surface these values so each journal entry can be reviewed against the exact rules used that day.
-
-## Notes
-
-The `.yaml` config files are JSON-compatible YAML, so the MVP can run with only the Python standard library. Replace the config loader with PyYAML later if richer YAML syntax is needed.
+Source-available for reading, forking and running your own instance. `packages/standard-kline` is MIT. No warranty; nothing here is investment advice, and the only execution path is a Hyperliquid **Testnet** account.

@@ -1,0 +1,23 @@
+{
+  "source_repo": "/Users/wendy/work/trading-system-testnet",
+  "source_baseline_sha": "b841800ee03fd98107063c0cbbf5144096a5c4c0",
+  "fixture_path": "tests/fixtures/canonical_golden.json",
+  "fixture_sha256": "7c8c04cbabe176c78f588531c3988b4ecbacee8af8f8ca749503777b88e2f395",
+  "source_file_sha256": {
+    "schemas/market_data.py": "1ba833a4e1119a1f76921b21323f812f1b9ec6468d4a0ac4af5cf74d6b3af2cc",
+    "services/dca_plan.py": "e326d5d4d1e2b69cfbc671fc272b04c268d41d7d7a2bcc5e51f0a1740625dc95",
+    "services/dualtrack_costs.py": "8383d9da496dfa79b96191b36be4daf72af587664d7b9c37cfb6320ca0047493",
+    "services/dualtrack_execution_contract.py": "01a55fad45c749da278eff25e677164f63a6fc9a82c22be7e1022fdfa6f5ae83",
+    "services/dualtrack_grid_core.py": "d2b489fba0c43b4d0edd031c6f2a1f0fb5d4efcdf6b231b47857118d10a1b039",
+    "services/grid_marketability.py": "e11c299d66b29d808706c0c66f0c5c4a0cdf39e4dda6361f2fa6a6a6282fe1e4",
+    "services/grid_range_adjustment.py": "be2dddbe258a5dc3ec2ddac7ac5e4363d7e1dcbd07f362e225e5aa6b040adba0",
+    "services/grid_sizing.py": "36394b4a80693d531734492eec333c683c64378cc689f463a051c744ad00cf81",
+    "services/venue_costs.py": "f17c76c2d5523269b426489bab3700761d68c10ca01aa28e655540b4c9670776"
+  },
+  "capture_script": "tools/capture_canonical_golden.py",
+  "capture_command": "python3 tools/capture_canonical_golden.py --source-ref b841800ee03fd98107063c0cbbf5144096a5c4c0 | diff -u tests/fixtures/canonical_golden.json -",
+  "capture_result": "GOLDEN_CAPTURE_DIFF_PASS",
+  "captured_at_utc": "2026-08-24T10:04:11Z",
+  "implementation_copy_started_after_fixture": true,
+  "source_behavior_note": "The default capture rejects a mutable checkout whose HEAD is not pinned; this receipt uses an explicit local Git-object snapshot of the pinned source ref and imports only source pure DCA/Grid modules. It does not call network, credentials, broker, order, filesystem journal, Park, Telegram, or Cloud code."
+}

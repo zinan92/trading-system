@@ -1,0 +1,594 @@
+"""FastAPI app. Orders are only ever placed from the 执行 button Park presses (Hyperliquid Testnet)."""
+from __future__ import annotations
+
+import json
+import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from . import plans, review
+from .config import Config
+from . import digest, gridmind, mainnet, remote
+from .advice import Advisor
+from .watch import Watch, codex_complete
+from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
+from .sources import Sources, http_json
+from .store import Store
+
+STATIC = Path(__file__).parent / "static"
+KLINE_PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>K 线日报 {title}</title>
+<style>body{{font:15px/1.7 "Noto Sans SC","PingFang SC",system-ui,sans-serif;max-width:860px;margin:0 auto;padding:24px;color:#18221F;background:#F8FAF9}}
+img{{max-width:100%;border-radius:6px}} h1,h2,h3{{font-family:"Noto Serif SC",serif}} table{{border-collapse:collapse}} td,th{{border:1px solid #CBD4D0;padding:4px 8px}}</style>
+</head><body>{body}</body></html>"""
+PAUSED_ROWS = re.compile(r"^\| (com\.[\w.-]+) \| ([^|]+) \| ([^|]+) \|$")
+
+
+class JudgmentIn(BaseModel):
+    asset: str = Field(min_length=1, max_length=20)
+    direction: Literal["long", "short", "flat"]
+    confidence: int = Field(ge=1, le=5)
+    reason: str = Field(default="", max_length=2000)
+    cited: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    action: Literal["recorded", "approved"] = "recorded"
+
+
+class PlanIn(BaseModel):
+    asset: str
+    direction: Literal["long", "short", "flat"]
+
+
+class NoteIn(BaseModel):
+    asset: str
+    body: str = Field(min_length=1, max_length=2000)
+
+
+class AssetIn(BaseModel):
+    coin: str = Field(min_length=1, max_length=20)
+    news_queries: list[str] = Field(default_factory=list, max_length=10)
+
+
+class NewsQueriesIn(BaseModel):
+    news_queries: list[str] = Field(min_length=1, max_length=10)
+
+
+class StopIn(BaseModel):
+    asset: str
+    confirm_text: Literal["停止"]
+
+
+class HoldIn(BaseModel):
+    asset: str
+    paused: bool
+
+
+class ExecuteIn(BaseModel):
+    judgment_id: int
+    shown_max_loss: float | None = None
+    confirm_text: Literal["执行"]
+
+
+def create_app(config: Config | None = None, sources: Sources | None = None, store: Store | None = None,
+               executor: Executor | None = None, watch: Watch | None = None, model: Callable[[str], str] | None = None) -> FastAPI:
+    config = config or Config()
+    sources = sources or Sources(config)
+    store = store or Store(config.db_path)
+    executor = executor or Executor(config, lambda url, body: http_json(url, body, timeout=150))
+    watch = watch or Watch(config.watch_folder, config.intel_url)
+    app = FastAPI(title="Park 交易台", docs_url=None, redoc_url=None)
+    remote.install(app, config.remote_passcode)
+    gridmind.install(app, config.dashboard_url)
+
+    def asset_or_404(key: str) -> dict[str, Any]:
+        asset = store.asset(key.upper())
+        if not asset:
+            raise HTTPException(404, "没有这个品种")
+        return asset
+
+    def asset_state(asset: dict[str, Any]) -> dict[str, Any]:
+        return current_state(sources, asset)
+
+    advisor = Advisor(store, sources, watch, complete=model or codex_complete, asset_state=asset_state)
+
+    @app.get("/")
+    def home() -> RedirectResponse:
+        return RedirectResponse("/trade", status_code=302)
+
+    @app.get("/desk")
+    def index() -> FileResponse:
+        return FileResponse(STATIC / "index.html")
+
+    @app.get("/api/health")
+    def health() -> dict[str, Any]:
+        return {"ok": True, "service": "trading-desk", "submits_orders": True, "requires_human_press": True,
+                "execution_scope": "hyperliquid.testnet"}
+
+    # ---- assets ----------------------------------------------------------------
+    @app.get("/api/assets")
+    def assets() -> dict[str, Any]:
+        return {"assets": [{k: a[k] for k in ("key", "label", "kind", "venue_profile_id", "instrument_id", "news_queries")} for a in store.assets()]}
+
+    @app.get("/api/catalog")
+    def catalog() -> dict[str, Any]:
+        result = sources.catalog()
+        have = {a["key"] for a in store.assets()}
+        for item in result.get("instruments", []):
+            item["added"] = str(item["coin"]).upper() in have
+        return result
+
+    @app.post("/api/assets")
+    def add_asset(body: AssetIn) -> dict[str, Any]:
+        found = next((i for i in sources.catalog().get("instruments", []) if str(i["coin"]).upper() == body.coin.upper()), None)
+        if not found:
+            raise HTTPException(422, "交易所目录里没有这个品种")
+        try:
+            return store.add_hl_asset(coin=found["coin"], instrument_id=found["instrument_id"], news_queries=body.news_queries or None)
+        except ValueError:
+            raise HTTPException(409, "这个品种已经在交易台里了") from None
+
+    @app.put("/api/assets/{key}/news")
+    def update_news(key: str, body: NewsQueriesIn) -> dict[str, Any]:
+        asset_or_404(key)
+        try:
+            return store.update_asset_news(key.upper(), body.news_queries)
+        except ValueError:
+            raise HTTPException(422, "至少留一个新闻关键词") from None
+
+    @app.delete("/api/assets/{key}")
+    def remove_asset(key: str) -> dict[str, Any]:
+        asset_or_404(key)
+        try:
+            store.remove_asset(key.upper())
+        except ValueError:
+            raise HTTPException(409, "至少要保留一个品种") from None
+        return {"ok": True, "note": "只从交易台移除，交易所上的挂单和持仓不受影响。"}
+
+    # ---- accounts / desk ---------------------------------------------------------
+    @app.get("/api/accounts")
+    def accounts() -> dict[str, Any]:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            hl, xau = pool.submit(sources.hl_account), pool.submit(sources.xau_paper)
+            hl_account, paper = hl.result(), xau.result()
+        return {"accounts": [
+            hl_account if hl_account.get("ok") else {**hl_account, "venue": "Hyperliquid 测试盘账户"},
+            paper["account"] if paper.get("ok") else {"ok": False, "venue": "Binance 纸面盘 · 黄金网格", "reason": paper.get("reason")},
+        ]}
+
+    @app.get("/api/desk/{key}")
+    def desk(key: str) -> dict[str, Any]:
+        asset = asset_or_404(key)
+        state = asset_state(asset)
+        today = datetime.now(timezone.utc).astimezone().date().isoformat()
+        mine = store.judgments(asset["key"], limit=50)
+        latest = next((j for j in mine if _local_date(j["created_at"]) == today), None)
+        grid = state["grid"]
+        runs = store.executions(asset["key"], limit=5)
+        steps = {
+            "look": True, "judge": latest is not None, "plan": bool(latest and latest.get("plan")),
+            "approve": bool(latest and latest.get("action") == "approved"),
+            "watch": bool(grid.get("ok") and grid.get("status") not in {"terminal", "TERMINAL", "stopped_by_operator"} and not grid.get("sealed")),
+            "review": any(j.get("resolved_at") for j in mine),
+        }
+        venue = {"hl_testnet": ("Hyperliquid Testnet", "测试盘（假钱）"), "xau_paper": ("Binance 纸面盘", "纸面模拟"), "watch": ("期货行情", "只记判断")}[asset["kind"]]
+        return {"asset": asset["key"], "meta": {"label": asset["label"], "venue": venue[0], "money": venue[1], "kind": asset["kind"]},
+                "price": state["price"], "grid": grid, "today_judgment": latest, "steps": steps,
+                "notes": store.notes(asset["key"], limit=10), "executions": runs, "kline": sources.kline_view(asset),
+                "news_queries": asset["news_queries"], "control": {**_grid_control(asset, executor.coordinator()), "rearm_paused": _hold_state(config, asset)},
+                "ai_today": advisor.today(asset["key"]), "ai_running": advisor_running.is_set()}
+
+    @app.get("/api/news/{key}")
+    def news(key: str) -> dict[str, Any]:
+        return sources.news(asset_or_404(key))
+
+    @app.get("/api/bars/{key}")
+    def bars(key: str, tf: Literal["1h", "4h", "1d"] = "4h") -> dict[str, Any]:
+        return sources.bars(asset_or_404(key), tf, limit=60)
+
+    @app.post("/api/plan")
+    def plan(body: PlanIn) -> dict[str, Any]:
+        asset = asset_or_404(body.asset)
+        state = asset_state(asset)
+        return plans.build_plan(asset["kind"], body.direction, state["price"], state["grid"])
+
+    @app.post("/api/judgments")
+    def add_judgment(body: JudgmentIn) -> dict[str, Any]:
+        asset = asset_or_404(body.asset)
+        state = asset_state(asset)
+        built = plans.build_plan(asset["kind"], body.direction, state["price"], state["grid"])
+        if body.action == "approved" and built.get("kind") == "unavailable":
+            raise HTTPException(409, "现价读不到，计划不完整，暂时不能批准。可以先只记录判断。")
+        today = datetime.now(timezone.utc).astimezone().date().isoformat()
+        earlier = next((j for j in store.judgments(asset["key"], limit=5) if _local_date(j["created_at"]) == today), None)
+        fields = dict(direction=body.direction, confidence=body.confidence, reason=body.reason, cited=body.cited,
+                      price_at=state["price"], plan=built, action=body.action)
+        if earlier and earlier.get("action") != "approved" and not earlier.get("resolved_at"):
+            saved = store.revise_judgment(earlier["id"], **fields)
+        else:
+            saved = store.add_judgment(asset=asset["key"], **fields)
+        if body.action == "approved" and built.get("kind") == "new" and built.get("executable"):
+            try:
+                preview = executor.preview(asset, built)
+            except ExecutionRefused as exc:
+                preview = {"execution_ready": False, "blockers": [str(exc)]}
+            except Exception as exc:  # noqa: BLE001 - preview failure must not lose the recorded judgment
+                preview = {"execution_ready": False, "blockers": [f"预览失败：{type(exc).__name__}"]}
+            store.log_execution(asset=asset["key"], stage="preview", judgment_id=saved["id"], preview_digest=preview.get("preview_digest"), detail=preview)
+            saved["preview"] = preview
+            saved["handoff"] = ("预览通过：以下是交易所会挂的真实价位。确认没问题再按「执行」，不按不会下单。" if preview.get("execution_ready")
+                                else "预览没有通过，不能执行：" + "；".join(map(str, preview.get("blockers") or [])))
+        elif body.action == "approved":
+            saved["handoff"] = "已记录批准。这份计划不需要下单（沿用现有网格或观望）。"
+        else:
+            saved["handoff"] = "判断已记录，到期后自动出现在复盘里。"
+        return saved
+
+    @app.post("/api/execute")
+    def execute(body: ExecuteIn) -> dict[str, Any]:
+        judgment = store.judgment(body.judgment_id)
+        if not judgment or judgment.get("action") != "approved" or not judgment.get("plan"):
+            raise HTTPException(409, "只有已批准的计划才能执行")
+        if any(e["stage"] in {"executed", "execute_started"} for e in store.executions(judgment["asset"], limit=50) if e["judgment_id"] == judgment["id"]):
+            raise HTTPException(409, "这份计划已经执行过了")
+        asset = asset_or_404(judgment["asset"])
+        store.log_execution(asset=asset["key"], stage="execute_started", judgment_id=judgment["id"], preview_digest=None, detail={"pressed_at": datetime.now(timezone.utc).isoformat()})
+        try:
+            result = executor.execute(asset, judgment["plan"], shown_max_loss=body.shown_max_loss, judgment_id=judgment["id"])
+        except ExecutionRefused as exc:
+            store.log_execution(asset=asset["key"], stage="refused", judgment_id=judgment["id"], preview_digest=None, detail={"reason": str(exc), **exc.detail})
+            raise HTTPException(409, str(exc)) from None
+        store.log_execution(asset=asset["key"], stage="executed" if result.get("started") else "execute_failed", judgment_id=judgment["id"],
+                            preview_digest=(result.get("preview") or {}).get("preview_digest"), detail=result)
+        started_text = "计划已确认，黄金纸面盘约 1 分钟内挂单，系统接管盯盘。" if asset["kind"] == "xau_paper" else "网格已经挂上测试盘，系统接管盯盘。"
+        return {**result, "message": started_text if result.get("started") else f"下单没有完成（{result.get('status')}），请看系统页记录。"}
+
+    @app.post("/api/grid/stop")
+    def stop_grid(body: StopIn) -> dict[str, Any]:
+        asset = asset_or_404(body.asset)
+        coordinator = executor.coordinator()
+        if asset["kind"] != "hl_testnet" or coordinator.get("selected_instrument_id") != asset["instrument_id"]:
+            raise HTTPException(409, "这个品种现在没有在测试盘跑网格")
+        try:
+            result = executor.stop_grid()
+        except ExecutionRefused as exc:
+            store.log_execution(asset=asset["key"], stage="stop_refused", judgment_id=None, preview_digest=None, detail={"reason": str(exc), **exc.detail})
+            raise HTTPException(409, str(exc)) from None
+        store.log_execution(asset=asset["key"], stage="stop_requested", judgment_id=None, preview_digest=None, detail=result)
+        return result
+
+    @app.post("/api/grid/rearm-hold")
+    def rearm_hold(body: HoldIn) -> dict[str, Any]:
+        """Park's 暂停补单 / 恢复补单: the grid stops (or resumes) placing new entries; resting orders and protection stay."""
+        asset = asset_or_404(body.asset)
+        if asset["kind"] != "hl_testnet":
+            raise HTTPException(409, "暂停补单目前只支持测试盘网格")
+        holds = read_holds(config)
+        holds[asset["instrument_id"]] = {"rearm_paused": body.paused, "by": "park", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                         "reason": "Park 在交易台按下「暂停补单」" if body.paused else "Park 在交易台按下「恢复补单」"}
+        write_holds(config, holds)
+        store.log_execution(asset=asset["key"], stage="rearm_hold" if body.paused else "rearm_release", judgment_id=None, preview_digest=None,
+                            detail=holds[asset["instrument_id"]])
+        return {"paused": body.paused, "message": "已暂停补单：现有挂单、止盈和止损不动，成交止盈后不再补新单。约 1 分钟内生效。" if body.paused
+                else "已恢复补单：约 1 分钟内生效；只补现价下方（做空则上方）的格子，不会高位追买。"}
+
+    # ---- Hyperliquid Mainnet: setup and read-only dry run ---------------------------
+    @app.get("/api/mainnet")
+    def mainnet_status() -> dict[str, Any]:
+        return mainnet.status(config)
+
+    def mainnet_request_guard(request: Request, refused: str) -> None:
+        """Mac-only, same-origin, JSON: a web page open elsewhere in the browser cannot post a simple cross-site request here."""
+        if remote.is_remote(request):
+            raise HTTPException(403, refused)
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/") != f"{request.url.scheme}://{request.headers.get('host', '')}":
+            raise HTTPException(403, refused)
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            raise HTTPException(415, "请求格式不对")
+
+    @app.post("/api/mainnet/setup")
+    async def mainnet_setup(request: Request) -> dict[str, Any]:
+        """Park types the key himself, on the Mac only. The body is parsed by hand so no validation error can echo it."""
+        mainnet_request_guard(request, "正式盘密钥只能在 Mac 本机的交易台里填写")
+        try:
+            body = json.loads(await request.body())
+            key, subaccount = str(body.get("key") or ""), str(body.get("subaccount") or "")
+        except (ValueError, AttributeError):
+            raise HTTPException(400, "提交的内容读不出来") from None
+        try:
+            result = mainnet.save_setup(config, key=key, subaccount=subaccount)
+        except mainnet.SetupRefused as exc:
+            raise HTTPException(400, str(exc)) from None
+        store.log_execution(asset="MAINNET", stage="mainnet_setup", judgment_id=None, preview_digest=None,
+                            detail={"subaccount": result["subaccount"], "by": "park"})
+        return result
+
+    @app.post("/api/mainnet/unlock")
+    def mainnet_unlock(request: Request) -> dict[str, Any]:
+        mainnet_request_guard(request, "正式盘只能在 Mac 本机的交易台里解锁")
+        result = mainnet.unlock(config)
+        store.log_execution(asset="MAINNET", stage="mainnet_unlock", judgment_id=None, preview_digest=None, detail={**result, "by": "park"})
+        if not result.get("ok"):
+            raise HTTPException(409, f"今天不能解锁，{result.get('unlock_from')} 起可以解锁" if result.get("reason") == "same_day" else "解锁被拒绝")
+        return result
+
+    # ---- review / notes ------------------------------------------------------------
+    @app.get("/api/review")
+    def review_list(asset: str | None = None) -> dict[str, Any]:
+        review.resolve_due(store, sources, config.review_hours, asset=asset.upper() if asset else None)
+        rows = store.judgments(asset.upper() if asset else None, limit=200, author=None)
+
+        def tally(items: list[dict[str, Any]]) -> dict[str, int]:
+            done = [r for r in items if r.get("outcome") in {"hit", "miss", "even"}]
+            return {"resolved": len(done), "hits": sum(1 for r in done if r["outcome"] == "hit"),
+                    "pending": sum(1 for r in items if not r.get("outcome")),
+                    "unverifiable": sum(1 for r in items if r.get("outcome") == "unverifiable")}
+
+        park_rows = [r for r in rows if r.get("author", "park") == "park"][:100]
+        ai_rows = [r for r in rows if r.get("author") == "ai"][:100]
+        return {"items": park_rows, "ai_items": ai_rows, "review_hours": config.review_hours,
+                "summary": tally(park_rows), "ai_summary": tally(ai_rows)}
+
+    @app.post("/api/notes")
+    def add_note(body: NoteIn) -> dict[str, Any]:
+        asset_or_404(body.asset)
+        try:
+            return store.add_note(asset=body.asset.upper(), body=body.body)
+        except ValueError:
+            raise HTTPException(422, "内容是空的") from None
+
+    # ---- newsletters ------------------------------------------------------------------
+    @app.get("/api/newsletters")
+    def newsletters() -> dict[str, Any]:
+        archive = sorted(config.morning_archive.glob("20??-??-??.html"), reverse=True)[:14] if config.morning_archive.exists() else []
+        def stamp(path: Path) -> str | None:
+            return datetime.fromtimestamp(path.stat().st_mtime).strftime("%m-%d %H:%M") if path.exists() else None
+        kline_md = digest.latest_kline_file(config.kline_archive, ".md")
+        return {"morning": {"latest": stamp(newest_morning()), "archive": [p.stem for p in archive]},
+                "kline": {"latest": stamp(kline_md) if kline_md else stamp(config.kline_latest_html)}, "weekly": {"latest": stamp(config.weekly_latest_html)}}
+
+    def newest_morning() -> Path:
+        dated = sorted(config.morning_archive.glob("20??-??-??.html")) if config.morning_archive.exists() else []
+        return dated[-1] if dated else config.morning_latest
+
+    @app.get("/newsletter-asset/kline/{name}")
+    def kline_asset(name: str) -> FileResponse:
+        if not re.fullmatch(r"[0-9a-f]{64}\.png", name):
+            raise HTTPException(404, "没有这张图")
+        path = config.kline_latest_html.parent / "snapshots" / name
+        if not path.exists():
+            raise HTTPException(404, "没有这张图")
+        return FileResponse(path)
+
+    @app.get("/newsletter-asset/weekly/{name}")
+    def weekly_asset(name: str) -> FileResponse:
+        if not re.fullmatch(r"[0-9a-f]{64}\.png", name):
+            raise HTTPException(404, "没有这张图")
+        path = config.weekly_latest_html.parent / "snapshots" / name
+        if not path.exists():
+            raise HTTPException(404, "没有这张图")
+        return FileResponse(path)
+
+    def review_rows() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        reviewed = review_list()
+        daily = digest.daily_cards(config.kline_archive)
+        readings = {c["key"]: c for c in daily.get("cards", [])} if daily.get("ok") else {}
+        today = datetime.now(timezone.utc).astimezone().date().isoformat()
+        rows = []
+        for meta in store.assets():
+            mine = [j for j in reviewed["items"] if j["asset"] == meta["key"]]
+            rows.append({"key": meta["key"], "label": meta["label"], "reading": readings.get(meta.get("kline_key") or ""),
+                         "ai": advisor.today(meta["key"]),
+                         "today": next((j for j in mine if _local_date(j["created_at"]) == today), None),
+                         "last": next((j for j in mine if j.get("outcome")), None),
+                         "pending": next((j for j in mine if not j.get("outcome") and _local_date(j["created_at"]) != today), None)})
+        return rows, {**reviewed["summary"], "ai": reviewed["ai_summary"]}
+
+    @app.get("/newsletter/{name}", response_class=HTMLResponse)
+    def newsletter(name: str) -> HTMLResponse:
+        cache_dir = config.db_path.parent / "newsletter-cache"
+        if name == "card":
+            return RedirectResponse("/newsletter/morning", status_code=302)
+        if name == "kline":
+            daily = digest.daily_cards(config.kline_archive)
+            if daily.get("ok"):
+                return HTMLResponse(digest.render_cards(f"K 线日报 · {daily['date']}", f"{len(daily['cards'])} 个品种 · 你的品种排在最前",
+                                                        daily["cards"], "/newsletter/kline-full", grouped=False))
+            name = "kline-full"
+        if name == "weekly":
+            source = config.weekly_latest_html.with_suffix(".md")
+            if source.exists():
+                weekly = digest.weekly_cards(_read_desktop_html(source, cache_dir))
+                if weekly.get("ok"):
+                    return HTMLResponse(digest.render_cards(weekly["title"], f"{len(weekly['cards'])} 个品种 · 周线 + 日线", weekly["cards"],
+                                                            "/newsletter/weekly-full", grouped=True))
+            name = "weekly-full"
+        if name == "kline-full":
+            kline_md = digest.latest_kline_file(config.kline_archive, ".md")
+            if kline_md:
+                import markdown
+                body = markdown.markdown(kline_md.read_text(encoding="utf-8", errors="replace").split("---", 2)[-1], extensions=["tables"])
+                body = re.sub(r'src="(?:\./)?snapshots/([0-9a-f]{64}\.png)"', r'src="/newsletter-asset/kline/\1"', body)
+                return HTMLResponse(KLINE_PAGE.format(title=kline_md.name[:10], body=body))
+            path = config.kline_latest_html
+        elif name == "weekly-full":
+            path = config.weekly_latest_html
+        elif name == "morning":
+            path = newest_morning()
+        elif re.fullmatch(r"20\d\d-\d\d-\d\d", name):
+            path = config.morning_archive / f"{name}.html"
+        else:
+            raise HTTPException(404, "没有这份日报")
+        if not path.exists():
+            return HTMLResponse(f"<p style='font-family:sans-serif;padding:24px'>这份日报还没有生成（{path.name}）。</p>", status_code=404)
+        html = _read_desktop_html(path, cache_dir)
+        if name == "morning":
+            rows, summary = review_rows()
+            html = digest.inject_review(html, digest.watch_block(watch.current(), datetime.now(timezone.utc)) + digest.review_block(rows, summary, config.review_hours))
+        return HTMLResponse(html)
+
+    # ---- system ---------------------------------------------------------------------
+    advisor_running = threading.Event()
+
+    @app.post("/api/advice/refresh")
+    def advice_refresh() -> dict[str, Any]:
+        """Park pressed 刷新: re-ask the model for every asset in the background (1–3 minutes)."""
+        if advisor_running.is_set():
+            return {"status": "running"}
+        advisor_running.set()
+
+        def run() -> None:
+            try:
+                advisor.last_result = advisor.generate(force=True)
+            finally:
+                advisor_running.clear()
+
+        threading.Thread(target=run, daemon=True, name="advice-refresh").start()
+        return {"status": "started"}
+
+    @app.get("/api/advice")
+    def advice_status() -> dict[str, Any]:
+        return {"running": advisor_running.is_set(), "last": getattr(advisor, "last_result", None),
+                "today": {a["key"]: advisor.today(a["key"]) for a in store.assets()}}
+
+    @app.get("/api/watch")
+    def watch_list() -> dict[str, Any]:
+        """本周要看的三件事. Refreshed by `trading_desk watch` every 20 minutes; this route only reads."""
+        return watch.current()
+
+    @app.get("/api/system")
+    def system() -> dict[str, Any]:
+        checks = []
+        def check(name: str, fn) -> None:
+            try:
+                ok, detail = fn()
+            except Exception as exc:  # noqa: BLE001
+                ok, detail = False, type(exc).__name__
+            checks.append({"name": name, "ok": ok, "detail": detail})
+        first = store.assets()[0]
+        check("新闻（Intel 8001）", lambda: (lambda r: (r.get("ok", False), r.get("reason") or f"{len(r.get('items', []))} 条"))(sources.news(first)))
+        check("交易后台（Dashboard 8765）", lambda: (lambda r: (bool(r.get("schema_version")), f"纸面盘：{r.get('status')}"))(http_json(f"{config.dashboard_url}/api/park-paper/read-model", None, timeout=10)))
+        check("测试盘 K 线（Hyperliquid）", lambda: (lambda r: (r["ok"], r.get("reason") or r.get("latest_timestamp")))(sources.bars(next((a for a in store.assets() if a["kind"] == "hl_testnet"), first), "1h", 2)))
+        coordinator = executor.coordinator()
+        scheduler = _json_last(config.paper_output / "testnet_automation" / "scheduler" / "current.json")
+        checks.append({"name": "测试盘调度器", "ok": scheduler.get("status") in {"active", "idle", "awaiting_operator"},
+                       "detail": f"{scheduler.get('status')} · {scheduler.get('blocker') or '无阻塞'}"})
+        checks.append({"name": "测试盘网格协调器", "ok": coordinator.get("status") not in {"grid_blocked", "unknown"}, "detail": coordinator.get("status")})
+        kline_md = digest.latest_kline_file(config.kline_archive, ".md")
+        weekly_md = config.weekly_latest_html.with_suffix(".md")
+        for label, path, hours in (("今日晨报", newest_morning(), 36), ("K 线日报", kline_md or config.kline_latest_html, 36),
+                                   ("宏观周报", weekly_md if weekly_md.exists() else config.weekly_latest_html, 8 * 24)):
+            fresh = path.exists() and (datetime.now().timestamp() - path.stat().st_mtime) < hours * 3600
+            checks.append({"name": label, "ok": fresh, "detail": datetime.fromtimestamp(path.stat().st_mtime).strftime("%m-%d %H:%M") if path.exists() else "没有文件"})
+        current_watch = watch.current()
+        checks.append({"name": "本周三件事", "ok": bool(current_watch.get("items")) and current_watch.get("provider") == "codex",
+                       "detail": f"{str(current_watch.get('generated_at') or '没有生成')[5:16]} · {current_watch.get('provider') or '—'}"})
+        paused = []
+        if config.paused_manifest.exists():
+            for line in config.paused_manifest.read_text(encoding="utf-8").splitlines():
+                m = PAUSED_ROWS.match(line.strip())
+                if m:
+                    paused.append({"label": m.group(1), "what": m.group(2).strip(), "why": m.group(3).strip()})
+        return {"checks": checks, "paused": paused, "restore": "launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist",
+                "executions": store.executions(None, limit=20)}
+
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+    return app
+
+
+def current_state(sources: Sources, asset: dict[str, Any]) -> dict[str, Any]:
+    """Price and grid for one asset, from the venue its grid trades on."""
+    if asset["kind"] == "watch":
+        latest = sources.bars(asset, "1h", limit=2)
+        return {"grid": {"ok": False, "none": True, "reason": f"{asset['label']}只记判断和复盘，还没有可以下单的交易所。"},
+                "price": latest["bars"][-1][4] if latest.get("ok") else None}
+    if asset["kind"] == "xau_paper":
+        paper = sources.xau_paper()
+        grid = paper["grid"] if paper.get("ok") else {"ok": False, "reason": paper.get("reason")}
+        price = paper.get("price") if paper.get("ok") else None
+    else:
+        grid = sources.hl_grid(asset)
+        price = grid.get("price") if grid.get("ok") else None
+    if price is None:
+        latest = sources.bars(asset, "1h", limit=2)
+        price = latest["bars"][-1][4] if latest.get("ok") else None
+    return {"grid": grid, "price": price}
+
+
+def _read_desktop_html(path: Path, cache_dir: Path) -> str:
+    """Files under ~/Desktop intermittently raise EDEADLK (macOS file coordination); retry, then serve the last good copy."""
+    cache = cache_dir / f"{path.parent.name}-{path.name}"
+    last: OSError | None = None
+    for _ in range(4):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache.write_text(text, encoding="utf-8")
+            return text
+        except OSError as exc:
+            last = exc
+            time.sleep(0.15)
+    if cache.exists():
+        return cache.read_text(encoding="utf-8", errors="replace")
+    raise HTTPException(503, f"这份日报暂时读不出来（{type(last).__name__}），稍后再试。")
+
+
+HOLDS = Path("testnet_automation") / "operator_holds.json"
+
+
+def read_holds(config: Config) -> dict[str, Any]:
+    try:
+        data = json.loads((config.paper_output / HOLDS).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        raise HTTPException(503, "暂停补单的记录文件读不出来；网格按规则会保持暂停，请到系统页查看。") from None
+    return data if isinstance(data, dict) else {}
+
+
+def _hold_state(config: Config, asset: dict[str, Any]) -> bool | None:
+    if asset["kind"] != "hl_testnet":
+        return None
+    try:
+        return bool((read_holds(config).get(asset["instrument_id"]) or {}).get("rearm_paused"))
+    except HTTPException:
+        return True
+
+
+def write_holds(config: Config, holds: dict[str, Any]) -> None:
+    """Atomic write; trading-system's grid lifecycle reads this file every tick (an unreadable file holds)."""
+    path = config.paper_output / HOLDS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(holds, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _grid_control(asset: dict[str, Any], coordinator: dict[str, Any]) -> dict[str, Any]:
+    """What the stop button may do for this asset right now."""
+    status = str(coordinator.get("status") or "unknown")
+    mine = asset["kind"] == "hl_testnet" and coordinator.get("selected_instrument_id") == asset["instrument_id"]
+    lifecycle = str((coordinator.get("grid_lifecycle") or {}).get("status") or "")
+    stopping = mine and (status == "stop_requested" or lifecycle == "hard_stop_triggered")
+    return {"coordinator_status": status, "can_stop": mine and not stopping and status in STOPPABLE_COORDINATOR_STATES,
+            "stopping": stopping, "ended": mine and status == "grid_terminal"}
+
+
+def _json_last(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    data = data[-1] if isinstance(data, list) and data else data
+    return data if isinstance(data, dict) else {}
+
+
+def _local_date(iso: str) -> str:
+    return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone().date().isoformat()
