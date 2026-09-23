@@ -111,4 +111,4 @@ original gold-pipeline documentation moved to `docs/gold-pipeline-readme.md`.
 
 ## License
 
-Private repository. `packages/standard-kline` is MIT.
+Source-available for reading, forking and running your own instance. `packages/standard-kline` is MIT. No warranty; nothing here is investment advice, and the only execution path is a Hyperliquid **Testnet** account.
