@@ -9,6 +9,31 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-09-27, 收敛为一个入口 #1284)
+
+- GitHub：`trading-desk`、`standard-broker`、`trading-strategy`、`standard-kline`
+  已归档，README 顶部指向本仓对应路径；本仓描述改为平台入口；200 条已并入
+  `main` 的远端分支已删（剩 80 条，多为 squash 合并、无法按祖先判定的旧分支）。
+  `zinan92/trading` 目录与 Park OS 快照
+  `github-universe-2026-09-27-trading-consolidation-01` 同步（park-operating-system#110，trading#20）。
+- 本机只剩两个 checkout：生产 `~/work/trading-platform`（launchd 用，保持
+  `origin/main` 且工作树干净，不在这里开发）与开发 `~/work/trading-system-dev`。
+  删除了 183 个干净且已合并/已推送的 worktree、旧生产 checkout
+  `trading-system-park-paper-main`（其未跟踪的 `park_strategy/` 挪到
+  `~/work/park-paper-output/legacy/`）、以及 `trading-desk` / `trading-strategy` /
+  `standard-broker(-mainnet/-testnet)` 本地克隆。
+- 保留未动、待 Park 决定的 worktree（有未提交改动或分支只在本机）：
+  `trading-system-issue-109`（dirty 3）、`-1163`（dirty 1）、`-1177`（dirty 1）、
+  `-444-cloud-timer-invariant`、`-448-risk-envelope`、`-49`、`-92-main`、
+  `trading-system-pr47-rebase`（分支无远端）；它们仍挂在 `~/work/trading-system`
+  主克隆下，以及 `~/.codex/worktrees/trading-system/` 下 15 个 7 月的 codex 分支。
+- `~/trading-orchestrator`（本仓另一份旧克隆）保留：`gold-1m-feed`、
+  `dualtrack-live-tick`、`daily-24h-report`、`deadman-ping` 四个 launchd 任务仍从
+  它运行，未在本轮范围内。
+
+_下一步_：Park 过一遍上面 8 个保留 worktree，要么推上来开 PR，要么删；四个
+仍从 `~/trading-orchestrator` 跑的任务另开票切到 `~/work/trading-platform`。
+
 ## 现在在哪里(2026-09-23, 本机 launchd 切到单仓 #1282)
 
 - 六个 launchd 任务（dashboard、park-paper-control、mainnet-observer、

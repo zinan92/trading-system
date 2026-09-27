@@ -19489,3 +19489,28 @@ cp ~/.config/trading-system/run-mainnet-observer.sh.pre-1282-*.bak ~/.config/tra
   && cp outputs/release_gates/paper_predeploy_current.json ~/work/park-paper-output/release_gates/)
 for l in ...same six...; do launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$l.plist; done
 ```
+
+# 2026-09-27 — One entry point: archive the standalone repos, prune local checkouts (#1284)
+
+## Decision
+
+- Archive the four standalone repos after a README pointer commit; do not delete
+  them (issues, PRs and history stay reachable). Their catalog rows stay in
+  `zinan92/trading` marked ARCHIVED with the new path.
+- Delete a local worktree only when it is clean **and** its content exists
+  elsewhere: branch is an ancestor of `origin/main`, or pushed with zero
+  unpushed commits, or its PR is merged. Everything else stays and is listed in
+  `REGISTRY.md`.
+- Delete remote branches only when they are ancestors of `main`; squash-merged
+  branches cannot be proven merged by ancestry and are left alone.
+- Two local checkouts by role: production (`~/work/trading-platform`, clean,
+  on `origin/main`) and development (`~/work/trading-system-dev`).
+
+## Gotchas
+
+- `gh api repos/.../contents` output contains raw newlines inside the base64
+  field; pipe through `--jq` rather than parsing with `json.load`.
+- Archiving is immediate and read-only: commit the pointer README first.
+- `~/trading-orchestrator` is a second clone of this repo with 158 worktrees
+  registered; several launchd jobs still run from it, so it is out of scope
+  here.
