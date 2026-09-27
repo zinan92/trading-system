@@ -31,8 +31,17 @@
   `dualtrack-live-tick`、`daily-24h-report`、`deadman-ping` 四个 launchd 任务仍从
   它运行，未在本轮范围内。
 
-_下一步_：Park 过一遍上面 8 个保留 worktree，要么推上来开 PR，要么删；四个
-仍从 `~/trading-orchestrator` 跑的任务另开票切到 `~/work/trading-platform`。
+- 2026-09-27 晚 Park 拍板后追加：上面 8 个保留 worktree、旧克隆
+  `~/work/trading-system`、`~/trading-orchestrator`（含 `~/.codex/worktrees/trading-system`）
+  全部删除；`gold-1m-feed`、`dualtrack-live-tick`、`daily-24h-report`、`deadman-ping`
+  四个 launchd 任务卸载，plist 备份在 `~/work/park-paper-output/legacy/launchd-trading-orchestrator/`
+  （它们只写自己的 `outputs/`，行情库停在 7 月 15 日，线上不读）。
+- `~/work/trading-co` **保留**：它承载 `com.park-intel.*`（新闻 :8001 与
+  news.park-ai-intel.com 隧道，交易台新闻栏的上游）以及 ashare / gold-trading 的
+  launchd 任务，不属于本仓，不能删。
+
+_下一步_：无。交易线本机只剩 `~/work/trading-platform`（生产）与
+`~/work/trading-system-dev`（开发）。
 
 ## 现在在哪里(2026-09-23, 本机 launchd 切到单仓 #1282)
 
