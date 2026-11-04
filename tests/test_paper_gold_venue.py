@@ -257,3 +257,10 @@ def test_raw_config_loader_callers_also_get_the_venue() -> None:
 
     assert "market_data" not in load_dualtrack_config_raw() or "provider" not in load_dualtrack_config_raw()["market_data"]
     assert load_dualtrack_config()["market_data"]["provider"] == "okx_swap_public"
+
+
+def test_venue_names_keep_their_capitalisation_on_screen() -> None:
+    from services.trading_system_read_model import _display_name
+
+    assert _display_name("okx") == "OKX"
+    assert _display_name("binance") == "Binance"

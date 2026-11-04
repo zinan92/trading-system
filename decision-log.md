@@ -53,6 +53,20 @@
   datafeed resolves it by `source=okx_swap_public` and serves
   `XAU-USDT-SWAP.OKX`.
 
+- **Found in the dev browser check, fixed here:**
+  - The desk's hand-bumped `?v=17` was not bumped, so the browser kept the old
+    `gm-desk.js` and selected `binance.paper`, which no longer exists
+    ("Venue 选择未保存：venue_profile_not_found"). `ASSET_VERSION` is now a
+    content hash of the desk's static files.
+  - The desk's 黄金 button did nothing when only the venue was chosen. It now
+    completes the instrument.
+  - The chart showed "GOLD unavailable": the Dashboard bounds chart reads at 2s
+    (#274). From this Mac the OKX TLS handshake alone is about 1.3s, and datafeed
+    opened a new connection per request (2–7s). datafeed now keeps one
+    connection alive (zinan92/datafeed#183), and a 240-bar read takes about
+    0.5s. The 2s bound is unchanged. The Paper tick path uses the 10s datafeed
+    timeout and was not affected.
+
 ## Verification
 
 - `tests/test_paper_gold_venue.py`: resolution, mismatch, source mismatch,

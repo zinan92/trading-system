@@ -29,6 +29,11 @@
   标 `verified: false`。所以旧的 legacy Nautilus 切换预检（要求账户实测费率）对 OKX 是挡住的。
   这是正确的 fail-closed 行为。
 - 已知未改：`services/cloud_paper_preflight.py` 只认 `binance_usdm_futures`，所以 Cloud Paper 在 OKX 下会被挡。
+- dev 浏览器检查时发现并修好了三处：
+  - 交易台 JS 被浏览器缓存，仍去选 `binance.paper`。版本号改成按文件内容的哈希。
+  - 黄金按钮在只选了 venue 时不动作。现在会把 instrument 也选上。
+  - 图表显示「GOLD unavailable」：从本机连 OKX，光 TLS 握手就约 1.3s，超过 Dashboard 图表的 2s 上限。
+    datafeed 现在保持长连接，读 240 根 K 线约 0.5s。2s 上限没有放宽。
 - 生产 2026-11-05 已部署 S1+S2 到 `787e499`：blocker 行数 37,083 → 37,084 后不再增长，1 条 Telegram 已送达。
 
 _下一步_：部署 OKX 需要 Park 再点头。顺序：datafeed（含执行行情 worker）→ 本仓库 →
