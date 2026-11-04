@@ -6,7 +6,7 @@
   "datafeed": {
     "enabled": true,
     "base_url": "http://127.0.0.1:8100",
-    "source": "binance_usdm_futures",
+    "source_from": "configs/dualtrack.yaml paper_gold_venue (datafeed.source and the GOLD route source are derived)",
     "asset_class": "commodity",
     "market_data_contract_mode": "authoritative",
     "timeout_seconds": 10,
@@ -14,7 +14,6 @@
       "GOLD": {
         "asset_class": "commodity",
         "ticker": "GOLD",
-        "source": "binance_usdm_futures",
         "historical_cache_policy": "allow",
         "historical_quality_policy": "standard",
         "live_cache_policy": "bypass",

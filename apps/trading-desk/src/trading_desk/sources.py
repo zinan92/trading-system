@@ -183,8 +183,9 @@ class Sources:
             return {"ok": True, "bars": bars, "source": source, "fresh": True, "latest_timestamp": bars[-1][0]}
         if asset["kind"] == "watch":
             return self._overview_bars(asset, timeframe, limit)
-        url = f"{self.config.dashboard_url}/api/dualtrack/market/bars?" + urllib.parse.urlencode({"symbol": "XAUUSDT", "timeframe": timeframe, "limit": limit})
-        source = "Binance XAUUSDT 永续（纸面网格用的同一个价格）"
+        url = f"{self.config.dashboard_url}/api/dualtrack/market/bars?" + urllib.parse.urlencode({"symbol": "GOLD", "timeframe": timeframe, "limit": limit})
+        paper = self.paper_gold()
+        source = f"{paper['market_label']}（纸面网格用的同一个价格）" if paper else "纸面黄金（来源读不到：GridMind 目录不可用）"
         try:
             payload = self.fetch(url, None)
         except Exception as exc:  # noqa: BLE001
@@ -198,6 +199,37 @@ class Sources:
             return {"ok": False, "reason": "K 线暂时没有数据（行情服务未就绪）", "bars": [], "source": source}
         return {"ok": True, "bars": bars, "source": source, "fresh": payload.get("fresh") is not False,
                 "latest_timestamp": payload.get("latest_timestamp")}
+
+    PAPER_GOLD_TTL_SECONDS = 60.0
+
+    def paper_gold(self) -> dict[str, Any] | None:
+        """The Paper gold venue GridMind actually uses, read from its catalog.
+
+        The desk never names the venue itself, so a venue switch in
+        configs/dualtrack.yaml shows here without a desk change. Returns None
+        when the catalog is unreachable; callers say so instead of guessing.
+        """
+
+        cached = getattr(self, "_paper_gold_cache", None)
+        if cached and time.monotonic() - cached[0] < self.PAPER_GOLD_TTL_SECONDS:
+            return cached[1]
+        try:
+            payload = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
+        except Exception:  # noqa: BLE001 - unreachable catalog is reported by the caller.
+            return None
+        profile = next((p for p in (payload or {}).get("venue_profiles") or [] if p.get("environment") == "paper"), None)
+        instrument = next((i for i in (profile or {}).get("instruments") or [] if i.get("asset") == "XAU"), None)
+        if not profile or not instrument:
+            return None
+        venue = profile.get("paper_gold_venue") or {}
+        result = {
+            "venue_profile_id": profile.get("id"),
+            "instrument_id": instrument.get("instrument_id"),
+            "venue_label": profile.get("label") or profile.get("id"),
+            "market_label": venue.get("label") or profile.get("label") or profile.get("id"),
+        }
+        self._paper_gold_cache = (time.monotonic(), result)
+        return result
 
     def catalog(self) -> dict[str, Any]:
         try:

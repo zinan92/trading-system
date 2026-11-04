@@ -28,15 +28,29 @@ NOTIFICATION_PATH = "dashboard_control_plane/notifications.json"
 PREVIEW_PATH = "dashboard_control_plane/previews.json"
 
 
-_VENUE_PROFILES: tuple[dict[str, Any], ...] = (
-    {
-        "id": "binance.paper",
-        "label": "Binance Paper",
-        "broker_id": "binance",
+def _paper_gold_profile() -> dict[str, Any]:
+    """The one Paper venue the runtime actually uses (configs/dualtrack.yaml)."""
+
+    from services.dualtrack_config import dualtrack_config
+    from services.paper_gold_venue import active_paper_gold_venue, describe
+
+    venue = active_paper_gold_venue(dualtrack_config())
+    return {
+        "id": venue.venue_profile_id,
+        "label": f"{venue.label.split()[0]} Paper",
+        "broker_id": venue.execution_market_venue,
         "environment": "paper",
         "instrument_scope": "paper",
         "catalog_source": "configured_paper_instruments",
-    },
+        "paper_gold_venue": describe(venue),
+    }
+
+
+def _venue_profiles() -> tuple[dict[str, Any], ...]:
+    return (_paper_gold_profile(), *_STATIC_VENUE_PROFILES)
+
+
+_STATIC_VENUE_PROFILES: tuple[dict[str, Any], ...] = (
     {
         "id": "hyperliquid.testnet",
         "label": "Hyperliquid Testnet",
@@ -225,10 +239,11 @@ def _normalise_instrument(row: Mapping[str, Any], *, profile_id: str) -> dict[st
 
 
 def _default_catalog_loader(profile_id: str) -> Iterable[Mapping[str, Any]]:
-    if profile_id == "binance.paper":
+    paper = _paper_gold_profile()
+    if profile_id == paper["id"]:
         return (
             {
-                "instrument_id": "XAUUSDT.BINANCE",
+                "instrument_id": paper["paper_gold_venue"]["execution_market"].split("/", 1)[1],
                 "asset": "XAU",
                 "eligibility": "eligible",
                 "market_fresh": None,
@@ -313,11 +328,11 @@ class DashboardControlPlane:
 
     @staticmethod
     def venue_profiles() -> tuple[dict[str, Any], ...]:
-        return tuple(dict(row) for row in _VENUE_PROFILES)
+        return tuple(dict(row) for row in _venue_profiles())
 
     def catalog(self) -> dict[str, Any]:
         profiles: list[dict[str, Any]] = []
-        for profile in _VENUE_PROFILES:
+        for profile in _venue_profiles():
             profile_id = str(profile["id"])
             blockers: list[str] = []
             try:
@@ -482,10 +497,7 @@ class DashboardControlPlane:
             return None
 
     def status(self) -> dict[str, Any]:
-        rows = load_json(self.selection_path)
-        if rows and isinstance(rows[-1], Mapping):
-            return dict(rows[-1])
-        return {
+        empty = {
             "schema_version": SELECTION_SCHEMA,
             "venue_profile_id": None,
             "instrument_id": None,
@@ -493,6 +505,26 @@ class DashboardControlPlane:
             "selection_digest": _digest({"venue_profile_id": None, "instrument_id": None}),
             "updated_at": None,
         }
+        rows = load_json(self.selection_path)
+        if not (rows and isinstance(rows[-1], Mapping)):
+            return empty
+        saved = dict(rows[-1])
+        saved_profile = str(saved.get("venue_profile_id") or "")
+        if saved_profile and not any(row["id"] == saved_profile for row in _venue_profiles()):
+            # The Paper gold venue changed (for example binance.paper -> okx.paper).
+            # A saved choice of a profile that is no longer offered is shown as
+            # retired and never silently mapped onto the new venue.
+            return {
+                **empty,
+                "retired_selection": {
+                    "venue_profile_id": saved_profile,
+                    "instrument_id": saved.get("instrument_id"),
+                    "strategy_family": saved.get("strategy_family"),
+                    "updated_at": saved.get("updated_at"),
+                    "reason": "venue_profile_no_longer_offered",
+                },
+            }
+        return saved
 
     def select(
         self,
@@ -502,7 +534,7 @@ class DashboardControlPlane:
         strategy_family: str | None = None,
     ) -> dict[str, Any]:
         profile_id = str(venue_profile_id or "").strip().lower()
-        profile = next((row for row in _VENUE_PROFILES if row["id"] == profile_id), None)
+        profile = next((row for row in _venue_profiles() if row["id"] == profile_id), None)
         if profile is None:
             raise ValueError("venue_profile_not_found")
         instrument = str(instrument_id or "").strip() or None
@@ -559,7 +591,7 @@ class DashboardControlPlane:
         profile_id = str(venue_profile_id or "").strip().lower()
         instrument = str(instrument_id or "").strip()
         family = str(strategy_family or "").strip().lower()
-        if not any(row["id"] == profile_id for row in _VENUE_PROFILES):
+        if not any(row["id"] == profile_id for row in _venue_profiles()):
             raise ValueError("venue_profile_not_found")
         if not instrument:
             raise ValueError("instrument_id_required")

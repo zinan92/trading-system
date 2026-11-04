@@ -29,8 +29,16 @@ def load_risk_rules(config_path: Path | None = None) -> dict:
 
 
 def load_pipeline_config(config_path: Path | None = None) -> dict:
+    from services.paper_gold_venue import apply_to_pipeline
+
     config_path = config_path or ROOT / "configs" / "pipeline.yaml"
     config = load_json_yaml(config_path)
+    try:
+        dualtrack_raw = load_json_yaml(ROOT / "configs" / "dualtrack.yaml")
+    except FileNotFoundError:
+        dualtrack_raw = {}
+    # One key picks the Paper gold venue; the GOLD route follows it.
+    config = apply_to_pipeline(config, dualtrack_raw)
     datafeed_url = str(os.getenv("TRADING_ORCHESTRATOR_DATAFEED_URL") or "").strip()
     if datafeed_url:
         _require_loopback_http_url(datafeed_url, "TRADING_ORCHESTRATOR_DATAFEED_URL")

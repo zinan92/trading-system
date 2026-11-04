@@ -58,7 +58,9 @@ def fetch() -> FakeFetch:
     f.routes["/api/dualtrack/market/bars"] = {"status": "ready", "fresh": True, "bars": bars}
     f.routes["candleSnapshot"] = [{"t": 1788998400000 + d * 86_400_000, "o": str(100 + d), "h": str(102 + d), "l": str(99 + d), "c": str(101 + d)} for d in range(14)]
     f.routes["/api/dashboard-control/catalog"] = {"venue_profiles": [{"id": "hyperliquid.testnet", "instruments": [
-        {"asset": "BTC", "instrument_id": "BTC-USD-PERP", "eligibility": "eligible"}, {"asset": "ETH", "instrument_id": "ETH-USD-PERP", "eligibility": "unknown"}]}]}
+        {"asset": "BTC", "instrument_id": "BTC-USD-PERP", "eligibility": "eligible"}, {"asset": "ETH", "instrument_id": "ETH-USD-PERP", "eligibility": "unknown"}]},
+        {"id": "okx.paper", "label": "OKX Paper", "environment": "paper", "paper_gold_venue": {"label": "OKX XAU-USDT-SWAP 永续"},
+         "instruments": [{"asset": "XAU", "instrument_id": "XAU-USDT-SWAP.OKX", "eligibility": "eligible"}]}]}
     f.routes["/api/ui/realtime"] = {"items": [
         {"id": 11, "title": "美联储9月降息预期升温", "source": "cls_telegraph", "collected_at": "2099-01-01T08:00:00Z", "triage": {"bucket": "high_impact"}, "exposure_assets": ["bitcoin", "gold"]},
         {"id": 12, "title": "比特币跌破7.7万", "source": "blockbeats_newsflash", "collected_at": "2099-01-01T09:30:00Z", "triage": {"bucket": "watch"}, "exposure_assets": ["bitcoin"]},

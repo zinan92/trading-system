@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from services import grid_sizing
+from services.dualtrack_config import dualtrack_config
 from services.grid_risk import full_depth_loss
 from services.strategy_control_plane import StrategyControlPlane
 
@@ -452,20 +453,33 @@ def test_auto_density_skips_counts_below_venue_price_precision(
     tmp_path: Path,
 ) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
+    payload = {
+        "direction": "neutral",
+        "style": "steady",
+        "range": {"low": 109.65, "high": 110.34},
+    }
+    # A 0.69-wide range needs the 0.01 tick (Binance XAUUSDT).
     preview = grid_sizing.build_grid_preview(
         "2026-07-05_DAY",
-        {
-            "direction": "neutral",
-            "style": "steady",
-            "range": {"low": 109.65, "high": 110.34},
-        },
+        payload,
         market=market(),
         account={"equity": 2_000_000.0},
-        config=plane.config,
+        config=dualtrack_config(paper_gold_venue="binance"),
     )
 
     assert 30 <= preview["grid"]["count"] < 70
     assert preview["grid"]["profit_target_met"] is True
+
+    # At OKX's 0.1 tick the same range has too few distinct prices: refused, not rounded.
+    with pytest.raises(ValueError, match="no grid between 30 and 70 levels"):
+        grid_sizing.build_grid_preview(
+            "2026-07-05_DAY",
+            payload,
+            market=market(),
+            account={"equity": 2_000_000.0},
+            config=dualtrack_config(paper_gold_venue="okx"),
+        )
+    assert plane.config["paper_gold_venue"]["active"] == "okx"
 
 
 def adaptive_payload(*, locks: list[str], **grid: float) -> dict:

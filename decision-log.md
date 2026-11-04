@@ -1,5 +1,64 @@
 # Decision Log
 
+# 2026-11-05 — Paper gold comes from one venue, chosen by one key (S4, OKX)
+
+## Decision
+
+- Park chose OKX `XAU-USDT-SWAP` for Paper gold. Binance answers HTTP 451 from
+  this Mac, so Paper gold had been blocked.
+- `configs/dualtrack.yaml` `paper_gold_venue.active` picks a profile in
+  `services/paper_gold_venue.py`. Both config loaders derive every touchpoint
+  from it, so the touchpoints cannot disagree:
+  - bars source and the GOLD route
+  - execution contract, instrument source and execution instrument
+  - fee model
+  - Dashboard Paper profile and the desk labels
+
+  Before this, five keys were set independently.
+- No fallback between venues. An unknown key fails closed. A Paper instrument
+  definition from another venue is refused (`paper_gold_venue_mismatch`).
+- Each session is stamped with its venue (`paper_gold_venue`). A different
+  configured venue blocks that session (`paper_gold_venue_changed_during_session`).
+  Switch only when there is no active Paper session. To go back, set `active`
+  back to the old venue.
+- An execution-market read whose served `source` differs from the requested
+  one is untrusted (`execution_market_source_mismatch`).
+- A saved Dashboard selection whose profile is no longer offered comes back as
+  `retired_selection`. It is never remapped onto the new venue.
+- OKX fee: an exact carry-over of the current Paper model (maker 0, taker
+  0.04%, Binance demo account 2026-07-10). It is marked `paper_assumption` with
+  `verified: false`, so the switch changes the venue and nothing else.
+
+## Gotchas
+
+- **This is a gate change.** `validate_instrument_definition` accepts a null
+  `min_notional` or `max_price` only when the definition lists that field
+  under `not_applicable_fields` with a reason. Only those two fields qualify,
+  and a declared field must actually be null. OKX publishes neither field.
+  Binance-shaped definitions are unchanged: `min_notional` "0" still fails.
+- The legacy Nautilus attended-cutover precheck demands `account_observed`
+  fees, so it is blocked under OKX. That is correct: there is no OKX account.
+  Tests built on Binance fixtures pin `dualtrack_config(paper_gold_venue="binance")`.
+- OKX tick is 0.1, not 0.01. A grid that needs 0.01 spacing is refused, not
+  rounded.
+- The production Park config pins a Binance instrument snapshot and fee under
+  `paper_execution`. On deploy, both must be re-captured, otherwise
+  `prepare_park_paper_config` refuses the mismatch.
+- `services/cloud_paper_preflight.py` still only knows `binance_usdm_futures`.
+  Cloud Paper is blocked under OKX until that file is generalized.
+- The instrument endpoint path stays `/api/instruments/commodity/XAUUSDT`.
+  datafeed resolves it by `source=okx_swap_public` and serves
+  `XAU-USDT-SWAP.OKX`.
+
+## Verification
+
+- `tests/test_paper_gold_venue.py`: resolution, mismatch, source mismatch,
+  `not_applicable_fields`, Nautilus build, Dashboard profile, retired selection.
+- Park runtime: mid-session block, session stamp, config-time mismatch.
+- Desk: venue and label come from the GridMind catalog; an unreadable catalog
+  names no venue.
+- Five suites and a dev browser check: see the PR.
+
 # 2026-11-05 — Show only correct state on screen (S2)
 
 ## Decision

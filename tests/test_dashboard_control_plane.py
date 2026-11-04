@@ -37,7 +37,7 @@ def test_catalog_exposes_explicit_venue_profiles_without_live_environment() -> N
 
     profiles = {row["id"]: row for row in catalog["venue_profiles"]}
 
-    assert set(profiles) == {"binance.paper", "hyperliquid.testnet"}
+    assert set(profiles) == {"okx.paper", "hyperliquid.testnet"}
     assert profiles["hyperliquid.testnet"]["broker_id"] == "hyperliquid"
     assert profiles["hyperliquid.testnet"]["environment"] == "testnet"
     btc = next(row for row in profiles["hyperliquid.testnet"]["instruments"] if row["instrument_id"] == "BTC-USD-PERP")
@@ -100,8 +100,8 @@ def test_control_plane_resolves_selected_testnet_bars_without_cross_venue_fallba
     ]
     with pytest.raises(ValueError, match="dashboard_market_venue_not_supported"):
         plane.resolve_market_bars(
-            venue_profile_id="binance.paper",
-            instrument_id="XAUUSDT.BINANCE",
+            venue_profile_id="okx.paper",
+            instrument_id="XAU-USDT-SWAP.OKX",
             timeframe="30m",
             limit=240,
             end=None,
@@ -217,7 +217,7 @@ def test_selecting_venue_and_instrument_clears_stale_downstream_selection(tmp_pa
     plane = DashboardControlPlane(tmp_path, catalog_loader=lambda profile_id: (
         [{"instrument_id": "BTC-USD-PERP", "asset": "BTC", "eligibility": "eligible"}]
         if profile_id == "hyperliquid.testnet"
-        else [{"instrument_id": "XAUUSDT.BINANCE", "asset": "XAU", "eligibility": "eligible"}]
+        else [{"instrument_id": "XAU-USDT-SWAP.OKX", "asset": "XAU", "eligibility": "eligible"}]
     ))
 
     selected = plane.select(venue_profile_id="hyperliquid.testnet", instrument_id="BTC-USD-PERP")
@@ -226,9 +226,9 @@ def test_selecting_venue_and_instrument_clears_stale_downstream_selection(tmp_pa
     assert selected["instrument_id"] == "BTC-USD-PERP"
     assert selected["strategy_family"] is None
 
-    reset = plane.select(venue_profile_id="binance.paper")
+    reset = plane.select(venue_profile_id="okx.paper")
 
-    assert reset["venue_profile_id"] == "binance.paper"
+    assert reset["venue_profile_id"] == "okx.paper"
     assert reset["instrument_id"] is None
     assert reset["strategy_family"] is None
     assert plane.status()["selection_digest"].startswith("sha256:")
@@ -312,8 +312,8 @@ def test_dashboard_v5_contains_the_venue_asset_strategy_track() -> None:
 
 def test_dca_preview_uses_the_canonical_builder_and_exposes_derived_risk(tmp_path: Path) -> None:
     preview = DashboardControlPlane(tmp_path).preview(
-        venue_profile_id="binance.paper",
-        instrument_id="XAUUSDT.BINANCE",
+        venue_profile_id="okx.paper",
+        instrument_id="XAU-USDT-SWAP.OKX",
         strategy_family="dca",
         strategy={
             "direction": "long",
@@ -396,8 +396,8 @@ def test_testnet_preview_carries_non_secret_activation_identity_from_host(
 
 def test_grid_preview_preserves_grid_geometry_and_is_non_authorizing(tmp_path: Path) -> None:
     preview = DashboardControlPlane(tmp_path).preview(
-        venue_profile_id="binance.paper",
-        instrument_id="XAUUSDT.BINANCE",
+        venue_profile_id="okx.paper",
+        instrument_id="XAU-USDT-SWAP.OKX",
         strategy_family="grid",
         strategy={
             "direction": "neutral",
@@ -424,8 +424,8 @@ def test_grid_preview_preserves_grid_geometry_and_is_non_authorizing(tmp_path: P
 def test_preview_digest_changes_when_strategy_configuration_changes(tmp_path: Path) -> None:
     plane = DashboardControlPlane(tmp_path)
     base = {
-        "venue_profile_id": "binance.paper",
-        "instrument_id": "XAUUSDT.BINANCE",
+        "venue_profile_id": "okx.paper",
+        "instrument_id": "XAU-USDT-SWAP.OKX",
         "strategy_family": "dca",
         "strategy": {
             "direction": "short",
@@ -452,8 +452,8 @@ def test_dashboard_preview_builder_keeps_execution_non_authorizing(monkeypatch, 
 
     result = dashboard_server.build_dashboard_control_preview_response(
         {
-            "venue_profile_id": "binance.paper",
-            "instrument_id": "XAUUSDT.BINANCE",
+            "venue_profile_id": "okx.paper",
+            "instrument_id": "XAU-USDT-SWAP.OKX",
             "strategy_family": "dca",
             "strategy": {
                 "direction": "long",
@@ -1350,7 +1350,7 @@ def test_runtime_record_for_another_selection_is_history_not_current_blocker() -
         execution_blocker="position_open_unprotected",
         occurred_at="2026-09-15T14:40:59+00:00",
     )
-    selection = {"venue_profile_id": "binance.paper", "instrument_id": "XAUUSDT.BINANCE", "strategy_family": "dca"}
+    selection = {"venue_profile_id": "okx.paper", "instrument_id": "XAU-USDT-SWAP.OKX", "strategy_family": "dca"}
 
     relevance = runtime_relevance(record, selection, now="2026-11-05T04:00:00+00:00")
 

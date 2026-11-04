@@ -9,6 +9,31 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, Paper 黄金改用 OKX XAU-USDT-SWAP · S4)
+
+- Park 拍板：Paper 黄金的价格、合约定义、执行品种都来自 **OKX `XAU-USDT-SWAP`**。
+  Binance 从本机返回 HTTP 451，Paper 黄金一直被挡。
+- 一个键决定场所：`configs/dualtrack.yaml` 的 `paper_gold_venue.active`
+  （`services/paper_gold_venue.py`）。两个配置加载器从它推出
+  行情来源、GOLD 路由、执行合约（tick 0.1）、Nautilus 合约来源、费率模型、
+  Dashboard 的 Paper venue（`okx.paper`）和交易台标签。没有备用来源：OKX 挂了 Paper 黄金就挡住。
+- 守卫：
+  - 合约定义与场所不一致时拒绝（`paper_gold_venue_mismatch`）
+  - 新 session 记下场所，中途换场所就挡住（`paper_gold_venue_changed_during_session`）
+  - datafeed 的执行行情来源不对时不可信（`execution_market_source_mismatch`）
+- 之前保存的 `binance.paper` 选择显示为「已停用」，不会被悄悄换成 OKX。
+- **门禁变化（需 Park 知道）**：合约校验允许 `min_notional`、`max_price` 为空，但只限这两个字段，
+  而且合约定义必须在 `not_applicable_fields` 里写明原因（OKX 不公布这两项）。
+  其它字段照旧必填、必须为正。
+- **费率未核实**：OKX 先沿用当前 Paper 费率（maker 0 / taker 0.04%，来自 Binance 模拟账户），
+  标 `verified: false`。所以旧的 legacy Nautilus 切换预检（要求账户实测费率）对 OKX 是挡住的。
+  这是正确的 fail-closed 行为。
+- 已知未改：`services/cloud_paper_preflight.py` 只认 `binance_usdm_futures`，所以 Cloud Paper 在 OKX 下会被挡。
+- 生产 2026-11-05 已部署 S1+S2 到 `787e499`：blocker 行数 37,083 → 37,084 后不再增长，1 条 Telegram 已送达。
+
+_下一步_：部署 OKX 需要 Park 再点头。顺序：datafeed（含执行行情 worker）→ 本仓库 →
+在没有活动 Paper session 时，重新抓取 `park_strategy_track.paper.json` 里固定的合约和费率。
+
 ## 现在在哪里(2026-11-05, 屏幕上只显示正确状态 S2)
 
 - `/trade` 控制轨道不再崩：DCA 已选但图上没有计划时，`buildVisibleChartPriceLines`
@@ -24,7 +49,7 @@
   活动 session 自己的缺口仍然挡入场。
 - 部署时会排队 1 条 Telegram（每个死窗口一条；按生产数据只有 `2026-09-14_NIGHT`）。
 
-_下一步_：S4 写 spec 等 Park 拍板；S6 交易回看。生产仍在 `bbdcf90`。
+_下一步_：S4 写 spec 等 Park 拍板；S6 交易回看。（之后已部署到生产 `787e499`。）
 
 ## 现在在哪里(2026-11-05, 绿色基线 S1)
 

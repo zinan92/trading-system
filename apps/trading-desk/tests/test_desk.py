@@ -71,8 +71,24 @@ def test_bars_use_the_grid_venue_not_a_research_feed(sources, fetch, btc, xau):
     bodies = [b for _, b in fetch.calls if b]
     urls = [u for u, _ in fetch.calls]
     assert any(b.get("type") == "candleSnapshot" and b["req"]["coin"] == "BTC" for b in bodies)
-    assert any("dualtrack/market/bars" in u and "XAUUSDT" in u for u in urls)
+    assert any("dualtrack/market/bars" in u and "symbol=GOLD" in u for u in urls)
     assert not any("8100" in u or "GC%3DF" in u for u in urls)
+
+
+def test_paper_gold_venue_comes_from_the_gridmind_catalog(config, sources, store, fetch, xau):
+    bars = sources.bars(xau, "1d")
+    assert bars["source"] == "OKX XAU-USDT-SWAP 永续（纸面网格用的同一个价格）"
+    client, _ex = client_for(config, sources, store, fetch)
+    gold = next(a for a in client.get("/api/assets").json()["assets"] if a["kind"] == "xau_paper")
+    assert (gold["venue_profile_id"], gold["instrument_id"]) == ("okx.paper", "XAU-USDT-SWAP.OKX")
+    assert client.get("/api/desk/XAU").json()["meta"]["venue"] == "OKX Paper · 纸面盘"
+
+
+def test_unreadable_catalog_says_so_instead_of_naming_a_venue(sources, fetch, xau):
+    del fetch.routes["/api/dashboard-control/catalog"]
+    bars = sources.bars(xau, "1d")
+    assert "来源读不到" in bars["source"]
+    assert "Binance" not in bars["source"] and "OKX" not in bars["source"]
 
 
 def test_two_accounts_stay_separate(sources):
@@ -250,7 +266,7 @@ def test_gold_approval_drafts_only_and_execute_confirms_once(config, sources, st
     assert plan["range"][0] < 4304.0 < plan["range"][1]  # the paper engine needs the price inside the range
     assert saved["preview"]["execution_ready"] is True and saved["preview"]["max_loss"] == 270.0
     assert [b and b["action"] for b in chat] == [None, "reject", "message"]
-    assert "做多网格" in chat[-1]["message"] and "XAUUSDT Paper" in chat[-1]["message"]
+    assert "做多网格" in chat[-1]["message"] and "纸面黄金 Paper" in chat[-1]["message"]
     assert not any(b and b.get("action") == "confirm" for b in chat)
 
     ok = client.post("/api/execute", json={"judgment_id": saved["id"], "shown_max_loss": 270.0, "confirm_text": "执行"}).json()

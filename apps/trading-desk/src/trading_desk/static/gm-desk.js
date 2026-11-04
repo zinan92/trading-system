@@ -4,7 +4,12 @@
   const $d = s => document.querySelector(s);
   const escD = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
   const fmtD = (n, d) => n == null || isNaN(n) ? "—" : Number(n).toLocaleString("en-US", {minimumFractionDigits: d ?? (Math.abs(n) >= 1000 ? 0 : 2), maximumFractionDigits: d ?? (Math.abs(n) >= 1000 ? 1 : 2)});
-  const VENUE = {xau_paper: ["binance.paper", "XAUUSDT.BINANCE"]};
+  // Paper gold's venue comes from GridMind's catalog (configs/dualtrack.yaml paper_gold_venue), never from here.
+  const paperGoldIds = () => {
+    const profile = (window.dashboardControlState?.catalog?.venue_profiles || []).find(p => p.environment === "paper");
+    const instrument = (profile?.instruments || []).find(i => i.asset === "XAU");
+    return profile && instrument ? [profile.id, instrument.instrument_id] : null;
+  };
   const D = {assets: [], asset: null, news: [], filter: "key", seen: null, fresh: new Set(), newsAt: null, d: null, cites: [], plan: null, desk: null, switching: false};
 
   async function call(path, body) {
@@ -61,7 +66,7 @@
   function selectionAsset() {
     const sel = window.dashboardControlState?.selection;
     if (!sel || !D.assets.length) return null;
-    if (sel.venue_profile_id === "binance.paper") return D.assets.find(a => a.kind === "xau_paper") || null;
+    if (String(sel.venue_profile_id || "").endsWith(".paper")) return D.assets.find(a => a.kind === "xau_paper") || null;
     return D.assets.find(a => a.kind === "hl_testnet" && a.instrument_id === sel.instrument_id) || null;
   }
   function renderAssets() {
@@ -79,9 +84,10 @@
     if (key === D.asset && !D.override) return;
     D.override = null;
     if (asset.key === selectionAsset()?.key) { applyAsset(); return; }
-    const [venueId, instrumentId] = VENUE[asset.kind] || ["hyperliquid.testnet", asset.instrument_id];
+    const ids = asset.kind === "xau_paper" ? paperGoldIds() : ["hyperliquid.testnet", asset.instrument_id];
     const venue = $d("#dashboardVenueSelect"), instrument = $d("#dashboardInstrumentSelect");
-    if (!venue || !instrument) return;
+    if (!venue || !instrument || !ids) return;
+    const [venueId, instrumentId] = ids;
     D.switching = true; renderAssets();
     try {
       if (venue.value !== venueId) { venue.value = venueId; venue.dispatchEvent(new Event("change")); }
