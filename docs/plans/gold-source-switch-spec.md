@@ -80,6 +80,8 @@ definitions (zinan92/datafeed#182).
 ## 5. Decisions
 
 1. Source: **OKX `XAU-USDT-SWAP`** (Park, 2026-11-05).
-2. Fee: OKX has no account, so the Paper fee is an explicit
-   `paper_assumption` taken from OKX's published fee schedule, with the page and
-   date recorded and `real_money_eligible: false`.
+2. Fee: **still open for Park.** There is no OKX account to observe a rate, and
+   OKX's fee page redirected to the OKX US spot schedule on 2026-11-05, so no
+   perpetual rate could be read. Until Park sets one, Paper charges every OKX fill
+   the current Paper taker rate of 0.04%, as an explicit `paper_assumption` with
+   `verified: false` and `real_money_eligible: false`.
