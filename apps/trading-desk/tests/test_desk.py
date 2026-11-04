@@ -91,6 +91,12 @@ def test_unreadable_catalog_says_so_instead_of_naming_a_venue(sources, fetch, xa
     assert "Binance" not in bars["source"] and "OKX" not in bars["source"]
 
 
+def test_unreadable_catalog_desk_label_says_venue_unknown(config, sources, store, fetch):
+    del fetch.routes["/api/dashboard-control/catalog"]
+    client, _ex = client_for(config, sources, store, fetch)
+    assert client.get("/api/desk/XAU").json()["meta"]["venue"] == "纸面盘（场所读不到）"
+
+
 def test_two_accounts_stay_separate(sources):
     hl = sources.hl_account()
     xau = sources.xau_paper()["account"]

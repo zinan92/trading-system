@@ -185,7 +185,8 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             "review": any(j.get("resolved_at") for j in mine),
         }
         if asset["kind"] == "xau_paper":
-            venue = (f"{(sources.paper_gold() or {}).get('venue_label') or '纸面盘'} · 纸面盘", "纸面模拟")
+            known = (sources.paper_gold() or {}).get("venue_label")
+            venue = (f"{known} · 纸面盘" if known else "纸面盘（场所读不到）", "纸面模拟")
         else:
             venue = {"hl_testnet": ("Hyperliquid Testnet", "测试盘（假钱）"), "watch": ("期货行情", "只记判断")}[asset["kind"]]
         return {"asset": asset["key"], "meta": {"label": asset["label"], "venue": venue[0], "money": venue[1], "kind": asset["kind"]},
