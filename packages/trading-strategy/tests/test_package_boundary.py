@@ -13,6 +13,8 @@ from trading_strategy.precision import normalize_execution_command
 
 
 PACKAGE_ROOT = Path(trading_strategy.__file__).parent
+# The pinned baseline commit is part of the monorepo history.
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
 STDLIB_ROOTS = set(sys.stdlib_module_names)
 
 
@@ -55,7 +57,7 @@ def test_real_external_dca_symbols_are_not_copied_into_the_package() -> None:
         [
             "git",
             "-C",
-            "/Users/wendy/work/trading-system-testnet",
+            str(SOURCE_ROOT),
             "show",
             "b841800ee03fd98107063c0cbbf5144096a5c4c0:services/standard_broker_external_dca.py",
         ],
