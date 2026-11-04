@@ -9,6 +9,23 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 绿色基线 S1)
+
+- 夜间成熟度计划 [`docs/plans/maturity-plan-2026-11-05.md`](docs/plans/maturity-plan-2026-11-05.md)（#1287）定了顺序 S1–S7；本条是 S1。
+- `make test` 在全新 `.venv` 里五套全绿：root 3867 passed / 1 skipped / 19 xfailed，
+  desk 59，standard-broker 366，trading-strategy 48，standard-kline 21。
+- 新增 `requirements-dev.txt`（`make setup` / `scripts/bootstrap.sh` 用它）；
+  `requirements.txt` 补 `markdown`，desk `pyproject.toml` 补 `markdown`。
+- 修了一个真 bug：DCA Testnet 生命周期 `on_market_event` 不接受 `market=`，
+  Coordinator 每次推价格都抛 TypeError 却仍显示 running；现在接受参数，
+  且任何意外异常都发布为 `blocked_reconciliation`。
+- 测试里过期的固定时间改为冻结服务器时钟（`tests/_frozen_clock.py`），
+  没有放松任何门禁；Telegram 文本入口已于 9/8 关闭，相关测试改用测试专用
+  `tests/_park_text_entry.py`，生产入口仍关闭并有断言。
+- Header 浏览器测试标 strict xfail，见 issue #1288（header 跟随 K 线源，夹具仍驱动读模型）。
+
+_下一步_：S2（屏幕上只显示正确状态）。生产仍在 `bbdcf90`，未部署。
+
 ## 现在在哪里(2026-09-27, 收敛为一个入口 #1284)
 
 - GitHub：`trading-desk`、`standard-broker`、`trading-strategy`、`standard-kline`

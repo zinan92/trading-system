@@ -1,5 +1,42 @@
 # Decision Log
 
+# 2026-11-05 — Green baseline: a fresh clone runs `make test` (S1)
+
+## Decision
+
+- Dev and test dependencies live in `requirements-dev.txt` (includes runtime
+  `requirements.txt`, adds `httpx` and `scikit-learn`). `markdown` is a runtime
+  dependency of the desk and is now declared in both `requirements.txt` and
+  `apps/trading-desk/pyproject.toml`.
+- trading-strategy's pinned-source tools read this monorepo
+  (`TRADING_STRATEGY_SOURCE_ROOT` overrides), not the deleted
+  `trading-system-testnet` checkout.
+- Tests whose fixtures sit in a fixed policy window freeze the *server* clock
+  (`tests/_frozen_clock.py`). No gate was loosened and no caller `as_of` was
+  introduced.
+- Tests for the retired Telegram text entry run through a test-only router
+  (`tests/_park_text_entry.py`); production keeps `entry_disabled`, asserted in
+  `test_live_activation_protocol.py`.
+- DCA Testnet: `on_market_event` accepts `market=`, and the Coordinator
+  publishes any unexpected market-event error as `blocked_reconciliation`
+  instead of leaving the session `running`.
+
+## Gotchas
+
+- Source-attestation tests fail on a **dirty tree** (~24 failures). Commit
+  before running the root suite, or the failure count lies.
+- The DCA `market=` TypeError dates from #1239; it was invisible because the
+  except branch only snapshotted, never changed status.
+- Production worked without `markdown` declared only because the system Python
+  already had Markdown 3.10.2. A fresh venv 500s on `/kline-full`.
+- `test_dashboard_gridmind_header_browser.py` is strict-xfail (#1288): the
+  header follows the selected K-line feed since 0b93ab8, but the fixture still
+  drives the read model.
+
+## Verification
+
+- `make test` in a fresh `.venv` from `requirements-dev.txt`: five suites green.
+
 # 2026-09-11 — Seal a stopping Grid once the venue is flat (#1261)
 
 ## Decision

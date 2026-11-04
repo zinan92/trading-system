@@ -5,4 +5,5 @@ pandas>=2.2,<4
 fastapi>=0.115,<1
 uvicorn>=0.30,<1
 pydantic>=2,<3
+markdown>=3.5,<4     # desk renders K-line newsletter archives
 pytest>=8
