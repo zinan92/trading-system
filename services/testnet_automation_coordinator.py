@@ -1453,6 +1453,17 @@ class TestnetAutomationCoordinator:
                     "blocker": f"dca_event_failed:{type(exc).__name__}:{exc}",
                     "next_action": "notify_park_and_wait",
                 }
+            else:
+                # An event that raised without the lifecycle recording its own
+                # blocker must not be published as a healthy running session:
+                # that hid a TypeError on every price tick from 2026-09-10.
+                if not str(state.get("status") or "").startswith("blocked"):
+                    state = {
+                        **dict(state),
+                        "status": "blocked_reconciliation",
+                        "blocker": f"dca_event_failed:{type(exc).__name__}:{exc}",
+                        "next_action": "notify_park_and_wait",
+                    }
         return self._publish_dca_state(current, execution_plan, state, observed_at=observed_at)
 
     def interrupt_dca_session(

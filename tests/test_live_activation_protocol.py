@@ -73,5 +73,8 @@ def test_production_proposal_seam_creates_only_local_confirmation_proposal(tmp_p
     ])
     router = ParkTelegramRouter(output_root, park_user_id="park", chat_id="chat")
     confirmed = router.handle_update({"update_id": 100, "message": {"message_id": 200, "from": {"id": "park"}, "chat": {"id": "chat"}, "text": command}})
-    assert confirmed["status"] == "live_activation_confirmed"
-    assert confirmed["decision"]["execution_authorized"] is False
+    # Since 2026-09-08 Telegram refuses every strategy or activation command
+    # before any ledger write (20db303); a live confirmation can't arrive this way.
+    assert confirmed["status"] == "blocked"
+    assert confirmed["code"] == "entry_disabled"
+    assert confirmed["execution_authorized"] is False

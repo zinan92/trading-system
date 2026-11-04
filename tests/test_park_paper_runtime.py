@@ -17,6 +17,7 @@ from services.park_strategy_plan import normalize_park_input
 from services.park_strategy_plan import build_deterministic_risk_plan
 from services.park_strategy_session import ParkStrategyIdentityJournal
 from services.park_telegram_runtime import ParkTelegramRouter
+from _park_text_entry import TextEntryRouter
 
 
 def _update(update_id: int, text: str) -> dict:
@@ -126,7 +127,7 @@ def _evidence() -> dict:
 
 
 def _router(output: Path, market_ref: dict) -> ParkTelegramRouter:
-    return ParkTelegramRouter(
+    return TextEntryRouter(
         output,
         park_user_id="park-user",
         chat_id="park-chat",
@@ -766,6 +767,11 @@ def test_direct_adapter_factory_allows_disabled_read_without_attended_switch(
         "services.execution_plugin_composition.build_park_direct_paper_adapter",
         fake_builder,
     )
+    # Unit test: never read the instrument from the machine's live datafeed.
+    monkeypatch.setattr(
+        "services.dualtrack_instrument_source.fetch_execution_instrument_definition",
+        lambda **_kwargs: {"schema_version": "instrument-definition-v1", "instrument_id": "XAUUSDT.BINANCE"},
+    )
     config = {
         **_config(),
         "feature_enabled": False,
@@ -806,7 +812,7 @@ def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identi
         "symbol": "GOLD",
     }
     now_ref = {"value": before}
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         output,
         park_user_id="park-user",
         chat_id="park-chat",
@@ -875,7 +881,7 @@ def test_recording_package_failure_blocks_evidence_without_execution_mutation(
         "symbol": "GOLD",
     }
     now_ref = {"value": "2026-08-14T12:59:00+00:00"}
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         output,
         park_user_id="park-user",
         chat_id="park-chat",
@@ -986,7 +992,7 @@ def test_runtime_retries_blocked_recording_after_late_event_without_mutation(
         "symbol": "GOLD",
     }
     now_ref = {"value": "2026-08-14T12:59:00+00:00"}
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         output,
         park_user_id="park-user",
         chat_id="park-chat",

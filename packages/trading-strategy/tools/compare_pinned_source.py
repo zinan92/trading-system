@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 
-SOURCE_ROOT = Path("/Users/wendy/work/trading-system-testnet")
+# The pinned baseline commit lives in this monorepo's own history (the standalone
+# checkout it was first read from was retired in #1284). Override with
+# TRADING_STRATEGY_SOURCE_ROOT to read it from another clone.
+SOURCE_ROOT = Path(
+    os.environ.get("TRADING_STRATEGY_SOURCE_ROOT") or Path(__file__).resolve().parents[3]
+)
 SOURCE_REF = "b841800ee03fd98107063c0cbbf5144096a5c4c0"
 MODULES = {
     "dca_plan.py": "services/dca_plan.py",

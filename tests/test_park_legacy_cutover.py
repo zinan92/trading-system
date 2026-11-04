@@ -16,6 +16,7 @@ from services.park_paper_mutation_gate import (
     _new_park_paper_mutation_gate,
 )
 from services.park_telegram_runtime import ParkTelegramRouter
+from _park_text_entry import TextEntryRouter
 
 
 def _update(update_id: int, text: str) -> dict:
@@ -74,7 +75,7 @@ def test_router_confirms_explicit_legacy_phrase_without_codex(tmp_path: Path) ->
             "quantity": 1.0,
         }
     ]
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         tmp_path,
         park_user_id="park-user",
         chat_id="park-chat",
@@ -100,7 +101,7 @@ def test_router_recovers_old_ingested_message_after_provider_misclassification(t
             "quantity": 1.0,
         }
     ]
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         tmp_path,
         park_user_id="park-user",
         chat_id="park-chat",
@@ -135,7 +136,7 @@ def test_router_rebuilds_expired_confirmed_cutover_from_same_inbox_message(
     ]
     clock = {"value": 1000.0}
     monkeypatch.setattr("services.park_legacy_cutover.time.time", lambda: clock["value"])
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         tmp_path,
         park_user_id="park-user",
         chat_id="park-chat",

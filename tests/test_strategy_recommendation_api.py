@@ -12,6 +12,14 @@ from services.journal_store import load_json, write_json
 from services.strategy_recommendation import RecommendationProviderError
 from services.strategy_control_plane import StrategyControlPlane
 
+from _frozen_clock import freeze_server_clock
+
+
+@pytest.fixture(autouse=True)
+def _server_clock_inside_fixture_policy_window(monkeypatch):
+    # Fixture policies expire 2026-08-31; run every test inside that window.
+    freeze_server_clock(monkeypatch, "2026-07-30T03:00:00+00:00")
+
 
 @pytest.fixture(autouse=True)
 def _authoritative_paper_snapshot(monkeypatch):
