@@ -39,6 +39,9 @@
 - The legacy Nautilus attended-cutover precheck demands `account_observed`
   fees, so it is blocked under OKX. That is correct: there is no OKX account.
   Tests built on Binance fixtures pin `dualtrack_config(paper_gold_venue="binance")`.
+- An unknown `active` key makes the whole Dashboard catalog fail, Hyperliquid
+  Testnet included, because the profile list is built from the venue. That is
+  fail-closed by design.
 - OKX tick is 0.1, not 0.01. A grid that needs 0.01 spacing is refused, not
   rounded.
 - The production Park config pins a Binance instrument snapshot and fee under

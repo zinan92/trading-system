@@ -222,6 +222,9 @@ def test_dashboard_offers_the_configured_paper_venue_only(tmp_path) -> None:
     assert [row["id"] for row in paper] == ["okx.paper"]
     assert paper[0]["label"] == "OKX Paper"
     assert [row["instrument_id"] for row in paper[0]["instruments"]] == ["XAU-USDT-SWAP.OKX"]
+    # Previews for okx.paper must be built on OKX's tick, not Binance's.
+    assert paper[0]["instruments"][0]["price_decimals"] == 1
+    assert paper[0]["instruments"][0]["size_decimals"] == 3
     assert paper[0]["paper_gold_venue"]["fee_verified"] is False
 
 
@@ -247,3 +250,10 @@ def test_saved_binance_selection_is_shown_as_retired_not_remapped(tmp_path) -> N
     assert status["instrument_id"] is None
     assert status["retired_selection"]["venue_profile_id"] == "binance.paper"
     assert status["retired_selection"]["reason"] == "venue_profile_no_longer_offered"
+
+
+def test_raw_config_loader_callers_also_get_the_venue() -> None:
+    from services.config_loader import load_dualtrack_config, load_dualtrack_config_raw
+
+    assert "market_data" not in load_dualtrack_config_raw() or "provider" not in load_dualtrack_config_raw()["market_data"]
+    assert load_dualtrack_config()["market_data"]["provider"] == "okx_swap_public"

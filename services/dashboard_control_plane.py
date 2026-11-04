@@ -239,12 +239,18 @@ def _normalise_instrument(row: Mapping[str, Any], *, profile_id: str) -> dict[st
 
 
 def _default_catalog_loader(profile_id: str) -> Iterable[Mapping[str, Any]]:
-    paper = _paper_gold_profile()
-    if profile_id == paper["id"]:
+    from services.dualtrack_config import dualtrack_config
+    from services.paper_gold_venue import active_paper_gold_venue
+
+    venue = active_paper_gold_venue(dualtrack_config())
+    if profile_id == venue.venue_profile_id:
         return (
             {
-                "instrument_id": paper["paper_gold_venue"]["execution_market"].split("/", 1)[1],
+                "instrument_id": venue.execution_market_instrument_id,
                 "asset": "XAU",
+                "price_decimals": int(venue.contract["price_precision"]),
+                "size_decimals": int(venue.contract["quantity_precision"]),
+                "price_increment": str(venue.contract["price_increment"]),
                 "eligibility": "eligible",
                 "market_fresh": None,
             },

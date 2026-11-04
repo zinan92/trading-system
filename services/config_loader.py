@@ -53,6 +53,16 @@ def load_strategy_config(config_path: Path | None = None) -> dict:
 
 
 def load_dualtrack_config(config_path: Path | None = None) -> dict:
+    """DualTrack config with the Paper gold venue applied (see services/paper_gold_venue.py)."""
+
+    from services.paper_gold_venue import apply_to_dualtrack
+
+    return apply_to_dualtrack(load_dualtrack_config_raw(config_path))
+
+
+def load_dualtrack_config_raw(config_path: Path | None = None) -> dict:
+    """The file as written: venue-derived keys are absent. Only for loaders that apply the venue."""
+
     config_path = config_path or ROOT / "configs" / "dualtrack.yaml"
     config = load_json_yaml(config_path)
     datafeed_url = str(os.getenv("TRADING_ORCHESTRATOR_DATAFEED_URL") or "").strip()

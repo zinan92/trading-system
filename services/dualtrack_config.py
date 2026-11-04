@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from services.config_loader import ROOT, load_dualtrack_config as _load_dualtrack_config
+from services.config_loader import ROOT, load_dualtrack_config_raw as _load_dualtrack_config
 
 
 DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {

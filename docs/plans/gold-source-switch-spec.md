@@ -73,7 +73,10 @@ definitions (zinan92/datafeed#182).
 2. **This repo:**
    - the profile block and loader, plus the guards
    - an explicit OKX Paper fee assumption, with source and date
-   - OKX goldens at tick 0.1, with the Binance goldens kept
+   - replay goldens: the existing goldens are built on Binance fixtures with
+     explicit contracts and are kept unchanged. **OKX goldens are deferred**
+     until a first OKX Paper session gives real events to capture. Tests that
+     depend on a tick pin the venue (`dualtrack_config(paper_gold_venue=...)`)
 3. A browser check on the dev instance against a dev datafeed.
 4. Deploy (Park's OK): datafeed first, then this repo.
 
