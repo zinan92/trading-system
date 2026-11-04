@@ -1319,3 +1319,85 @@ def test_dashboard_runtime_status_builder_projects_authoritative_coordinator_sta
     assert result["runtime"]["reconciliation"]["status"] == "unknown"
     assert result["safety"]["orders_submitted"] is False
 
+
+
+def _runtime_record(**overrides) -> dict:
+    record = {
+        "status": "running",
+        "broker_id": "hyperliquid",
+        "environment": "testnet",
+        "instrument_id": "BTC-USD-PERP",
+        "strategy_family": "grid",
+        "occurred_at": "2026-11-05T00:00:00+00:00",
+        "execution_blocker": None,
+    }
+    record.update(overrides)
+    return record
+
+
+_BTC_GRID_SELECTION = {
+    "venue_profile_id": "hyperliquid.testnet",
+    "instrument_id": "BTC-USD-PERP",
+    "strategy_family": "grid",
+}
+
+
+def test_runtime_record_for_another_selection_is_history_not_current_blocker() -> None:
+    from services.dashboard_control_plane import runtime_relevance
+
+    record = _runtime_record(
+        status="grid_terminal",
+        execution_blocker="position_open_unprotected",
+        occurred_at="2026-09-15T14:40:59+00:00",
+    )
+    selection = {"venue_profile_id": "binance.paper", "instrument_id": "XAUUSDT.BINANCE", "strategy_family": "dca"}
+
+    relevance = runtime_relevance(record, selection, now="2026-11-05T04:00:00+00:00")
+
+    assert relevance["view"] == "history"
+    assert relevance["reason"] == "other_selection"
+    assert relevance["mismatched_fields"] == ["venue_profile_id", "instrument_id", "strategy_family"]
+    assert relevance["age_seconds"] == 4_367_941  # 50 days 13h19m01s
+
+
+def test_ended_runtime_for_the_same_selection_is_history() -> None:
+    from services.dashboard_control_plane import runtime_relevance
+
+    relevance = runtime_relevance(
+        _runtime_record(status="grid_terminal"), _BTC_GRID_SELECTION, now="2026-11-05T00:01:00+00:00"
+    )
+
+    assert (relevance["view"], relevance["reason"]) == ("history", "ended")
+
+
+def test_silent_running_record_stays_current_but_is_marked_stale() -> None:
+    """A Coordinator that stopped ticking must stay visible, flagged, not demoted."""
+
+    from services.dashboard_control_plane import RUNTIME_STALE_AFTER_SECONDS, runtime_relevance
+
+    fresh = runtime_relevance(_runtime_record(), _BTC_GRID_SELECTION, now="2026-11-05T00:05:00+00:00")
+    late = runtime_relevance(
+        _runtime_record(),
+        _BTC_GRID_SELECTION,
+        now=f"2026-11-05T00:{RUNTIME_STALE_AFTER_SECONDS // 60 + 1:02d}:00+00:00",
+    )
+    undated = runtime_relevance(_runtime_record(occurred_at=None), _BTC_GRID_SELECTION, now="2026-11-05T00:05:00+00:00")
+
+    assert (fresh["view"], fresh["reason"], fresh["stale"]) == ("current", "live", False)
+    assert (late["view"], late["reason"], late["stale"]) == ("current", "stale", True)
+    assert (undated["view"], undated["stale"]) == ("current", True)
+
+
+def test_runtime_status_measures_age_on_the_server_clock(tmp_path: Path) -> None:
+    class Coordinator:
+        def status(self):
+            return _runtime_record(occurred_at="2026-11-05T00:00:00+00:00")
+
+    plane = DashboardControlPlane(tmp_path, clock=lambda: "2026-11-05T00:30:00+00:00")
+    result = plane.runtime_status(coordinator=Coordinator())
+
+    # No selection saved yet: nothing to compare, so the record stays current.
+    assert result["relevance"]["view"] == "current"
+    assert result["relevance"]["age_seconds"] == 1800
+    assert result["relevance"]["stale"] is True
+    assert result["runtime"]["status"] == "running"

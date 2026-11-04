@@ -137,7 +137,8 @@ def _recording_projection(
             row
             for row in reversed(blockers)
             if str(row.get("code") or "").startswith("recording_")
-            and str(row.get("code") or "") != "recording_facts_recovered"
+            # Receipts, not blockers: recovery, and a one-time abandonment.
+            and str(row.get("code") or "") not in {"recording_facts_recovered", "recording_window_abandoned"}
             and matches(row)
         ),
         {},
@@ -154,8 +155,11 @@ def _recording_projection(
     resolved_windows = {
         window_id
         for window_id, row in latest_package_by_window.items()
-        if row.get("status") == "complete"
-        and str(row.get("review_status") or "complete") == "complete"
+        if (
+            row.get("status") == "complete"
+            and str(row.get("review_status") or "complete") == "complete"
+        )
+        or row.get("status") == "abandoned"
     }
     if blocker and blocker_windows:
         recovered_windows = {
@@ -206,6 +210,8 @@ def _recording_projection(
         status = "blocked"
     elif package_status == "complete":
         status = "complete"
+    elif package_status == "abandoned":
+        status = "abandoned"
     elif latest_manifest:
         # A live Recording Window exists before its 12h package is closed.
         # It is evidence in progress, never a strategy transition.

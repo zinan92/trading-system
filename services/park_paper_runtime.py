@@ -14,7 +14,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -44,6 +44,9 @@ from services.park_telegram_control import ParkTelegramLedger
 from services.strategy_control_plane import production_mutation_lock
 
 PARK_PAPER_RUNTIME_SCHEMA = "park-paper-runtime-v1"
+# An ended Recording Window whose evidence is still missing after this long is
+# closed as `abandoned` once, with a receipt, instead of being retried every tick.
+RECORDING_ABANDON_AFTER = timedelta(hours=24)
 _SAFE_NAMESPACE = re.compile(r"[^a-zA-Z0-9_-]+")
 
 
@@ -2012,6 +2015,8 @@ class ParkPaperRuntime:
                 and str(package_state.get("review_status") or "complete") == "complete"
             ):
                 continue
+            if package_state.get("status") == "abandoned":
+                continue
             try:
                 ends = datetime.fromisoformat(
                     str(window_manifests[-1].get("ends_at") or "").replace("Z", "+00:00")
@@ -2067,6 +2072,9 @@ class ParkPaperRuntime:
                     positions_open=int(payload.get("open_count") or 0),
                 )
                 if package.get("status") != "complete":
+                    if current - ends >= RECORDING_ABANDON_AFTER:
+                        self._abandon_recording_window(package, observed_at=observed_at)
+                        continue
                     failures.append(
                         {
                             "record_window_id": window_id,
@@ -2121,6 +2129,44 @@ class ParkPaperRuntime:
             binding=binding,
         )
         return {"schema_version": PARK_PAPER_RUNTIME_SCHEMA, "status": "blocked", **row}
+
+    def _abandon_recording_window(self, package: Mapping[str, Any], *, observed_at: str) -> None:
+        """Write one receipt for a window that can never complete, then stop retrying it."""
+
+        window_id = str(package.get("record_window_id") or "")
+        missing = [str(item) for item in package.get("missing_categories") or []]
+        abandoned = self.recording.abandon_window(
+            record_window_id=window_id,
+            reason="evidence_missing_after_grace",
+            abandoned_at=observed_at,
+        )
+        if not abandoned:
+            return
+        _append_jsonl(
+            self.blocker_path,
+            {
+                "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+                "event": "recording_window_abandoned",
+                "code": "recording_window_abandoned",
+                "recorded_at": observed_at,
+                "record_window_id": window_id,
+                "missing_categories": missing,
+                "grace_seconds": int(RECORDING_ABANDON_AFTER.total_seconds()),
+                "strategy_session_ids": list(package.get("strategy_session_ids") or []),
+                "strategy_revision_ids": list(package.get("strategy_revision_ids") or []),
+                "paper_only": True,
+                "next_action": "none",
+            },
+        )
+        self.telegram.queue_outbound(
+            idempotency_key=f"park-recording-abandoned:{window_id}",
+            message_type="park_blocker",
+            text=(
+                f"Park Paper recording window {window_id} closed as incomplete "
+                f"(missing: {', '.join(missing) or 'none'}); it will not be retried."
+            ),
+            binding=None,
+        )
 
     def _record_recording_blocker(
         self,

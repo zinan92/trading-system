@@ -1261,3 +1261,94 @@ def test_idle_runtime_finishes_a_boundary_close_that_left_positions_open(tmp_pat
     assert adapter.positions[0]["status"] == "closed"
     assert runtime.run_once()["status"] == "idle"
     assert len([c for c in adapter.submit_calls if c["event"] == "stop"]) == 1
+
+
+def test_recording_window_that_can_never_complete_is_abandoned_once_not_retried_forever(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """2026-09-14_NIGHT wrote ~600 blocker rows a day for seven weeks (S2, D6)."""
+
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T12:59:00+00:00",
+        "symbol": "GOLD",
+    }
+    now_ref = {"value": "2026-08-14T12:59:00+00:00"}
+    router = TextEntryRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: dict(market),
+        account_reader=lambda _root, _cycle: {
+            "equity": 10000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: now_ref["value"],
+        cycle_id_provider=lambda _now: "2026-08-14_DAY",
+    )
+    adapter = FakePaperAdapter()
+    runtime = ParkPaperRuntime(
+        output,
+        adapter=adapter,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        config=_config(),
+        market_reader=lambda: dict(market),
+        now=lambda: now_ref["value"],
+        safety_evidence_reader=_evidence,
+    )
+    proposal = router.handle_update(_update(19, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
+    router.handle_update(_update(20, f"confirm {proposal['proposal']['plan_digest']}"))
+    original_record_event = runtime.recording.record_event
+
+    def never_record_fills(**kwargs):
+        if kwargs.get("category") == "fills":
+            return {"skipped": True}
+        return original_record_event(**kwargs)
+
+    monkeypatch.setattr(runtime.recording, "record_event", never_record_fills)
+
+    def tick(at: str) -> dict:
+        now_ref["value"] = at
+        market["observed_at"] = at
+        return runtime.run_once()
+
+    tick("2026-08-14T12:59:00+00:00")
+    within_grace = tick("2026-08-14T13:01:00+00:00")
+    assert within_grace["next_action"] == "retry_recording_package"
+    assert runtime.recording.packages()[-1]["status"] == "blocked_incomplete"
+
+    def window_rows() -> list[dict]:
+        rows = [json.loads(line) for line in runtime.blocker_path.read_text().splitlines() if line.strip()]
+        return [
+            row for row in rows
+            if "2026-08-14_DAY" in json.dumps(row.get("recording_windows") or row.get("record_window_id"))
+        ]
+
+    after_grace = tick("2026-08-15T13:00:01+00:00")
+    # The next window (14_NIGHT) is still inside its own grace period and may retry.
+    assert all(row["record_window_id"] != "2026-08-14_DAY" for row in after_grace["recording_failures"])
+
+    def day_package() -> dict:
+        return [row for row in runtime.recording.packages() if row["record_window_id"] == "2026-08-14_DAY"][-1]
+
+    package = day_package()
+    assert package["status"] == "abandoned"
+    assert "fills" in package["missing_categories"]  # never claimed complete
+    rows_after_abandon = window_rows()
+    assert [row["code"] for row in rows_after_abandon].count("recording_window_abandoned") == 1
+
+    tick("2026-08-15T13:05:00+00:00")
+    tick("2026-08-15T13:10:00+00:00")
+    assert window_rows() == rows_after_abandon
+    assert day_package()["status"] == "abandoned"
