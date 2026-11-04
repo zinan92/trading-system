@@ -589,3 +589,15 @@ def test_stale_futures_candles_are_refreshed_by_the_background_job(config, fetch
     fetch.routes["/api/overview"] = overview("2026-09-15T00:30:00+00:00")
     assert sources.refresh_futures(["silver"], now=now) == {"ok": True, "refreshed": True}
     assert any("refresh=true" in url for url, _ in fetch.calls)
+
+
+def test_desk_assets_are_cache_busted_by_content():
+    import hashlib
+    from pathlib import Path
+
+    from trading_desk import gridmind
+
+    static = Path(gridmind.__file__).resolve().parent / "static"
+    expected = hashlib.sha256((static / "gm-desk.js").read_bytes() + (static / "gm-desk.css").read_bytes()).hexdigest()[:12]
+    assert gridmind.ASSET_VERSION == expected
+    assert f"gm-desk.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")

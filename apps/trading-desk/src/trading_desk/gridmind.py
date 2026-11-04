@@ -47,7 +47,24 @@ WRITE_PATHS = frozenset({
 })
 SHELL = ('<link rel="stylesheet" href="/static/gm-desk.css?v={v}">'
          '<script src="/static/gm-desk.js?v={v}" defer></script>')
-ASSET_VERSION = "17"
+def _asset_version() -> str:
+    """Content hash of the desk's static files: a changed file always busts the browser cache.
+
+    A hand-bumped number was forgotten once (2026-11-05): browsers kept running the old
+    gm-desk.js and selected a Paper venue that no longer existed.
+    """
+
+    import hashlib
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parent / "static"
+    digest = hashlib.sha256()
+    for name in ("gm-desk.js", "gm-desk.css"):
+        digest.update((static / name).read_bytes())
+    return digest.hexdigest()[:12]
+
+
+ASSET_VERSION = _asset_version()
 MAX_BODY = 64_000
 
 Fetch = Callable[[str, str, bytes | None, str, float], tuple[int, bytes, str]]
