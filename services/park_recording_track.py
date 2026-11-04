@@ -299,6 +299,40 @@ class ParkRecordingTrack:
         _append(self.package_path, amended)
         return amended
 
+    def abandon_window(
+        self,
+        *,
+        record_window_id: str,
+        reason: str,
+        abandoned_at: str,
+    ) -> dict[str, Any] | None:
+        """Close an ended window whose missing evidence can no longer arrive.
+
+        The package keeps its missing categories; it is not marked complete.
+        This only stops the runtime from retrying it on every tick. Idempotent.
+        """
+
+        window = _text(record_window_id, "record_window_id")
+        package = next((row for row in reversed(self.packages()) if row.get("record_window_id") == window), None)
+        if not package:
+            return None
+        if package.get("status") == "abandoned":
+            return dict(package)
+        if package.get("status") == "complete":
+            return dict(package)
+        amended = {
+            **package,
+            "event": "package_abandoned",
+            "status": "abandoned",
+            "review_status": "abandoned",
+            "abandoned_reason": _text(reason, "reason"),
+            "abandoned_at": _text(abandoned_at, "abandoned_at"),
+            "next_action": "none",
+            "revision": int(package.get("revision") or 0) + 1,
+        }
+        _append(self.package_path, amended)
+        return amended
+
     def amend_late_event(self, **kwargs: Any) -> dict[str, Any]:
         kwargs["late"] = True
         row = self.record_event(**kwargs)

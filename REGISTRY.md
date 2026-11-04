@@ -9,6 +9,23 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 屏幕上只显示正确状态 S2)
+
+- `/trade` 控制轨道不再崩：DCA 已选但图上没有计划时，`buildVisibleChartPriceLines`
+  曾读 `null.direction`（`isDca(undefined)` 回落到当前选择的策略类型）。
+- runtime-status 新增 `relevance`：Coordinator 记录属于另一个 Venue/Instrument/策略，
+  或已结束，就标成「上一次运行 · 日期 · …（历史记录：…）」灰色显示，不再当作当前阻断。
+  9/15 BTC Testnet Grid 的 `position_open_unprotected` 不再冒充 XAU Paper DCA 的当前状态。
+- 录制窗口：已结束 24h、证据仍不全、且**不属于当前活动 session** 的窗口，标
+  `abandoned` 一次（带缺失类别的回执），不再每个 tick 重试。生产数据里
+  `2026-09-14_NIGHT` 已写 36,100 行 blocker。
+- **门禁变化（需 Park 知道）**：`recording_failures` 会挡住 Paper 新开仓。这个死窗口
+  自 9/14 起一直在挡所有新 Paper 入场；部署后它被 abandoned，新入场恢复由其它门禁决定。
+  活动 session 自己的缺口仍然挡入场。
+- 部署时会排队 1 条 Telegram（每个死窗口一条；按生产数据只有 `2026-09-14_NIGHT`）。
+
+_下一步_：S4 写 spec 等 Park 拍板；S6 交易回看。生产仍在 `bbdcf90`。
+
 ## 现在在哪里(2026-11-05, 绿色基线 S1)
 
 - 夜间成熟度计划 [`docs/plans/maturity-plan-2026-11-05.md`](docs/plans/maturity-plan-2026-11-05.md)（#1287）定了顺序 S1–S7；本条是 S1。

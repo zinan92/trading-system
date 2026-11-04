@@ -93,6 +93,79 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+_ENDED_RUNTIME_STATUSES = {"completed", "finalized", "stopped", "sealed", "cancelled"}
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def runtime_relevance(
+    runtime: Mapping[str, Any],
+    selection: Mapping[str, Any] | None,
+    *,
+    now: str,
+) -> dict[str, Any]:
+    """Say whether a Coordinator record describes what is selected now.
+
+    The record is never hidden or rewritten; this only decides whether the
+    page may present it as the current state or must label it as history.
+    Age is measured on the server clock, never a caller timestamp. It is
+    reported, not judged: the Coordinator publishes on lifecycle events, not on
+    a heartbeat, so an old timestamp alone does not mean it stopped.
+    """
+
+    selection = selection or {}
+    observed_at = runtime.get("occurred_at") or runtime.get("updated_at")
+    observed = _parse_utc(observed_at)
+    current = _parse_utc(now)
+    age_seconds = (
+        max(0, int((current - observed).total_seconds())) if observed and current else None
+    )
+    broker = str(runtime.get("broker_id") or "").strip()
+    environment = str(runtime.get("environment") or "").strip()
+    runtime_venue = f"{broker}.{environment}" if broker and environment else ""
+    runtime_instrument = str(
+        runtime.get("instrument_id") or runtime.get("selected_instrument_id") or ""
+    ).strip()
+    runtime_family = str(runtime.get("strategy_family") or "").strip()
+    mismatched = [
+        field
+        for field, recorded, selected in (
+            ("venue_profile_id", runtime_venue, selection.get("venue_profile_id")),
+            ("instrument_id", runtime_instrument, selection.get("instrument_id")),
+            ("strategy_family", runtime_family, selection.get("strategy_family")),
+        )
+        if recorded and selected and recorded != str(selected).strip()
+    ]
+    status = str(runtime.get("status") or "").strip().lower()
+    ended = status.endswith("terminal") or status in _ENDED_RUNTIME_STATUSES
+    if mismatched:
+        view, reason = "history", "other_selection"
+    elif ended:
+        view, reason = "history", "ended"
+    else:
+        view, reason = "current", "selected"
+    return {
+        "schema_version": "dashboard-runtime-relevance-v1",
+        "view": view,
+        "reason": reason,
+        "observed_at": observed_at,
+        "age_seconds": age_seconds,
+        "mismatched_fields": mismatched,
+        "runtime_selection": {
+            "venue_profile_id": runtime_venue or None,
+            "instrument_id": runtime_instrument or None,
+            "strategy_family": runtime_family or None,
+        },
+    }
+
+
+
 def _public(value: Any) -> Any:
     sensitive = {
         "api_key",
@@ -1345,6 +1418,7 @@ class DashboardControlPlane:
         return {
             "schema_version": "dashboard-runtime-status-v1",
             "runtime": _public(runtime),
+            "relevance": runtime_relevance(runtime, self.status(), now=self.clock()),
             "notification": latest,
             "execution_mutation": False,
             "safety": {

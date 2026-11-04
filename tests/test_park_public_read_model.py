@@ -793,3 +793,53 @@ def test_public_read_model_keeps_the_last_session_ledger_between_sessions(tmp_pa
         "fees": 4.5,
         "open_positions": 0,
     }
+
+
+def test_abandoned_recording_window_is_history_not_a_standing_blocker(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    package = {
+        "record_window_id": "2026-08-14_DAY",
+        "strategy_session_id": "session-1",
+        "strategy_revision_id": "revision-1",
+        "strategy_session_ids": ["session-1"],
+        "strategy_revision_ids": ["revision-1"],
+        "status": "blocked_incomplete",
+        "missing_categories": ["fills"],
+        "strategy_open": True,
+        "positions_open": 0,
+        "execution_mutations": [],
+        "next_action": "collect_missing_evidence",
+    }
+    abandoned = {**package, "event": "package_abandoned", "status": "abandoned", "review_status": "abandoned", "next_action": "none"}
+    _append_jsonl(recording_root / "packages.jsonl", [package, abandoned])
+    _append_jsonl(
+        output / "park_strategy" / "runtime_blockers.jsonl",
+        [
+            {
+                "code": "recording_package_blocked",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "recording_windows": [{"record_window_id": "2026-08-14_DAY"}],
+                "recorded_at": "2026-08-14T13:01:00+00:00",
+                "next_action": "retry_recording_package",
+            },
+            {
+                "code": "recording_window_abandoned",
+                "record_window_id": "2026-08-14_DAY",
+                "strategy_session_ids": ["session-1"],
+                "strategy_revision_ids": ["revision-1"],
+                "missing_categories": ["fills"],
+                "recorded_at": "2026-08-15T13:00:01+00:00",
+                "next_action": "none",
+            },
+        ],
+    )
+
+    recording = build_park_public_read_model(output, now=lambda: NOW)["recording"]
+
+    assert recording["status"] == "abandoned"
+    assert recording["blocker_code"] is None
+    assert recording["missing_categories"] == ["fills"]  # still says what is missing
