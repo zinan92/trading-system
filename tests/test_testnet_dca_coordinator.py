@@ -263,3 +263,43 @@ def test_dca_resume_blocks_when_external_broker_reports_foreign_open_order(tmp_p
     )
     assert blocked["status"] == "dca_blocked"
     assert "foreign_open_order_detected" in blocked["blocker"]
+
+
+def test_unexpected_market_event_error_is_published_as_blocked_not_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a TypeError on every price tick was published as dca_running (2026-09-10 → 11-05)."""
+
+    coordinator, plan, confirmation, broker, _backend, market, fill = _setup(tmp_path)
+    started = coordinator.start_dca_session(
+        plan,
+        confirmation=confirmation,
+        market=_market_at(market, NOW),
+        broker=broker,
+        timestamp=NOW,
+    )
+    coordinator.advance_dca_session(
+        plan,
+        broker=broker,
+        fill=fill(started["lifecycle"]["orders"][0], price=65000, tid=1),
+        market=_market_at(market, "2026-08-26T01:01:00+00:00"),
+        timestamp="2026-08-26T01:01:00+00:00",
+    )
+
+    def explode(*_args, **_kwargs):
+        raise TypeError("unexpected keyword argument")
+
+    monkeypatch.setattr(
+        "services.dca_testnet_lifecycle.DcaTestnetLifecycle.on_market_event", explode
+    )
+    result = coordinator.advance_dca_session(
+        plan,
+        broker=broker,
+        price=66000,
+        market=_market_at(market, "2026-08-26T01:02:00+00:00"),
+        timestamp="2026-08-26T01:02:00+00:00",
+    )
+
+    assert result["status"] == "dca_blocked"
+    assert result["dca_lifecycle_status"] == "blocked_reconciliation"
+    assert "dca_event_failed:TypeError" in str(result["lifecycle"].get("blocker"))

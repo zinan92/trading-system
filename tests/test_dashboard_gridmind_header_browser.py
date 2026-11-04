@@ -72,6 +72,10 @@ def _header_model(
     return model
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="Header follows the selected K-line feed since 0b93ab8; fixture still drives the read model. https://github.com/zinan92/trading-system/issues/1288",
+)
 def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     responses = [

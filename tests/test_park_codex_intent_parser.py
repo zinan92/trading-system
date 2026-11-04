@@ -6,6 +6,7 @@ from pathlib import Path
 
 from services.park_codex_intent_parser import CodexCliIntentParser, deterministic_neutral_grid_candidate
 from services.park_telegram_runtime import ParkTelegramRouter
+from _park_text_entry import TextEntryRouter
 
 
 _MARKET = {
@@ -133,7 +134,7 @@ def test_router_gives_natural_guidance_for_neutral_grid(tmp_path: Path) -> None:
                 "metadata": {"provider": "codex_cli", "status": "returned", "elapsed_ms": 8},
             }
 
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         tmp_path / "outputs",
         park_user_id="park-user",
         chat_id="park-chat",
@@ -180,7 +181,7 @@ def test_router_uses_safe_neutral_grid_fallback_after_provider_timeout(tmp_path:
                 },
             }
 
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         tmp_path / "outputs",
         park_user_id="park-user",
         chat_id="park-chat",
@@ -213,7 +214,7 @@ def test_router_help_is_local_and_does_not_call_provider(tmp_path: Path) -> None
         def parse(self, _text):
             raise AssertionError("help must not call Codex")
 
-    router = ParkTelegramRouter(
+    router = TextEntryRouter(
         tmp_path / "outputs",
         park_user_id="park-user",
         chat_id="park-chat",

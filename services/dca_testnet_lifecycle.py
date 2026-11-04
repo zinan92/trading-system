@@ -447,7 +447,12 @@ class DcaTestnetLifecycle:
         *,
         price: float,
         timestamp: str,
+        market: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # ``market`` is accepted for parity with GridTestnetLifecycle: the
+        # Coordinator passes the authoritative market document to both
+        # families (#1239). DCA exits only need the validated price.
+        del market
         identity = self._identity(plan)
         state = self._state(plan)
         if state["status"] in {

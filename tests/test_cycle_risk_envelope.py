@@ -2453,6 +2453,9 @@ def test_classifier_is_closed_and_tick_dead_after_ten_minutes() -> None:
 
 
 def test_control_plane_audits_human_policy_and_cycle_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from _frozen_clock import freeze_server_clock
+
+    freeze_server_clock(monkeypatch, "2026-07-30T01:02:00+00:00")
     actor = _verified_park_actor(monkeypatch)
     plane = StrategyControlPlane(tmp_path / "outputs")
     cycle_id = "2026-07-30_DAY"

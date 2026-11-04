@@ -24,7 +24,7 @@ fi
 echo "[1/5] venv + requirements"
 [ -d .venv ] || "$PY" -m venv .venv
 .venv/bin/python -m pip install --quiet --upgrade pip
-.venv/bin/python -m pip install --quiet -r requirements.txt
+.venv/bin/python -m pip install --quiet -r requirements-dev.txt
 
 if [ "$WITH_NAUTILUS" = 1 ]; then
   echo "[2/5] nautilus venv (this one is large)"

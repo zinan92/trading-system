@@ -8,7 +8,7 @@ export PYTHONPATH := $(ROOT):$(ROOT)/src:$(ROOT)/packages/standard-broker/src:$(
 .PHONY: help setup setup-nautilus test test-root test-desk test-broker test-strategy test-kline gate dashboard desk lint gitleaks clean
 
 help:
-	@echo "make setup          create $(VENV) and install requirements.txt"
+	@echo "make setup          create $(VENV) and install requirements-dev.txt (runtime + test deps)"
 	@echo "make setup-nautilus create .venv-nautilus with nautilus_trader (Testnet execution only)"
 	@echo "make test           run every suite (root, desk, broker, strategy, kline)"
 	@echo "make gate           write the paper pre-deploy receipt the dashboard needs to boot"
@@ -19,7 +19,7 @@ help:
 setup:
 	$(PY) -m venv $(VENV)
 	$(VPY) -m pip install --upgrade pip
-	$(VPY) -m pip install -r requirements.txt
+	$(VPY) -m pip install -r requirements-dev.txt
 
 setup-nautilus:
 	$(PY) -m venv .venv-nautilus
