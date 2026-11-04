@@ -2072,7 +2072,9 @@ class ParkPaperRuntime:
                     positions_open=int(payload.get("open_count") or 0),
                 )
                 if package.get("status") != "complete":
-                    if current - ends >= RECORDING_ABANDON_AFTER:
+                    # Only a window no active session writes to may be closed;
+                    # the active session's own gap keeps blocking new entries.
+                    if not strategy_open and current - ends >= RECORDING_ABANDON_AFTER:
                         self._abandon_recording_window(package, observed_at=observed_at)
                         continue
                     failures.append(

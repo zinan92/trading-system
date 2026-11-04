@@ -1335,12 +1335,19 @@ def test_recording_window_that_can_never_complete_is_abandoned_once_not_retried_
             if "2026-08-14_DAY" in json.dumps(row.get("recording_windows") or row.get("record_window_id"))
         ]
 
-    after_grace = tick("2026-08-15T13:00:01+00:00")
-    # The next window (14_NIGHT) is still inside its own grace period and may retry.
-    assert all(row["record_window_id"] != "2026-08-14_DAY" for row in after_grace["recording_failures"])
-
     def day_package() -> dict:
         return [row for row in runtime.recording.packages() if row["record_window_id"] == "2026-08-14_DAY"][-1]
+
+    # While the session that owns the window is still active, its gap is a real,
+    # current recording failure: it keeps blocking new entries, never abandoned.
+    still_active = tick("2026-08-15T13:00:01+00:00")
+    assert any(row["record_window_id"] == "2026-08-14_DAY" for row in still_active["recording_failures"])
+    assert day_package()["status"] == "blocked_incomplete"
+
+    # Once no active session writes to it, the window can never complete.
+    monkeypatch.setattr(runtime.identity, "active_session", lambda: None)
+    after_grace = tick("2026-08-15T13:01:00+00:00")
+    assert all(row["record_window_id"] != "2026-08-14_DAY" for row in after_grace["recording_failures"])
 
     package = day_package()
     assert package["status"] == "abandoned"

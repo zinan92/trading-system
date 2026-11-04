@@ -1,5 +1,49 @@
 # Decision Log
 
+# 2026-11-05 — Show only correct state on screen (S2)
+
+## Decision
+
+- `runtime_status` returns `relevance` (`dashboard-runtime-relevance-v1`):
+  `history/other_selection` when the record's venue, instrument or strategy
+  differs from the saved selection; `history/ended` for terminal records;
+  otherwise `current/selected`. The record itself is unchanged and stays
+  visible; only its label changes.
+- Age is reported but never used to demote a record. The Coordinator publishes
+  on lifecycle events, not on a heartbeat, so an old `occurred_at` does not
+  mean it stopped. A stale flag would mark a healthy, waiting grid as broken.
+- Control track: the DCA price-line branch requires a plan or preview.
+- Recording: an ended window that is still incomplete 24h after `ends_at`, and
+  that no active session writes to, is marked `abandoned` once
+  (`package_abandoned` plus a `recording_window_abandoned` receipt listing the
+  missing categories). It is never marked complete. The read model treats it
+  as resolved history; the receipt is not a blocker.
+
+## Gotchas
+
+- **This is a gate change.** `recording_failures` blocks new Paper entries
+  (`park_paper_runtime.py`, `_submit_entries_if_needed` guard). Since
+  2026-09-14 the dead window `2026-09-14_NIGHT` blocked every new Paper entry.
+  The active session's own incomplete window still blocks entries.
+- The control track only boots on ports 8765/8766/8790 or a non-local host. On
+  the dev ports (18765/18790) it silently does nothing, which is why D5 looked
+  fine on dev. `tests/test_dashboard_gridmind_control_track_browser.py` serves
+  the page from `gridmind.test` so the control track really runs.
+- `isDca()` defaults to `state.strategyType`; `isDca(x?.strategy_type)` on a
+  null `x` is true whenever DCA is selected.
+- Deploying queues one Telegram message per dead window (production data: one,
+  `2026-09-14_NIGHT`).
+
+## Verification
+
+- New unit tests (relevance, abandonment once, active window not abandoned,
+  read model clears the blocker) and a browser regression; mutation checks:
+  reverting the DCA guard and the receipt exclusion each fail a test.
+- Copy of real outputs: first tick writes one receipt, later ticks add none
+  (before: one row per tick, 36,100 rows).
+- Dev `/trade`: control track renders Binance Paper · XAU · DCA; the 9/15 BTC
+  Testnet record shows as grey history.
+
 # 2026-11-05 — Green baseline: a fresh clone runs `make test` (S1)
 
 ## Decision

@@ -1370,22 +1370,15 @@ def test_ended_runtime_for_the_same_selection_is_history() -> None:
     assert (relevance["view"], relevance["reason"]) == ("history", "ended")
 
 
-def test_silent_running_record_stays_current_but_is_marked_stale() -> None:
-    """A Coordinator that stopped ticking must stay visible, flagged, not demoted."""
+def test_running_record_for_the_selection_stays_current_however_old() -> None:
+    """Age is reported, never used to demote a live record (no heartbeat exists)."""
 
-    from services.dashboard_control_plane import RUNTIME_STALE_AFTER_SECONDS, runtime_relevance
+    from services.dashboard_control_plane import runtime_relevance
 
-    fresh = runtime_relevance(_runtime_record(), _BTC_GRID_SELECTION, now="2026-11-05T00:05:00+00:00")
-    late = runtime_relevance(
-        _runtime_record(),
-        _BTC_GRID_SELECTION,
-        now=f"2026-11-05T00:{RUNTIME_STALE_AFTER_SECONDS // 60 + 1:02d}:00+00:00",
-    )
-    undated = runtime_relevance(_runtime_record(occurred_at=None), _BTC_GRID_SELECTION, now="2026-11-05T00:05:00+00:00")
+    relevance = runtime_relevance(_runtime_record(), _BTC_GRID_SELECTION, now="2026-11-07T00:00:00+00:00")
 
-    assert (fresh["view"], fresh["reason"], fresh["stale"]) == ("current", "live", False)
-    assert (late["view"], late["reason"], late["stale"]) == ("current", "stale", True)
-    assert (undated["view"], undated["stale"]) == ("current", True)
+    assert (relevance["view"], relevance["reason"]) == ("current", "selected")
+    assert relevance["age_seconds"] == 172_800
 
 
 def test_runtime_status_measures_age_on_the_server_clock(tmp_path: Path) -> None:
@@ -1399,5 +1392,4 @@ def test_runtime_status_measures_age_on_the_server_clock(tmp_path: Path) -> None
     # No selection saved yet: nothing to compare, so the record stays current.
     assert result["relevance"]["view"] == "current"
     assert result["relevance"]["age_seconds"] == 1800
-    assert result["relevance"]["stale"] is True
     assert result["runtime"]["status"] == "running"

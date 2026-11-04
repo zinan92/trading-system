@@ -64,7 +64,6 @@ def _old_btc_grid_runtime() -> dict:
         "relevance": {
             "view": "history",
             "reason": "other_selection",
-            "stale": True,
             "observed_at": "2026-09-15T14:40:59+00:00",
             "age_seconds": 4_367_941,
             "runtime_selection": {

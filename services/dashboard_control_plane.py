@@ -93,7 +93,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-RUNTIME_STALE_AFTER_SECONDS = 15 * 60
 _ENDED_RUNTIME_STATUSES = {"completed", "finalized", "stopped", "sealed", "cancelled"}
 
 
@@ -115,7 +114,9 @@ def runtime_relevance(
 
     The record is never hidden or rewritten; this only decides whether the
     page may present it as the current state or must label it as history.
-    Age is measured on the server clock, never a caller timestamp.
+    Age is measured on the server clock, never a caller timestamp. It is
+    reported, not judged: the Coordinator publishes on lifecycle events, not on
+    a heartbeat, so an old timestamp alone does not mean it stopped.
     """
 
     selection = selection or {}
@@ -143,19 +144,16 @@ def runtime_relevance(
     ]
     status = str(runtime.get("status") or "").strip().lower()
     ended = status.endswith("terminal") or status in _ENDED_RUNTIME_STATUSES
-    stale = age_seconds is None or age_seconds > RUNTIME_STALE_AFTER_SECONDS
     if mismatched:
         view, reason = "history", "other_selection"
     elif ended:
         view, reason = "history", "ended"
     else:
-        view, reason = "current", "stale" if stale else "live"
+        view, reason = "current", "selected"
     return {
         "schema_version": "dashboard-runtime-relevance-v1",
         "view": view,
         "reason": reason,
-        "stale": stale,
-        "stale_after_seconds": RUNTIME_STALE_AFTER_SECONDS,
         "observed_at": observed_at,
         "age_seconds": age_seconds,
         "mismatched_fields": mismatched,
