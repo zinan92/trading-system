@@ -83,8 +83,9 @@
     if (!asset || D.switching) return;
     if (key === D.asset && !D.override) return;
     D.override = null;
-    if (asset.key === selectionAsset()?.key) { applyAsset(); return; }
     const ids = asset.kind === "xau_paper" ? paperGoldIds() : ["hyperliquid.testnet", asset.instrument_id];
+    // Already there only when the instrument is chosen too (a venue alone is half a selection).
+    if (asset.key === selectionAsset()?.key && ids && window.dashboardControlState?.selection?.instrument_id === ids[1]) { applyAsset(); return; }
     const venue = $d("#dashboardVenueSelect"), instrument = $d("#dashboardInstrumentSelect");
     if (!venue || !instrument || !ids) return;
     const [venueId, instrumentId] = ids;
