@@ -58,7 +58,7 @@ def test_boundaries_end_a_run_as_they_do_in_paper(price: float, reason: str | No
 
 def test_windows_step_through_the_history_and_only_full_ones_count() -> None:
     series = bars([100.0] * (9 * 1440))
-    spans = gb.windows(series)
+    spans = gb.windows(series, step=timedelta(hours=12))
     assert [span[0].opened_at for span in spans] == [START + timedelta(hours=12 * i) for i in range(5)]
     assert all(len(span) == 7 * 1440 for span in spans)
 
@@ -121,6 +121,11 @@ def test_funding_older_than_the_record_is_left_out_and_said_so() -> None:
     assert covered["funding"] is not None
     older, _ = window([100.0] * 30, funding=settled, funding_from=(START + timedelta(days=1)).isoformat())
     assert older["funding"] is None and older["net"] == older["gross"] - older["fees"]
+
+
+def test_the_default_is_non_overlapping_weeks() -> None:
+    spans = gb.windows(bars([100.0] * (15 * 1440)))
+    assert [span[0].opened_at for span in spans] == [START, START + timedelta(days=7)]
 
 
 def test_summary_is_numbers_only() -> None:

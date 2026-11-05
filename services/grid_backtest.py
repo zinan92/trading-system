@@ -36,7 +36,10 @@ from services.dualtrack_shadow_input import build_shadow_input
 
 SCHEMA = "grid-backtest-v1"
 WINDOW = timedelta(days=7)
-STEP = timedelta(hours=12)
+# One start every 12 hours (347 overlapping runs over 180 days) took 393 s on this Mac,
+# over the spec's 5-minute limit, so the spec's fallback applies: non-overlapping weeks.
+# Same median on the 9/8 plan (+0.25 %), 40 s.
+STEP = WINDOW
 MAX_DATA_AGE = timedelta(days=3)
 PLAN_VERSION = "park-strategy-plan-v1"
 
