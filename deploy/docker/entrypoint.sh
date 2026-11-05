@@ -5,7 +5,7 @@ set -euo pipefail
 cd /app
 
 export PYTHONPATH=/app:/app/src:/app/packages/standard-broker/src:/app/packages/trading-strategy/src:/app/apps/trading-desk/src
-export TRADING_ORCHESTRATOR_OUTPUT_ROOT="${TRADING_ORCHESTRATOR_OUTPUT_ROOT:-/data/outputs}"
+export TRADING_ORCHESTRATOR_OUTPUT_ROOT="${TRADING_ORCHESTRATOR_OUTPUT_ROOT:-/app/outputs}"  # -> /data/outputs (Dockerfile)
 export TRADING_ORCHESTRATOR_MARKET_DB="${TRADING_ORCHESTRATOR_MARKET_DB:-/data/market_data.db}"
 export TRADING_DESK_PAPER_OUTPUT="${TRADING_DESK_PAPER_OUTPUT:-$TRADING_ORCHESTRATOR_OUTPUT_ROOT}"
 export TRADING_DESK_DB="${TRADING_DESK_DB:-/data/desk/desk.db}"

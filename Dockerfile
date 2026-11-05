@@ -29,7 +29,12 @@ RUN git config --system --add safe.directory /app \
       echo "build context has uncommitted tracked changes; commit or stash them first:"; git status --short --untracked-files=no; exit 1; \
     fi
 
-RUN useradd --create-home --uid 10001 park && mkdir -p /data && chown park /data
+# Runtime state lives in the /data volume. outputs/ is untracked, so linking it there keeps the tree
+# clean; the gate and dashboard write <repo>/outputs whatever TRADING_ORCHESTRATOR_OUTPUT_ROOT says.
+RUN useradd --create-home --uid 10001 park \
+ && mkdir -p /data/outputs /data/desk \
+ && ln -s /data/outputs /app/outputs \
+ && chown -R park /data /app/data
 USER park
 
 EXPOSE 8765 8790
