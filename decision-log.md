@@ -1,5 +1,51 @@
 # Decision Log
 
+# 2026-11-05 — Repair the attended Nautilus cutover test instead of retiring it (#1302)
+
+## Decision
+
+- Repair `tests/test_dualtrack_nautilus_cutover_integration.py`, fixtures only.
+  Every assertion stays, and no gate or production path changes.
+- Do not retire it. It is the only test that takes the real authority path end
+  to end: attended approval, runtime path and cutover gate through the real
+  `build_configured_execution_engine_adapter`, control-plane start, regrid,
+  cancel and stop against the real replay, a market open and close through the
+  dashboard order API, then rollback to `legacy_paper`. The runtime test
+  `test_real_runtime_control_plane_cancel_and_stop_with_blocked_feed` patches
+  that builder out. `nautilus_paper` is the configured authoritative engine, so
+  this path matters.
+- The test writes its own preflight into `tmp_path`, so it no longer reads the
+  gitignored `outputs/dualtrack/nautilus/instrument_preflight.json`.
+- Pin `dualtrack_config(paper_gold_venue="binance")`, the hook meant for tests
+  built on one venue's contract, as `test_dualtrack_nautilus_attended_cutover.py`
+  already does.
+
+## Gotchas
+
+- The Binance pin is not a loosened gate. This preflight schema requires
+  `account_observed` fees and OKX Paper is `paper_assumption`, so the attended
+  path refuses OKX (`test_attended_cutover_is_blocked_for_okx_until_a_fee_is_account_observed`).
+  Running it on OKX would need a made-up account-observed fee, which is false
+  evidence. When OKX gets an observed fee, move this test to OKX.
+- OKX Paper authority runs through the Park direct adapter and its own
+  `park-paper-preflight-v1` artifact, which this test does not cover.
+- The old skip reason said "runtime evidence is not installed" while the test
+  was also stale, so the skip hid three gate failures: tick heartbeat, account
+  snapshot, instrument identity. A skip that nobody sees pass is not coverage.
+- CI runs this test only because #1300 set
+  `TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON`. Without it the test skips again.
+
+## Verification
+
+- Local, one Python as pytest host and replay, no `outputs/` file: 1 passed.
+- Default OKX config with the same fixtures fails at
+  `shadow input instrument identity mismatch`, confirming the third failure is
+  the venue and that nothing else sits behind it on Binance.
+- Full local root suite before committing: 0 skipped, 3881 passed, 25 failed, in
+  five files outside this change (live activation, DCA canary, schedule manager,
+  soak readiness). All five passed, 59 tests, rerun alone after the commit. They
+  bind to the checkout's source state, so run the suite on a committed tree.
+
 # 2026-11-05 — Nautilus real-runtime tests run in CI (#1299)
 
 ## Decision

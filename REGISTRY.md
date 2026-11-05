@@ -9,6 +9,18 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 修复 Nautilus 人工切换测试 · #1302)
+
+- `tests/test_dualtrack_nautilus_cutover_integration.py` 修好了，不再跳过。它从 2026-07-16 加入以来
+  没人见过它通过：依赖一个被 gitignore 的 preflight 文件，而且落后于之后加的三道门禁。
+- 决定修而不是删：这是唯一一条真走权限路径的测试（人工批准、运行环境、切换门禁 → Nautilus 接管
+  → 启动、调网格、撤单、手动开平仓、停止 → 回滚 legacy，历史一字节不变）。
+- 只改测试 fixture：preflight 写进 tmp_path，补心跳和账户快照，固定 Binance。没有放松任何门禁，
+  没有动生产路径。
+- 固定 Binance 是有意的：这条路径要求账户实测费率，OKX 只有假设费率，所以它本来就拒绝 OKX。
+
+_下一步_：等 OKX 有了账户实测费率，把这条测试改到 OKX。
+
 ## 现在在哪里(2026-11-05, CI 跑 Nautilus 真实运行时测试 · #1299)
 
 - CI 的 root 测试现在会跑 `tests/test_dualtrack_nautilus_runtime_integration.py` 的 9 个测试，
