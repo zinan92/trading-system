@@ -1,5 +1,47 @@
 # Decision Log
 
+# 2026-11-06 — No xfails left in the suite (#1340, #1288)
+
+## Decision
+
+- The 18 Telegram strategy-entry tests are deleted, not rewritten:
+  - #1148 turned Telegram strategy entry off, and ADR 0006 makes Dashboard
+    the only entry. The tests drove a path no message can reach any more.
+  - The refusal stays pinned by
+    `test_telegram_strategy_entry_is_disabled_before_draft_or_provider`
+    (blocked with `entry_disabled` before any parser, market or account
+    read; no plan or continuation written).
+  - If Telegram entry ever comes back, it comes back through the Dashboard
+    contract with new tests, not by un-xfailing these.
+- #1288: the GridMind header follows the selected 1m chart feed since
+  0b93ab8. The browser test now drives prices through
+  `/api/dualtrack/market/bars?timeframe=1m`, while the run badge still
+  follows the read model. No product code changed. The header behaviour is
+  the one shipped since 0b93ab8.
+
+## Gotchas
+
+- The header only ticks on a 1m feed (`isTrustedHeaderMarket` requires
+  `timeframe == "1m"`). On 30m it shows the price but never colours it.
+- A `load()` can read the 1m feed more than once, so the fixture keys each
+  1m snapshot to the read-model step rather than counting bar requests.
+- A bar snapshot with an empty `bars` list does not replace the chart
+  market (`acceptMarketSnapshot` keeps the last trusted one); every 1m
+  fixture carries one bar.
+
+## Verification
+
+- `grep -rn xfail tests apps packages`: empty.
+- Header browser test passes: tick-up, tick-up, tick-down; venue switch
+  clears the tick; an untrusted feed never ticks; risk block → 运行异常;
+  stale heartbeat → 运行降级.
+- Root suite on the committed tree: 3942 passed, 1 skipped, 0 xfail
+  (was 3923 passed + 19 xfailed).
+- A first run on an uncommitted tree failed 25 tests in
+  `test_schedule_manager`, `test_live_*` and `test_testnet_soak_readiness`.
+  They attest the repo's own tracked tree and pass on a clean one (59/59).
+  Commit before running the root suite, as the README says.
+
 # 2026-11-05 — 回测工作台: gold grid side by side (#1336)
 
 ## Decision
@@ -15787,6 +15829,7 @@ auditable datafeed port; broker execution remains a separate port.
   precheck blockers, source mismatch, dry-run purity, successful forward
   cutover, every post-pause fail-disabled branch, idempotent completion,
   monotonic rollback, and secret-free deployment manifests.
+
 # 2026-07-27 — Cloud host provisioning is source-bound and passive by default
 
 ## Decision
@@ -18143,6 +18186,7 @@ auditable datafeed port; broker execution remains a separate port.
   and production writes/controls/orders/positions were all zero. This is
   pre-release proof, not runtime recovery; only exact-main deployment plus a
   natural sealed `running_proven` can close #605.
+
 # 2026-08-11 — Contain managed-service OOM without losing repair access (#611)
 
 ## Decision
@@ -18188,6 +18232,7 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused systemd, timer, boot and dead-man suites pass.  Target-environment
   canary and exact-SHA deployment remain runtime acceptance gates and are not
   replaced by these tests.
+
 # 2026-08-11 — Stream runtime-artifact hashes with one bounded buffer (#612)
 
 ## Decision
@@ -19415,6 +19460,7 @@ auditable datafeed port; broker execution remains a separate port.
 - `git diff --check` and scoped `compileall` passed. Live read-only probes
   confirmed XAU and Hyperliquid BTC endpoint keys and confirmed unsupported
   `BTCUSDT` keys fail closed.
+
 # 2026-09-08 — Add Paper OrderPort execution seam (#1144)
 
 ## Decision
@@ -19443,6 +19489,7 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 # 2026-09-08 — Disable Telegram strategy entry and confirmation (#1148)
+
 # 2026-09-08 — Disable Telegram strategy entry and confirmation (#1148)
 
 ## Decision
@@ -19469,6 +19516,7 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused Telegram and Dashboard suites run with `PYTHONPATH=src`.
 - No deployment, launchd operation, live path, data source, or port 8100 API
   change is included.
+
 # 2026-09-08 — Local Testnet control tick and activation slice binding (#1146)
 
 ## Decision
@@ -19639,6 +19687,7 @@ auditable datafeed port; broker execution remains a separate port.
 - Real Playwright runs reached trusted Hyperliquid Testnet BTC Preview with
   `execution_ready=true` and no blockers; Confirm was blocked by the 64,000
   byte server request limit as recorded above.
+
 # 2026-09-08 — Assemble attended Testnet proof inputs from Dashboard activation (#1159)
 
 ## Decision
@@ -19819,6 +19868,7 @@ auditable datafeed port; broker execution remains a separate port.
   `incomplete`, with both family counts `0/2`, `live_enabled=false`, and
   `execution_authorized=false`; no online files were written.
 - `gitleaks git --no-banner --redact --log-opts='--all'` — no leaks found.
+
 # 2026-09-08 — Quantize Hyperliquid Grid prices before proof and lifecycle (#1192)
 
 ## Decision
@@ -19873,6 +19923,7 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_testnet_proof_driver.py tests/test_grid_testnet_lifecycle.py tests/test_standard_broker_external_execution.py` — 48 passed.
 - `git diff --check` — passed.
+
 # 2026-09-08 — Attach the Testnet scheduler and advance Grid lifecycle per tick (#1196)
 
 ## Decision
@@ -20146,6 +20197,7 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `PYTHONPATH=src python3 -m pytest -q tests/test_grid_testnet_lifecycle.py tests/test_testnet_grid_coordinator.py tests/test_park_control.py` — 67 passed.
 - `git diff --check` — passed.
+
 # 2026-09-11 — Testnet replay regression suite (#1251)
 
 ## Revision 2 decision
@@ -20264,6 +20316,7 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `scripts/testnet_replay.sh` — 24 passed in 0.24s.
 - `scripts/testnet_replay_mutations.sh` — 15/15 mutations caught, including the #1255 strict `_snapshot` regression.
+
 # 2026-09-11 — Full proof-entry replay reaches Grid running (#1257)
 
 ## Decision
