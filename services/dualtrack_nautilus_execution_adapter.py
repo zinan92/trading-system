@@ -1246,61 +1246,7 @@ class NautilusExecutionAdapter:
     ) -> list[dict[str, Any]]:
         if self.storage_namespace != "nautilus_authoritative":
             return []
-        command_by_id = {
-            str(row.get("command_id") or ""): dict(row.get("command") or {})
-            for row in commands
-        }
-        lines: dict[str, list[tuple[int, str, dict[str, Any]]]] = {}
-        for command_id, command in command_by_id.items():
-            if not _grid_rearm_entry(command):
-                continue
-            root_id = str(command.get("grid_line_id") or command_id)
-            generation = int(command.get("grid_generation") or 1)
-            lines.setdefault(root_id, []).append((generation, command_id, command))
-
-        fills = [dict(row) for row in snapshot.get("fills") or []]
-        generated: list[dict[str, Any]] = []
-        for root_id, generations in sorted(lines.items()):
-            generation, command_id, command = max(generations, key=lambda row: row[0])
-            entry_quantity = sum(
-                float(fill.get("quantity") or 0.0)
-                for fill in fills
-                if str(fill.get("trade_id") or "") == command_id
-                and str(fill.get("event") or "") == "entry"
-            )
-            target_fills = [
-                fill
-                for fill in fills
-                if str(fill.get("trade_id") or "") == command_id
-                and str(fill.get("event") or "") == "target"
-            ]
-            target_quantity = sum(float(fill.get("quantity") or 0.0) for fill in target_fills)
-            if entry_quantity <= 0 or target_quantity + 1e-9 < entry_quantity:
-                continue
-            target_at = max((str(fill.get("ts") or "") for fill in target_fills), default="")
-            if not target_at or self._grid_plan_cancelled_after(commands, command, target_at):
-                continue
-            next_generation = generation + 1
-            if any(item[0] == next_generation for item in generations):
-                continue
-            payload = {
-                **command,
-                "cycle_id": cycle_id,
-                "ts": _after_fill_timestamp(target_at),
-                "source_fill_id": f"nautilus-grid-rearm:{root_id}:generation:{next_generation}",
-                "grid_line_id": root_id,
-                "grid_generation": next_generation,
-                "grid_rearm_enabled": True,
-                "rearm_of_order_id": command_id,
-            }
-            normalized = _canonical_command(payload)
-            generated.append({
-                "schema_version": "dualtrack-shadow-command-v1",
-                "command_id": normalized["command_id"],
-                "cycle_id": cycle_id,
-                "command": normalized["command"],
-            })
-        return generated
+        return next_grid_rearm_commands(cycle_id, commands, snapshot)
 
     @staticmethod
     def _grid_plan_cancelled_after(
@@ -1584,6 +1530,70 @@ class NautilusExecutionAdapter:
     def _handoff_path(self, previous_cycle_id: str, current_cycle_id: str) -> Path:
         del previous_cycle_id
         return self.root / "handoffs" / f"{current_cycle_id}.json"
+
+
+def next_grid_rearm_commands(
+    cycle_id: str,
+    commands: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """The next generation of every grid line whose target has filled."""
+
+    command_by_id = {
+        str(row.get("command_id") or ""): dict(row.get("command") or {})
+        for row in commands
+    }
+    lines: dict[str, list[tuple[int, str, dict[str, Any]]]] = {}
+    for command_id, command in command_by_id.items():
+        if not _grid_rearm_entry(command):
+            continue
+        root_id = str(command.get("grid_line_id") or command_id)
+        generation = int(command.get("grid_generation") or 1)
+        lines.setdefault(root_id, []).append((generation, command_id, command))
+
+    fills = [dict(row) for row in snapshot.get("fills") or []]
+    generated: list[dict[str, Any]] = []
+    for root_id, generations in sorted(lines.items()):
+        generation, command_id, command = max(generations, key=lambda row: row[0])
+        entry_quantity = sum(
+            float(fill.get("quantity") or 0.0)
+            for fill in fills
+            if str(fill.get("trade_id") or "") == command_id
+            and str(fill.get("event") or "") == "entry"
+        )
+        target_fills = [
+            fill
+            for fill in fills
+            if str(fill.get("trade_id") or "") == command_id
+            and str(fill.get("event") or "") == "target"
+        ]
+        target_quantity = sum(float(fill.get("quantity") or 0.0) for fill in target_fills)
+        if entry_quantity <= 0 or target_quantity + 1e-9 < entry_quantity:
+            continue
+        target_at = max((str(fill.get("ts") or "") for fill in target_fills), default="")
+        if not target_at or NautilusExecutionAdapter._grid_plan_cancelled_after(commands, command, target_at):
+            continue
+        next_generation = generation + 1
+        if any(item[0] == next_generation for item in generations):
+            continue
+        payload = {
+            **command,
+            "cycle_id": cycle_id,
+            "ts": _after_fill_timestamp(target_at),
+            "source_fill_id": f"nautilus-grid-rearm:{root_id}:generation:{next_generation}",
+            "grid_line_id": root_id,
+            "grid_generation": next_generation,
+            "grid_rearm_enabled": True,
+            "rearm_of_order_id": command_id,
+        }
+        normalized = _canonical_command(payload)
+        generated.append({
+            "schema_version": "dualtrack-shadow-command-v1",
+            "command_id": normalized["command_id"],
+            "cycle_id": cycle_id,
+            "command": normalized["command"],
+        })
+    return generated
 
 
 def _canonical_command(command: dict[str, Any]) -> dict[str, Any]:

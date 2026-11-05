@@ -58,6 +58,28 @@ class DatafeedMarketClient:
         path = f"/api/candles/{asset_class}/{ticker}"
         return self._get(path, params)
 
+    def history_candles(
+        self, *, asset_class: str, ticker: str, source: str, start: str, end: str, limit: int = 20_000
+    ) -> dict:
+        """Stored bars only. A window this wide never falls through to the venue."""
+
+        return self._get(f"/api/candles/{asset_class}/{ticker}", {
+            "timeframe": "1m",
+            "limit": limit,
+            "source": source,
+            "cache_policy": "require",
+            "quality": "standard",
+            "fallback_policy": "none",
+            "start": start,
+            "end": end,
+        })
+
+    def history_report(self, *, source: str, instrument: str) -> dict:
+        return self._get(f"/api/history/{source}/{instrument}/report", {})
+
+    def history_funding(self, *, source: str, instrument: str) -> dict:
+        return self._get(f"/api/history/{source}/{instrument}/funding", {})
+
     def health(self) -> dict:
         return self._get("/api/health", {})
 
