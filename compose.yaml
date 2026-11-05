@@ -1,0 +1,25 @@
+# `docker compose up --build` → http://127.0.0.1:8790/trade (#1343)
+# Ports are published on the host's loopback only: nothing is reachable from the network.
+services:
+  trading:
+    build:
+      context: .
+      args:
+        WITH_NAUTILUS: "${WITH_NAUTILUS:-0}"
+    image: trading-system:local
+    ports:
+      - "127.0.0.1:8790:8790"   # 交易台 /trade, /desk
+      - "127.0.0.1:8765:8765"   # GridMind console
+    environment:
+      # Market data must come from a loopback URL (services/config_loader.py refuses anything else),
+      # so the default 127.0.0.1:8100 inside this container finds no datafeed: the chart says
+      # "unavailable" and new entries stay blocked. On Linux, compose.host-network.yaml shares the
+      # host's loopback so a datafeed running there is used as is.
+      TRADING_DESK_HL_ACCOUNT: "${HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS:-}"
+      HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS: "${HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS:-}"
+    volumes:
+      - trading-data:/data   # receipts, ledgers, read models, desk.db
+    restart: unless-stopped
+
+volumes:
+  trading-data:

@@ -1,0 +1,25 @@
+# Only untracked or ignored things: a tracked file left out would make the image's tree "dirty" and the
+# boot receipt would refuse it (#1343).
+.venv
+.venv-*
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+outputs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+configs/live.env
+configs/live.env.*
+!configs/live.env.template
+*.pk
+*.pem
+*.key
+.claude/
+.coverage
+.coverage.*
+coverage.xml

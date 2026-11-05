@@ -9,6 +9,16 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-06, Docker 一键安装 · #1343)
+
+- `docker compose up --build` 一条命令起 `/trade`：同一个镜像里先写开机回执，再起 GridMind（8765）和交易台（8790）。端口只开在本机 127.0.0.1。
+- 数据放在 `trading-data` 卷里，重启不丢；镜像里没有任何密钥、口令和 `.env`。
+- 行情：控制台只认本机回环地址的 datafeed，这一条没有放宽。
+  - 普通容器里没有 datafeed，页面写「黄金行情中断，已停止开新仓」。
+  - Linux 用 `compose.host-network.yaml` 直接用主机上的 datafeed。
+  - Mac 上要看实时图表，还是用原生安装。
+- 本机实测（colima，端口 28790/28765）：回执 pass，`/trade` 等 200，以非 root 用户运行，没有行情时禁止开新仓。
+
 ## 现在在哪里(2026-11-06, AI 策略助手的回复带「依据」 · #1348)
 
 - `/trade` 右栏「Park AI 策略助手」的每条回复下面多一行「依据」，说这一轮实际读到了什么：

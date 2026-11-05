@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import uvicorn
 
@@ -18,6 +19,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="trading-desk")
     parser.add_argument("command", choices=["serve", "watch", "advise", "tick"])
     parser.add_argument("--port", type=int, default=None)
+    # 127.0.0.1 unless told otherwise: off-machine traffic must come through a proxy, which the passcode
+    # gate recognises by its headers. Docker binds 0.0.0.0 inside the container and publishes on the
+    # host's loopback only (compose.yaml).
+    parser.add_argument("--host", default=os.environ.get("TRADING_DESK_HOST", "127.0.0.1"))
     parser.add_argument("--force", action="store_true", help="watch: re-rank now; advise: re-ask the model for every asset")
     args = parser.parse_args()
     config = Config()
@@ -38,7 +43,7 @@ def main() -> None:
         advisor = Advisor(store, sources, Watch(config.watch_folder, config.intel_url), asset_state=lambda asset: current_state(sources, asset))
         print(json.dumps(advisor.generate(force=args.force), ensure_ascii=False))
         return
-    uvicorn.run(create_app(config), host="127.0.0.1", port=args.port or config.port, log_level="warning")
+    uvicorn.run(create_app(config), host=args.host, port=args.port or config.port, log_level="warning")
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ browser ──▶ trading-desk :8790 ──/trade──▶ dashboard_server :876
 
 ## Quick start
 
-Requirements: Python 3.13+, `make`, git. Node is optional (only for the K-line widget's own tests).
+Requirements: Python 3.13+, `make`, git, or just Docker (below). Node 22 is needed only to rebuild or test the React islands (`apps/web`).
 
 ```bash
 git clone https://github.com/zinan92/trading-system.git
@@ -53,6 +53,36 @@ scripts/bootstrap.sh          # venv, deps, all test suites, boot receipt
 make dashboard                # terminal 1 → http://127.0.0.1:8765
 make desk                     # terminal 2 → http://127.0.0.1:8790/trade
 ```
+
+### Or with Docker (one command)
+
+```bash
+git clone https://github.com/zinan92/trading-system.git && cd trading-system
+docker compose up --build     # → http://127.0.0.1:8790/trade  (GridMind: :8765)
+docker compose down           # stop; data stays in the trading-data volume
+```
+
+- One image runs the boot receipt, GridMind and the desk. Data (receipts,
+  ledgers, `desk.db`) lives in the `trading-data` volume and survives
+  restarts.
+- Ports are published on your machine's `127.0.0.1` only. Nothing is
+  reachable from the network, so the desk treats your browser as local,
+  the same as a native run.
+- Market data must come from [zinan92/datafeed](https://github.com/zinan92/datafeed)
+  on a loopback URL; the console refuses any other address.
+  - Inside a plain container nothing listens on `127.0.0.1:8100`. The page
+    says 「黄金行情中断，已停止开新仓」 and no other source stands in.
+  - On **Linux**, run
+    `docker compose -f compose.yaml -f compose.host-network.yaml up --build`.
+    The container then shares the host's loopback, so a datafeed running
+    on the host is used as is.
+  - On macOS, run natively (Quick start above) for live charts.
+- `WITH_NAUTILUS=1 docker compose up --build` adds `nautilus_trader`
+  (Testnet orders, Paper ledger, grid backtests). Without it the product
+  is read-only.
+- No key, passcode or `.env` is copied into the image. Build from a
+  committed tree: the boot receipt binds the exact commit, and the build
+  stops on uncommitted tracked changes.
 
 `scripts/bootstrap.sh --with-nautilus` additionally builds an isolated venv with
 `nautilus_trader`, which is only needed to **send** Testnet orders or run the
