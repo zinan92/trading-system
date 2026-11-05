@@ -50,6 +50,9 @@ jobs:
           .venv/bin/python -m playwright install --with-deps chromium
 
       - name: Root suite
+        env:
+          # Runs tests/test_dualtrack_nautilus_runtime_integration.py against the pinned Nautilus install.
+          TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
         run: make VENV=.venv test-root
 
       - name: Desk suite
