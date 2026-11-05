@@ -1,5 +1,31 @@
 # Decision Log
 
+# 2026-11-05 — 三件事 show their source and unbacked numbers (#1319)
+
+## Decision
+
+- `/api/watch` adds `unverified` per item, computed on read with
+  `provenance.unverified(why, [source_title, detail])`. Each item is checked
+  against its own source only, not the whole candidate pool. The stored
+  `current.json` and `history.jsonl` are unchanged.
+- A flash's `detail` is its feed id; the route shows the feed name from
+  `SOURCE_LABEL` instead. The number check still reads the raw detail.
+- The card's source line appears only when there is model text (`why`); the
+  rules fallback already prints the source title as the body.
+
+## Gotchas
+
+- The model-written short `title` is not a source: it is checked by nothing
+  and checks nothing.
+
+## Verification
+
+- Desk suite 125 passed (`test_watch.py` route case: 25 基点 and 4% backed,
+  「9月」 flagged, stored file untouched, feed name shown;
+  `test_gm_ai_sources.py` watch view).
+- Dev desk with a copy of production `current.json`: three cards each show a
+  source line; the flash shows 东方财富.
+
 # 2026-11-05 — AI advice records what it was given (#1318)
 
 ## Decision

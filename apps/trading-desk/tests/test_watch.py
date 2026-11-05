@@ -125,10 +125,11 @@ def test_watch_route_checks_each_why_against_its_own_source(config, sources, sto
     (config.watch_folder / "current.json").write_text(json.dumps({"generated_at": "2026-09-15T14:26:10+08:00", "provider": "codex", "items": [
         {"ref": "event:1", "kind": "event", "title": "美联储利率决议", "why": "市场押注加息25基点至4%，9月再议", "detail": "预期 4.00% · 前值 3.75%", "source_title": "美国 Federal Funds Rate"},
         {"ref": "event:2", "kind": "event", "title": "非农", "why": "押注新增6.5万", "detail": "预期 65K", "source_title": "美国 Non-Farm Employment Change"},
-        {"ref": "news:3", "kind": "breaking", "title": "x", "why": "", "detail": "", "source_title": "油轮遇袭"}]}, ensure_ascii=False))
+        {"ref": "news:3", "kind": "breaking", "title": "x", "why": "", "detail": "eastmoney_global_news", "source_title": "油轮遇袭"}]}, ensure_ascii=False))
     from tests.test_desk import client_for
     client, _ = client_for(config, sources, store, fetch)
     items = client.get("/api/watch").json()["items"]
     assert [i["unverified"] for i in items] == [["9"], [], []]
+    assert items[2]["detail"] == "东方财富"
     stored = json.loads((config.watch_folder / "current.json").read_text())
     assert "unverified" not in stored["items"][0]  # computed on read; the stored list is unchanged

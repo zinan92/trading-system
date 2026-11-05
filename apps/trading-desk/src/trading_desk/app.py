@@ -23,7 +23,7 @@ from . import provenance
 from .advice import Advisor
 from .watch import Watch, codex_complete
 from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
-from .sources import Sources, http_json
+from .sources import SOURCE_LABEL, Sources, http_json
 from .store import Store
 
 STATIC = Path(__file__).parent / "static"
@@ -507,8 +507,13 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         data = watch.current()
         if not data.get("items"):
             return data
-        return {**data, "items": [{**item, "unverified": provenance.unverified(item.get("why") or "", [item.get("source_title") or "", item.get("detail") or ""])}
-                                  for item in data["items"]]}
+        def shown(item: dict[str, Any]) -> dict[str, Any]:
+            detail = item.get("detail") or ""
+            if item.get("kind") == "breaking":  # a flash's detail is its feed id; show the feed's name
+                detail = SOURCE_LABEL.get(detail, detail)
+            return {**item, "detail": detail,
+                    "unverified": provenance.unverified(item.get("why") or "", [item.get("source_title") or "", item.get("detail") or ""])}
+        return {**data, "items": [shown(item) for item in data["items"]]}
 
     @app.get("/api/system")
     def system() -> dict[str, Any]:
