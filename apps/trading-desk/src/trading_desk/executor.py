@@ -164,7 +164,7 @@ class Executor:
     def gold_message(plan: dict[str, Any]) -> str:
         lower, upper = plan["range"]
         side = "做多" if plan["direction"] == "long" else "做空"
-        return (f"{side}网格 Grid，XAUUSDT Paper，区间 {lower}~{upper}，{len(plan['rungs'])}格，最大3倍杠杆，"
+        return (f"{side}网格 Grid，纸面黄金 Paper，区间 {lower}~{upper}，{len(plan['rungs'])}格，最大3倍杠杆，"
                 f"硬止损 {plan['hard_stop']}，最大可接受亏损 {math.ceil(float(plan['max_loss']))} USDT，没有旧仓。")
 
     def preview_gold(self, plan: dict[str, Any]) -> dict[str, Any]:

@@ -4,7 +4,29 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
+# Fields a venue may genuinely not have (OKX publishes no minimum notional and
+# no maximum price). Only these, and only when the definition names a reason
+# under ``not_applicable_fields``; every other field stays required.
+NOT_APPLICABLE_ALLOWED = frozenset({"min_notional", "max_price"})
+
+
+def not_applicable_fields(definition: dict[str, Any]) -> frozenset[str]:
+    declared = definition.get("not_applicable_fields") or {}
+    if not isinstance(declared, dict):
+        raise ValueError("not_applicable_fields must be a mapping of field to reason")
+    unknown = sorted(set(declared) - NOT_APPLICABLE_ALLOWED)
+    if unknown:
+        raise ValueError(f"fields cannot be declared not applicable: {', '.join(unknown)}")
+    for field, reason in declared.items():
+        if not str(reason or "").strip():
+            raise ValueError(f"not_applicable field {field} needs a reason")
+        if definition.get(field) not in (None, ""):
+            raise ValueError(f"not_applicable field {field} must be null, got {definition.get(field)!r}")
+    return frozenset(declared)
+
+
 def validate_instrument_definition(definition: dict[str, Any]) -> dict[str, Any]:
+    absent = not_applicable_fields(definition)
     required = {
         "instrument_id",
         "venue",
@@ -35,7 +57,7 @@ def validate_instrument_definition(definition: dict[str, Any]) -> dict[str, Any]
         "is_synthetic",
         "upstream_server_time",
     }
-    missing = sorted(key for key in required if definition.get(key) in (None, ""))
+    missing = sorted(key for key in required - absent if definition.get(key) in (None, ""))
     if missing:
         raise ValueError(f"instrument definition missing required fields: {', '.join(missing)}")
     if definition.get("schema_version") != "instrument-definition-v1":
@@ -65,6 +87,8 @@ def validate_instrument_definition(definition: dict[str, Any]) -> dict[str, Any]
         "margin_maint_rate",
         "contract_multiplier",
     ):
+        if field in absent:
+            continue
         try:
             value = Decimal(str(definition[field]))
         except (InvalidOperation, ValueError) as exc:
@@ -113,9 +137,17 @@ def build_nautilus_instrument(
         multiplier=Quantity.from_str(str(definition["contract_multiplier"])),
         min_quantity=Quantity.from_str(str(definition["min_quantity"])),
         max_quantity=Quantity.from_str(str(definition["max_quantity"])),
-        min_notional=Money.from_str(f"{definition['min_notional']} {definition['quote_currency']}"),
+        min_notional=(
+            None
+            if definition.get("min_notional") in (None, "")
+            else Money.from_str(f"{definition['min_notional']} {definition['quote_currency']}")
+        ),
         min_price=Price.from_str(str(definition["min_price"])),
-        max_price=Price.from_str(str(definition["max_price"])),
+        max_price=(
+            None
+            if definition.get("max_price") in (None, "")
+            else Price.from_str(str(definition["max_price"]))
+        ),
         margin_init=Decimal(str(definition["margin_init_rate"])),
         margin_maint=Decimal(str(definition["margin_maint_rate"])),
         maker_fee=maker,

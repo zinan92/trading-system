@@ -1,4 +1,9 @@
 {
+  "paper_gold_venue": {
+    "active": "okx",
+    "decided": "Park, 2026-11-05 (docs/plans/gold-source-switch-spec.md)",
+    "derives": "market_data.provider, execution_contract (instrument id and increments), execution_shadow.nautilus.instrument_source/execution_instrument_id, paper_fee_model (okx), pipeline datafeed GOLD route"
+  },
   "capital_per_track_usd": 10000,
   "max_leverage": 10,
   "cycle_hours_utc": {
@@ -14,8 +19,7 @@
   },
   "market_data": {
     "symbol": "GOLD",
-    "timeframe": "1m",
-    "provider": "binance_usdm_futures"
+    "timeframe": "1m"
   },
   "execution_engine": {
     "authoritative": "nautilus_paper",
@@ -121,12 +125,7 @@
   },
   "cost_per_side_bp": 0.5,
   "execution_contract": {
-    "schema_version": "dualtrack-execution-contract-v1",
-    "execution_instrument_id": "XAUUSDT",
-    "price_precision": 2,
-    "price_increment": "0.01",
-    "quantity_precision": 3,
-    "quantity_increment": "0.001"
+    "schema_version": "dualtrack-execution-contract-v1"
   },
   "paper_fee_model": {
     "mode": "account_observed",
@@ -140,9 +139,7 @@
   "execution_shadow": {
     "nautilus": {
       "instrument_endpoint": "http://127.0.0.1:8100/api/instruments/commodity/XAUUSDT",
-      "instrument_source": "binance_usdm_futures",
       "source_symbol": "GOLD",
-      "execution_instrument_id": "XAUUSDT",
       "fee_model": {
         "mode": "paper_assumption",
         "maker_fee_rate": "0.00005",

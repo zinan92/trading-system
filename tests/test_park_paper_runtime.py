@@ -9,6 +9,7 @@ import pytest
 
 from services.park_paper_runtime import (
     ParkPaperRuntime,
+    ParkPaperRuntimeError,
     build_park_authoritative_adapter,
     prepare_park_paper_config,
 )
@@ -728,7 +729,13 @@ def test_prepare_park_paper_config_resolves_explicit_instrument_and_fee_contract
     )
     monkeypatch.setattr(
         "services.dualtrack_instrument_source.fetch_execution_instrument_definition",
-        lambda **_kwargs: {"schema_version": "instrument-definition-v1", "instrument_id": "XAUUSDT.BINANCE"},
+        lambda **_kwargs: {
+            "schema_version": "instrument-definition-v1",
+            "instrument_id": "XAUUSDT.BINANCE",
+            "venue": "BINANCE",
+            "symbol": "XAUUSDT",
+            "source_mode": "binance_usdm_futures",
+        },
     )
 
     resolved = prepare_park_paper_config({"feature_enabled": False})
@@ -770,7 +777,13 @@ def test_direct_adapter_factory_allows_disabled_read_without_attended_switch(
     # Unit test: never read the instrument from the machine's live datafeed.
     monkeypatch.setattr(
         "services.dualtrack_instrument_source.fetch_execution_instrument_definition",
-        lambda **_kwargs: {"schema_version": "instrument-definition-v1", "instrument_id": "XAUUSDT.BINANCE"},
+        lambda **_kwargs: {
+            "schema_version": "instrument-definition-v1",
+            "instrument_id": "XAU-USDT-SWAP.OKX",
+            "venue": "OKX",
+            "symbol": "XAU-USDT-SWAP",
+            "source_mode": "okx_swap_public",
+        },
     )
     config = {
         **_config(),
@@ -1359,3 +1372,54 @@ def test_recording_window_that_can_never_complete_is_abandoned_once_not_retried_
     tick("2026-08-15T13:10:00+00:00")
     assert window_rows() == rows_after_abandon
     assert day_package()["status"] == "abandoned"
+
+
+def test_session_started_on_another_gold_venue_blocks_before_any_mutation(tmp_path: Path) -> None:
+    """A session runs on the venue it started on; switching mid-session is refused."""
+
+    output = tmp_path / "outputs"
+    identity = ParkStrategyIdentityJournal(output)
+    identity.start_clean_session(
+        observed_at="2026-08-14T10:00:00+00:00",
+        plan_digest="sha256:" + "1" * 64,
+        reconciliation_healthy=True,
+        strategy_session_id="session-binance",
+        strategy_revision_id="revision-binance",
+        paper_gold_venue="binance",
+    )
+    adapter = FakePaperAdapter()
+    market = {"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "provider": "paper-provider", "observed_at": "2026-08-14T10:01:00+00:00", "symbol": "GOLD"}
+
+    result = _runtime(output, adapter, market).run_once()
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "paper_gold_venue_changed_during_session"
+    assert adapter.submit_calls == []
+
+
+def test_new_session_is_stamped_with_the_configured_gold_venue(tmp_path: Path) -> None:
+    identity = ParkStrategyIdentityJournal(tmp_path / "outputs")
+    row = identity.start_clean_session(
+        observed_at="2026-08-14T10:00:00+00:00",
+        plan_digest="sha256:" + "2" * 64,
+        reconciliation_healthy=True,
+        strategy_session_id="session-okx",
+        strategy_revision_id="revision-okx",
+    )
+    assert row["paper_gold_venue"] == "okx"
+
+
+def test_paper_instrument_from_another_venue_is_refused_at_config_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "services.dualtrack_instrument_source.fetch_execution_instrument_definition",
+        lambda **_kwargs: {
+            "schema_version": "instrument-definition-v1",
+            "instrument_id": "XAUUSDT.BINANCE",
+            "venue": "BINANCE",
+            "symbol": "XAUUSDT",
+            "source_mode": "binance_usdm_futures",
+        },
+    )
+    with pytest.raises(ParkPaperRuntimeError) as caught:
+        prepare_park_paper_config({"feature_enabled": False})
+    assert caught.value.code == "paper_gold_venue_mismatch"

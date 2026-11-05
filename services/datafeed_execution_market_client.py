@@ -70,10 +70,14 @@ def execution_market_payload(
     symbol: str,
 ) -> dict[str, Any]:
     provenance = payload.get("provenance") if isinstance(payload.get("provenance"), Mapping) else {}
+    served_source = str(payload.get("source") or "")
+    # Never relabel another venue's price: a served source that differs from
+    # the one asked for is untrusted, not silently renamed.
+    source_matches = not served_source or served_source == source
     return {
         "price": payload.get("price"),
-        "trusted": payload.get("trusted") is True,
-        "fresh": payload.get("fresh") is True,
+        "trusted": payload.get("trusted") is True and source_matches,
+        "fresh": payload.get("fresh") is True and source_matches,
         "source": source,
         "provider": provider,
         "environment": environment,
@@ -81,8 +85,8 @@ def execution_market_payload(
         "symbol": symbol,
         "observed_at": str(payload.get("observed_at") or ""),
         "age_seconds": payload.get("age_seconds"),
-        "reason": str(payload.get("reason") or ""),
-        "raw_status": "ready" if payload.get("fresh") is True else "blocked",
+        "reason": str(payload.get("reason") or "") if source_matches else f"execution_market_source_mismatch:{served_source}",
+        "raw_status": "ready" if payload.get("fresh") is True and source_matches else "blocked",
         "execution_market": True,
         "provenance": dict(provenance),
     }

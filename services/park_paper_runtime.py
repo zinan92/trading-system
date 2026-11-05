@@ -199,6 +199,22 @@ def prepare_park_paper_config(
             "environment": "paper",
             "real_money_eligible": False,
         }
+    from services.dualtrack_config import dualtrack_config
+    from services.paper_gold_venue import (
+        PaperGoldVenueError,
+        active_paper_gold_venue,
+        require_instrument_matches,
+    )
+
+    try:
+        # A pinned instrument (Park's config) or a fetched one must be from the
+        # configured Paper gold venue; mixed provenance fails closed.
+        require_instrument_matches(
+            paper_execution["instrument"],
+            active_paper_gold_venue(dualtrack_settings or dualtrack_config()),
+        )
+    except PaperGoldVenueError as exc:
+        raise ParkPaperRuntimeError(exc.code, str(exc)) from exc
     settings["paper_execution"] = paper_execution
     return settings
 
@@ -306,6 +322,9 @@ class ParkPaperRuntime:
         session = _text(active.get("strategy_session_id"), "strategy_session_id")
         revision = _text(active.get("strategy_revision_id"), "strategy_revision_id")
         digest = _text(active.get("plan_digest"), "plan_digest")
+        venue_blocker = self._paper_gold_venue_blocker(active, observed_at=observed_at)
+        if venue_blocker is not None:
+            return venue_blocker
         facts_gate_failure, facts_gate_blocker = self._recording_facts_gate(
             active,
             observed_at=observed_at,
@@ -2107,6 +2126,30 @@ class ParkPaperRuntime:
                         # package journal must never turn into execution mutation.
                         pass
         return failures
+
+    def _paper_gold_venue_blocker(self, active: Mapping[str, Any], *, observed_at: str) -> dict[str, Any] | None:
+        """A session runs to its end on the venue it started on; a switch mid-session blocks."""
+
+        from services.dualtrack_config import dualtrack_config
+        from services.paper_gold_venue import PaperGoldVenueError, active_paper_gold_venue, session_venue_key
+
+        try:
+            configured = active_paper_gold_venue(dualtrack_config()).key
+        except PaperGoldVenueError as exc:
+            return self._blocked(exc.code, str(exc), observed_at=observed_at)
+        started_on = session_venue_key(active)
+        if started_on == configured:
+            return None
+        return self._blocked(
+            "paper_gold_venue_changed_during_session",
+            f"session started on {started_on}, Paper gold venue is now {configured}; "
+            "close the session on its own venue before switching",
+            observed_at=observed_at,
+            strategy_session_id=active.get("strategy_session_id"),
+            strategy_revision_id=active.get("strategy_revision_id"),
+            session_venue=started_on,
+            configured_venue=configured,
+        )
 
     def _blocked(self, code: str, detail: str, **context: Any) -> dict[str, Any]:
         self._revoke_adapter_mutation()

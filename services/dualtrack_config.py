@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from services.config_loader import ROOT, load_dualtrack_config as _load_dualtrack_config
+from services.config_loader import ROOT, load_dualtrack_config_raw as _load_dualtrack_config
 
 
 DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
@@ -145,13 +145,28 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
 }
 
 
-def dualtrack_config(config_path: Path | None = None) -> dict[str, Any]:
+def dualtrack_config(config_path: Path | None = None, *, paper_gold_venue: str | None = None) -> dict[str, Any]:
+    """Resolved DualTrack config.
+
+    ``paper_gold_venue`` overrides ``paper_gold_venue.active`` for callers that
+    must pin a venue (tests built on one venue's contract). Runtime code never
+    passes it: the config file is the one place the venue is chosen.
+    """
+
     path = config_path or ROOT / "configs" / "dualtrack.yaml"
     try:
         loaded = _load_dualtrack_config(path)
     except FileNotFoundError:
         loaded = {}
-    return _deep_merge(DEFAULT_DUALTRACK_CONFIG, loaded)
+    if paper_gold_venue is not None:
+        loaded = {
+            **loaded,
+            "paper_gold_venue": {**dict(loaded.get("paper_gold_venue") or {}), "active": paper_gold_venue},
+        }
+    from services.paper_gold_venue import apply_to_dualtrack
+
+    # One key picks the Paper gold venue; contract, instrument source and fee follow it.
+    return apply_to_dualtrack(_deep_merge(DEFAULT_DUALTRACK_CONFIG, loaded))
 
 
 def track_notional_budget(config: dict[str, Any]) -> float:

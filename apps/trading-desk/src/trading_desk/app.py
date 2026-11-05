@@ -114,7 +114,14 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     # ---- assets ----------------------------------------------------------------
     @app.get("/api/assets")
     def assets() -> dict[str, Any]:
-        return {"assets": [{k: a[k] for k in ("key", "label", "kind", "venue_profile_id", "instrument_id", "news_queries")} for a in store.assets()]}
+        paper = sources.paper_gold()
+        rows = [{k: a[k] for k in ("key", "label", "kind", "venue_profile_id", "instrument_id", "news_queries")} for a in store.assets()]
+        for row in rows:
+            if row["kind"] == "xau_paper":
+                # The seeded ids are a placeholder; GridMind's catalog decides the venue.
+                row["venue_profile_id"] = (paper or {}).get("venue_profile_id") or ""
+                row["instrument_id"] = (paper or {}).get("instrument_id") or ""
+        return {"assets": rows}
 
     @app.get("/api/catalog")
     def catalog() -> dict[str, Any]:
@@ -159,7 +166,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             hl_account, paper = hl.result(), xau.result()
         return {"accounts": [
             hl_account if hl_account.get("ok") else {**hl_account, "venue": "Hyperliquid 测试盘账户"},
-            paper["account"] if paper.get("ok") else {"ok": False, "venue": "Binance 纸面盘 · 黄金网格", "reason": paper.get("reason")},
+            paper["account"] if paper.get("ok") else {"ok": False, "venue": f"{(sources.paper_gold() or {}).get('venue_label') or '纸面盘'} · 黄金网格", "reason": paper.get("reason")},
         ]}
 
     @app.get("/api/desk/{key}")
@@ -177,7 +184,11 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             "watch": bool(grid.get("ok") and grid.get("status") not in {"terminal", "TERMINAL", "stopped_by_operator"} and not grid.get("sealed")),
             "review": any(j.get("resolved_at") for j in mine),
         }
-        venue = {"hl_testnet": ("Hyperliquid Testnet", "测试盘（假钱）"), "xau_paper": ("Binance 纸面盘", "纸面模拟"), "watch": ("期货行情", "只记判断")}[asset["kind"]]
+        if asset["kind"] == "xau_paper":
+            known = (sources.paper_gold() or {}).get("venue_label")
+            venue = (f"{known} · 纸面盘" if known else "纸面盘（场所读不到）", "纸面模拟")
+        else:
+            venue = {"hl_testnet": ("Hyperliquid Testnet", "测试盘（假钱）"), "watch": ("期货行情", "只记判断")}[asset["kind"]]
         return {"asset": asset["key"], "meta": {"label": asset["label"], "venue": venue[0], "money": venue[1], "kind": asset["kind"]},
                 "price": state["price"], "grid": grid, "today_judgment": latest, "steps": steps,
                 "notes": store.notes(asset["key"], limit=10), "executions": runs, "kline": sources.kline_view(asset),

@@ -56,7 +56,7 @@ def _ready_output(output: Path, cycle_id: str, config: dict) -> None:
 def test_attended_cutover_precheck_is_ready_only_when_gate_services_and_ledgers_are_safe(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-08_DAY"
-    config = dualtrack_config()
+    config = dualtrack_config(paper_gold_venue="binance")  # fixtures carry Binance account-observed fees
     config["execution_engine"] = {
         "authoritative": "legacy_paper",
         "shadow": "nautilus_paper",
@@ -87,7 +87,7 @@ def test_attended_cutover_precheck_is_ready_only_when_gate_services_and_ledgers_
 def test_attended_cutover_precheck_blocks_running_robot_and_missing_service_approval(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-08_DAY"
-    config = dualtrack_config()
+    config = dualtrack_config(paper_gold_venue="binance")  # fixtures carry Binance account-observed fees
     config["execution_engine"] = {
         "authoritative": "legacy_paper",
         "shadow": "nautilus_paper",
@@ -129,7 +129,7 @@ def test_attended_cutover_precheck_blocks_running_robot_and_missing_service_appr
 def test_attended_cutover_can_override_only_shadow_history_when_fixed_fixture_is_green(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-08_DAY"
-    config = dualtrack_config()
+    config = dualtrack_config(paper_gold_venue="binance")  # fixtures carry Binance account-observed fees
     config["execution_engine"] = {
         "authoritative": "legacy_paper",
         "shadow": "nautilus_paper",
@@ -164,7 +164,7 @@ def test_attended_cutover_can_override_only_shadow_history_when_fixed_fixture_is
 def test_attended_cutover_override_still_blocks_when_fixed_fixture_is_not_green(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-08_DAY"
-    config = dualtrack_config()
+    config = dualtrack_config(paper_gold_venue="binance")  # fixtures carry Binance account-observed fees
     config["execution_engine"] = {
         "authoritative": "legacy_paper",
         "shadow": "nautilus_paper",
@@ -189,3 +189,31 @@ def test_attended_cutover_override_still_blocks_when_fixed_fixture_is_not_green(
 
     assert result["status"] == "blocked"
     assert "shadow_gate_not_ready" in {row["code"] for row in result["blockers"]}
+
+
+def test_attended_cutover_is_blocked_for_okx_until_a_fee_is_account_observed(tmp_path: Path) -> None:
+    """OKX Paper carries an assumed fee; the legacy cutover demands an observed one."""
+
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-08_DAY"
+    config = dualtrack_config(paper_gold_venue="okx")
+    config["execution_engine"] = {
+        "authoritative": "legacy_paper",
+        "shadow": "nautilus_paper",
+        "real_money_eligible": False,
+    }
+    _ready_output(output, cycle_id, config)
+
+    result = build_attended_cutover_precheck(
+        output,
+        config=config,
+        cycle_id=cycle_id,
+        environ={
+            "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED": "1",
+            "TRADING_ORCHESTRATOR_NAUTILUS_PYTHON": sys.executable,
+        },
+    )
+
+    assert result["status"] == "blocked"
+    assert result["blockers"][0]["code"] == "nautilus_runtime_validation_failed"
+    assert "account-observed fees" in result["blockers"][0]["detail"]["error"]

@@ -1801,7 +1801,14 @@ def _display_name(value: str) -> str | None:
     normalized = str(value or "").strip()
     if not normalized:
         return None
-    return " ".join(part.capitalize() for part in normalized.replace("-", "_").split("_") if part)
+    return " ".join(
+        _ACRONYMS.get(part.lower(), part.capitalize())
+        for part in normalized.replace("-", "_").split("_")
+        if part
+    )
+
+
+_ACRONYMS = {"okx": "OKX", "usdm": "USDⓈ-M", "usdt": "USDT"}
 
 
 def _format_number(value: Any) -> str:

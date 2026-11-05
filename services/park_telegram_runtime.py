@@ -107,18 +107,25 @@ def default_market_reader(*, output_root: Path | str | None = None) -> dict[str,
         write_compare_receipt,
     )
 
+    from services.dualtrack_config import dualtrack_config
+    from services.paper_gold_venue import active_paper_gold_venue
+
+    venue = active_paper_gold_venue(dualtrack_config())
     mode = market_source_mode()
     if mode in {"dual", "datafeed"}:
         client = DatafeedExecutionMarketClient()
         try:
-            payload = client.read(venue="binance", instrument_id="XAUUSDT.BINANCE")
+            payload = client.read(
+                venue=venue.execution_market_venue,
+                instrument_id=venue.execution_market_instrument_id,
+            )
             datafeed = execution_market_payload(
                 payload,
-                source="binance_usdm_futures",
-                provider="binance_usdm_futures",
+                source=venue.market_source,
+                provider=venue.market_source,
                 environment="production",
-                instrument_id="XAUUSDT.BINANCE",
-                symbol="XAUUSDT",
+                instrument_id=venue.execution_market_instrument_id,
+                symbol=venue.instrument_symbol,
             )
         except ExecutionMarketUnavailable as exc:
             if mode == "datafeed":
