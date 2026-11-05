@@ -1,5 +1,31 @@
 # Decision Log
 
+# 2026-11-05 — Deployed S4 (OKX Paper gold) to production
+
+## Decision
+
+- Park approved. Deployed datafeed `c6f4d69` first, then trading-system `51285bd`.
+  `park-paper-control` was paused across the merge and the re-capture of the
+  pinned instrument, so no pass ran new code against the Binance pin.
+
+## Gotchas
+
+- `ops/release.sh` (datafeed) refuses a dirty canonical checkout. An untracked
+  `.DS_Store` counted as dirty. It was moved to `~/park-data/launchd-backup-20260908/`.
+- `launchctl bootstrap` printed "Input/output error" on first attempts while
+  the bootout was still finishing. The script retries and all jobs came back.
+- Pausing `park-paper-control` with `bootout` terminated a pass that was
+  running. With no active session the pass had nothing in flight. Next time,
+  pause between passes.
+- The first OKX read after a datafeed restart took 22s: a cold start plus TLS.
+  Later reads take 0.5s.
+
+## Verification
+
+- Gate receipt and dashboard boot receipt `pass` at `51285bd`. Preflight
+  `ready_for_park_paper` with `XAU-USDT-SWAP.OKX`. Blocker log flat at 37,084.
+- Production `/trade` shows OKX gold bars and the retired Binance choice.
+
 # 2026-11-05 — Paper gold comes from one venue, chosen by one key (S4, OKX)
 
 ## Decision
