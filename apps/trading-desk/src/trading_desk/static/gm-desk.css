@@ -180,3 +180,30 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
 }
 /* Loading and error rows are plain text, not news rows: no 3px marker column squeezing them. */
 .desk-news li.desk-empty,.desk-news li.desk-bad{display:block;cursor:default}
+
+/* 交易回看 (#1306) */
+.desk-review{display:none;flex-direction:column;gap:12px}
+.desk-review.on{display:flex}
+.desk-review-head{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+.desk-review-head label{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted,#aab1bb)}
+.desk-review-head select{min-height:40px;max-width:100%;background:var(--gm-panel,#131519);color:inherit;border:1px solid var(--rule-strong,#2c3139);border-radius:8px;padding:0 10px;font-size:14px}
+.desk-review-source{font-size:12px;color:#d9a35b}
+.desk-review-kpis{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:baseline}
+.desk-review-kpis small{display:block;font-size:12px;color:var(--muted,#aab1bb)}
+.desk-review-kpis b{font-size:16px;font-weight:600}
+.desk-review-kpis b.big{font-size:24px;font-variant-numeric:tabular-nums}
+.desk-review-kpis .bad b{color:#f0a24b}
+.desk-review-missing{padding:10px 12px;border:1px solid #5a4526;border-radius:8px;color:#d9a35b;font-size:13px}
+.desk-review-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,340px);gap:14px}
+#deskRunChart{height:420px;overflow:hidden}
+.desk-review-body>div{min-width:0}
+.desk-review-legend{margin:6px 0 0;font-size:12px;color:var(--muted,#aab1bb)}
+.desk-review-events{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;max-height:300px;overflow:auto}
+.desk-review-events button{all:unset;box-sizing:border-box;display:block;width:100%;min-height:44px;padding:9px 10px;border-radius:8px;cursor:pointer;font-size:14px;line-height:1.45}
+.desk-review-events button small{display:block;font-size:12px;color:var(--muted,#aab1bb)}
+.desk-review-events button:hover{background:rgba(255,255,255,.05)}
+.desk-review-events button:focus-visible{outline:2px solid #7fb2ff}
+.desk-review-events button[aria-pressed="true"]{background:#1f2733}
+.desk-review-record{margin:8px 0 0;padding:10px 12px;border:1px solid var(--rule,#23272e);border-radius:8px;font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-all;max-height:170px;overflow:auto}
+.desk-review-score{margin:0;font-size:13px;color:var(--muted,#aab1bb)}
+@media (max-width:900px){.desk-review-body{grid-template-columns:minmax(0,1fr)}}

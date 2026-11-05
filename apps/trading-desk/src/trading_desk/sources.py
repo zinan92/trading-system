@@ -165,6 +165,19 @@ class Sources:
     # ---- bars (venue-native: the chart that carries the grid uses the grid's own prices)
     HL_INTERVAL_MS = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 
+    def testnet_bars_between(self, coin: str, start: str, end: str) -> dict[str, Any]:
+        """Hourly Hyperliquid Testnet bars for one past window, for 交易回看."""
+        source = f"Hyperliquid Testnet {coin}"
+        try:
+            start_ms = int(datetime.fromisoformat(start.replace("Z", "+00:00")).timestamp() * 1000) - self.HL_INTERVAL_MS["1h"] * 6
+            end_ms = int(datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() * 1000) + self.HL_INTERVAL_MS["1h"] * 6
+            rows = self.fetch(self.config.hyperliquid_info_url, {"type": "candleSnapshot", "req": {"coin": coin, "interval": "1h", "startTime": start_ms, "endTime": end_ms}})
+        except Exception as exc:  # noqa: BLE001 - the page says the bars are missing.
+            return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
+        bars = [[datetime.fromtimestamp(int(r["t"]) / 1000, timezone.utc).isoformat(), float(r["o"]), float(r["h"]), float(r["l"]), float(r["c"])]
+                for r in rows or [] if isinstance(r, dict) and all(k in r for k in ("t", "o", "h", "l", "c"))]
+        return {"ok": bool(bars), "bars": bars, "source": source}
+
     def bars(self, asset: dict[str, Any], timeframe: str, limit: int = 60) -> dict[str, Any]:
         if timeframe not in self.HL_INTERVAL_MS:
             return {"ok": False, "reason": "不支持的周期", "bars": []}

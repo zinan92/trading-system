@@ -490,6 +490,8 @@ def test_tunnel_requests_need_the_passcode_and_local_ones_do_not(config, sources
     tunnel = {"cf-connecting-ip": "203.0.113.9"}
     assert client.get("/api/health").status_code == 200  # the Mac itself
     assert client.get("/api/health", headers=tunnel).status_code == 401
+    assert client.get("/api/review/runs", headers=tunnel).status_code == 401
+    assert client.get("/api/review/timeline", params={"run": "paper:x"}, headers=tunnel).status_code == 401
     assert client.get("/", headers=tunnel, follow_redirects=False).headers["location"] == "/login"
     assert client.post("/login", data={"passcode": "wrong"}, headers=tunnel).status_code == 401
     ok = client.post("/login", data={"passcode": "orchid-47"}, headers=tunnel, follow_redirects=False)
@@ -615,6 +617,40 @@ def test_desk_assets_are_cache_busted_by_content():
     from trading_desk import gridmind
 
     static = Path(gridmind.__file__).resolve().parent / "static"
-    expected = hashlib.sha256((static / "gm-desk.js").read_bytes() + (static / "gm-desk.css").read_bytes()).hexdigest()[:12]
+    expected = hashlib.sha256(b"".join((static / name).read_bytes() for name in ("gm-desk.js", "gm-desk.css", "gm-review.js"))).hexdigest()[:12]
     assert gridmind.ASSET_VERSION == expected
     assert f"gm-desk.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
+    assert f"gm-review.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
+
+
+def _review_ledger(config):
+    base = config.paper_output / "dualtrack" / "nautilus_authoritative"
+    (base / "fills").mkdir(parents=True)
+    (base / "fills" / "park-session-abc.json").write_text(json.dumps([
+        {"ts": "2026-09-14T01:00:00+00:00", "side": "buy", "event": "entry", "price": 100.0, "quantity": 1.0, "cost": 0.1, "order_id": "a"},
+        {"ts": "2026-09-14T02:00:00+00:00", "side": "sell", "event": "exit", "price": 99.0, "quantity": 1.0, "cost": 0.1, "order_id": "b"},
+    ]))
+
+
+def test_review_lists_a_run_and_keeps_a_zero_author_visible(config, sources, store, fetch):
+    _review_ledger(config)
+    client, _ = client_for(config, sources, store, fetch)
+    body = client.get("/api/review/runs").json()
+    assert [run["id"] for run in body["runs"]] == ["paper:session-abc"]
+    assert body["score"]["park"]["total"] == 0
+
+
+def test_review_timeline_reads_one_run_and_writes_nothing(config, sources, store, fetch):
+    _review_ledger(config)
+    client, ex = client_for(config, sources, store, fetch)
+    before = store.judgments(None, limit=5000, author=None)
+    data = client.get("/api/review/timeline", params={"run": "paper:session-abc"}).json()
+    assert data["result"]["fill_count"] == 2 and data["result"]["net"] == pytest.approx(-1.2)
+    assert store.judgments(None, limit=5000, author=None) == before
+    assert ex.driver_calls == [] and ex.close_calls == []
+
+
+def test_review_timeline_404s_an_unknown_run(config, sources, store, fetch):
+    client, _ = client_for(config, sources, store, fetch)
+    response = client.get("/api/review/timeline", params={"run": "paper:../../etc"})
+    assert response.status_code == 404 and response.json()["detail"] == "没有这一轮的记录"
