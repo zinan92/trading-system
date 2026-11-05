@@ -36,8 +36,24 @@
     datafeed 现在保持长连接，读 240 根 K 线约 0.5s。2s 上限没有放宽。
 - 生产 2026-11-05 已部署 S1+S2 到 `787e499`：blocker 行数 37,083 → 37,084 后不再增长，1 条 Telegram 已送达。
 
-_下一步_：部署 OKX 需要 Park 再点头。顺序：datafeed（含执行行情 worker）→ 本仓库 →
-在没有活动 Paper session 时，重新抓取 `park_strategy_track.paper.json` 里固定的合约和费率。
+- **已部署到生产（2026-11-05 02:16–02:25 UTC，Park 点头）**：
+  - datafeed `c6f4d69`（#183）：用 `ops/release.sh` 发布，6 个 job 都重启了。OKX 执行行情 fresh（4134.9）。
+    接收文件 `execution-market-latest.json` 显示 `stale`，原因是 Binance 仍然 451，这是部署前就有的。
+  - 本仓库 `51285bd`（#1292），顺序：
+    1. 确认没有活动 session
+    2. 暂停 `park-paper-control`
+    3. `ff-only` 合并
+    4. 重新抓取 `park_strategy_track.paper.json` 的合约（备份：`.pre-okx-20261105.bak`，只改了 `paper_execution.instrument`）
+    5. 恢复并启动
+  - 结果：
+    - gate 收据和 dashboard 启动收据都是 `pass`，提交号 `51285bd`
+    - preflight `ready_for_park_paper`，合约 `XAU-USDT-SWAP.OKX`
+    - blocker 行数仍是 37,084，没有增加
+    - 没有多发 Telegram
+  - 浏览器 8790：显示旧选择「已停用」，K 线 `GOLD 30m · okx swap public · 240 bars`，顶部 `OKX · XAU / USDT`。
+  - Park 需要自己重新选一次 Venue 和 Instrument。
+
+_下一步_：S6 交易回看。
 
 ## 现在在哪里(2026-11-05, 屏幕上只显示正确状态 S2)
 
