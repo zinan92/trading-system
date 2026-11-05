@@ -9,6 +9,13 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-06, 测试里不再有 xfail · #1340)
+
+- 19 个「已知失败」清零：
+  - 18 个 Telegram 下单入口测试删掉了。#1148 已经关掉这个入口，ADR 0006 定了 Dashboard 是唯一入口；「Telegram 下单会被拒绝」那条测试保留。
+  - #1288 表头测试改成用 1 分钟 K 线驱动（表头 0b93ab8 起就跟着图表走），跳动、换交易所、行情不可信、风控、心跳都照旧断言。
+- 根目录测试 3942 通过、0 xfail。产品代码没改。
+
 ## 现在在哪里(2026-11-06, 回测工作台：黄金网格并排对比 · #1336)
 
 - 「回测」标签的策略可以选「网格」（只限黄金）。每组填方向（双向 / 做多 / 做空）、下沿 %、上沿 %、格数、每格金额，做多 / 做空可以填止损 %。
@@ -2387,6 +2394,7 @@ activation is authorized; fixture evidence is not external readiness.
 - #214: 策略类型的 Grid / DCA 选择使用高对比选中卡、`✓ 当前选择` 标签和同步的 `aria-pressed` 状态；切换后仅一个类型保持选中，策略计算与下单语义未变。
 - #216: 浏览器未收到 Dashboard 响应时不再断言请求未到后端或 Paper 未改变；控制动作一律进入权威 read-model 核对，读取动作明确提示刷新重试。
 - #218: AI 市场评估改为位置优先：D1 200 根完整日线先给出低/中/高位与方向倾向，再由 D1/4H 明确震荡、形成中、已形成趋势，最后才推荐 Grid/DCA 与确定性参数职责；只写提案与本地预览，绝不自动启动或下单。
+
 # 2026-07-27 Cloud M6b — passive host provisioning in progress
 
 - Cloud M6a merged as PR #397 at `main@ec8be27`: exact-source deployment
