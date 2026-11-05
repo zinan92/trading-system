@@ -164,7 +164,8 @@ if (typeof document !== "undefined") (() => {
   const TABS = {positions: "持仓", orders: "委托", fills: "成交", review: "复盘", history: "收益曲线", supervisor: "运行监督", shadows: "影子策略"};
 
   function mountStatus(wrap, rail) {
-    wrap.insertAdjacentHTML("afterbegin", `<section class="desk-status wait" id="deskStatus" aria-live="polite"></section><div class="desk-retired hidden" id="deskRetired" role="status"></div>`);
+    // First thing on the page, above 本周三件事: what is happening now and the one next step.
+    (wrap.parentNode || wrap).insertAdjacentHTML("afterbegin", `<section class="desk-status wait" id="deskStatus" aria-live="polite"></section><div class="desk-retired hidden" id="deskRetired" role="status"></div>`);
     // Every GridMind card stays in the page with its controls; the ones for fine-tuning are folded away.
     rail?.querySelector(".desk-judge")?.insertAdjacentHTML("afterend", `<details class="card desk-more" id="deskManual"><summary>手动配置与 AI 助手<small>Trading BOT · AI 助手 · 趋势评估 · 策略配置与停止</small></summary><div class="desk-more-body"></div></details>`);
     const manual = $d("#deskManual .desk-more-body");

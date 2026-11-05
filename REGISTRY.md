@@ -9,6 +9,25 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 交易台 /trade 改版 · #1294)
+
+- Park 先看 mockup 再拍板（https://claude.ai/artifact/6s2EPPMkA9DSVjgxE469C9）。只改展示，
+  下单、风控、门禁逻辑不动。
+- 页面最上方一条状态：空闲（一句话 + 「开始今天的计划」）、运行中（区间、格数、成交）、
+  行情中断（唯一的红色）。数据取自 GridMind 刚渲染的那份 `window.gridmindView`，不会和
+  图表、账户栏说法不一。
+- 「今天」面板分三步：你的判断 → 生成计划 → 你亲手启动。GridMind 自己的 Trading BOT、
+  AI 助手、趋势评估、策略配置（含「停止 + 撤单 + 平仓」）收进「手动配置与 AI 助手」，
+  没有删，按钮作用不变。
+- 当前运行策略卡片、生产运行状态、内部记录收进底部「系统详情」。健康只说字段能撑住的话：
+  空闲是灰色「行情可信 · 没有运行中的计划」，任何不认识的记录都是黄色「N 项需要看一下」。
+- Binance 已停用的旧选择：一条黄色提示 + 「改选 OKX Paper 黄金」按钮（只是选择，不下单）。
+- GridMind 本体两处：生产运行状态不再重复账户数字（旧执行引擎的 10,000/0 与上方账本
+  9,877.86/−122.14 矛盾）；趋势卡在行情可信、只是图表不是 1m 时说「切到 1m 后可评估」，
+  不再说「行情不可用」。1m 才能刷新趋势、启动的门槛没变。
+
+_下一步_：Park 同意后部署到生产（只换展示，不动订单生命周期）；然后 S6 交易回看。
+
 ## 现在在哪里(2026-11-05, Paper 黄金改用 OKX XAU-USDT-SWAP · S4)
 
 - Park 拍板：Paper 黄金的价格、合约定义、执行品种都来自 **OKX `XAU-USDT-SWAP`**。

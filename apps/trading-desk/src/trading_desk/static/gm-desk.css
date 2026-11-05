@@ -117,6 +117,9 @@
 /* ---- 2026-11-05 trade page redesign (#1294): one status line, one start path, no false alarms ---- */
 /* The banner says what the header pills used to repeat. */
 #marketBadge,#cycleBadge,#accessBadge,#runBadge{display:none}
+.desk-layout>.desk-status,.desk-layout>.desk-retired{grid-column:1/-1;margin-bottom:0}
+@media (max-width:1280px){.desk-layout>.desk-status,.desk-layout>.desk-retired{margin:0 16px}}
+@media (max-width:760px){.desk-layout>.desk-status,.desk-layout>.desk-retired{margin:0 7px}}
 .desk-status{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:18px 22px;margin-bottom:10px;border-radius:12px;background:var(--gm-panel,#131519);border:1px solid var(--gm-line,rgba(236,238,242,.08))}
 .desk-status-ic{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none;background:var(--gm-panel-2,#191c22);color:var(--gm-muted,#99a0ab)}
 .desk-status-text{flex:1;min-width:240px}
@@ -175,3 +178,5 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
   .desk-status .desk-btn.big{width:100%;justify-content:center}
   #tabs [data-tab="supervisor"]{margin-left:0}
 }
+/* Loading and error rows are plain text, not news rows: no 3px marker column squeezing them. */
+.desk-news li.desk-empty,.desk-news li.desk-bad{display:block;cursor:default}
