@@ -398,13 +398,14 @@ if (typeof document !== "undefined") (() => {
   }
   const AI_CALL = {long: "做多", short: "做空", flat: "观望"};
   function renderAi(d) {
-    const ai = d.ai_today, box = $d("#deskAi");
+    const ai = d.ai_today, box = $d("#deskAi"), keepOpen = Boolean(box.querySelector("details.desk-ai-src")?.open);  // the minute refresh must not fold it
     const refresh = `<button type="button" class="desk-link" id="deskAiRefresh" ${d.ai_running ? "disabled" : ""}>${d.ai_running ? "AI 正在看…" : "刷新 AI 建议"}</button>`;
     if (!ai) { box.innerHTML = `<div class="desk-ai-line"><span class="k">AI 建议</span><span class="muted">每天 08:40 生成</span>${refresh}</div>`; }
     else {
       const at = new Date(ai.created_at).toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"});
       box.innerHTML = `<div class="desk-ai-line"><span class="k">AI 建议</span><b class="d-${ai.direction === "flat" ? "wait" : ai.direction}">${AI_CALL[ai.direction]}</b><span class="muted">信心 ${ai.confidence}/5 · ${at}</span>${refresh}</div>
         <p>${escD(ai.reason)}</p>${aiSources(ai)}${D.d === null ? `<button type="button" class="desk-link" id="deskAiAdopt">照 AI 的方向判断</button>` : ""}`;
+      if (keepOpen) box.querySelector("details.desk-ai-src")?.setAttribute("open", "");
       const adopt = $d("#deskAiAdopt");
       if (adopt) adopt.onclick = () => { D.d = ai.direction; syncDir(); loadPlan(); adopt.remove(); };
     }
