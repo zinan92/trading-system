@@ -9,6 +9,16 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-06, 生产已部署 ab95fa0)
+
+- 生产（Goldbot V5 Paper）已经是 ab95fa0。今晚合并的都上线了：xfail 清零（#1340）、一键部署脚本和覆盖率（#1341）、AI 回复带「依据」（#1348）、Docker（#1343）、只读 API 和 MCP（#1344）。
+- 部署用的是 `ops/deploy-paper.sh`：先确认 Paper 空闲，等预检在这个提交上通过，才重启。
+- 只读 API 已在生产上用临时 token 试过：能读的 6 个路径返回 200，下单类路径 404，撤销后 401。没有留下 token。
+- 覆盖率 80%。最低的是 pipelines，52%。
+- 没验证的：生产上还没有一条真实的 AI 回复带依据。等 Park 下次在助手里发消息时看。
+
+_下一步_：#1317 早上 08:40 后核对生产 AI 调用证据；#1337 BTC 网格回测；前端剩下的切片 #1327–#1330。
+
 ## 现在在哪里(2026-11-06, 只读开放 API + MCP · #1344)
 
 - 别的工具（另一个 agent、笔记本、Claude）现在可以读交易台。

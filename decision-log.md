@@ -1,5 +1,23 @@
 # Decision Log
 
+# 2026-11-06 — Deploy record: ab95fa0 (#1345, #1342, #1349, #1346, #1347)
+
+- `ops/deploy-paper.sh ab95fa0 --dashboard`: main's head, Paper idle, gate
+  pass at ab95fa0, dashboard and desk restarted at 04:42 (UTC+8), 200 from
+  `/trade`, `/static/web/web.js` and `/api/watch`. The dashboard restart was
+  needed because #1348 changes `services/park_ai_chat.py`. It happened only
+  after the idle check: no strategy, order or position was running.
+- Open API in production: without a token `/api/v1/status` gives 401 and
+  POST gives 405. A scratch token `deploy-check-1106` got 200 from status,
+  assets, watch, advice, review/runs and system, and 404 from execute.
+  After `token revoke` it gave 401. No token is left.
+- `/trade` in the browser: no console errors, the AI chat card is present
+  and the page carries the 「依据」 renderer. A real production reply with
+  sources was not triggered. That would call the model and write a chat
+  journal row. The rendering is covered by the Playwright test in #1348.
+- CI coverage (first run with `COV=1`): total 80%; services 84%,
+  pipelines 52%, schemas 93%, trading_desk 88%.
+
 # 2026-11-06 — Read-only open API and MCP (#1344)
 
 ## Decision
