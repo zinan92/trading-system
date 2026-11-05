@@ -44,3 +44,33 @@ test("an unavailable result names the reason", async () => {
   fireEvent.click(screen.getByRole("button", {name: "开始回测"}));
   expect(await screen.findByText("回测不可用：历史数据有缺口：3 分钟")).toBeTruthy();
 });
+
+test("a gold grid comparison sends grid sets and shows grid rows; BTC cannot pick grid yet", async () => {
+  vi.useFakeTimers();
+  const calls: Array<[string, RequestInit | undefined]> = [];
+  const grid = {runs: 25, median_return_pct: 0.3, worst_return_pct: -2, best_return_pct: 1.5, stopped_pct: 8, mean_fills: 11.5, funded_runs: 25, histogram: {low: -2, width: 0.3, counts: [1]}};
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    calls.push([String(input), init]);
+    if (init?.method === "POST") return json({key: "g"});
+    return json({status: "ready", asset: "XAU", strategy: "grid", instrument: "XAU-USDT-SWAP", source: "okx_swap_public",
+      variants: [{params: JSON.parse(String(calls[0]?.[1]?.body)).variants[0], summary: grid, account_equity: 10000}]});
+  });
+  render(<Workbench />);
+  fireEvent.change(screen.getByLabelText("策略"), {target: {value: "grid"}});
+  fireEvent.click(screen.getAllByRole("button", {name: "去掉这组"})[1]!);
+  fireEvent.change(screen.getByLabelText("格数"), {target: {value: "6"}});
+  fireEvent.change(screen.getByLabelText("方向"), {target: {value: "long"}});
+  fireEvent.change(screen.getByLabelText("止损（离现价 %，可空）"), {target: {value: "2"}});
+  await act(async () => { fireEvent.click(screen.getByRole("button", {name: "开始回测"})); await vi.advanceTimersByTimeAsync(0); });
+  expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({asset: "XAU", strategy: "grid",
+    variants: [{direction: "long", below_pct: 3, above_pct: 3, levels: 6, notional_per_level: 500, stop_pct: 2}]});
+  expect(screen.getByText("做多 −3%/+3% · 6 格 × 500 USDT · 止损 2%")).toBeTruthy();
+  expect(screen.getByText("8%")).toBeTruthy();
+  expect(screen.getByText("11.5 笔")).toBeTruthy();
+  vi.useRealTimers();
+
+  fireEvent.change(screen.getByLabelText("品种"), {target: {value: "BTC"}});
+  expect(screen.getByText(/BTC 网格回测还没开通/)).toBeTruthy();
+  expect((screen.getByRole("button", {name: "开始回测"}) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("option", {name: "网格（BTC 即将开通）"}) as HTMLOptionElement).disabled).toBe(true);
+});

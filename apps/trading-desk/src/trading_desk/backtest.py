@@ -108,6 +108,7 @@ class Comparisons:
         self.folder = Path(config.db_path).parent / "comparisons"
         self.checkout = Path(config.trading_system_checkout)
         self.python = Path(config.nautilus_python)
+        self.preflight = Path(config.paper_output) / "park_strategy" / "paper_preflight_current.json"
         self.datafeed_url = str(getattr(config, "datafeed_url", "http://127.0.0.1:8100"))
         self.launch = launch
         self.now = now or (lambda: datetime.now(timezone.utc))
@@ -134,7 +135,9 @@ class Comparisons:
 
         key = self.key(request)
         current = self.read(key)
-        if current and (current.get("status") != "running" or key in self._running()):
+        # A ready result is today's answer; an unavailable one (gap, datafeed blip, stale preflight)
+        # is retried, so pressing the button again is a real retry.
+        if current and (current.get("status") == "ready" or key in self._running()):
             return key
         self.folder.mkdir(parents=True, exist_ok=True)
         if self._running():
@@ -147,7 +150,7 @@ class Comparisons:
         environment["PYTHONPATH"] = str(self.checkout)
         self.launch(
             [str(self.python), "-m", "pipelines.backtest_compare", "--request", str(request_path), "--output", str(self.path(key)),
-             "--datafeed-url", self.datafeed_url],
+             "--datafeed-url", self.datafeed_url, "--preflight", str(self.preflight), "--nautilus-python", str(self.python)],
             cwd=str(self.checkout), env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )

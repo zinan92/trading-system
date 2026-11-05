@@ -106,6 +106,7 @@ def test_a_comparison_runs_alone_and_a_second_one_waits(compare, launched) -> No
     key = compare.start(REQUEST)
     args, kw = launched[0]
     assert args[1:3] == ["-m", "pipelines.backtest_compare"] and "HYPERLIQUID_TESTNET_SECRET_FILE" not in kw["env"]
+    assert args[args.index("--preflight") + 1].endswith("park_strategy/paper_preflight_current.json")  # grids replay with Paper's contract
     assert json.loads((compare.folder / f"{key}.request.json").read_text()) == REQUEST
     assert compare.read(key)["status"] == "running"
     assert compare.start(REQUEST) == key and len(launched) == 1  # the same click again just follows it
@@ -114,6 +115,14 @@ def test_a_comparison_runs_alone_and_a_second_one_waits(compare, launched) -> No
     compare.path(key).write_text(json.dumps({"status": "ready"}))
     other = compare.start({**REQUEST, "asset": "XAU"})
     assert other != key and len(launched) == 2
+
+
+def test_a_ready_result_is_reused_but_an_unavailable_one_runs_again(compare, launched) -> None:
+    key = compare.start(REQUEST)
+    compare.path(key).write_text(json.dumps({"status": "unavailable", "reason": "回测出错：RuntimeError"}))
+    assert compare.start(REQUEST) == key and len(launched) == 2 and compare.read(key)["status"] == "running"
+    compare.path(key).write_text(json.dumps({"status": "ready"}))
+    assert compare.start(REQUEST) == key and len(launched) == 2
 
 
 def test_a_stuck_comparison_does_not_block_forever(compare, launched) -> None:
