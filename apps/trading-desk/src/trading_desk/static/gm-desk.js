@@ -1,6 +1,84 @@
 // Desk layer injected into the GridMind console (served at /trade): nav + asset switch,
-// rolling news rail, and today's judgment -> plan -> 执行 panel. GridMind itself stays untouched.
-(() => {
+// one status line, rolling news rail, and today's judgment -> plan -> 执行 panel.
+// GridMind's own cards stay in the page (collapsed); only presentation changes here.
+
+// Pure status model, read from the view GridMind last rendered (window.gridmindView), so the
+// banner can never disagree with the chart or the account strip. Tested in tests/test_gm_desk_status.py.
+const DeskStatus = (() => {
+  const TERMINAL = {lower_boundary_invalidated: "价格跌破区间下沿", upper_boundary_invalidated: "价格涨破区间上沿", hard_stop: "触发硬止损", operator_stop: "你手动停止", session_expired: "会话到期"};
+  const LIFECYCLE = {armed: "挂单中", running: "运行中", active: "运行中", paused_above_range: "价格高于区间，暂停补单", paused_below_range: "价格低于区间，暂停补单", hard_stop_triggered: "已触发硬止损，正在平仓", flattening: "正在平仓"};
+  const ENDED = new Set(["terminal", "sealed", ""]);
+  // With no plan these records are what "no plan" means, not a fault. Everything else counts as needing a look.
+  const IDLE_EXPECTED = new Set(["production_plan_missing", "risk_decision_missing", "active_strategy_missing", "grid_geometry_invalid", "authoritative_snapshot_missing", "reconciliation_blocked:local_execution_authority_unavailable"]);
+  const finite = v => v !== null && v !== "" && Number.isFinite(Number(v));
+  const num = v => finite(v) ? Number(v).toLocaleString("en-US", {maximumFractionDigits: 2}) : "--";
+  const beijing = stamp => { const t = new Date(stamp); return isNaN(t) ? null : new Date(t.getTime() + 8 * 3600000); };
+  const bjDay = stamp => { const t = beijing(stamp); return t ? `${t.getUTCMonth() + 1}/${t.getUTCDate()}` : ""; };
+  const bjTime = stamp => { const t = beijing(stamp); return t ? `${bjDay(stamp)} ${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}` : "--"; };
+
+  function isActive(view) {
+    const data = view?.data || {}, plan = view?.livePlan;
+    const lifecycle = plan?.source === "testnet_grid_lifecycle" ? plan : null;
+    return data.current_strategy?.active === true || Boolean(lifecycle && !ENDED.has(String(lifecycle.status || "")));
+  }
+
+  function banner(view, {asset = "黄金"} = {}) {
+    if (!view?.data) return {tone: "wait", title: "正在读取交易状态", body: "", action: null};
+    const data = view.data, market = view.market || data.market || {}, current = data.current_strategy || {};
+    if (view.marketTrusted !== true) {
+      const last = market.latest_timestamp ? `最后可信数据 ${bjTime(market.latest_timestamp)}` : "还没有可信数据";
+      return {tone: "bad", title: `${asset}行情中断，已停止开新仓`,
+        body: `${market.provider_label || "行情源"}的数据没有通过可信检查（${last}）。恢复之前不会开新仓，也不会改用别的数据源顶替。`,
+        action: {kind: "details", label: "查看原因"}};
+    }
+    if (isActive(view)) {
+      const plan = view.livePlan || {}, spec = current.specification || {}, ex = current.execution || {}, counts = data.execution?.counts || {};
+      const lifecycle = plan.source === "testnet_grid_lifecycle" ? String(plan.status || "") : "";
+      const low = spec.lower_price_boundary ?? plan.range?.low, high = spec.upper_price_boundary ?? plan.range?.high;
+      const rungs = spec.grid_rung_count ?? plan.grid?.count, fills = ex.fill_count ?? counts.fill_count, held = ex.open_position_count ?? counts.open_position_count;
+      const type = String(spec.strategy_type || plan.strategy_type || "grid").toLowerCase() === "dca" ? "定投" : "网格";
+      const direction = {long: "做多", short: "做空", neutral: "中性"}[spec.direction || plan.direction] || null;
+      const parts = [finite(low) && finite(high) ? `区间 ${num(low)} – ${num(high)}` : null, finite(rungs) && Number(rungs) > 0 ? `${num(rungs)} 格` : null, direction,
+        finite(fills) ? `已成交 ${num(fills)} 笔` : null, finite(held) ? `持仓 ${num(held)} 笔` : null].filter(Boolean);
+      const bad = /hard_stop|flatten/.test(lifecycle), paused = /paused/.test(lifecycle);
+      return {tone: bad ? "bad" : paused ? "warn" : "run", title: `${asset}${type}${LIFECYCLE[lifecycle] || "运行中"}`, body: parts.join(" · "), action: {kind: "stop", label: "去停止"}};
+    }
+    const terminal = current.terminal || {};
+    let body = "还没有上一轮策略的记录。";
+    if (terminal.reason) {
+      const exits = terminal.exit_receipts || [], ended = exits.map(r => r?.ts).filter(Boolean).sort().pop(), rec = terminal.reconciliation?.status;
+      body = `上一轮${ended ? `在 ${bjDay(ended)} ` : ""}结束：${TERMINAL[terminal.reason] || "已结束（原因见系统详情）"}${exits.length ? `，平仓 ${exits.length} 笔` : ""}${rec === "ok" ? "，对账一致" : rec ? "，对账未完成" : ""}。`;
+    }
+    return {tone: "idle", title: "现在没有在跑的策略", body, action: {kind: "start", label: "开始今天的计划"}};
+  }
+
+  // Only claims a field backs. Never "all good": the calm state is grey, not green.
+  function health(view) {
+    if (!view?.data) return {tone: "wait", text: "读取中", other: [], expected: []};
+    const data = view.data, active = isActive(view), issues = [...(data.completeness?.issues || [])];
+    const rec = data.execution?.reconciliation;
+    if (rec?.status && !["ok", "pass", "reconciled"].includes(rec.status)) issues.push(`reconciliation_${rec.status}${rec.reason ? `:${rec.reason}` : ""}`);
+    const expected = active ? [] : issues.filter(code => IDLE_EXPECTED.has(code)), other = issues.filter(code => !expected.includes(code));
+    const parts = [view.marketTrusted === true ? "行情可信" : "行情没有通过可信检查"];
+    if (!active) parts.push("没有运行中的计划");
+    if (other.length) parts.push(`${other.length} 项需要看一下`);
+    return {tone: view.marketTrusted !== true ? "bad" : other.length ? "warn" : "calm", text: parts.join(" · "), other, expected};
+  }
+
+  function retired(selection, catalog) {
+    const old = selection?.retired_selection;
+    if (!old || selection?.venue_profile_id) return null;
+    const [venue, env] = String(old.venue_profile_id || "").split(".");
+    const label = venue ? `${venue.charAt(0).toUpperCase()}${venue.slice(1)}${env === "paper" ? " Paper" : ""}` : "之前的交易场所";
+    const paper = (catalog?.venue_profiles || []).find(p => p.environment === "paper");
+    return {old: label, next: paper?.label || null};
+  }
+
+  return {banner, health, retired, isActive};
+})();
+if (typeof module !== "undefined") module.exports = DeskStatus;
+
+if (typeof document !== "undefined") (() => {
   const $d = s => document.querySelector(s);
   const escD = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
   const fmtD = (n, d) => n == null || isNaN(n) ? "—" : Number(n).toLocaleString("en-US", {minimumFractionDigits: d ?? (Math.abs(n) >= 1000 ? 0 : 2), maximumFractionDigits: d ?? (Math.abs(n) >= 1000 ? 1 : 2)});
@@ -37,29 +115,116 @@
       <div class="desk-watch-head"><span id="deskWatchTitle">本周要看的三件事</span><span class="desk-meta" style="padding:0" id="deskWatchMeta">读取中</span></div>
       <div class="desk-watch-row" id="deskWatch"></div></section>`);
     const rail = $d(".control-rail");
-    rail?.insertAdjacentHTML("afterbegin", `<section class="card desk-judge" aria-labelledby="deskJudgeTitle">
-      <div class="card-title"><span id="deskJudgeTitle">今日判断 · 执行</span><span class="desk-meta" style="padding:0" id="deskJudgeDate"></span></div>
+    rail?.insertAdjacentHTML("afterbegin", `<section class="card desk-judge" id="deskToday" aria-labelledby="deskJudgeTitle">
+      <div class="card-title"><span id="deskJudgeTitle">今天</span><span class="desk-meta" style="padding:0" id="deskJudgeDate"></span></div>
       <div class="card-body">
-        <div class="desk-chips" id="deskChips" role="group" aria-label="判断哪个品种"></div>
-        <div class="desk-reading" id="deskReading"></div>
-        <div class="desk-ai" id="deskAi"></div>
-        <div class="desk-dir" role="group" aria-label="方向"><button type="button" data-d="long" aria-pressed="false">做多</button><button type="button" data-d="flat" aria-pressed="false">观望</button><button type="button" data-d="short" aria-pressed="false">做空</button></div>
-        <label for="deskReason" class="desk-meta" style="padding:0">一句理由</label>
-        <textarea id="deskReason" placeholder="比如：美元走强、ETF 净流出，先不追多"></textarea>
-        <div class="desk-conf"><label for="deskConf">信心</label><input id="deskConf" type="range" min="1" max="5" value="3"><span id="deskConfV">3 / 5</span></div>
-        <div class="desk-cites" id="deskCites">还没有引用新闻</div>
-        <div class="desk-plan" id="deskPlan"><p class="note">先选方向，系统按它生成计划；批准后才会出现「执行」。</p></div>
-        <div id="deskStop"></div>
+        <ol class="desk-steps">
+        <li class="desk-step" data-step="1"><span class="desk-n" aria-hidden="true">1</span><div class="desk-step-body">
+          <h3>你的判断</h3>
+          <div class="desk-chips" id="deskChips" role="group" aria-label="判断哪个品种"></div>
+          <div class="desk-reading" id="deskReading"></div>
+          <div class="desk-ai" id="deskAi"></div>
+          <div class="desk-dir" role="group" aria-label="方向"><button type="button" data-d="long" aria-pressed="false">做多</button><button type="button" data-d="flat" aria-pressed="false">观望</button><button type="button" data-d="short" aria-pressed="false">做空</button></div>
+          <label for="deskReason" class="desk-meta" style="padding:0">一句理由</label>
+          <textarea id="deskReason" placeholder="比如：美元走强、ETF 净流出，先不追多"></textarea>
+          <div class="desk-conf"><label for="deskConf">信心</label><input id="deskConf" type="range" min="1" max="5" value="3"><span id="deskConfV">3 / 5</span></div>
+          <div class="desk-cites" id="deskCites">还没有引用新闻</div>
+        </div></li>
+        <li class="desk-step" data-step="2"><span class="desk-n" aria-hidden="true">2</span><div class="desk-step-body">
+          <h3>生成计划</h3>
+          <div class="desk-plan" id="deskPlan"><p class="note">先选方向，系统按它生成计划，先给你看。</p></div>
+        </div></li>
+        <li class="desk-step" data-step="3"><span class="desk-n" aria-hidden="true">3</span><div class="desk-step-body">
+          <h3>你亲手启动</h3>
+          <div class="desk-plan" id="deskExecBox"></div>
+          <div id="deskStop"></div>
+        </div></li>
+        </ol>
       </div></section>`);
-    const note = "启动和停止在上方「今日判断 · 执行」里按：会重新预览、复核最大亏损，再挂单或撤单。";
+    const note = "日常从「今天」面板开始：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。";
     $d(".dashboard-control-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
     $d(".strategy-card .robot-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
+    mountStatus(wrap, rail);
     $d("#deskJudgeDate").textContent = new Date().toLocaleDateString("zh-CN", {month: "long", day: "numeric"});
     document.querySelectorAll("[data-nf]").forEach(b => b.onclick = () => { D.filter = b.dataset.nf; document.querySelectorAll("[data-nf]").forEach(x => x.setAttribute("aria-pressed", x === b)); renderNews(); });
     $d("#deskNews").addEventListener("click", e => { const li = e.target.closest("li[data-title]"); if (li) toggleCite(li.dataset.title); });
     $d("#deskNews").addEventListener("keydown", e => { const li = e.target.closest("li[data-title]"); if (li && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleCite(li.dataset.title); } });
     document.querySelectorAll(".desk-dir [data-d]").forEach(b => b.onclick = () => { D.d = b.dataset.d; syncDir(); loadPlan(); });
     $d("#deskConf").oninput = () => { $d("#deskConfV").textContent = `${$d("#deskConf").value} / 5`; };
+  }
+
+  // ---- status line, retired selection, collapsed GridMind cards --------------------------
+  const ICONS = {
+    idle: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M10 9v6M14 9v6"></path></svg>',
+    run: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path><path d="M3 20l5-6 4 3 4-7 5 4"></path></svg>',
+    bad: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 16H3z"></path><path d="M12 10v4M12 17v.5"></path></svg>',
+    info: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8v.5"></path></svg>',
+  };
+  ICONS.warn = ICONS.bad; ICONS.wait = ICONS.idle;
+  const TABS = {positions: "持仓", orders: "委托", fills: "成交", review: "复盘", history: "收益曲线", supervisor: "运行监督", shadows: "影子策略"};
+
+  function mountStatus(wrap, rail) {
+    wrap.insertAdjacentHTML("afterbegin", `<section class="desk-status wait" id="deskStatus" aria-live="polite"></section><div class="desk-retired hidden" id="deskRetired" role="status"></div>`);
+    // Every GridMind card stays in the page with its controls; the ones for fine-tuning are folded away.
+    rail?.querySelector(".desk-judge")?.insertAdjacentHTML("afterend", `<details class="card desk-more" id="deskManual"><summary>手动配置与 AI 助手<small>Trading BOT · AI 助手 · 趋势评估 · 策略配置与停止</small></summary><div class="desk-more-body"></div></details>`);
+    const manual = $d("#deskManual .desk-more-body");
+    ["#dashboardControlCard", "#parkAiChatCard", ".market-card", "#strategyCard"].forEach(sel => { const el = $d(sel); if (el && manual) manual.appendChild(el); });
+    wrap.insertAdjacentHTML("beforeend", `<details class="card desk-sys" id="deskSystem"><summary><span class="desk-dot" id="deskHealthDot"></span><span id="deskHealth">读取中</span><span class="desk-sys-link">系统详情：运行状态、策略明细、内部记录</span></summary><div class="desk-sys-body"><div class="desk-records" id="deskRecords"></div></div></details>`);
+    const system = $d("#deskSystem .desk-sys-body");
+    ["#currentStrategyCard", ".live-card"].forEach(sel => { const el = $d(sel); if (el && system) system.appendChild(el); });
+    document.querySelectorAll("#tabs [data-tab]").forEach(button => {
+      const label = TABS[button.dataset.tab], text = [...button.childNodes].find(node => node.nodeType === 3);
+      if (label && text) text.textContent = `${label} `;
+      if (["supervisor", "shadows"].includes(button.dataset.tab)) button.classList.add("desk-tab-quiet");
+    });
+  }
+
+  function reveal(target, details) {
+    if (details) details.open = true;
+    if (!target) return;
+    target.scrollIntoView({behavior: "smooth", block: "center"});
+    setTimeout(() => target.focus?.({preventScroll: true}), 350);
+  }
+
+  function statusAsset() {
+    const asset = selectionAsset();
+    if (asset) return asset.kind === "xau_paper" ? "黄金" : asset.label;
+    return String(window.gridmindView?.market?.symbol || "GOLD").toUpperCase() === "GOLD" ? "黄金" : String(window.gridmindView.market.symbol);
+  }
+
+  function renderStatus() {
+    const view = window.gridmindView, control = window.dashboardControlState;
+    const banner = DeskStatus.banner(view, {asset: statusAsset()}), health = DeskStatus.health(view), retired = DeskStatus.retired(control?.selection, control?.catalog);
+    const signature = JSON.stringify([banner, health, retired, D.switching]);
+    if (signature === D.statusSignature) return;
+    D.statusSignature = signature;
+    document.body.classList.toggle("desk-idle", banner.tone === "idle");
+    const box = $d("#deskStatus");
+    box.className = `desk-status ${banner.tone}`;
+    box.innerHTML = `<span class="desk-status-ic">${ICONS[banner.tone] || ICONS.idle}</span><div class="desk-status-text"><h1>${escD(banner.title)}</h1>${banner.body ? `<p>${escD(banner.body)}</p>` : ""}</div>`
+      + (banner.action ? `<button type="button" class="desk-btn big ${banner.action.kind === "start" ? "primary" : ""}" id="deskStatusAction">${escD(banner.action.label)}</button>` : "");
+    const action = $d("#deskStatusAction");
+    if (action) action.onclick = () => {
+      if (banner.action.kind === "start") reveal($d(".desk-dir [data-d]"));
+      else if (banner.action.kind === "details") reveal($d("#deskSystem summary"), $d("#deskSystem"));
+      // Stop is never pressed for Park: this only takes him to the existing stop button.
+      else if (D.desk?.meta?.kind === "hl_testnet" && $d("#deskStopBtn")) reveal($d("#deskStopBtn"));
+      else reveal($d("#stopRobot"), $d("#deskManual"));
+    };
+    const note = $d("#deskRetired");
+    note.classList.toggle("hidden", !retired);
+    if (retired) {
+      const gold = D.assets.find(a => a.kind === "xau_paper");
+      note.innerHTML = `<span class="desk-retired-ic">${ICONS.info}</span><span class="t">你之前选的 <b>${escD(retired.old)}</b> 已停用${retired.next ? `，黄金现在走 <b>${escD(retired.next)}</b>` : ""}。重新选一次就能用，旧选择不会被自动替换。</span>`
+        + (gold ? `<button type="button" class="desk-btn" id="deskRetiredPick" ${D.switching ? "disabled" : ""}>改选${retired.next ? ` ${escD(retired.next)}` : ""} 黄金</button>` : "");
+      const pick = $d("#deskRetiredPick");
+      if (pick) pick.onclick = () => switchAsset(gold.key);
+    }
+    $d("#deskHealth").textContent = health.text;
+    $d("#deskHealthDot").className = `desk-dot ${health.tone}`;
+    const code = list => list.map(c => `<code>${escD(c)}</code>`).join(" ");
+    $d("#deskRecords").innerHTML = (health.other.length ? `<p><b class="desk-warn-text">需要看一下</b> ${code(health.other)}</p>` : "")
+      + (health.expected.length ? `<p><span class="desk-muted-text">没有计划时的正常记录</span> ${code(health.expected)}</p>` : "");
   }
 
   // ---- asset = GridMind's venue selection -------------------------------------------
@@ -119,9 +284,11 @@
     if (!changed) return;
     D.d = null; D.cites = []; D.plan = null; D.seen = null;
     $d("#deskReason").value = ""; $d("#deskConf").value = 3; $d("#deskConfV").textContent = "3 / 5"; syncDir(); renderCites();
-    $d("#deskPlan").innerHTML = `<p class="note">先选方向，系统按它生成计划；批准后才会出现「执行」。</p>`;
-    $d("#deskJudgeTitle").textContent = `今日判断 · ${asset.label}`;
+    $d("#deskPlan").innerHTML = `<p class="note">先选方向，系统按它生成计划，先给你看。</p>`;
+    $d("#deskExecBox").innerHTML = "";
+    $d("#deskJudgeTitle").textContent = `今天 · ${asset.label}`;
     $d("#deskStop").innerHTML = "";
+    syncSteps();
     loadNews(); loadDesk();
   }
   function applyAsset() {
@@ -266,10 +433,21 @@
     };
   }
   // ---- judgment -> plan -> approve -> 执行 (same flow and endpoints as before) --------
-  function syncDir() { document.querySelectorAll(".desk-dir [data-d]").forEach(b => b.setAttribute("aria-pressed", b.dataset.d === D.d)); }
+  function syncDir() { document.querySelectorAll(".desk-dir [data-d]").forEach(b => b.setAttribute("aria-pressed", b.dataset.d === D.d)); syncSteps(); }
+  // Step marks only: which step is done and which is next. The flow and its endpoints are unchanged.
+  function syncSteps() {
+    const exec = $d("#deskExecBox");
+    if (!exec) return;
+    const ready = Boolean(exec.querySelector(".desk-exec"));
+    if (!ready) exec.innerHTML = `<button type="button" class="desk-btn wide" disabled>${D.plan?.kind === "new" ? "先批准第 2 步的计划" : D.plan ? "这份计划不需要新启动" : "先完成前两步"}</button>`;
+    const done = {1: Boolean(D.d), 2: ready, 3: false};
+    const next = [1, 2, 3].find(n => !done[n]);
+    document.querySelectorAll(".desk-step").forEach(li => { const n = +li.dataset.step; li.classList.toggle("done", done[n]); li.classList.toggle("on", n === next); });
+  }
   async function loadPlan() {
     if (!D.d || !D.asset) return;
     const box = $d("#deskPlan"); box.innerHTML = `<p class="note">正在生成计划…</p>`;
+    D.plan = null; $d("#deskExecBox").innerHTML = ""; syncSteps();
     try { D.plan = await call("/api/plan", {asset: D.asset, direction: D.d}); } catch (e) { box.innerHTML = `<p class="warn">${escD(e.message)}</p>`; return; }
     const p = D.plan, tag = {keep: "沿用当前网格", new: "需要批准", hold: "不开新单", unavailable: "暂不可用", record_only: "只记录"}[p.kind] || p.kind;
     const rungs = p.rungs ? `<dt>价位</dt><dd>${p.rungs.map(r => fmtD(r)).join(" / ")}</dd>` : "";
@@ -279,6 +457,7 @@
       <div class="desk-toast" id="deskToast" role="status"></div>`;
     $d("#deskApprove").onclick = () => submit(p.kind === "new" ? "approved" : "recorded");
     if ($d("#deskRecord")) $d("#deskRecord").onclick = () => submit("recorded");
+    syncSteps();
   }
   async function submit(action) {
     if (!D.d) return;
@@ -291,19 +470,19 @@
     finally { buttons.forEach(b => b.disabled = false); }
   }
   function renderExec(judgmentId, preview, done) {
-    const plan = $d("#deskPlan"); plan.querySelector(".desk-exec")?.remove();
+    const plan = $d("#deskExecBox"); plan.innerHTML = "";
     const box = document.createElement("div"); box.className = "desk-exec"; box.style.display = "grid"; box.style.gap = "7px";
     const paper = D.desk?.meta?.kind === "xau_paper", unit = paper ? "USDT" : "USDC";
     if (done) {
       const txt = {executed: paper ? "已执行：计划已确认，纸面盘约 1 分钟内挂单。" : "已执行：网格已挂上测试盘。", execute_started: "执行中或上次中断，请到系统页查看记录。", execute_failed: "上次执行没有完成，请到系统页查看记录。", refused: `上次执行被拒绝：${done.detail?.reason || ""}`}[done.stage];
-      box.innerHTML = `<p class="note">${escD(txt)}</p>`; plan.appendChild(box); return;
+      box.innerHTML = `<p class="note">${escD(txt)}</p>`; plan.appendChild(box); syncSteps(); return;
     }
     const BLOCKER = {instrument_not_eligible: "这个品种还没在交易系统里开通下单（测试盘目前只开通了 BTC）"};
-    if (!preview.execution_ready) { box.innerHTML = `<p class="warn">预览没通过，不能执行：${escD((preview.blockers || []).map(b => BLOCKER[b] || b).join("；"))}</p>`; plan.appendChild(box); return; }
+    if (!preview.execution_ready) { box.innerHTML = `<p class="warn">预览没通过，不能执行：${escD((preview.blockers || []).map(b => BLOCKER[b] || b).join("；"))}</p>`; plan.appendChild(box); syncSteps(); return; }
     box.innerHTML = `<dl><dt>${paper ? "纸面盘预览价位" : "交易所预览价位"}</dt><dd>${(preview.orders || []).map(o => fmtD(o.price)).join(" / ")}</dd><dt>预览最多亏</dt><dd>${fmtD(preview.max_loss)} ${unit}</dd></dl>
       <p class="warn">${paper ? "按下后确认这份黄金纸面盘计划（模拟资金），约 1 分钟内挂单。已有黄金网格在跑时系统会拒绝。" : "按下后会在 Hyperliquid 测试盘真实挂单（假钱）。已有网格在跑时系统会拒绝。"}</p>
       <button type="button" class="desk-btn exec" id="deskExec">执行</button><div class="desk-toast" id="deskExecToast" role="status"></div>`;
-    plan.appendChild(box);
+    plan.appendChild(box); syncSteps();
     $d("#deskExec").onclick = async () => {
       if (!confirm(`确认在${paper ? "黄金纸面盘" : "测试盘"}执行这份计划？\n最多亏 ${fmtD(preview.max_loss)} ${unit}`)) return;
       $d("#deskExec").disabled = true; $d("#deskExecToast").textContent = "正在复核预览并下单，可能需要一两分钟…";
@@ -327,6 +506,9 @@
 
   async function boot() {
     mountShell();
+    syncSteps();
+    renderStatus();
+    setInterval(renderStatus, 1000);  // follows whatever GridMind last rendered
     placeForViewport();
     loadWatch();
     window.matchMedia("(max-width: 760px)").addEventListener("change", placeForViewport);

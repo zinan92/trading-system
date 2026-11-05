@@ -113,3 +113,65 @@
 .desk-chips{display:flex;flex-wrap:wrap;gap:4px}
 .desk-chips button{font:inherit;font-size:12px;padding:2px 10px;border-radius:99px;border:1px solid var(--gm-line,rgba(255,255,255,.08));background:transparent;color:var(--gm-muted,#9aa3ad);cursor:pointer}
 .desk-chips button[aria-pressed="true"]{border-color:var(--gm-warn,#f0a52e);color:var(--gm-text,#eceef2);background:rgba(240,165,46,.1)}
+
+/* ---- 2026-11-05 trade page redesign (#1294): one status line, one start path, no false alarms ---- */
+/* The banner says what the header pills used to repeat. */
+#marketBadge,#cycleBadge,#accessBadge,#runBadge{display:none}
+.desk-status{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:18px 22px;margin-bottom:10px;border-radius:12px;background:var(--gm-panel,#131519);border:1px solid var(--gm-line,rgba(236,238,242,.08))}
+.desk-status-ic{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none;background:var(--gm-panel-2,#191c22);color:var(--gm-muted,#99a0ab)}
+.desk-status-text{flex:1;min-width:240px}
+.desk-status h1{margin:0;font-size:19px;font-weight:600;color:var(--gm-text,#eceef2)}
+.desk-status p{margin:3px 0 0;font-size:14px;line-height:1.5;color:var(--gm-muted,#99a0ab)}
+.desk-status.run{border-color:rgba(47,201,138,.3)}.desk-status.run .desk-status-ic{background:rgba(47,201,138,.12);color:var(--gm-green,#2fc98a)}
+.desk-status.warn{border-color:rgba(240,165,46,.35)}.desk-status.warn .desk-status-ic{background:rgba(240,165,46,.12);color:var(--gm-warn,#f0a52e)}
+.desk-status.bad{border-color:rgba(242,73,95,.45);background:rgba(242,73,95,.07)}.desk-status.bad .desk-status-ic{background:rgba(242,73,95,.14);color:var(--gm-red,#f2495f)}
+.desk-btn.big{min-height:44px;padding:10px 18px;font-size:14px;font-weight:600}
+.desk-btn.wide{width:100%;min-height:40px}
+.desk-retired{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding:10px 14px;border-radius:10px;background:rgba(240,165,46,.08);border:1px solid rgba(240,165,46,.3);font-size:14px;color:var(--gm-text,#eceef2)}
+.desk-retired.hidden{display:none}
+.desk-retired-ic{display:inline-flex;color:var(--gm-warn,#f0a52e)}
+.desk-retired .t{flex:1;min-width:220px}
+/* No grid running is not an alarm: the banner already says it, so the chart drops its red repeats. */
+body.desk-idle #gate,body.desk-idle #productionStrategySummary{display:none}
+body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
+
+/* 今天: one panel, three steps. */
+.desk-judge{border:1px solid var(--gm-line,rgba(236,238,242,.08))}
+.desk-judge .card-title{font-size:15px;letter-spacing:0;font-weight:600}
+.desk-steps{list-style:none;margin:0;padding:0;display:grid}
+.desk-step{display:grid;grid-template-columns:26px minmax(0,1fr);gap:11px;padding:12px 0;border-top:1px solid var(--gm-line,rgba(236,238,242,.08))}
+.desk-step:first-child{border-top:0;padding-top:2px}
+.desk-step-body{display:grid;gap:9px;min-width:0}
+.desk-step h3{margin:2px 0 0;font-size:14px;font-weight:600;color:var(--gm-text,#eceef2)}
+.desk-n{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:var(--gm-panel-3,#21252d);color:var(--gm-muted,#99a0ab)}
+.desk-step.on .desk-n{background:var(--gm-accent,#3fd0e0);color:#061215}
+.desk-step.done .desk-n{background:rgba(47,201,138,.16);color:var(--gm-green,#2fc98a)}
+.desk-step .desk-plan{border-top:0;padding-top:0}
+.desk-chips button[aria-pressed="true"]{border-color:var(--gm-accent,#3fd0e0);background:rgba(63,208,224,.12)}
+
+/* Folded GridMind cards: still there, still working, out of the way. */
+.desk-more,.desk-sys{padding:0;overflow:hidden}
+.desk-more>summary,.desk-sys>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 16px;min-height:44px;box-sizing:border-box;font-size:14px;color:var(--gm-text,#eceef2)}
+.desk-more>summary::-webkit-details-marker,.desk-sys>summary::-webkit-details-marker{display:none}
+.desk-more>summary::after,.desk-sys>summary::after{content:"";margin-left:auto;width:8px;height:8px;border-right:2px solid var(--gm-muted,#99a0ab);border-bottom:2px solid var(--gm-muted,#99a0ab);transform:rotate(45deg);transition:transform .15s}
+.desk-more[open]>summary::after,.desk-sys[open]>summary::after{transform:rotate(225deg)}
+.desk-more>summary small{color:var(--gm-muted,#99a0ab);font-size:12px}
+.desk-more-body,.desk-sys-body{display:grid;gap:9px;padding:0 9px 9px}
+.desk-sys{margin-top:10px;border-style:dashed}
+.desk-sys-link{color:var(--gm-accent,#3fd0e0);font-size:13px}
+.desk-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--gm-muted,#99a0ab)}
+.desk-dot.warn{background:var(--gm-warn,#f0a52e)}.desk-dot.bad{background:var(--gm-red,#f2495f)}
+.desk-records p{margin:4px 8px;font-size:12px;line-height:1.8;color:var(--gm-muted,#99a0ab)}
+.desk-records code{padding:1px 6px;border-radius:4px;background:var(--gm-panel-2,#191c22);font-size:11px}
+.desk-warn-text{color:var(--gm-warn,#f0a52e)}.desk-muted-text{color:var(--gm-muted,#99a0ab)}
+.desk-records:empty{display:none}
+
+/* Tabs: everyday ones first, engineering ones at the end. */
+#tabs .desk-tab-quiet{order:9;color:var(--gm-muted,#99a0ab);opacity:.8}
+#tabs [data-tab="supervisor"]{margin-left:auto}
+#tabs [data-tab="history"]{order:8}
+@media (max-width:760px){
+  .desk-status{padding:14px 16px;gap:12px}
+  .desk-status .desk-btn.big{width:100%;justify-content:center}
+  #tabs [data-tab="supervisor"]{margin-left:0}
+}

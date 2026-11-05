@@ -635,3 +635,26 @@ def test_gridmind_shows_unknown_pnl_as_unknown_not_zero() -> None:
     assert 'function knownSigned(value){return value==null?"--":signed(value)}' in html
     assert '["已实现盈亏",knownSigned(pnl.net_realized)' in html
     assert "盈亏尚未核算" in html
+
+
+def test_gridmind_status_card_does_not_repeat_account_numbers_from_another_source() -> None:
+    # #1294: the strip shows the Park ledger (9,877.86) while execution.account was the
+    # retired engine's 10,000. Account numbers now live in one place.
+    live = _html().split('$("#live").innerHTML=[', 1)[1].split("].map(", 1)[0]
+    assert '["账户权益"' not in live
+    assert '["已实现盈亏"' not in live and '["未实现盈亏"' not in live
+    assert '["账户与盈亏","见页面上方账户栏"]' in live
+
+
+def test_gridmind_trend_card_gives_the_real_reason_on_a_trusted_non_1m_chart() -> None:
+    html = _html()
+    trend = html.split("function renderTrend(data,fresh){", 1)[1].split("if(!recommendation)", 1)[0]
+    assert "切到 1m 后可评估" in trend
+    assert "行情不可用" in trend  # still said when the market itself is not trusted
+    # The 1m requirement for the trend refresh and start controls is unchanged.
+    assert "function isTrustedHeaderMarket(m){return isFresh(m)&&m?.timeframe===\"1m\"}" in html
+    assert "renderRobotControls(data,headerFresh,execution)" in html
+
+
+def test_gridmind_exposes_what_it_rendered_for_the_desk_status_line() -> None:
+    assert "window.gridmindView=Object.freeze({data,market,livePlan,marketTrusted:fresh,renderedAt:Date.now()})" in _html()
