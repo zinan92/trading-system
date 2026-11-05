@@ -843,3 +843,110 @@ def test_abandoned_recording_window_is_history_not_a_standing_blocker(tmp_path: 
     assert recording["status"] == "abandoned"
     assert recording["blocker_code"] is None
     assert recording["missing_categories"] == ["fills"]  # still says what is missing
+
+
+TERMINAL_KEY = "session-1:revision-1:lower_boundary_invalidated"
+
+
+def _terminal_fixture(root: Path, *, cycle_positions_open: int, completion: dict | None) -> None:
+    """The 2026-09-14 gold shape: 3 accepted receipts at the seal, 10 fills after a later close."""
+
+    _fixture(root)
+    (root / "park_strategy" / "identity.jsonl").unlink(missing_ok=True)
+    receipts = [{"order_id": f"exit-{i}", "state": "accepted", "ts": "2026-09-14T09:19:35+00:00"} for i in range(3)]
+    rows = [{
+        "event": "terminal_paused",
+        "terminal_key": TERMINAL_KEY,
+        "strategy_session_id": "session-1",
+        "strategy_revision_id": "revision-1",
+        "plan_digest": "sha256:" + "a" * 64,
+        "recorded_at": "2026-09-14T09:19:35+00:00",
+        "result": {
+            "terminal_reason": "lower_boundary_invalidated",
+            "observed_price": 4298.42,
+            "exit_receipts": receipts,
+            "positions_preserved": 3,
+            "reconciliation": {"status": "ok", "issues": [], "counts": {"open_positions": 10}},
+            "next_action": "await_park_next_strategy",
+        },
+    }]
+    if completion:
+        rows.append({"event": "terminal_close_completed", "terminal_key": TERMINAL_KEY, **completion})
+    _append_jsonl(root / "park_strategy" / "executions.jsonl", rows)
+    authoritative = root / "dualtrack" / "nautilus_authoritative"
+    cycle = "park-session-1"
+    commands = [
+        {"command_id": f"exit-{i}", "command": {"event": "stop", "source_fill_id": f"park-terminal:session-1:revision-1:x:POS-{i}"}}
+        for i in range(10)
+    ] + [{"command_id": "entry-1", "command": {"event": "entry", "source_fill_id": "revision-1:grid:1"}}]
+    fills = [{"order_id": "entry-1", "event": "entry", "ts": "2026-09-08T02:02:08+00:00"}] + [
+        {"order_id": f"exit-{i}", "event": "stop", "ts": "2026-09-14T09:19:35+00:00" if i < 3 else "2026-09-14T16:21:19+00:00"}
+        for i in range(10 if completion else 0)
+    ]
+    positions = [{"position_id": f"POS-{i}", "status": "open"} for i in range(cycle_positions_open)]
+    write_json(authoritative / "commands" / f"{cycle}.json", commands)
+    write_json(authoritative / "snapshots" / f"{cycle}.json", [{"fills": fills, "positions": positions, "orders": []}])
+
+
+def test_terminal_reports_the_finished_close_not_the_seal_receipts(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _terminal_fixture(output, cycle_positions_open=0, completion={"recorded_at": "2026-09-14T16:21:19+00:00", "exits": 10, "observed_price": 4302.85})
+
+    terminal = build_park_public_read_model(output, now=lambda: NOW)["terminal"]
+
+    assert terminal["closed_count"] == 10
+    assert terminal["ended_at"] == "2026-09-14T16:21:19+00:00"
+    assert terminal["ended_flat"] is True
+    assert terminal["open_positions"] == 0
+    assert terminal["sealed_open_positions"] == 10
+    assert len(terminal["exit_receipts"]) == 3
+
+
+def test_terminal_with_open_exposure_is_not_reported_flat(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _terminal_fixture(output, cycle_positions_open=10, completion=None)
+
+    terminal = build_park_public_read_model(output, now=lambda: NOW)["terminal"]
+
+    assert terminal["closed_count"] == 0
+    assert terminal["ended_flat"] is False
+    assert terminal["open_positions"] == 10
+
+
+def test_terminal_without_a_snapshot_claims_nothing(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _terminal_fixture(output, cycle_positions_open=0, completion=None)
+    (output / "dualtrack" / "nautilus_authoritative" / "snapshots" / "park-session-1.json").unlink()
+
+    terminal = build_park_public_read_model(output, now=lambda: NOW)["terminal"]
+
+    assert terminal["closed_count"] is None
+    assert terminal["ended_flat"] is None
+
+
+def test_completed_close_supersedes_an_earlier_terminal_blocker(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _terminal_fixture(output, cycle_positions_open=0, completion={"recorded_at": "2026-09-14T16:21:19+00:00", "exits": 10})
+    _append_jsonl(output / "park_strategy" / "runtime_blockers.jsonl", [
+        {"code": "terminal_close_blocked", "session": "session-1", "revision": "revision-1", "recorded_at": "2026-09-14T12:00:00+00:00"},
+    ])
+
+    terminal = build_park_public_read_model(output, now=lambda: NOW)["terminal"]
+
+    assert terminal.get("status") != "blocked"
+    assert terminal["closed_count"] == 10
+
+
+def test_blocked_terminal_reports_the_exposure_it_is_waiting_on(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _terminal_fixture(output, cycle_positions_open=2, completion=None)
+    _append_jsonl(output / "park_strategy" / "runtime_blockers.jsonl", [
+        {"code": "terminal_unowned_exposure", "session": "session-1", "revision": "revision-1", "recorded_at": "2026-09-14T12:00:00+00:00"},
+    ])
+
+    terminal = build_park_public_read_model(output, now=lambda: NOW)["terminal"]
+
+    assert terminal["status"] == "blocked"
+    assert terminal["ended_flat"] is False
+    assert terminal["ended_at"] is None
+    assert terminal["open_positions"] == 2

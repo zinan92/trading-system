@@ -328,12 +328,23 @@ def test_system_lists_paused_services_and_health(config, sources, store, fetch):
 
 def test_ended_gold_grid_reads_as_ended_not_broken(config, sources, store, fetch):
     fetch.routes["/api/park-paper/read-model"] = {"status": "blocked", "market": {"price": 4298.0}, "strategy": {"active": False, "state": "IDLE_CLEAN"},
-        "terminal": {"reason": "lower_boundary_invalidated", "observed_price": 4298.42, "exit_receipts": [{"ts": "2026-09-14T09:19:35+00:00"}] * 10}, "execution": {}}
+        "terminal": {"reason": "lower_boundary_invalidated", "observed_price": 4298.42, "exit_receipts": [{"ts": "2026-09-14T09:19:35+00:00"}] * 3,
+                     "closed_count": 10, "ended_at": "2026-09-14T16:21:19+00:00", "ended_flat": True, "reconciliation": {"status": "ok"}}, "execution": {}}
     client, _ = client_for(config, sources, store, fetch)
     desk = client.get("/api/desk/XAU").json()
     assert desk["grid"]["ok"] is False and "跌破区间下沿" in desk["grid"]["reason"] and desk["price"] == 4298.0
+    assert "10 笔已平仓" in desk["grid"]["reason"] and "4298.42" not in desk["grid"]["reason"]
+    assert desk["grid"]["ended_at"] == "2026-09-14T16:21:19+00:00"
     account = client.get("/api/accounts").json()["accounts"][1]
     assert account["ok"] is True and "网格已结束" in account["note"]
+    assert account["reconciliation"] == "ok"
+
+
+def test_ended_gold_grid_does_not_claim_reconciled_when_flat_is_not_proven(config, sources, store, fetch):
+    fetch.routes["/api/park-paper/read-model"] = {"status": "blocked", "market": {"price": 4298.0}, "strategy": {"active": False, "state": "IDLE_CLEAN"},
+        "terminal": {"reason": "lower_boundary_invalidated", "closed_count": 3, "ended_at": None, "ended_flat": False, "open_positions": 7, "reconciliation": {"status": "ok"}}, "execution": {}}
+    client, _ = client_for(config, sources, store, fetch)
+    assert client.get("/api/accounts").json()["accounts"][1]["reconciliation"] == "unknown"
     assert client.post("/api/plan", json={"asset": "XAU", "direction": "long"}).json()["kind"] == "new"
 
 

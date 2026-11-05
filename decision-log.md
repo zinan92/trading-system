@@ -1,5 +1,70 @@
 # Decision Log
 
+# 2026-11-05 — Seal a terminal only when the cycle is flat (#1311)
+
+## Decision
+
+- A terminal seals only when its cycle has zero open positions, whoever owns
+  them, no accepted order remains, and every submitted exit has a fill.
+  Ownership decides what the runtime may close, never whether it may seal.
+- A position that fails ownership is never closed automatically. The runtime
+  blocks with `terminal_unowned_exposure`, keeps the session active and tells
+  Park.
+- The idle path never idles over exposure. Without close authority it blocks
+  with `terminal_close_authority_missing`. It writes
+  `terminal_close_completed` only once the cycle is flat.
+- Close counts come from fills, flatness from the book, and the end time from
+  the finished close. Exit receipts only say an exit was accepted. Historical
+  ledgers and fills are not rewritten.
+
+## Gate changes
+
+All tighten; none loosens.
+
+- `_terminal` block condition: was owned positions on closing terminals; now
+  any open position on any terminal. New blockers `terminal_unowned_exposure`,
+  `terminal_exits_unfilled`.
+- `remaining_accepted`: was owned orders; now any accepted order in the cycle.
+- `_finish_incomplete_terminal_close`: was a silent `None` when authority was
+  missing, and `exits: 0` when only unowned positions remained; now blocks.
+- A terminal with no close authority blocks before it records an action plan.
+  Otherwise the next pass would read that plan as authority to flatten.
+
+## Evidence
+
+2026-09-14 gold session c8e099: the seal recorded 46 fills and 10 open
+positions, with 3 accepted exits. None of the 10 closed until 16:21:19. The 3
+fills stamped 09:19:35 @4298.42 are backdated by replay. Full account in #1311.
+This is Paper evidence, not proof of any venue action.
+
+## Gotchas
+
+- `reconciliation: ok` means the books agree, not that the strategy is flat.
+  The 09:19 result said `ok` with `open_positions: 10`.
+- A later `terminal_*` blocker used to outrank the seal row by time, so a
+  finished close now counts as a newer terminal candidate. Otherwise a blocker
+  raised during a retry would stay on the banner.
+- Repeated terminal blockers write a row each pass, with the Telegram notice
+  sent once per code. Same cost as the existing `terminal_positions_still_open`.
+
+## Verification
+
+- `tests/test_park_paper_runtime.py`, `tests/test_park_public_read_model.py`,
+  `apps/trading-desk/tests/test_gm_desk_status.py` and `test_desk.py`: 21 new
+  or changed tests failed first, then passed.
+- The read model run read-only over the real output gives closed 10, ended
+  2026-09-14T16:21:19Z, flat true, 10 open at the seal.
+- Not deployed by this change. Runtime behaviour on production is unverified
+  until deploy.
+
+## Not changed
+
+- Retried exits keep their first time and price, and the re-arm hypothesis stays
+  unverified. Both are in #1311's follow-ups.
+- A new session started while an old close is unfinished does not run the idle
+  path. Sealing only when flat should leave no such close, but rows written
+  before this change are not rechecked once a session is active.
+
 # 2026-11-05 — Repair the attended Nautilus cutover test instead of retiring it (#1302)
 
 ## Decision

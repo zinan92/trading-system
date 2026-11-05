@@ -16,7 +16,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from services.execution_engine_port import ExecutionEngineAdapter
 from services.park_confirmation import ParkConfirmationLedger
@@ -138,6 +138,37 @@ def _grid_rearm_ids(orders: Any, revision: str, digest: str) -> set[str]:
         ):
             result.update({str(row["order_id"]), f"POS-{row['order_id']}"})
     return result
+
+
+def _open_positions(snapshot: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Every open position in the snapshot, whoever owns it."""
+
+    return [row for row in snapshot.get("positions") or [] if str(row.get("status") or "").lower() == "open"]
+
+
+def _position_ids(rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    return [str(row.get("position_id") or row.get("trade_id") or "") for row in rows]
+
+
+def _exit_fills(receipts: Iterable[Mapping[str, Any]], snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The fill facts of these exits. A receipt only says an exit was accepted."""
+
+    order_ids = {str(row.get("order_id") or "") for row in receipts}
+    return [
+        {key: row.get(key) for key in ("order_id", "ts", "event", "side", "price", "quantity")}
+        for row in snapshot.get("fills") or []
+        if str(row.get("order_id") or "") in order_ids
+    ]
+
+
+def _unfilled_exit_ids(receipts: Iterable[Mapping[str, Any]], snapshot: Mapping[str, Any]) -> list[str]:
+    filled = {str(row.get("order_id") or "") for row in snapshot.get("fills") or []}
+    filled |= {
+        str(row.get("order_id") or "")
+        for row in snapshot.get("orders") or []
+        if str(row.get("state") or "").lower() == "filled"
+    }
+    return sorted(str(row.get("order_id") or "") for row in receipts if str(row.get("order_id") or "") not in filled)
 
 
 def _owned(artifact: Mapping[str, Any], session: str, revision: str, digest: str) -> bool:
@@ -765,6 +796,21 @@ class ParkPaperRuntime:
         snapshot: Mapping[str, Any],
         reconciliation: Mapping[str, Any],
     ) -> dict[str, Any]:
+        exposure = _open_positions(snapshot)
+        if not boundary.get("close_positions") and exposure:
+            # Nothing authorises closing these, so neither seal over them nor record a
+            # close plan that the next pass would turn into an automatic flatten.
+            return self._blocked(
+                "terminal_positions_still_open",
+                f"{len(exposure)} positions are open and this terminal has no close authority",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+                snapshot=snapshot,
+                reconciliation=reconciliation,
+                open_position_ids=_position_ids(exposure),
+            )
         lifecycle_ledger: ParkStrategyLifecycleLedger | None = None
         normalized_strategy_type = str((plan.get("normalized_input") or {}).get("strategy_type") or "")
         if normalized_strategy_type in {"dca", "grid"}:
@@ -883,27 +929,18 @@ class ParkPaperRuntime:
             row
             for row in final_snapshot.get("orders") or []
             if str(row.get("state") or "").lower() == "accepted"
-            and self._order_owned(row, session, revision, digest)
         ]
-        still_open = [
-            row
-            for row in final_snapshot.get("positions") or []
-            if str(row.get("status") or "").lower() == "open"
-            and self._position_owned(row, session, revision, digest, final_snapshot.get("orders"))
-        ]
-        if boundary.get("close_positions") and still_open:
-            # Never close the session over exposure the boundary was meant to flatten;
-            # the next pass resubmits the same (idempotent) exits and retries.
-            return self._blocked(
-                "terminal_positions_still_open",
-                f"{len(still_open)} owned positions remain open after terminal exits",
-                session=session,
-                revision=revision,
-                digest=digest,
-                observed_at=observed_at,
-                snapshot=final_snapshot,
-                reconciliation=final_reconciliation,
-            )
+        unsealed = self._unsealed_exposure(
+            session=session,
+            revision=revision,
+            digest=digest,
+            observed_at=observed_at,
+            snapshot=final_snapshot,
+            reconciliation=final_reconciliation,
+            exit_receipts=exit_receipts,
+        )
+        if unsealed:
+            return unsealed
         if remaining_accepted or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
             return self._blocked(
                 "terminal_reconciliation_blocked",
@@ -925,12 +962,9 @@ class ParkPaperRuntime:
             "observed_price": current_price,
             "cancel": cancel,
             "exit_receipts": exit_receipts,
-            "positions_preserved": sum(
-                1
-                for row in final_snapshot.get("positions") or []
-                if str(row.get("status") or "").lower() == "open"
-                and self._position_owned(row, session, revision, digest, final_snapshot.get("orders"))
-            ),
+            "exit_fills": _exit_fills(exit_receipts, final_snapshot),
+            "open_positions": 0,
+            "positions_preserved": 0,
             "reconciliation": final_reconciliation,
             "paper_only": True,
             "next_action": "await_park_next_strategy",
@@ -992,6 +1026,70 @@ class ParkPaperRuntime:
         "stop_price", "take_profit_price", "upper_boundary_invalidated", "lower_boundary_invalidated",
     })
 
+    def _unsealed_exposure(
+        self,
+        *,
+        session: str,
+        revision: str,
+        digest: str,
+        observed_at: str,
+        snapshot: Mapping[str, Any],
+        reconciliation: Mapping[str, Any] | None,
+        exit_receipts: Iterable[Mapping[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Block unless the strategy's cycle is flat and every exit filled.
+
+        Ownership decides what the runtime may close, never whether it may seal: the
+        cycle belongs to this session, so a position that fails the owner check is a
+        reason to stop and tell Park (2026-09-14: seven re-arms failed it and 2.0 oz sat
+        unwatched for seven hours). It is never closed automatically.
+        """
+
+        context = {"session": session, "revision": revision, "digest": digest, "observed_at": observed_at,
+                   "snapshot": snapshot, "reconciliation": reconciliation}
+        orders = snapshot.get("orders")
+        exposure = _open_positions(snapshot)
+        owned = [row for row in exposure if self._position_owned(row, session, revision, digest, orders)]
+        if owned:
+            # The next pass resubmits the same idempotent exits and retries.
+            return self._blocked("terminal_positions_still_open",
+                                 f"{len(owned)} owned positions remain open after terminal exits",
+                                 open_position_ids=_position_ids(exposure), **context)
+        if exposure:
+            return self._blocked("terminal_unowned_exposure",
+                                 f"{len(exposure)} open positions failed the ownership check; not closed automatically",
+                                 open_position_ids=_position_ids(exposure), **context)
+        unfilled = _unfilled_exit_ids(exit_receipts, snapshot)
+        if unfilled:
+            return self._blocked("terminal_exits_unfilled", f"{len(unfilled)} submitted exits have no fill",
+                                 unfilled_exit_ids=unfilled, **context)
+        return None
+
+    def _exposure_without_close_authority(
+        self,
+        *,
+        session: str,
+        revision: str,
+        digest: str,
+        cycle_id: str,
+        observed_at: str,
+    ) -> dict[str, Any] | None:
+        """The runtime may not close, so idle only when the cycle is proven flat."""
+
+        context = {"session": session, "revision": revision, "digest": digest, "observed_at": observed_at}
+        if not session:
+            return self._blocked("terminal_close_authority_missing", "terminal record names no session", **context)
+        try:
+            snapshot = dict(self.adapter.snapshot(cycle_id))
+        except Exception as exc:  # noqa: BLE001 - unknown exposure stays fail-closed.
+            return self._blocked("terminal_close_authority_missing", f"cannot read exposure: {type(exc).__name__}", **context)
+        exposure = _open_positions(snapshot)
+        if not exposure:
+            return None
+        return self._blocked("terminal_close_authority_missing",
+                             f"{len(exposure)} positions are open and no close authority remains",
+                             open_position_ids=_position_ids(exposure), **context)
+
     def _finish_incomplete_terminal_close(self, observed_at: str) -> dict[str, Any] | None:
         """Flatten positions a confirmed boundary close left open before its session was closed.
 
@@ -1005,8 +1103,6 @@ class ParkPaperRuntime:
             return None
         result = dict(terminal.get("result") or {})
         key = str(terminal.get("terminal_key") or "")
-        if str(result.get("terminal_reason") or "") not in self._CLOSING_TERMINAL_REASONS:
-            return None
         if any(row.get("event") == "terminal_close_completed" and row.get("terminal_key") == key for row in rows):
             return None
         session = str(terminal.get("strategy_session_id") or result.get("session") or "")
@@ -1014,9 +1110,16 @@ class ParkPaperRuntime:
         digest = str(terminal.get("plan_digest") or result.get("plan_digest") or "")
         plan = self._plan_for_digest(digest)
         confirmation = self._confirmed_for(digest, session, revision)
-        if not session or not revision or plan is None or confirmation is None:
-            return None
-        cycle_id = park_paper_namespace(session)
+        cycle_id = park_paper_namespace(session) if session else ""
+        if (
+            str(result.get("terminal_reason") or "") not in self._CLOSING_TERMINAL_REASONS
+            or not session
+            or not revision
+            or plan is None
+            or confirmation is None
+        ):
+            return self._exposure_without_close_authority(session=session, revision=revision, digest=digest,
+                                                          cycle_id=cycle_id, observed_at=observed_at)
         try:
             market = dict(self.market_reader() if self.market_reader else self._default_market_reader())
             current_price = float(market.get("price"))
@@ -1031,49 +1134,53 @@ class ParkPaperRuntime:
                 return None
             snapshot = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
             orders = snapshot.get("orders")
-            open_positions = [
-                dict(row) for row in snapshot.get("positions") or []
-                if str(row.get("status") or "").lower() == "open"
-                and self._position_owned(row, session, revision, digest, orders)
-            ]
-            if not open_positions:
+            exposure = _open_positions(snapshot)
+            if not exposure:
                 _append_jsonl(self.execution_path, {"schema_version": PARK_PAPER_RUNTIME_SCHEMA, "event": "terminal_close_completed",
-                                                    "terminal_key": key, "recorded_at": observed_at, "exits": 0})
+                                                    "terminal_key": key, "recorded_at": observed_at, "exits": 0, "exit_fills": [],
+                                                    "open_positions": 0, "strategy_session_id": session,
+                                                    "strategy_revision_id": revision})
                 return None
-            reconciliation = dict(self.adapter.reconcile(cycle_id))
-            gate = self._admission(market=market, snapshot=snapshot, reconciliation=reconciliation, confirmation=confirmation)
-            if gate.get("status") != "pass":
-                return self._blocked("terminal_close_blocked", ",".join(str(v) for v in gate.get("blockers") or []),
-                                     session=session, revision=revision, digest=digest, observed_at=observed_at,
-                                     market=market, snapshot=snapshot, reconciliation=reconciliation, gate=gate)
-            self._grant_adapter_mutation(session=session, revision=revision, digest=digest, cycle_id=cycle_id,
-                                         confirmation=confirmation, gate=gate)
-            try:
-                reason = str(result.get("terminal_reason"))
-                exits = [
-                    self.adapter.submit_order(self._exit_command(
-                        position, plan=plan, session=session, revision=revision, digest=digest, cycle_id=cycle_id,
-                        current_price=current_price, market=market, observed_at=observed_at, reason=reason,
-                    ))
-                    for position in open_positions
-                ]
-                event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at, fills_commands_at=observed_at)
-                event["event_id"] = _digest({"base_event_id": event["event_id"], "terminal_close": key})
-                self.adapter.process_market_event(event)
-                final = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
-            finally:
-                self._revoke_adapter_mutation()
-        remaining = [
-            row for row in final.get("positions") or []
-            if str(row.get("status") or "").lower() == "open"
-            and self._position_owned(row, session, revision, digest, final.get("orders"))
-        ]
-        if remaining:
-            return self._blocked("terminal_positions_still_open", f"{len(remaining)} owned positions remain open after finishing the close",
-                                 session=session, revision=revision, digest=digest, observed_at=observed_at, snapshot=final)
+            open_positions = [
+                dict(row) for row in exposure
+                if self._position_owned(row, session, revision, digest, orders)
+            ]
+            exits: list[dict[str, Any]] = []
+            final = snapshot
+            if open_positions:
+                reconciliation = dict(self.adapter.reconcile(cycle_id))
+                gate = self._admission(market=market, snapshot=snapshot, reconciliation=reconciliation, confirmation=confirmation)
+                if gate.get("status") != "pass":
+                    return self._blocked("terminal_close_blocked", ",".join(str(v) for v in gate.get("blockers") or []),
+                                         session=session, revision=revision, digest=digest, observed_at=observed_at,
+                                         market=market, snapshot=snapshot, reconciliation=reconciliation, gate=gate,
+                                         open_position_ids=_position_ids(exposure))
+                self._grant_adapter_mutation(session=session, revision=revision, digest=digest, cycle_id=cycle_id,
+                                             confirmation=confirmation, gate=gate)
+                try:
+                    reason = str(result.get("terminal_reason"))
+                    exits = [
+                        self.adapter.submit_order(self._exit_command(
+                            position, plan=plan, session=session, revision=revision, digest=digest, cycle_id=cycle_id,
+                            current_price=current_price, market=market, observed_at=observed_at, reason=reason,
+                        ))
+                        for position in open_positions
+                    ]
+                    event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at, fills_commands_at=observed_at)
+                    event["event_id"] = _digest({"base_event_id": event["event_id"], "terminal_close": key})
+                    self.adapter.process_market_event(event)
+                    final = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
+                finally:
+                    self._revoke_adapter_mutation()
+        unsealed = self._unsealed_exposure(session=session, revision=revision, digest=digest, observed_at=observed_at,
+                                           snapshot=final, reconciliation=None, exit_receipts=exits)
+        if unsealed:
+            return unsealed
         _append_jsonl(self.execution_path, {"schema_version": PARK_PAPER_RUNTIME_SCHEMA, "event": "terminal_close_completed",
                                             "terminal_key": key, "recorded_at": observed_at, "exits": len(exits),
-                                            "observed_price": current_price})
+                                            "exit_fills": _exit_fills(exits, final), "open_positions": 0,
+                                            "observed_price": current_price, "strategy_session_id": session,
+                                            "strategy_revision_id": revision})
         self.telegram.queue_outbound(
             idempotency_key=f"park-terminal-close-completed:{key}",
             message_type="park_terminal",

@@ -1276,6 +1276,256 @@ def test_idle_runtime_finishes_a_boundary_close_that_left_positions_open(tmp_pat
     assert len([c for c in adapter.submit_calls if c["event"] == "stop"]) == 1
 
 
+def _seal_gap_runtime(tmp_path: Path, adapter: FakePaperAdapter) -> tuple:
+    output = tmp_path / "outputs"
+    market = {"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "provider": "paper-provider",
+              "observed_at": "2026-08-14T10:00:00+00:00", "symbol": "GOLD"}
+    clock = {"now": "2026-08-14T10:00:00+00:00"}
+    runtime = ParkPaperRuntime(output, adapter=adapter, park_user_id="park-user", chat_id="park-chat", config=_config(),
+                               market_reader=lambda: dict(market), now=lambda: clock["now"], safety_evidence_reader=_evidence)
+    digest = _confirm_on_dashboard(tmp_path)
+    assert runtime.run_once()["status"] == "active"
+    return output, market, clock, runtime, digest, ParkStrategyIdentityJournal(output).active_session()
+
+
+def _execution_events(output: Path) -> list[str]:
+    path = output / "park_strategy" / "executions.jsonl"
+    return [json.loads(line).get("event") for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _break_boundary(market: dict, clock: dict) -> None:
+    market.update({"price": 4444.0, "observed_at": "2026-08-14T10:01:00+00:00"})
+    clock["now"] = "2026-08-14T10:01:35+00:00"
+
+
+def _sealed_with(output: Path, session: dict, digest: str, position: dict, reason: str = "stop_price") -> None:
+    """A row as written before #1311: sealed by the runtime while exposure was still open."""
+    key = f"{session['strategy_session_id']}:{session['strategy_revision_id']}:{reason}"
+    with (output / "park_strategy" / "executions.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"event": "terminal_paused", "terminal_key": key, "plan_digest": digest,
+                                 "strategy_session_id": session["strategy_session_id"],
+                                 "strategy_revision_id": session["strategy_revision_id"],
+                                 "result": {"terminal_reason": reason, "positions_preserved": 1}}) + "\n")
+    ParkStrategyIdentityJournal(output).close_session(strategy_session_id=session["strategy_session_id"],
+                                                      strategy_revision_id=session["strategy_revision_id"],
+                                                      observed_at="2026-08-14T10:01:00+00:00", reason=reason)
+
+
+def test_boundary_never_seals_over_a_position_that_fails_ownership(tmp_path: Path) -> None:
+    # #1311: 28a981e taught the owner check about re-arms; the next unknown shape must block, not seal.
+    adapter = ReplayOrderedPaperAdapter()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    unknown = {"position_id": "POS-unknown", "trade_id": "unknown", "status": "open", "side": "short",
+               "remaining_units": 0.2, "strategy_plan_id": digest}
+    adapter.positions.append(unknown)
+    _break_boundary(market, clock)
+
+    blocked = runtime.run_once()
+
+    assert blocked["status"] == "blocked", blocked
+    assert blocked["code"] == "terminal_unowned_exposure"
+    assert blocked["open_position_ids"] == ["POS-unknown"]
+    assert ParkStrategyIdentityJournal(output).active_session() is not None
+    assert "terminal_paused" not in _execution_events(output)
+    assert not [c for c in adapter.submit_calls if c.get("target_position_id") == "POS-unknown"], "never auto-close unowned"
+    assert any("terminal_unowned_exposure" in row["text"] for row in runtime.telegram.pending_outbound())
+    assert not any(row.get("message_type") == "park_terminal" for row in runtime.telegram.pending_outbound())
+    assert adapter.positions[-1]["status"] == "open"
+
+    # Market evaluation continues, and the session stays open until the position is resolved.
+    market.update({"price": 4445.0, "observed_at": "2026-08-14T10:02:00+00:00"})
+    clock["now"] = "2026-08-14T10:02:35+00:00"
+    assert runtime.run_once()["code"] == "terminal_unowned_exposure"
+    assert len(adapter.process_calls) >= 3
+
+    adapter.positions[-1].update(status="closed", remaining_units=0.0)
+    market.update({"price": 4446.0, "observed_at": "2026-08-14T10:03:00+00:00"})
+    clock["now"] = "2026-08-14T10:03:35+00:00"
+    assert runtime.run_once()["status"] == "paused"
+    assert ParkStrategyIdentityJournal(output).active_session() is None
+
+
+def test_boundary_never_seals_while_a_submitted_exit_has_no_fill(tmp_path: Path) -> None:
+    # 2026-09-14 09:19: receipts said accepted, yet the exits were in neither orders nor fills.
+    class GhostExit(ReplayOrderedPaperAdapter):
+        def submit_order(self, command: dict) -> dict:
+            receipt = super().submit_order(command)
+            if command["event"] == "stop":
+                self.orders.pop()
+                for position in self.positions:
+                    if position["position_id"] == command["target_position_id"]:
+                        position.update(status="closed", remaining_units=0.0)
+            return receipt
+
+    adapter = GhostExit()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.1, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    _break_boundary(market, clock)
+
+    blocked = runtime.run_once()
+
+    assert blocked["status"] == "blocked", blocked
+    assert blocked["code"] == "terminal_exits_unfilled"
+    assert ParkStrategyIdentityJournal(output).active_session() is not None
+    assert "terminal_paused" not in _execution_events(output)
+
+
+def test_boundary_blocks_when_an_accepted_order_fails_ownership(tmp_path: Path) -> None:
+    adapter = ReplayOrderedPaperAdapter()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    adapter.orders.append({"order_id": "unknown-order", "state": "accepted", "event": "entry", "strategy_plan_id": digest})
+    _break_boundary(market, clock)
+
+    blocked = runtime.run_once()
+
+    assert blocked["status"] == "blocked", blocked
+    assert blocked["code"] == "terminal_reconciliation_blocked"
+    assert ParkStrategyIdentityJournal(output).active_session() is not None
+
+
+def test_non_closing_terminal_never_seals_or_flattens_open_exposure(tmp_path: Path, monkeypatch) -> None:
+    adapter = ReplayOrderedPaperAdapter()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.1, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    monkeypatch.setattr(runtime, "_terminal_reason", lambda *_args: {"reason": "boundary_invalid"})
+    market.update({"observed_at": "2026-08-14T10:01:00+00:00"})
+    clock["now"] = "2026-08-14T10:01:35+00:00"
+
+    for _ in range(2):
+        blocked = runtime.run_once()
+        assert blocked["code"] == "terminal_positions_still_open", blocked
+        assert ParkStrategyIdentityJournal(output).active_session() is not None
+    assert not [c for c in adapter.submit_calls if c["event"] == "stop"]
+
+
+def test_clean_seal_records_flat_exit_fills(tmp_path: Path) -> None:
+    class Fills(ReplayOrderedPaperAdapter):
+        def snapshot(self, cycle_id: str, *, mark_price=None, mark_fresh=False, mark_source="") -> dict:
+            row = super().snapshot(cycle_id, mark_price=mark_price, mark_fresh=mark_fresh, mark_source=mark_source)
+            row["fills"] = [{"order_id": o["order_id"], "ts": o["ts"], "event": o["event"], "side": o["side"], "price": o["price"],
+                             "quantity": o["quantity"], "unrelated": True}
+                            for o in self.orders if o.get("state") == "filled"]
+            return row
+
+    adapter = Fills()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.1, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    _break_boundary(market, clock)
+
+    paused = runtime.run_once()
+
+    assert paused["status"] == "paused", paused
+    assert paused["open_positions"] == 0
+    assert [row["order_id"] for row in paused["exit_fills"]] == [paused["exit_receipts"][0]["order_id"]]
+    assert "unrelated" not in paused["exit_fills"][0]
+
+
+def test_idle_blocks_when_exposure_remains_without_close_authority(tmp_path: Path, monkeypatch) -> None:
+    adapter = ReplayOrderedPaperAdapter()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.2, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    _sealed_with(output, session, digest, adapter.positions[-1])
+    monkeypatch.setattr(runtime, "_confirmed_for", lambda *_args: None)
+
+    blocked = runtime.run_once()
+
+    assert blocked["status"] == "blocked", blocked
+    assert blocked["code"] == "terminal_close_authority_missing"
+    assert blocked["open_position_ids"] == ["park-position-1"]
+    assert adapter.positions[-1]["status"] == "open"
+    assert "terminal_close_completed" not in _execution_events(output)
+
+
+def test_idle_blocks_after_a_non_closing_terminal_left_exposure(tmp_path: Path) -> None:
+    adapter = ReplayOrderedPaperAdapter()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.2, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    _sealed_with(output, session, digest, adapter.positions[-1], reason="boundary_invalid")
+
+    blocked = runtime.run_once()
+
+    assert blocked["code"] == "terminal_close_authority_missing", blocked
+    assert not [c for c in adapter.submit_calls if c["event"] == "stop"]
+
+
+def test_idle_never_completes_a_close_while_unowned_exposure_remains(tmp_path: Path) -> None:
+    adapter = ReplayOrderedPaperAdapter()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    unknown = {"position_id": "POS-unknown", "trade_id": "unknown", "status": "open", "side": "short",
+               "remaining_units": 0.2, "strategy_plan_id": digest}
+    adapter.positions.append(unknown)
+    _sealed_with(output, session, digest, unknown)
+
+    blocked = runtime.run_once()
+
+    assert blocked["status"] == "blocked", blocked
+    assert blocked["code"] == "terminal_unowned_exposure"
+    assert adapter.positions[-1]["status"] == "open"
+    assert not [c for c in adapter.submit_calls if c["event"] == "stop"]
+    assert "terminal_close_completed" not in _execution_events(output)
+
+    adapter.positions[-1].update(status="closed", remaining_units=0.0)
+    assert runtime.run_once()["status"] == "idle"
+    assert _execution_events(output)[-1] == "terminal_close_completed"
+
+
+def test_idle_closes_owned_positions_but_still_blocks_on_unowned(tmp_path: Path) -> None:
+    adapter = ReplayOrderedPaperAdapter()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.2, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    adapter.positions.append({"position_id": "POS-unknown", "trade_id": "unknown", "status": "open", "side": "short",
+                              "remaining_units": 0.2, "strategy_plan_id": digest})
+    _sealed_with(output, session, digest, adapter.positions[0])
+    market.update({"price": 4444.0, "observed_at": "2026-08-14T10:05:00+00:00"})
+    clock["now"] = "2026-08-14T10:05:20+00:00"
+
+    blocked = runtime.run_once()
+
+    assert blocked["code"] == "terminal_unowned_exposure", blocked
+    assert [p["status"] for p in adapter.positions] == ["closed", "open"]
+    assert "terminal_close_completed" not in _execution_events(output)
+
+
+def test_finished_close_records_the_exit_fills_and_flat_state(tmp_path: Path) -> None:
+    class Fills(ReplayOrderedPaperAdapter):
+        def snapshot(self, cycle_id: str, *, mark_price=None, mark_fresh=False, mark_source="") -> dict:
+            row = super().snapshot(cycle_id, mark_price=mark_price, mark_fresh=mark_fresh, mark_source=mark_source)
+            row["fills"] = [{"order_id": o["order_id"], "ts": o["ts"], "event": o["event"], "side": o["side"],
+                             "price": o["price"], "quantity": o["quantity"]}
+                            for o in self.orders if o.get("state") == "filled"]
+            return row
+
+    adapter = Fills()
+    output, market, clock, runtime, digest, session = _seal_gap_runtime(tmp_path, adapter)
+    adapter.positions.append({"position_id": "park-position-1", "trade_id": "park-trade-1", "status": "open", "side": "short",
+                              "remaining_units": 0.2, "strategy_session_id": session["strategy_session_id"],
+                              "strategy_revision_id": session["strategy_revision_id"], "plan_digest": digest})
+    _sealed_with(output, session, digest, adapter.positions[-1])
+    market.update({"price": 4444.0, "observed_at": "2026-08-14T10:05:00+00:00"})
+    clock["now"] = "2026-08-14T10:05:20+00:00"
+
+    assert runtime.run_once()["status"] == "terminal_close_completed"
+
+    rows = [json.loads(line) for line in (output / "park_strategy" / "executions.jsonl").read_text(encoding="utf-8").splitlines()]
+    completed = rows[-1]
+    assert completed["event"] == "terminal_close_completed"
+    assert completed["open_positions"] == 0
+    assert len(completed["exit_fills"]) == 1 and completed["exit_fills"][0]["ts"] == "2026-08-14T10:05:20+00:00"
+    assert completed["strategy_session_id"] == session["strategy_session_id"]
+
+
 def test_recording_window_that_can_never_complete_is_abandoned_once_not_retried_forever(
     tmp_path: Path,
     monkeypatch,

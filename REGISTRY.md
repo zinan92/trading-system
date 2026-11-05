@@ -9,6 +9,14 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 只有持仓全平才封存策略 · #1311)
+
+- 查清 9/14 黄金：09:19 封存时 10 笔全开着，一笔没平，16:21 才一起平掉。账上 3 笔 09:19 的成交是回放倒签的。
+- 现在策略只在本周期没有任何持仓、没有挂单、每笔退出都有成交时才封存。归属对不上的持仓不自动平，阻塞并通知 Park。
+- 空闲时只要还有敞口就阻塞，不再静默 idle。
+- `/trade` 和桌面改用真实成交数、结束时间和是否已无持仓。真实数据上读出 10 笔、9/15 00:21（北京）结束。
+- 所有闸门只收紧，记录在 `decision-log.md`。尚未部署，生产行为未验证。
+
 ## 现在在哪里(2026-11-05, 修复 Nautilus 人工切换测试 · #1302)
 
 - `tests/test_dualtrack_nautilus_cutover_integration.py` 修好了，不再跳过。它从 2026-07-16 加入以来

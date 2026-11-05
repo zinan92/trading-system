@@ -416,11 +416,12 @@ class Sources:
         execution = model.get("execution") or {}
         if strategy.get("active") is not True:
             terminal = model.get("terminal") or {}
-            receipts = terminal.get("exit_receipts") or []
-            ended = receipts[-1].get("ts") if receipts else None
+            closed = terminal.get("closed_count")
+            ended = terminal.get("ended_at")
             reason = {"lower_boundary_invalidated": "跌破区间下沿", "upper_boundary_invalidated": "涨破区间上沿", "hard_stop": "触发硬止损"}.get(terminal.get("reason"), terminal.get("reason") or "")
             price = (model.get("market") or {}).get("price")
-            ended_text = f"：{reason}，{len(receipts)} 笔在 {terminal.get('observed_price')} 平仓" if terminal else ""
+            ended_text = (f"：{reason}，{closed} 笔已平仓" if closed is not None else f"：{reason}") if terminal else ""
+            reconciliation = (terminal.get("reconciliation") or {}).get("status") if terminal.get("ended_flat") is True else None
             grid = {"ok": False, "none": True, "ended": True, "reason": f"黄金网格已结束{ended_text}。现在没有运行中的黄金网格。",
                     "ended_at": ended, "status": "TERMINAL", "price": price}
             ledger = self._paper_ledger()
@@ -428,7 +429,7 @@ class Sources:
             account_view = {"ok": True, "venue": "Binance 纸面盘 · 黄金网格", "money": "纸面模拟",
                             "equity": ledger.get("equity"), "starting_cash": ledger.get("starting_cash"),
                             "realized": ledger.get("realized"), "unrealized": ledger.get("unrealized"),
-                            "positions": open_positions, "trades": None, "reconciliation": "ok",
+                            "positions": open_positions, "trades": None, "reconciliation": reconciliation or "unknown",
                             "note": (f"网格已结束（{reason}）· " + (f"仍有 {len(open_positions)} 笔持仓无人管理" if open_positions else "无持仓"))}
             return {"ok": True, "grid": grid, "account": account_view, "price": price}
         account = execution.get("account") or {}

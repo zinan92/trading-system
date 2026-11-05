@@ -297,6 +297,43 @@ def _empty_execution() -> dict[str, Any]:
     }
 
 
+def _terminal_close_facts(root: Path, session_id: str) -> dict[str, Any]:
+    """Count closes from fills and flatness from the book, never from exit receipts.
+
+    A receipt only says an exit was accepted. On 2026-09-14 the seal recorded 3 of
+    them while 10 positions stayed open until a later pass closed all 10.
+    """
+
+    unknown = {"closed_count": None, "open_positions": None, "ended_flat": None}
+    if not session_id:
+        return unknown
+    authoritative = root / "dualtrack" / "nautilus_authoritative"
+    namespace = park_paper_namespace(session_id)
+    try:
+        snapshot = _latest_array_row(authoritative / "snapshots" / f"{namespace}.json")
+        commands = load_json(authoritative / "commands" / f"{namespace}.json")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return unknown
+    if not snapshot:
+        return unknown
+    exit_ids = {
+        str(row.get("command_id") or "")
+        for row in commands
+        if isinstance(row, Mapping)
+        and str((row.get("command") or {}).get("source_fill_id") or "").startswith("park-terminal:")
+    }
+    open_positions = sum(1 for row in snapshot.get("positions") or [] if str(row.get("status") or "").lower() == "open")
+    return {
+        "closed_count": len({
+            str(row.get("order_id") or "")
+            for row in snapshot.get("fills") or []
+            if str(row.get("order_id") or "") in exit_ids
+        }),
+        "open_positions": open_positions,
+        "ended_flat": open_positions == 0,
+    }
+
+
 def _latest_terminal(
     root: Path,
     *,
@@ -316,9 +353,17 @@ def _latest_terminal(
         executions = _read_jsonl(root / "park_strategy" / "executions.jsonl")
     except (OSError, ValueError, json.JSONDecodeError):
         executions = []
+    paused_by_key: dict[str, dict[str, Any]] = {}
+    completions: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(executions):
         if row.get("event") == "terminal_paused" and isinstance(row.get("result"), Mapping) and matches(row):
+            paused_by_key[str(row.get("terminal_key") or "")] = row
             candidates.append((str(row.get("recorded_at") or row.get("observed_at") or ""), index, "execution", row))
+        elif row.get("event") == "terminal_close_completed" and str(row.get("terminal_key") or "") in paused_by_key:
+            # A finished close supersedes any terminal blocker raised while it was retrying.
+            key = str(row.get("terminal_key") or "")
+            completions[key] = row
+            candidates.append((str(row.get("recorded_at") or ""), index, "execution", paused_by_key[key]))
     try:
         blockers = _read_jsonl(root / "park_strategy" / "runtime_blockers.jsonl")
     except (OSError, ValueError, json.JSONDecodeError):
@@ -332,7 +377,13 @@ def _latest_terminal(
     _, _, kind, row = max(candidates, key=lambda item: (bool(item[0]), item[0], item[1]))
     if kind == "execution":
         result = row.get("result") or {}
+        completion = completions.get(str(row.get("terminal_key") or "")) or {}
+        counts = (result.get("reconciliation") or {}).get("counts") or {}
         return {
+            **_terminal_close_facts(root, str(row.get("strategy_session_id") or "")),
+            "ended_at": (completion.get("recorded_at") if completion.get("exits") else None) or row.get("recorded_at"),
+            "close_completed_at": completion.get("recorded_at"),
+            "sealed_open_positions": counts.get("open_positions"),
             "reason": result.get("terminal_reason"),
             "observed_price": result.get("observed_price"),
             "cancel": result.get("cancel"),
@@ -346,6 +397,8 @@ def _latest_terminal(
         }
     code = str(row.get("code") or "")
     return {
+        **_terminal_close_facts(root, str(row.get("session") or row.get("strategy_session_id") or "")),
+        "ended_at": None,
         "status": "blocked",
         "reason": row.get("reason") or row.get("terminal_reason") or code,
         "blocker_code": code,
