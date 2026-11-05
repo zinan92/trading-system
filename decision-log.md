@@ -46,6 +46,36 @@
 - Local, one venv as pytest host and replay runtime: `9 passed`.
 - Workflow change only. No production path touched and no deploy needed.
 
+# 2026-11-05 — Deployed CI and root cleanup (#1297) to production
+
+## Decision
+
+- Park approved: 「部署到生产」. `~/work/trading-platform` fast-forwarded from
+  `669e080` to `ff0f6b3`, after the CI run on main passed. Only CI, Makefile,
+  `.gitignore`, one test, docs and archived root files changed.
+  `park-paper-control` kept running and no order lifecycle was touched.
+  datafeed is unchanged.
+
+## Gotchas
+
+- `completeness.issues` showed `market_not_trusted` once before the deploy.
+  It was gone on the next three reads, with OKX data fresh and trusted. The
+  cause was not found; it is recorded here in case it recurs.
+
+## Verification
+
+- No active Paper session, and 0 open orders, unknown orders and positions,
+  both before the deploy and after it.
+- The gate receipt refreshed itself to `pass` at `ff0f6b3` on the next control
+  pass (04:37:35Z). Dashboard and desk were then kickstarted. The dashboard
+  boot receipt is `pass` at `ff0f6b3` (04:37:49Z).
+- Desk `/trade` and GridMind `/dashboard-v5.html` return 200. The desk asset
+  hash is still `f6c89583d133`, as expected: no page file changed.
+- OKX market is ready, fresh and trusted. The only open issues are
+  `production_plan_missing` and `risk_decision_missing`, expected when idle.
+- No order, confirm or start button was pressed. The page was checked over
+  HTTP, not in a browser.
+
 # 2026-11-05 — CI on every PR, and a clean repository root (#1297)
 
 ## Decision
