@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -278,3 +278,29 @@ def scoreboard(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
         count = lambda outcome: sum(row.get("outcome") == outcome for row in items)  # noqa: E731
         board[author] = {"total": len(items), "hit": count("hit"), "miss": count("miss"), "even": count("even"), "unverifiable": count("unverifiable"), "pending": count(None)}
     return board
+
+
+PERIODS = (0, 7, 30, 90)  # 0 = 全部
+
+
+def filtered(all_runs: list[dict[str, Any]], judgments: list[dict[str, Any]], *, asset: str | None, days: int, now: datetime | None = None) -> dict[str, Any]:
+    """交易回看 by asset and period (#1326). A run counts when any part of it falls inside the period.
+
+    The scoreboard is filtered the same way, by each judgment's asset and creation time, so the
+    record under the chart always describes the runs above it. `assets` lists every asset that
+    has a run or a judgment, whatever the filter, so the picker does not shrink.
+    """
+    if days not in PERIODS:
+        raise ValueError(f"days must be one of {PERIODS}")
+    asset = (asset or "").upper() or None
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=days) if days else None
+
+    def inside(ts: Any) -> bool:
+        at = _at(ts)
+        return since is None or (at is not None and at >= since)
+
+    runs_shown = [run for run in all_runs if (asset is None or run.get("asset") == asset) and inside(run.get("ended_at") or run.get("started_at"))]
+    judged = [row for row in judgments if (asset is None or row.get("asset") == asset) and inside(row.get("created_at"))]
+    assets = sorted({str(run["asset"]) for run in all_runs if run.get("asset")} | {str(row["asset"]) for row in judgments if row.get("asset")})
+    return {"runs": runs_shown, "score": scoreboard(judged), "assets": assets,
+            "filter": {"asset": asset, "days": days, "since": since.isoformat(timespec="seconds") if since else None}}

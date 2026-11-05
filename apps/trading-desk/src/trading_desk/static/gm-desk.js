@@ -487,7 +487,18 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
+  // 交易回看 is a React island (apps/web ReviewPanel, #1326). GridMind keeps rewriting its own
+  // review panel, so that one is renamed and hidden; the island loads when the tab is first opened.
+  function mountReview() {
+    const old = $d('[data-panel="review"]');
+    if (!old || $d("#deskReview")) return;
+    old.dataset.panel = "review-legacy";
+    old.insertAdjacentHTML("afterend", `<div class="tab card-body desk-review" data-panel="review" id="deskReview" data-island="review" data-props="{}"></div>`);
+    $d("#tabs")?.addEventListener("click", event => { if (event.target.closest('[data-tab="review"]')) $d("#deskReview").dataset.props = '{"active":true}'; });
+  }
+
   async function boot() {
+    mountReview();
     mountShell();
     syncSteps();
     renderStatus();

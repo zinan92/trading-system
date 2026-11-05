@@ -671,10 +671,9 @@ def test_desk_assets_are_cache_busted_by_content():
     from trading_desk import gridmind
 
     static = Path(gridmind.__file__).resolve().parent / "static"
-    expected = hashlib.sha256(b"".join((static / name).read_bytes() for name in ("gm-desk.js", "gm-desk.css", "gm-review.js", "web/web.js"))).hexdigest()[:12]
+    expected = hashlib.sha256(b"".join((static / name).read_bytes() for name in ("gm-desk.js", "gm-desk.css", "web/web.js"))).hexdigest()[:12]
     assert gridmind.ASSET_VERSION == expected
     assert f"gm-desk.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
-    assert f"gm-review.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
     assert f"/static/web/web.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
 
 
@@ -688,10 +687,11 @@ def test_react_islands_bundle_is_shipped_and_replaces_the_old_scripts():
     bundle = (static / "web" / "web.js").read_text(encoding="utf-8")
     assert bundle.startswith("var DeskWeb=") and "process.env" not in bundle
     shell = gridmind.inject_shell("<html><body></body></html>")
-    assert "gm-backtest.js" not in shell and "gm-ai-sources.js" not in shell
-    assert not (static / "gm-backtest.js").exists() and not (static / "gm-ai-sources.js").exists()
+    for retired in ("gm-backtest.js", "gm-ai-sources.js", "gm-review.js"):
+        assert retired not in shell and not (static / retired).exists()
     desk = (static / "gm-desk.js").read_text(encoding="utf-8")
-    assert 'data-island="watch"' in desk and 'data-island="ai-sources"' in desk and 'data-island="backtest"' in desk
+    for island in ("watch", "ai-sources", "backtest", "review"):
+        assert f'data-island="{island}"' in desk
 
 
 def _review_ledger(config):
@@ -709,6 +709,9 @@ def test_review_lists_a_run_and_keeps_a_zero_author_visible(config, sources, sto
     body = client.get("/api/review/runs").json()
     assert [run["id"] for run in body["runs"]] == ["paper:session-abc"]
     assert body["score"]["park"]["total"] == 0
+    assert client.get("/api/review/runs", params={"asset": "btc"}).json()["runs"] == []
+    assert client.get("/api/review/runs", params={"asset": "XAU"}).json()["filter"]["asset"] == "XAU"
+    assert client.get("/api/review/runs", params={"days": 5}).status_code == 422
 
 
 def test_review_timeline_reads_one_run_and_writes_nothing(config, sources, store, fetch):

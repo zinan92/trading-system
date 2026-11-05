@@ -1,5 +1,47 @@
 # Decision Log
 
+# 2026-11-05 — 交易回看 island with asset and period filters (#1326)
+
+## Decision
+
+- `ReviewPanel` replaces `gm-review.js`. gm-desk.js keeps a ten-line shim:
+  - It renames GridMind's own review panel to `review-legacy`, as before.
+  - It inserts the `data-island="review"` panel.
+  - On the first click of the review tab it sets `data-props` to
+    `{"active":true}`. The bridge re-renders, and the island loads only then.
+- `/api/review/runs` takes `asset` and `days` (0, 7, 30 or 90; anything else
+  is 422).
+  - A run is kept when its end (or its start, when there is no end) is inside
+    the period.
+  - The scoreboard is filtered by each judgment's asset and `created_at`, so
+    it describes the same slice as the runs.
+  - `assets` lists every asset with a run or a judgment, whatever the filter,
+    so the picker does not shrink after a filter.
+- Item 6 of the plan ("review filter by asset/time") is done by this Issue.
+
+## Gotchas
+
+- The review panel has buttons (the event list). The islands' safety check
+  for it covers request methods and order/control endpoints, not `<button`.
+- A filter that empties the list unmounts the chart, so the StandardKline
+  instance is destroyed on unmount. Otherwise its resize observer would
+  outlive the DOM.
+
+## Verification
+
+- Vitest 31 passed (review view logic ported from `test_gm_review.py`, plus
+  panel tests):
+  - Nothing loads before the tab opens.
+  - The newest run, the missing-parts note and the raw record render.
+  - The filters reach the server.
+  - An empty result names the filter.
+- Desk suite 112 passed: the filter unit test, the route asserts (BTC empty,
+  `XAU` echoed, `days=5` gives 422) and the retired-script checks.
+- Dev desk:
+  - The review tab lists 6 runs and draws the chart.
+  - XAU shows 2 黄金 Paper runs (−122.14 USDT).
+  - XAU · 近 30 天 shows 「没有跑过的记录」 and a scoreboard of 待定 29.
+
 # 2026-11-05 — React + TypeScript islands on /trade (#1325)
 
 ## Decision

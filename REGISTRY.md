@@ -9,6 +9,16 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 交易回看搬成组件，可按品种和时间筛 · #1326)
+
+- 「交易回看」整块换成 React 组件（`ReviewPanel`），`gm-review.js` 删掉；第一次点开这个标签才读数据，跟以前一样。
+- 新增两个筛选：品种（全部 / BTC / XAU …，列出所有有记录的品种）和时间（全部 / 近 7 天 / 近 30 天 / 近 90 天）。只要一轮有一部分落在时间段里就算。
+- 下面的「判断战绩」跟着同样的筛选算（按判断的品种和创建时间），标题写明筛的是什么，例如「判断战绩（XAU · 近 30 天）」。
+- 筛完没有记录时直接说「XAU · 近 30 天 没有跑过的记录」，不显示空图。
+- 还是只读：`/api/review/runs?asset=&days=` 和 `/api/review/timeline`，`days` 只收 0/7/30/90，别的值返回 422。
+
+_下一步_：#1327 今天的流程搬成组件。
+
 ## 现在在哪里(2026-11-05, 前端组件化第一块 · #1325)
 
 - 新增 `apps/web/`：Vite 8 + React 19 + TypeScript 7，打包成一个 `static/web/web.js`（gzip 73 KB），跟源码一起提交；交易台照旧是 Python 服务，不需要 node 才能跑。
@@ -16,6 +26,11 @@
 - 第一批换掉三块：「本周要看的三件事」、开仓前回测框、AI 建议下面的「依据」。`gm-backtest.js`、`gm-ai-sources.js` 删掉，测试搬到 Vitest。
 - 这几个组件只读（GET），没有按钮；有一条测试专门拦 `method:`、`/api/execute`、`dashboard-control`。下单和控制面板放到 #1329 最后搬，请求体逐字节对比。
 - `make test-web` 跑类型检查、Vitest、重新打包，打出来和提交的不一样就失败；已加进 `make test` 和 CI（CI 改用 Node 22）。
+
+- 生产部署（2026-11-05）：trading-system `992cb13`。部署前确认空闲（无运行策略，挂单、未知单、持仓都是 0），predeploy gate 在这个 sha 上 pass，只重启了交易台。
+  - `/trade` 200，`/static/web/web.js` 200（228,764 字节）。
+  - 本机 8790 页面上「三件事」岛渲染出 3 张卡，「依据」岛挂上了：今天这条 AI 建议是加依据之前生成的，显示「这条建议生成时还没有记录依据」。
+  - 公网 trade.park-ai-intel.com 要口令，没有输入。
 
 _下一步_：#1326 复盘、#1327 今天的流程搬成组件。
 
