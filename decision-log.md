@@ -1,5 +1,29 @@
 # Decision Log
 
+# 2026-11-05 — Deployed the trade page redesign (#1294) to production
+
+## Decision
+
+- Park approved: 「合并并部署」. `~/work/trading-platform` fast-forwarded from
+  `51285bd` to `669e080`. Only page files, tests and docs changed, so
+  `park-paper-control` kept running and no order lifecycle was touched.
+  datafeed is unchanged.
+
+## Verification
+
+- No active Paper session and 0 open orders before the deploy.
+- The gate receipt refreshed itself to `pass` at `669e080` on the next control
+  pass (03:35:11Z). Dashboard and desk were then kickstarted. The dashboard
+  boot receipt is `pass` at `669e080`.
+- The desk serves `gm-desk.js?v=f6c89583d133`, which matches the content hash
+  of the checkout. GridMind serves `window.gridmindView`.
+- Production `/trade` at 1440 px shows:
+  - the banner 「现在没有在跑的策略 · 上一轮在 9/14 结束：价格跌破区间下沿，平仓 3 笔，对账一致」
+  - the amber 「Binance Paper 已停用 … 改选 OKX Paper 黄金」 line (first time seen live)
+  - health 「行情可信 · 没有运行中的计划」
+  - no red gate line
+- No button was pressed in production.
+
 # 2026-11-05 — Trade page: one status line, one start path, no false alarms (#1294)
 
 ## Decision
