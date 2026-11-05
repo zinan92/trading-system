@@ -1,7 +1,18 @@
+"""Attended Nautilus Paper cutover, run for real end to end.
+
+The one test that takes the unstubbed path: attended approval, isolated runtime
+and cutover gate grant Nautilus authority, then the control plane and the manual
+order API drive the Nautilus runtime, and config rolls back to legacy Paper.
+
+It is pinned to Binance on purpose. This preflight schema requires account-observed
+fees, and OKX Paper only has an assumed fee, so the attended path refuses OKX (see
+test_attended_cutover_is_blocked_for_okx_until_a_fee_is_account_observed). Running
+it on OKX would need a made-up account-observed fee, which would be false evidence.
+"""
+
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 import pytest
@@ -11,20 +22,19 @@ from services.dualtrack_config import dualtrack_config
 from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
 from services.journal_store import load_json, write_json
 from services.strategy_control_plane import StrategyControlPlane
-from tests.test_strategy_control_plane import market, proposal
+from tests.test_dualtrack_nautilus_instrument import _definition
+from tests.test_strategy_control_plane import account_context, market, proposal
 
 
-ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = Path(os.environ.get(
     "TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON",
     "/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python",
 ))
-PREFLIGHT = ROOT / "outputs" / "dualtrack" / "nautilus" / "instrument_preflight.json"
 
 
 pytestmark = pytest.mark.skipif(
-    not RUNTIME.exists() or not PREFLIGHT.exists(),
-    reason="isolated Nautilus paper runtime evidence is not installed",
+    not RUNTIME.exists(),
+    reason="Nautilus runtime missing; set TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON",
 )
 
 
@@ -47,15 +57,26 @@ def test_attended_nautilus_control_plane_start_regrid_cancel_and_stop(
     }])
     legacy_history_before = legacy_history_path.read_bytes()
     preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
-    preflight.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(PREFLIGHT, preflight)
+    write_json(preflight, [{
+        "status": "ready_for_paper_shadow",
+        "instrument": _definition(),
+        "fee_model": {
+            "mode": "account_observed",
+            "maker_fee_rate": "0",
+            "taker_fee_rate": "0.000400",
+            "funding_rate": "0",
+            "funding_time": 1,
+            "observed_at": "2026-07-10T10:53:16+00:00",
+            "real_money_eligible": False,
+        },
+    }])
     write_json(
         output / "dualtrack" / "cutover" / "shadow_gate_current.json",
         [{"status": "ready_for_attended_paper_switch"}],
     )
     monkeypatch.setenv("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED", "1")
     monkeypatch.setenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON", str(RUNTIME))
-    config = dualtrack_config()
+    config = dualtrack_config(paper_gold_venue="binance")
     config["execution_engine"] = {
         **dict(config.get("execution_engine") or {}),
         "authoritative": "nautilus_paper",
@@ -79,6 +100,12 @@ def test_attended_nautilus_control_plane_start_regrid_cancel_and_stop(
             "quantity": 1.0,
         },
     }])
+    write_json(output / "dualtrack" / "runner" / f"{cycle_id}.json", [{
+        "ts": "2026-07-05T01:39:30+00:00",
+        "cycle_id": cycle_id,
+        "event": "live_tick_heartbeat",
+        "detail": {"runner": "dualtrack-live-tick"},
+    }])
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
 
@@ -87,7 +114,7 @@ def test_attended_nautilus_control_plane_start_regrid_cancel_and_stop(
         "start",
         {"direction": "neutral", "style": "steady"},
         market=market(),
-        account={"ending_cash": 10_000.0},
+        account=account_context(),
         now="2026-07-05T01:40:00+00:00",
     )
     first_ids = {row["order_id"] for row in plane._accepted_orders(cycle_id)}
@@ -102,7 +129,7 @@ def test_attended_nautilus_control_plane_start_regrid_cancel_and_stop(
         "adjust_plan",
         {"direction": "neutral", "style": "aggressive"},
         market=market(close=110.2),
-        account={"ending_cash": 10_000.0},
+        account=account_context(),
         now="2026-07-05T01:41:00+00:00",
     )
     second_ids = {row["order_id"] for row in plane._accepted_orders(cycle_id)}
