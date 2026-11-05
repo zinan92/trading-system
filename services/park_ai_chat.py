@@ -261,9 +261,62 @@ class ParkAiChatService:
         self.snapshot_path = self.output_root / "park_strategy" / "strategy_snapshots.jsonl"
         self.reverse_path = self.output_root / "park_strategy" / "reverse_requests.jsonl"
         self.identity = ParkStrategyIdentityJournal(self.output_root)
+        self._turn: dict[str, Any] = {}
 
     @_serialized
     def handle_message(self, message: str, *, actor: str | None = None) -> dict[str, Any]:
+        """One chat turn. The reply carries `sources`: what this turn actually read (#1348)."""
+
+        self._turn = {}
+        result = self._handle_message(message, actor=actor)
+        if isinstance(result, dict):
+            result = {**result, "sources": self._turn_sources()}
+        return result
+
+    def _turn_sources(self) -> dict[str, Any]:
+        """Only what this turn read: the model call, the market envelope, the account facts.
+
+        A part that was not read is None, never a guess. No raw model output, prompt or key.
+        """
+
+        provider = self._turn.get("provider")
+        context = self._turn.get("context")
+        market = dict((context or {}).get("market") or {}) if context is not None else None
+        account = dict((context or {}).get("account") or {}) if context is not None else None
+        strategy = (context or {}).get("strategy") if context is not None else None
+
+        def number(value: Any) -> float | None:
+            try:
+                return float(value) if value is not None and value != "" else None
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "schema_version": "dashboard-ai-chat-sources-v1",
+            "model": None if provider is None else {
+                "provider": provider.get("provider"),
+                "model": provider.get("model"),
+                "status": provider.get("status"),
+                "elapsed_ms": provider.get("elapsed_ms"),
+                "fallback_from": provider.get("fallback_from"),
+            },
+            "market": None if market is None else {
+                "provider": market.get("provider") or market.get("source") or None,
+                "symbol": market.get("instrument_id") or market.get("symbol") or None,
+                "price": number(market.get("price")),
+                "observed_at": market.get("observed_at") or None,
+                "trusted": market.get("trusted") is True,
+                "fresh": market.get("fresh") is True,
+            },
+            "account": None if account is None else {
+                "equity": number(account.get("equity")),
+                "open_positions": account.get("open_positions"),
+                "open_orders": account.get("open_or_accepted_orders"),
+            },
+            "strategy": None if context is None else {"active": bool(strategy)},
+        }
+
+    def _handle_message(self, message: str, *, actor: str | None = None) -> dict[str, Any]:
         text = _text(message, "message")
         if len(text) > MAX_MESSAGE_CHARS:
             raise ParkAiChatError("message_too_large", f"message exceeds {MAX_MESSAGE_CHARS} characters")
@@ -916,7 +969,7 @@ class ParkAiChatService:
             )
         else:
             account = dict(self.account_reader(self.output_root, cycle) or {})
-        return {
+        context = {
             "market": market,
             "account": account,
             "strategy": dict(active or {}),
@@ -931,6 +984,8 @@ class ParkAiChatService:
                 or []
             ),
         }
+        self._turn["context"] = context
+        return context
 
     def _active_strategy_summary(self, active: Mapping[str, Any] | None) -> dict[str, Any]:
         if not active:
@@ -995,6 +1050,7 @@ class ParkAiChatService:
             return True
 
     def _record_provider(self, metadata: Mapping[str, Any], *, actor: str | None) -> None:
+        self._turn["provider"] = dict(metadata)
         _append_jsonl(
             self.output_root / "park_strategy" / "provider_calls.jsonl",
             {
@@ -1037,6 +1093,7 @@ class ParkAiChatService:
                 "draft_id": draft.get("draft_id") or result.get("draft_id"),
                 "plan_digest": draft.get("plan_digest") or snapshot.get("plan_digest"),
                 "snapshot_id": snapshot.get("snapshot_id"),
+                "sources": result.get("sources"),
                 "actor": actor,
             },
         )

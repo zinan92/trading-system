@@ -89,7 +89,7 @@
 <style>.dashboard-control-card{border:1px solid rgba(63,208,224,.42);border-left:4px solid var(--gm-blue);background:linear-gradient(135deg,rgba(63,208,224,.07),rgba(19,21,25,.98) 48%)}.dashboard-control-card .card-title{padding:13px 14px 8px;color:var(--gm-text);font-size:12px;letter-spacing:.08em}.dashboard-control-card .card-body{padding:9px 14px 12px}.dashboard-control-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.dashboard-control-step{min-width:0;padding:8px;border:1px solid var(--gm-line);border-radius:6px;background:rgba(11,12,15,.38)}.dashboard-control-step .label{font-size:8px;letter-spacing:.08em}.dashboard-control-step select{min-height:34px;padding:6px 8px;font-size:10px}.dashboard-control-step .choice-row{grid-template-columns:1fr 1fr;gap:5px;margin-top:0}.dashboard-control-step .choice{padding:7px 4px;font-size:10px}.dashboard-control-step .choice small{font-size:8px}.dashboard-control-actions{display:flex;justify-content:flex-end;gap:5px;margin-top:7px}.dashboard-control-actions .button{padding:7px 10px;font-size:9px}.dashboard-control-preview{min-height:0;margin-top:7px;color:var(--gm-faint);font:8px/1.45 var(--mono,monospace)}.dashboard-control-preview.on{padding:7px;border:1px dashed var(--gm-line);border-radius:5px;background:rgba(11,12,15,.42)}.dashboard-control-preview.blocked{color:var(--gm-red)}.dashboard-control-preview b{color:var(--gm-text)}.dashboard-control-account,.dashboard-control-runtime{min-height:13px;margin-top:5px;color:var(--gm-faint);font:8px/1.45 var(--mono,monospace)}.dashboard-control-account.blocked,.dashboard-control-runtime.blocked{color:var(--gm-red)}.dashboard-control-account.ready,.dashboard-control-runtime.ready{color:var(--gm-green)}
 .dashboard-control-runtime.history{color:var(--gm-faint)}.dashboard-control-status{min-height:14px;margin:7px 0 0;color:var(--gm-faint);font:8px/1.45 var(--mono,monospace)}.dashboard-control-status.blocked{color:var(--gm-red)}.dashboard-control-status.ready{color:var(--gm-green)}@media(max-width:760px){.dashboard-control-steps{grid-template-columns:1fr}.dashboard-control-step .choice-row{grid-template-columns:1fr 1fr}.dashboard-control-actions{justify-content:stretch}.dashboard-control-actions .button{width:100%}}</style>
 <style>@media(max-height:1050px) and (min-width:761px){.chart{height:300px}}</style>
-<style>.rail-ai-card .park-ai-chat-messages{max-height:180px}.park-ai-snapshot details>summary{cursor:pointer;color:var(--gm-muted);font-size:12px;padding:4px 0}.current-strategy-card.paused{border-left-color:var(--gm-warn,#f0a52e);background:linear-gradient(135deg,rgba(240,165,46,.08),rgba(19,21,25,.98) 42%)}.current-strategy-card.paused .current-strategy-status{border-color:rgba(240,165,46,.45);color:#f0a52e;background:rgba(240,165,46,.09)}.current-strategy-fact b.warn{color:#f0a52e}.strategy-evidence-more{display:inline}.strategy-evidence-more summary{cursor:pointer;display:inline;color:var(--gm-faint)}.strategy-evidence-more code{font-size:10px;color:var(--gm-faint)}</style>
+<style>.park-ai-sources{display:flex;flex-wrap:wrap;gap:4px;margin:-2px 0 2px;color:var(--gm-faint);font:8px/1.5 var(--mono,monospace)}.park-ai-sources span{padding:2px 5px;border:1px solid var(--gm-line);border-radius:4px;background:rgba(11,12,15,.35);overflow-wrap:anywhere}.park-ai-sources span:first-child{border:0;background:none;padding-left:0;color:var(--gm-muted);font-weight:700}.park-ai-sources .bad{color:var(--gm-red);border-color:rgba(242,73,95,.35)}.rail-ai-card .park-ai-chat-messages{max-height:180px}.park-ai-snapshot details>summary{cursor:pointer;color:var(--gm-muted);font-size:12px;padding:4px 0}.current-strategy-card.paused{border-left-color:var(--gm-warn,#f0a52e);background:linear-gradient(135deg,rgba(240,165,46,.08),rgba(19,21,25,.98) 42%)}.current-strategy-card.paused .current-strategy-status{border-color:rgba(240,165,46,.45);color:#f0a52e;background:rgba(240,165,46,.09)}.current-strategy-fact b.warn{color:#f0a52e}.strategy-evidence-more{display:inline}.strategy-evidence-more summary{cursor:pointer;display:inline;color:var(--gm-faint)}.strategy-evidence-more code{font-size:10px;color:var(--gm-faint)}</style>
 </head>
 <body>
   <header class="top">
@@ -744,6 +744,21 @@ load();setInterval(()=>{if(!state.busy&&!document.hidden)load()},PUBLIC_OBSERVER
   const text=(value)=>value===null||value===undefined||value===""?"—":String(value);
   const addMessage=(value,kind="system")=>{if(!value)return;const node=document.createElement("div");node.className=`park-ai-chat-message ${kind}`;node.textContent=String(value);messages.appendChild(node);messages.scrollTop=messages.scrollHeight};
   const setStatus=(value)=>{status.textContent=String(value||"")};
+  // #1348: what this reply was based on — the model call, the market price it saw, the account facts.
+  function sourcesLine(sources){
+    if(!sources||typeof sources!=="object")return null;
+    const parts=[],model=sources.model,market=sources.market,account=sources.account;
+    if(model){const secs=Number.isFinite(Number(model.elapsed_ms))&&model.elapsed_ms!==null?` · ${(Number(model.elapsed_ms)/1000).toFixed(1)} 秒`:"";const ok=["returned","ok"].includes(String(model.status||""));parts.push({text:`模型 ${text(model.provider)}${model.model?" "+model.model:""}${model.fallback_from?`（${model.fallback_from} 不可用后改用）`:""}${secs}${ok?"":` · ${text(model.status)}`}`,bad:!ok})}
+    else parts.push({text:"本地规则解析，未调用模型",bad:false});
+    if(market){const when=market.observed_at?String(market.observed_at).replace("T"," ").slice(0,16)+" UTC":"时间未知";const good=market.trusted===true&&market.fresh===true;parts.push({text:`行情 ${text(market.provider)}${market.symbol?" "+market.symbol:""} ${market.price===null||market.price===undefined?"无价格":Number(market.price).toLocaleString("en-US",{maximumFractionDigits:2})} · ${when} · ${good?"可信":"不可信"}`,bad:!good})}
+    else parts.push({text:"未读取行情",bad:false});
+    if(account)parts.push({text:`账户 权益 ${account.equity===null||account.equity===undefined?"未知":Number(account.equity).toLocaleString("en-US",{maximumFractionDigits:2})} · 持仓 ${text(account.open_positions)} · 挂单 ${text(account.open_orders)}`,bad:account.equity===null||account.equity===undefined});
+    const node=document.createElement("div");node.className="park-ai-sources";node.dataset.sources="1";
+    const label=document.createElement("span");label.textContent="依据";node.appendChild(label);
+    parts.forEach(part=>{const item=document.createElement("span");item.textContent=part.text;if(part.bad)item.className="bad";node.appendChild(item)});
+    return node;
+  }
+  const addSources=(sources)=>{const node=sourcesLine(sources);if(!node)return;messages.appendChild(node);messages.scrollTop=messages.scrollHeight};
   const valueFor=(source,key)=>source&&Object.prototype.hasOwnProperty.call(source,key)?source[key]:null;
   function fillLegacyForm(draft){
     const source=(draft&&draft.plan&&draft.plan.normalized_input)||(draft&&draft.normalized)||{};
@@ -784,6 +799,7 @@ load();setInterval(()=>{if(!state.busy&&!document.hidden)load()},PUBLIC_OBSERVER
   }
   function applyResponse(data){
     if(data.message)addMessage(data.message,"system");
+    if(data.sources)addSources(data.sources);
     const draft=data.draft||null;
     const card=data.snapshot||null;
     if(draft){pending=draft;renderSnapshot(card,draft);fillLegacyForm(draft)}

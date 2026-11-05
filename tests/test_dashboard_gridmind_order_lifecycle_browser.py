@@ -733,3 +733,59 @@ def test_gridmind_shows_dca_tp_sl_without_grid_only_facts() -> None:
         assert "Grid Spacing" not in copy
         assert browser_errors == []
         browser.close()
+
+
+def test_gridmind_ai_reply_shows_what_it_was_based_on() -> None:
+    """#1348: under each AI reply, the model that answered and the market/account facts it saw."""
+
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True)
+    replies = [
+        {"status": "needs_clarification", "message": "请补充止损价。", "sources": {
+            "schema_version": "dashboard-ai-chat-sources-v1",
+            "model": {"provider": "deepseek", "model": "deepseek-chat", "status": "returned", "elapsed_ms": 2140, "fallback_from": None},
+            "market": {"provider": "okx", "symbol": "XAU-USDT-SWAP", "price": 4106.7, "observed_at": "2026-11-06T03:40:00+00:00", "trusted": True, "fresh": True},
+            "account": {"cycle_id": None, "equity": 10000.0, "open_positions": 0, "open_orders": 0},
+            "strategy": {"active": False}}},
+        {"status": "needs_disposition", "message": "先说旧仓怎么处理。", "sources": {
+            "schema_version": "dashboard-ai-chat-sources-v1", "model": None,
+            "market": {"provider": "okx", "symbol": "XAU-USDT-SWAP", "price": None, "observed_at": None, "trusted": False, "fresh": False},
+            "account": None, "strategy": {"active": True}}},
+    ]
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    def fulfill_ai(route) -> None:
+        if route.request.method == "POST":
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(replies.pop(0), ensure_ascii=False))
+        else:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"pending_draft": None, "snapshots": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.route("**/api/park-paper/ai-chat", fulfill_ai)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        for text in ("做空 DCA 区间 4444~4200", "反手"):
+            page.locator("#parkAiChatInput").fill(text)
+            page.locator("#parkAiSend").click()
+        lines = page.locator(".park-ai-sources")
+        lines.nth(1).wait_for(state="visible")
+        first, second = lines.nth(0).inner_text(), lines.nth(1).inner_text()
+        assert "依据" in first and "模型 deepseek deepseek-chat · 2.1 秒" in first
+        assert "行情 okx XAU-USDT-SWAP 4,106.7 · 2026-11-06 03:40 UTC · 可信" in first
+        assert "账户 权益 10,000 · 持仓 0 · 挂单 0" in first
+        assert lines.nth(0).locator(".bad").count() == 0
+        assert "本地规则解析，未调用模型" in second and "无价格" in second and "不可信" in second
+        assert lines.nth(1).locator(".bad").inner_text().endswith("不可信")
+        browser.close()

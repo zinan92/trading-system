@@ -1,5 +1,49 @@
 # Decision Log
 
+# 2026-11-06 — AI 策略助手的回复带「依据」 (#1348)
+
+## Decision
+
+- `ParkAiChatService.handle_message` now returns `sources`
+  (`dashboard-ai-chat-sources-v1`) beside the existing reply:
+  - `model`: provider, model, status, elapsed_ms, fallback_from. It is
+    `None` when no model was called this turn.
+  - `market`: provider, symbol, price, observed_at, trusted, fresh.
+  - `account`: equity, open_positions, open_orders.
+  - `strategy`: whether a strategy was active.
+- Sources come only from what this turn read. `handle_message` resets a
+  per-turn record, then `_read_context` and `_record_provider` fill it.
+  A part that was not read is `None`, never carried over from an earlier
+  turn.
+- The `assistant_response` journal row stores the same `sources`, so the
+  page and the audit trail agree.
+- The page renders one 「依据」 line under each reply. An untrusted or
+  stale market, a missing price or a failed model call shows red.
+- No change to parsing, drafts, confirmation, digests or any gate. Sources
+  hold no prompt, no raw model output and no credential.
+
+## Gotchas
+
+- `_serialized` records the assistant result for methods named
+  `handle_message`, `confirm` and `reject`. The new public
+  `handle_message` keeps that name and the old body moved to an
+  undecorated `_handle_message`. Decorating both would take the lock
+  twice (it is an RLock, so it would not deadlock) and would journal
+  every reply twice.
+- `confirm` and `reject` replies carry no `sources`. They read no model.
+  The page shows the line only when `sources` is present.
+- The market reader in production returns `instrument_id`; tests use
+  `symbol`. The sources take whichever is present.
+
+## Verification
+
+- `tests/test_park_ai_chat.py`: 28 passed. 4 are new: sources on a reply
+  and in the journal, no previous-turn carry-over, an untrusted market
+  stays untrusted, no prompt or secret in sources.
+- `tests/test_dashboard_gridmind_order_lifecycle_browser.py`: a new
+  Playwright test renders two replies in the real page: one model-backed
+  and trusted, one local and untrusted (red).
+
 # 2026-11-06 — One deploy script, and a coverage number (#1341)
 
 ## Decision
