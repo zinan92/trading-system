@@ -1,5 +1,57 @@
 # Decision Log
 
+# 2026-11-05 — Trade page: one status line, one start path, no false alarms (#1294)
+
+## Decision
+
+- Park approved a mockup first. The change is presentation only: no order,
+  risk or gate logic changed, and no gate was loosened.
+- The redesign lives in the desk layer (`gm-desk.js`/`gm-desk.css`), which only
+  `/trade` loads. GridMind on 8765 keeps its structure, so its browser tests
+  still drive the same cards.
+- The status line reads `window.gridmindView`, which GridMind sets in the same
+  render that draws the chart and the account strip, so they cannot disagree.
+- GridMind cards are moved into `<details>`, not removed. Every control path,
+  including GridMind's own start and stop, still works.
+- Health is grey when calm, never a green "all good". Records that only mean
+  "no plan yet" are listed as expected while idle and count as problems once a
+  strategy runs. Any unknown record is amber.
+
+## Gotchas
+
+- The account contradiction had a real cause. The strip reads the Park ledger
+  (`current_strategy.ledger`), while 生产运行状态 read `execution.account` from
+  the retired engine (`engine: unavailable`, 10,000). The status card now
+  points to the strip instead of repeating numbers.
+- 「行情不可用」 was a false alarm. `renderTrend` received the header trust,
+  which requires a 1m chart, so any 30m chart reported a market outage. The
+  text now separates "market untrusted" from "chart is not 1m". The 1m
+  requirement for refreshing the trend and for starting is unchanged.
+- On dev ports, GridMind's control track does not boot (it only boots on
+  8765, 8766 and 8790). The desk then falls back to BTC after 15 s. That is a
+  dev artifact, not a regression.
+- The dev dashboard refuses to boot without
+  `release_gates/paper_predeploy_current.json` for the current commit. The file
+  is a JSON list (`[receipt]`), not a bare object.
+
+## Verification
+
+- Desk suite: 73 passed. It includes `test_gm_desk_status.py`, which runs the
+  real `gm-desk.js` under node against stub read models for idle, running,
+  testnet-paused, market-blocked, unknown-record and retired-selection cases.
+- GridMind static, UI and server tests: 104 passed. Five GridMind browser
+  suites (header, control track, operator journey, failure chains,
+  supervisor): 11 passed, 1 xfailed (already xfailed before this change).
+- Dev browser (desk 18790 → dashboard 18765 → datafeed 18100) at 1440 px:
+  - The banner reads 「现在没有在跑的策略 · 上一轮在 9/14 结束：价格跌破区间下沿，平仓 3 笔，对账一致」.
+  - Health reads 「行情可信 · 没有运行中的计划」 and the red gate line is hidden.
+  - The status card shows 「账户与盈亏 · 见页面上方账户栏」.
+  - The trend card reads 「切到 1m 后可评估」.
+  - Choosing 观望 marks step 1 done and step 2 next.
+- At 375 px there is no horizontal scroll.
+- The retired-venue line was not seen in dev, because the dev selection is
+  already `okx.paper`. It is covered by the node test.
+
 # 2026-11-05 — Deployed S4 (OKX Paper gold) to production
 
 ## Decision
