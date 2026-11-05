@@ -9,7 +9,7 @@ dependencies = ["fastapi", "uvicorn", "markdown>=3.5"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-trading_desk = ["static/*"]
+trading_desk = ["static/*", "static/web/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

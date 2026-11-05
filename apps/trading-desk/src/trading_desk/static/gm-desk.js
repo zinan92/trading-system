@@ -116,9 +116,8 @@ if (typeof document !== "undefined") (() => {
       <div class="desk-meta"><span>点一条，引用到今日判断</span><span id="deskNewsAt">读取中</span></div>
       <ul id="deskNews"><li class="desk-empty">正在读取新闻…</li></ul></aside>`;
     layout.appendChild(wrap);
-    layout.insertAdjacentHTML("afterbegin", `<section class="card desk-watch" aria-labelledby="deskWatchTitle">
-      <div class="desk-watch-head"><span id="deskWatchTitle">本周要看的三件事</span><span class="desk-meta" style="padding:0" id="deskWatchMeta">读取中</span></div>
-      <div class="desk-watch-row" id="deskWatch"></div></section>`);
+    // 本周三件事 is a React island (apps/web WatchPanel, #1325): it reads /api/watch itself.
+    layout.insertAdjacentHTML("afterbegin", `<section class="card desk-watch" aria-labelledby="deskWatchTitle" data-island="watch"></section>`);
     const rail = $d(".control-rail");
     rail?.insertAdjacentHTML("afterbegin", `<section class="card desk-judge" id="deskToday" aria-labelledby="deskJudgeTitle">
       <div class="card-title"><span id="deskJudgeTitle">今天</span><span class="desk-meta" style="padding:0" id="deskJudgeDate"></span></div>
@@ -345,38 +344,6 @@ if (typeof document !== "undefined") (() => {
   }
   function renderCites() { $d("#deskCites").innerHTML = D.cites.length ? D.cites.map(c => `<span title="${escD(c.title)}">${escD(c.title.slice(0, 16))}…</span>`).join("") : "还没有引用新闻"; }
 
-  // ---- 本周三件事 --------------------------------------------------------------------
-  const WEEKDAY = "一二三四五六日";
-  function whenLabel(item) {
-    const at = new Date(item.at); if (isNaN(at)) return "";
-    const bj = new Date(at.getTime() + (at.getTimezoneOffset() + 480) * 60000), hm = `${String(bj.getHours()).padStart(2, "0")}:${String(bj.getMinutes()).padStart(2, "0")}`;
-    if (item.kind === "breaking") return `突发 · ${hm}`;
-    const ms = at - Date.now(), stamp = `周${WEEKDAY[(bj.getDay() + 6) % 7]} ${hm}`;
-    if (ms <= 0) return `${stamp} · 已公布`;
-    const h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60;
-    return `${stamp} · ${h >= 24 ? `还有 ${Math.floor(h / 24)} 天 ${h % 24} 小时` : h ? `还有 ${h} 小时 ${m} 分` : `还有 ${m} 分钟`}`;
-  }
-  async function loadWatch() {
-    let w;
-    try { w = await call("/api/watch"); } catch (e) { $d("#deskWatchMeta").textContent = e.message; return; }
-    D.watch = w; renderWatch();
-  }
-  function renderWatch() {
-    const w = D.watch || {}, items = w.items || [];
-    $d("#deskWatchMeta").textContent = w.generated_at ? `${w.generated_at.slice(11, 16)} 更新 · ${w.provider === "codex" ? "按全市场冲击排序" : "模型暂不可用，按日历重要性排序"}` : "还在生成";
-    $d("#deskWatch").innerHTML = items.length ? items.map(item => `<article class="desk-watch-card ${item.volatility === "高" ? "high" : ""}${(w.replaced || []).includes(item.ref) ? " fresh" : ""}">
-      <div class="w-when"><span>${escD(whenLabel(item))}</span><span>波动 ${escD(item.volatility || "中")}</span></div>
-      <b title="${escD(item.source_title)}">${escD(item.title)}</b>
-      ${(item.markets || []).length ? `<div class="w-mk">${item.markets.map(m => `<span>${escD(m)}</span>`).join("")}</div>` : ""}
-      <p>${escD(item.why || item.source_title)}</p>${watchSource(item)}</article>`).join("") : `<p class="desk-empty">三件事还在生成，稍后自动刷新。</p>`;
-  }
-
-  function watchSource(item) {  // AI 透明度 (#1319)
-    const v = window.DeskSources ? window.DeskSources.watch(item) : {source: ""};
-    if (!v.source) return "";
-    return `<small class="w-src">来源：${escD(v.source)}${v.unverified.length ? ` <span class="warn">输入里没有：${escD(v.unverified.join("、"))}</span>` : ""}</small>`;
-  }
-
   // ---- desk state: reading, today's call, stop -----------------------------------------
   const readingDirection = s => /分歧|等待确认/.test(s || "") ? "wait" : /偏多/.test(s || "") ? "long" : /偏空/.test(s || "") ? "short" : "wait";
   async function loadDesk() {
@@ -404,14 +371,13 @@ if (typeof document !== "undefined") (() => {
   }
   const AI_CALL = {long: "做多", short: "做空", flat: "观望"};
   function renderAi(d) {
-    const ai = d.ai_today, box = $d("#deskAi"), keepOpen = Boolean(box.querySelector("details.desk-ai-src")?.open);  // the minute refresh must not fold it
+    const ai = d.ai_today, box = $d("#deskAi");
     const refresh = `<button type="button" class="desk-link" id="deskAiRefresh" ${d.ai_running ? "disabled" : ""}>${d.ai_running ? "AI 正在看…" : "刷新 AI 建议"}</button>`;
     if (!ai) { box.innerHTML = `<div class="desk-ai-line"><span class="k">AI 建议</span><span class="muted">每天 08:40 生成</span>${refresh}</div>`; }
     else {
       const at = new Date(ai.created_at).toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"});
       box.innerHTML = `<div class="desk-ai-line"><span class="k">AI 建议</span><b class="d-${ai.direction === "flat" ? "wait" : ai.direction}">${AI_CALL[ai.direction]}</b><span class="muted">信心 ${ai.confidence}/5 · ${at}</span>${refresh}</div>
         <p>${escD(ai.reason)}</p>${aiSources(ai)}${D.d === null ? `<button type="button" class="desk-link" id="deskAiAdopt">照 AI 的方向判断</button>` : ""}`;
-      if (keepOpen) box.querySelector("details.desk-ai-src")?.setAttribute("open", "");
       const adopt = $d("#deskAiAdopt");
       if (adopt) adopt.onclick = () => { D.d = ai.direction; syncDir(); loadPlan(); adopt.remove(); };
     }
@@ -422,15 +388,8 @@ if (typeof document !== "undefined") (() => {
     };
   }
 
-  function aiSources(ai) {  // AI 透明度 (#1318): what the call was given and used
-    if (!window.DeskSources) return "";
-    const v = window.DeskSources.advice(ai);
-    if (v.empty) return `<p class="desk-ai-src muted">${escD(v.empty)}</p>`;
-    const warn = [...(v.unverified.length ? [`输入里没有：${v.unverified.join("、")}`] : []), ...v.flags];
-    return `<details class="desk-ai-src"><summary>依据：${escD(v.summary)}${warn.length ? ` <span class="warn">${escD(warn.join(" · "))}</span>` : ""}</summary>
-      <ul>${v.items.map(item => `<li class="${item.cited ? "cited" : ""}"><span class="k">${escD(item.label)}</span>${item.url ? `<a href="${escD(item.url)}" target="_blank" rel="noopener noreferrer">${escD(item.text)}</a>` : escD(item.text)}${item.cited ? '<span class="cite">已引用</span>' : ""}</li>`).join("")}</ul>
-      ${v.model ? `<p class="muted">${escD(v.model)}</p>` : ""}</details>`;
-  }
+  // 依据 (#1318) is a React island (apps/web AiSources, #1325); it keeps itself open across this minute refresh.
+  const aiSources = ai => `<div data-island="ai-sources" data-props="${escD(JSON.stringify({judgment: {id: ai.id, cited: ai.cited, evidence: ai.evidence}}))}"></div>`;
 
   function renderStop(c) {
     const box = $d("#deskStop");
@@ -506,7 +465,7 @@ if (typeof document !== "undefined") (() => {
       <p class="warn">${paper ? "按下后确认这份黄金纸面盘计划（模拟资金），约 1 分钟内挂单。已有黄金网格在跑时系统会拒绝。" : "按下后会在 Hyperliquid 测试盘真实挂单（假钱）。已有网格在跑时系统会拒绝。"}</p>
       <button type="button" class="desk-btn exec" id="deskExec">执行</button><div class="desk-toast" id="deskExecToast" role="status"></div>`;
     plan.appendChild(box); syncSteps();
-    if (paper && preview.backtest_key && window.DeskBacktest) window.DeskBacktest.mount(plan, preview.backtest_key);
+    if (paper && preview.backtest_key) plan.insertAdjacentHTML("afterbegin", `<div data-island="backtest" data-props="${escD(JSON.stringify({backtestKey: preview.backtest_key}))}"></div>`);  // apps/web BacktestBox
     $d("#deskExec").onclick = async () => {
       if (!confirm(`确认在${paper ? "黄金纸面盘" : "测试盘"}执行这份计划？\n最多亏 ${fmtD(preview.max_loss)} ${unit}`)) return;
       $d("#deskExec").disabled = true; $d("#deskExecToast").textContent = "正在复核预览并下单，可能需要一两分钟…";
@@ -534,7 +493,6 @@ if (typeof document !== "undefined") (() => {
     renderStatus();
     setInterval(renderStatus, 1000);  // follows whatever GridMind last rendered
     placeForViewport();
-    loadWatch();
     window.matchMedia("(max-width: 760px)").addEventListener("change", placeForViewport);
     try { D.assets = (await call("/api/assets")).assets; } catch (e) { $d("#deskNews").innerHTML = `<li class="desk-bad">${escD(e.message)}</li>`; return; }
     const ready = await waitFor(() => window.dashboardControlState?.selection, 15000);
@@ -543,8 +501,7 @@ if (typeof document !== "undefined") (() => {
     } else applyAsset();
     setInterval(() => { if (!D.switching) applyAsset(); }, 2000);  // follow selection changes made inside GridMind
     setInterval(() => { if (!document.hidden) { loadNews(true); loadDesk(); } }, 60000);
-    setInterval(() => { if (!document.hidden && D.news.length) renderNews(); if (D.watch) renderWatch(); }, 30000);
-    setInterval(() => { if (!document.hidden) loadWatch(); }, 300000);
+    setInterval(() => { if (!document.hidden && D.news.length) renderNews(); }, 30000);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
