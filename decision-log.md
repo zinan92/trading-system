@@ -1,5 +1,51 @@
 # Decision Log
 
+# 2026-11-05 — Nautilus real-runtime tests run in CI (#1299)
+
+## Decision
+
+- Set `TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON` to the CI `.venv` Python on
+  the Root suite step only. CI already installs the pinned
+  `nautilus_trader==1.230.0`, so the 9 tests in
+  `tests/test_dualtrack_nautilus_runtime_integration.py` now run instead of
+  skipping.
+- Leave `tests/test_dualtrack_nautilus_cutover_integration.py` skipped here.
+  It is stale, and repairing it is separate work.
+- Do not set `TRADING_ORCHESTRATOR_NAUTILUS_PYTHON` (no `_TEST_`). Production
+  code reads that one.
+
+## Gotchas
+
+- `instrument_preflight.json` is gitignored and absent in CI, and that is fine
+  for the 9 tests. `_runtime_preflight` writes a paper-only fixture
+  (`real_money_eligible: False`) into `tmp_path` when the file is missing.
+  These tests prove replay behaviour; they are not venue evidence.
+- The replay subprocess gets a reduced environment (PATH, HOME, TMPDIR, LANG,
+  LC_ALL, TZ, plus `PYTHONPATH`) and `cwd=ROOT`. One venv can be both the pytest
+  host and the replay runtime; there is no need for a second CI venv.
+- The cutover test's skip message says runtime evidence is not installed. That
+  is misleading. It reads `outputs/...` directly with no fallback, and with a
+  fixture preflight in place it fails on gates it predates:
+  `paper_execution_tick_unavailable:heartbeat_missing`, then
+  `account_snapshot_unavailable`, then `shadow input instrument identity
+  mismatch` (`XAUUSDT` fixture against the default OKX `XAU-USDT-SWAP`).
+  More failures may sit behind those. No gate was changed to find this; the
+  trial fixtures were reverted.
+- `make test-root` uses `-q` without `-rs`, so the CI log gives skip counts but
+  not skip names.
+
+## Verification
+
+- CI on `a5774ff` ([run 41968741419](https://github.com/zinan92/trading-system/actions/runs/41968741419)):
+  all five suites green. Root suite `3905 passed, 1 skipped, 19 xfailed`.
+- Baseline CI on `main@ff0f6b3` ([run 41968165512](https://github.com/zinan92/trading-system/actions/runs/41968165512)):
+  `3896 passed, 10 skipped, 19 xfailed`. The change is +9 passed, -9 skipped,
+  with desk (73) and broker (366) unchanged.
+- The remaining skip is taken to be the cutover test, because that is the one
+  skip locally and in this test pair; the CI log does not name it.
+- Local, one venv as pytest host and replay runtime: `9 passed`.
+- Workflow change only. No production path touched and no deploy needed.
+
 # 2026-11-05 — Deployed CI and root cleanup (#1297) to production
 
 ## Decision
