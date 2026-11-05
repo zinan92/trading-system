@@ -43,7 +43,8 @@ const DeskReview = (() => {
     cells.push({label: `${data.run?.environment === "testnet" ? "Testnet" : "Paper"} 成交`, value: `${result.fill_count} 笔（开 ${result.entries} · 平 ${result.exits}）`});
     if (result.fees != null) cells.push({label: "手续费", value: `${fmt(result.fees)} USDT`});
     cells.push({label: "结束原因", value: data.run?.reason || "原因见原始记录"});
-    cells.push({label: "结束时", value: result.ended_flat === true ? "已空仓" : result.ended_flat === false ? "未空仓" : "记录缺失", bad: result.ended_flat !== true});
+    const open = result.flat ? "未空仓，之后全部结算" : "未空仓";
+    cells.push({label: "策略结束时", value: result.ended_flat === true ? "已空仓" : result.ended_flat === false ? open : "记录缺失", bad: result.ended_flat !== true});
     return cells;
   }
 
@@ -106,6 +107,12 @@ if (typeof document !== "undefined") (() => {
     const payload = {bars: market.bars || [], symbol: market.instrument || "", timeframe: market.timeframe || "1h", provider: market.source || ""};
     const times = StandardKline.adaptBarPayload(payload).candles.map(candle => candle.time);
     const snap = time => times.length ? StandardKline.nearestTime(times, time) ?? time : time;
+    const prices = (data.lines || []).map(line => Number(line.price)).filter(Number.isFinite);
+    chart.candleSeries?.applyOptions({autoscaleInfoProvider: base => {  // keep the plan's boundaries and stop on screen
+      const info = base();
+      if (!info?.priceRange || !prices.length) return info;
+      return {...info, priceRange: {minValue: Math.min(info.priceRange.minValue, ...prices), maxValue: Math.max(info.priceRange.maxValue, ...prices)}};
+    }});
     chart.setPayload(payload, {
       markers: DeskReview.markers(data, snap),
       priceLines: (data.lines || []).map(line => ({price: Number(line.price), title: line.title, color: line.title === "止损" ? "#f0a24b" : "#8b95a3", lineStyle: 2, lineWidth: 1})),

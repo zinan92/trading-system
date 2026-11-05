@@ -31,7 +31,7 @@ def data(**result) -> dict:
 def test_net_result_says_what_it_excludes_and_an_open_end_is_flagged() -> None:
     cells = run("summary", data())
     assert cells[0] == {"label": "这一轮结果（费后，未含资金费）", "value": "−122.14 USDT", "big": True, "bad": True}
-    assert {"label": "结束时", "value": "未空仓", "bad": True} in cells
+    assert {"label": "策略结束时", "value": "未空仓，之后全部结算", "bad": True} in cells
 
 
 def test_a_book_that_does_not_net_to_flat_shows_no_result() -> None:
@@ -40,7 +40,7 @@ def test_a_book_that_does_not_net_to_flat_shows_no_result() -> None:
 
 
 def test_missing_end_record_is_not_called_flat() -> None:
-    assert {"label": "结束时", "value": "记录缺失", "bad": True} in run("summary", data(ended_flat=None))
+    assert {"label": "策略结束时", "value": "记录缺失", "bad": True} in run("summary", data(ended_flat=None))
 
 
 def test_times_are_beijing_and_a_bad_time_is_named() -> None:

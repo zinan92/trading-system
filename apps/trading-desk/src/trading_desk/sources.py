@@ -167,7 +167,7 @@ class Sources:
 
     def testnet_bars_between(self, coin: str, start: str, end: str) -> dict[str, Any]:
         """Hourly Hyperliquid Testnet bars for one past window, for 交易回看."""
-        source = f"Hyperliquid Testnet {coin}（历史，只读）"
+        source = f"Hyperliquid Testnet {coin}"
         try:
             start_ms = int(datetime.fromisoformat(start.replace("Z", "+00:00")).timestamp() * 1000) - self.HL_INTERVAL_MS["1h"] * 6
             end_ms = int(datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() * 1000) + self.HL_INTERVAL_MS["1h"] * 6
