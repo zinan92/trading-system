@@ -53,10 +53,10 @@ jobs:
         env:
           # Runs tests/test_dualtrack_nautilus_runtime_integration.py against the pinned Nautilus install.
           TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
-        run: make VENV=.venv test-root
+        run: make VENV=.venv test-root COV=1
 
       - name: Desk suite
-        run: make VENV=.venv test-desk
+        run: make VENV=.venv test-desk COV=1
 
       - name: Broker suite
         run: make VENV=.venv test-broker
@@ -69,3 +69,14 @@ jobs:
 
       - name: Web islands (typecheck, vitest, committed build is current)
         run: make VENV=.venv test-web
+
+      - name: Coverage summary (root + desk)
+        if: always()
+        run: make VENV=.venv coverage-report | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
