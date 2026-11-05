@@ -1,5 +1,44 @@
 # Decision Log
 
+# 2026-11-05 — Pre-start backtest engine and its calibration (#1308)
+
+## Decision
+
+- Replay each window through `spikes/dualtrack_nautilus_shadow_replay.py`, the
+  isolated replay Paper uses, called directly. `NautilusExecutionAdapter` and
+  the Strategy Shadow path refuse a `park-paper-preflight-v1` artifact without
+  the runtime's mutation gate. That refusal is right and stays; no gate changed.
+- Paper's own rules: `next_grid_rearm_commands` is now a module function the
+  adapter and the backtest share, and a boundary touch closes every open
+  position with one market order, as `_terminal` does.
+- Default windows are non-overlapping weeks. 347 overlapping starts took 393 s;
+  the spec allows 5 minutes and names this fallback. 25 weeks take 40 s and give
+  the same median on the 9/8 plan.
+- History is read with `cache_policy=require`, `fallback_policy=none`. A gap, a
+  failed fetch, a short count or data older than 3 days gives
+  `status: unavailable` with the reason. No other source is substituted.
+
+## Gotchas
+
+- An entry without `sl` does not get its `tp` placed: the replay only builds a
+  bracket when both are set. Paper entries always carry the plan stop.
+- Paper's recorded events are one price per minute, a bar's close stamped at
+  its end. The backtest builds the same: the first open, then each close at
+  minute end. Using the open instead gave −982 gross on 9/8.
+- OKX funding history starts 2026-08-03. Windows before it report
+  `funding: null` and their net excludes funding; `funded_runs` says how many.
+
+## Verification
+
+- `tests/test_grid_backtest.py` (21, one against the real Nautilus runtime),
+  `tests/test_dualtrack_nautilus_execution_adapter.py`.
+- 9/8 recorded inputs replayed: 56 of 56 fills identical.
+- 9/8 rebuilt from Binance 1-minute bars: 56 fills, gross −123.98 against
+  −117.63, fees 4.48 against 4.51. The gap is the end: the backtest closes at
+  the touch, the real run closed seven hours later (#1311).
+- 180 days of OKX on the dev store: 25 windows in 40 s, median +0.25 %, worst
+  −2.05 %, best +0.99 %, 40 % ended at the lower boundary or stop.
+
 # 2026-11-05 — Trade review: one read-only timeline per run (#1306)
 
 ## Decision
