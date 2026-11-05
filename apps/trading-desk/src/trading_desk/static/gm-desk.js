@@ -368,7 +368,13 @@ if (typeof document !== "undefined") (() => {
       <div class="w-when"><span>${escD(whenLabel(item))}</span><span>波动 ${escD(item.volatility || "中")}</span></div>
       <b title="${escD(item.source_title)}">${escD(item.title)}</b>
       ${(item.markets || []).length ? `<div class="w-mk">${item.markets.map(m => `<span>${escD(m)}</span>`).join("")}</div>` : ""}
-      <p>${escD(item.why || item.source_title)}</p></article>`).join("") : `<p class="desk-empty">三件事还在生成，稍后自动刷新。</p>`;
+      <p>${escD(item.why || item.source_title)}</p>${watchSource(item)}</article>`).join("") : `<p class="desk-empty">三件事还在生成，稍后自动刷新。</p>`;
+  }
+
+  function watchSource(item) {  // AI 透明度 (#1319)
+    const v = window.DeskSources ? window.DeskSources.watch(item) : {source: ""};
+    if (!v.source) return "";
+    return `<small class="w-src">来源：${escD(v.source)}${v.unverified.length ? ` <span class="warn">输入里没有：${escD(v.unverified.join("、"))}</span>` : ""}</small>`;
   }
 
   // ---- desk state: reading, today's call, stop -----------------------------------------

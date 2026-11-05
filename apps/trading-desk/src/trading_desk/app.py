@@ -19,6 +19,7 @@ from . import plans, review
 from .config import Config
 from . import digest, gridmind, mainnet, remote, review_timeline
 from .backtest import Backtests
+from . import provenance
 from .advice import Advisor
 from .watch import Watch, codex_complete
 from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
@@ -499,8 +500,15 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
 
     @app.get("/api/watch")
     def watch_list() -> dict[str, Any]:
-        """本周要看的三件事. Refreshed by `trading_desk watch` every 20 minutes; this route only reads."""
-        return watch.current()
+        """本周要看的三件事. Refreshed by `trading_desk watch` every 20 minutes; this route only reads.
+
+        Each item's `why` is model text; `unverified` lists its numbers that its own source (the calendar
+        event with forecast and previous, or the flash headline) does not back (AI 透明度 #1319)."""
+        data = watch.current()
+        if not data.get("items"):
+            return data
+        return {**data, "items": [{**item, "unverified": provenance.unverified(item.get("why") or "", [item.get("source_title") or "", item.get("detail") or ""])}
+                                  for item in data["items"]]}
 
     @app.get("/api/system")
     def system() -> dict[str, Any]:

@@ -91,6 +91,8 @@
 .desk-watch-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .desk-watch-card{display:grid;gap:3px;align-content:start;padding:8px 10px;border-radius:7px;background:var(--gm-panel-2,#15181e);border:1px solid var(--gm-line,rgba(255,255,255,.08));border-left:3px solid var(--gm-warn,#f0a52e)}
 .desk-watch-card.high{border-left-color:var(--gm-red,#f2495f)}
+.desk-watch-card .w-src{font-size:11px;color:var(--gm-faint,#5d666f);line-height:1.4;overflow-wrap:anywhere}
+.desk-watch-card .w-src .warn{color:var(--gm-warn,#f0a24b)}
 .desk-watch-card.fresh{box-shadow:0 0 0 1px var(--gm-accent,#3fd0e0) inset}
 .desk-watch-card .w-when{display:flex;justify-content:space-between;gap:6px;font-size:11px;color:var(--gm-warn,#f0a52e);font-variant-numeric:tabular-nums}
 .desk-watch-card .w-when span+span{color:var(--gm-faint,#5d666f)}

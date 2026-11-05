@@ -38,7 +38,12 @@ const DeskSources = (() => {
     return {summary, flags, unverified, items, model: ev.model ? `${ev.model.channel || "模型"} · ${when(ev.model.asked_at)}` : ""};
   }
 
-  return {advice, when};
+  function watch(item) {  // #1319: where a 三件事 line comes from; nothing to add when there is no model text
+    if (!item?.why) return {source: "", unverified: []};
+    return {source: [item.source_title, item.detail].filter(Boolean).join(" · ") || "来源缺失", unverified: item.unverified || []};
+  }
+
+  return {advice, watch, when};
 })();
 
 if (typeof module !== "undefined") module.exports = DeskSources;
