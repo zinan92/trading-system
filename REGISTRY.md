@@ -9,6 +9,18 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-06, AI 策略助手的回复带「依据」 · #1348)
+
+- `/trade` 右栏「Park AI 策略助手」的每条回复下面多一行「依据」，说这一轮实际读到了什么：
+  - 模型：哪家、哪个模型、用了几秒；主模型不可用后改用备用的，会写出来；没调用模型（本地规则直接解析）就写「本地规则解析，未调用模型」。
+  - 行情：来源、合约、价格、时间、可信 / 不可信。不可信或没有价格时标红。
+  - 账户：权益、持仓数、挂单数。
+- 只写这一轮读到的，读不到的部分写「未读取」，不拿上一轮的补。
+- 同一份依据也写进 `park_strategy/dashboard_ai_chat.jsonl` 的 `assistant_response` 记录，回头能查。
+- 不含提示词、模型原始输出和任何密钥。解析、Draft、确认、digest 和所有闸门都没改。
+
+_下一步_：合并后部署，在生产页面上看一条真实回复的依据。
+
 ## 现在在哪里(2026-11-06, 一键部署 + 覆盖率 · #1341)
 
 - 部署改成一条命令：`ops/deploy-paper.sh <main 的 sha>`。它会依次：

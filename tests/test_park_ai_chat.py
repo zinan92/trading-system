@@ -545,3 +545,53 @@ def test_snapshot_terminal_event_seals_card_without_mutating_original_snapshot(t
     assert model["snapshots"][0]["sealed"] is True
     original = json.loads((tmp_path / "outputs" / "park_strategy" / "strategy_snapshots.jsonl").read_text())
     assert original["sealed"] is False
+
+
+def test_a_reply_carries_the_sources_this_turn_actually_read(tmp_path):
+    """#1348: every chat reply says which model answered and which market/account facts it saw."""
+
+    service = _service(tmp_path)
+    reply = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")
+    sources = reply["sources"]
+    assert sources["schema_version"] == "dashboard-ai-chat-sources-v1"
+    assert sources["model"] == {"provider": "fake", "model": None, "status": "returned", "elapsed_ms": 1, "fallback_from": None}
+    assert sources["market"] == {"provider": "paper-test-feed", "symbol": None, "price": 4250.0,
+                                 "observed_at": "2026-08-17T03:00:00+00:00", "trusted": True, "fresh": True}
+    assert sources["account"]["equity"] == 10_000.0
+    assert sources["account"]["open_positions"] == 0 and sources["account"]["open_orders"] == 0
+    assert sources["strategy"] == {"active": False}
+    chat_rows = [
+        json.loads(line)
+        for line in (tmp_path / "outputs" / "park_strategy" / "dashboard_ai_chat.jsonl").read_text().splitlines()
+    ]
+    recorded = [row for row in chat_rows if row["event"] == "assistant_response"]
+    assert recorded[-1]["sources"] == sources
+
+
+def test_sources_never_carry_a_previous_turns_model_call(tmp_path):
+    provider = FakeProvider(status="unavailable")
+    service = _service(tmp_path, provider=provider)
+    first = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")
+    assert first["sources"]["model"]["status"] == "unavailable"
+    service._turn = {"provider": {"provider": "stale"}}  # what a previous turn might have left behind
+    second = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")
+    assert second["sources"]["model"]["provider"] == "fake"
+
+
+def test_untrusted_market_is_reported_as_untrusted(tmp_path):
+    service = ParkAiChatService(
+        tmp_path / "outputs",
+        park_user_id="park-dashboard",
+        provider=FakeProvider(),
+        market_reader=lambda: {**MARKET, "trusted": False, "fresh": False, "price": None},
+        account_reader=lambda _root, _cycle: _account(),
+        now=lambda: "2026-08-17T03:00:00+00:00",
+    )
+    market = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")["sources"]["market"]
+    assert market["trusted"] is False and market["fresh"] is False and market["price"] is None
+
+
+def test_sources_hold_no_prompt_raw_output_or_secret(tmp_path):
+    sources = _service(tmp_path).handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆 api_key=sk-test")["sources"]
+    text = json.dumps(sources)
+    assert "sk-test" not in text and "做空" not in text and "snapshot" not in text
