@@ -1,5 +1,68 @@
 # Decision Log
 
+# 2026-11-06 — `docker compose up` for /trade (#1343)
+
+## Decision
+
+- One image (`python:3.13.16-slim-bookworm`) runs three things in the
+  entrypoint, in order: the boot receipt, GridMind (8765) and the desk
+  (8790). If either server exits, the container exits, and compose's
+  `restart: unless-stopped` brings both back together.
+- Ports are published on the host's `127.0.0.1` only. The desk sees no
+  proxy headers, so it treats the browser as local, as a native run does.
+  The desk gained `--host` (env `TRADING_DESK_HOST`, default `127.0.0.1`)
+  so it can bind inside the container.
+- **The datafeed stays on loopback.** `config_loader` refuses a
+  non-loopback `TRADING_ORCHESTRATOR_DATAFEED_URL`. Compose does not route
+  around it: no `host.docker.internal`, no in-container forwarder.
+  - A plain container therefore shows 「黄金行情中断，已停止开新仓」.
+  - On Linux, `compose.host-network.yaml` shares the host's network, so
+    the host's `127.0.0.1:8100` is used as written and both servers bind
+    127.0.0.1.
+  - No gate was changed.
+- The runtime user is `park` (uid 10001), and `/app` stays read-only for
+  it. `outputs/` is a symlink into the `/data` volume; it is untracked, so
+  the tree stays clean. `PYTHONPYCACHEPREFIX=/tmp/pycache` lets the
+  receipt's compile probe run.
+- The build refuses a context with uncommitted tracked changes, which
+  would only boot into "source tree dirty". `.dockerignore` lists only
+  untracked or ignored things, and a test checks no tracked file is left
+  out.
+- No key, passcode or `.env` enters the image. Nautilus is opt-in with
+  `WITH_NAUTILUS=1`; without it the product is read-only.
+
+## Gotchas
+
+- A git worktree's `.git` is a file pointing elsewhere: build from a real
+  clone, or git inside the image cannot read the commit.
+- With `/app` owned by root, the receipt's `compileall` probe fails with
+  return code 1 and an empty stderr. That is the read-only tree, not a
+  missing import; `PYTHONPYCACHEPREFIX` fixes it.
+- Ports 8790/8765 clash with a native run on the same machine. Verify on
+  other host ports (`docker run -p 127.0.0.1:28790:8790 …`).
+- A transient `deb.debian.org … does not have a Release file` failed one
+  build; keep new `ENV` lines after the apt layer so it stays cached.
+
+## Verification
+
+- `tests/test_docker_files.py` (6) pins:
+  - the exact base image;
+  - 127.0.0.1-only ports;
+  - no secret or env file in the image and a non-root user;
+  - no tracked file ignored;
+  - no datafeed indirection, and the host-network override binding
+    loopback;
+  - the receipt written before the dashboard starts.
+- Local colima build (718 MB), run on 28790/28765:
+  - receipt `pass` at the image's commit, tree clean;
+  - `/trade`, `/static/web/web.js`, `/api/health` and `/api/watch` all
+    200;
+  - runs as `park`;
+  - with no datafeed, the read model says market `blocked`, untrusted,
+    and the page shows the stop-new-entries banner.
+- `docker compose -f compose.yaml -f compose.host-network.yaml config` is
+  valid; the host-network run itself was not tried (macOS).
+
 # 2026-11-06 — AI 策略助手的回复带「依据」 (#1348)
 
 ## Decision

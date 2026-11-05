@@ -59,6 +59,7 @@ make desk                     # terminal 2 → http://127.0.0.1:8790/trade
 ```bash
 git clone https://github.com/zinan92/trading-system.git && cd trading-system
 docker compose up --build     # → http://127.0.0.1:8790/trade  (GridMind: :8765)
+docker compose down           # stop; data stays in the trading-data volume
 ```
 
 - One image runs the boot receipt, GridMind and the desk. Data (receipts,
@@ -67,10 +68,15 @@ docker compose up --build     # → http://127.0.0.1:8790/trade  (GridMind: :876
 - Ports are published on your machine's `127.0.0.1` only. Nothing is
   reachable from the network, so the desk treats your browser as local,
   the same as a native run.
-- Market data comes from [zinan92/datafeed](https://github.com/zinan92/datafeed)
-  running on the host (`DATAFEED_URL`, default
-  `http://host.docker.internal:8100`). Without it the chart says
-  "unavailable" and new entries stay blocked. No other source stands in.
+- Market data must come from [zinan92/datafeed](https://github.com/zinan92/datafeed)
+  on a loopback URL; the console refuses any other address.
+  - Inside a plain container nothing listens on `127.0.0.1:8100`. The page
+    says 「黄金行情中断，已停止开新仓」 and no other source stands in.
+  - On **Linux**, run
+    `docker compose -f compose.yaml -f compose.host-network.yaml up --build`.
+    The container then shares the host's loopback, so a datafeed running
+    on the host is used as is.
+  - On macOS, run natively (Quick start above) for live charts.
 - `WITH_NAUTILUS=1 docker compose up --build` adds `nautilus_trader`
   (Testnet orders, Paper ledger, grid backtests). Without it the product
   is read-only.
