@@ -74,6 +74,17 @@ def test_timeline_keeps_the_ledger_timestamps_and_says_it_ended_open(paper: Path
     assert data["missing"] == []
 
 
+def test_a_close_that_settled_nothing_more_does_not_say_zero(paper: Path) -> None:
+    write_rows(paper / "park_strategy" / "executions.jsonl", [
+        {"event": "terminal_paused", "strategy_session_id": SESSION, "recorded_at": SEAL, "terminal_key": f"{SESSION}:revision-1:lower_boundary_invalidated",
+         "exit_fills": [], "result": {"reconciliation": {"status": "ok", "counts": {"open_positions": 0}}}},
+        {"event": "terminal_close_completed", "recorded_at": SEAL, "terminal_key": f"{SESSION}:revision-1:lower_boundary_invalidated", "exits": 0, "exit_fills": [], "open_positions": 0},
+    ])
+    data = rt.timeline(paper, f"paper:{SESSION}", bars=no_bars, judgments=[])
+    assert data["events"][-1]["title"] == "已全部平仓"
+    assert data["result"]["ended_flat"] is True
+
+
 def test_exit_stamped_at_the_seal_is_shown_when_it_settled(paper: Path) -> None:
     fills = rt.timeline(paper, f"paper:{SESSION}", bars=no_bars, judgments=[])["fills"]
     backdated = [f for f in fills if f["backdated"]]

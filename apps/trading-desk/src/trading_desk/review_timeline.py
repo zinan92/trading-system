@@ -207,7 +207,7 @@ def _paper_timeline(root: Path, session: str) -> dict[str, Any] | None:
         title = f"{reason}，策略被标记为结束" + (f"，当时还有 {open_at_seal} 笔未平" if open_at_seal else "")
         events.append({"ts": seal.get("recorded_at"), "kind": "seal", "title": title, "source": "park_strategy/executions.jsonl", "record": {"event": "terminal_paused", "open_positions": open_at_seal, "reconciliation": (result_at_seal.get("reconciliation") or {}).get("status")}})
     if done:
-        events.append({"ts": done.get("recorded_at"), "kind": "closed", "title": f"{done.get('exits')} 笔持仓全部结算", "source": "park_strategy/executions.jsonl", "record": {"event": "terminal_close_completed", "exits": done.get("exits")}})
+        events.append({"ts": done.get("recorded_at"), "kind": "closed", "title": f"{done.get('exits')} 笔持仓全部结算" if done.get("exits") else "已全部平仓", "source": "park_strategy/executions.jsonl", "record": {"event": "terminal_close_completed", "exits": done.get("exits")}})
     recorded = _latest(_json(base / "inputs" / f"{stem}.json"))
     market_events = recorded.get("market_events") or []
     if not market_events:

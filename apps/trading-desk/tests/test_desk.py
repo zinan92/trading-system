@@ -490,6 +490,8 @@ def test_tunnel_requests_need_the_passcode_and_local_ones_do_not(config, sources
     tunnel = {"cf-connecting-ip": "203.0.113.9"}
     assert client.get("/api/health").status_code == 200  # the Mac itself
     assert client.get("/api/health", headers=tunnel).status_code == 401
+    assert client.get("/api/review/runs", headers=tunnel).status_code == 401
+    assert client.get("/api/review/timeline", params={"run": "paper:x"}, headers=tunnel).status_code == 401
     assert client.get("/", headers=tunnel, follow_redirects=False).headers["location"] == "/login"
     assert client.post("/login", data={"passcode": "wrong"}, headers=tunnel).status_code == 401
     ok = client.post("/login", data={"passcode": "orchid-47"}, headers=tunnel, follow_redirects=False)
