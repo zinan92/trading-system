@@ -18,10 +18,12 @@ mkdir -p "$TRADING_ORCHESTRATOR_OUTPUT_ROOT" "$(dirname "$TRADING_DESK_DB")" "$T
 python -m pipelines.paper_predeploy_gate --python "$(command -v python)" --json | tail -c 400 || true
 echo
 
-# Both bind inside the container only; compose publishes them on the host's 127.0.0.1.
-python -m pipelines.dashboard_server --host 0.0.0.0 --port 8765 &
+# Default: bind every interface of the container; compose publishes them on the host's 127.0.0.1
+# only. With host networking (compose.host-network.yaml) BIND_HOST is 127.0.0.1.
+bind="${BIND_HOST:-0.0.0.0}"
+python -m pipelines.dashboard_server --host "$bind" --port 8765 &
 dashboard=$!
-python -m trading_desk serve --host 0.0.0.0 --port 8790 &
+python -m trading_desk serve --host "$bind" --port 8790 &
 desk=$!
 trap 'kill "$dashboard" "$desk" 2>/dev/null || true' TERM INT
 set +e

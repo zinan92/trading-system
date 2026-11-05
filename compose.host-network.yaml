@@ -1,0 +1,9 @@
+# Linux only: `docker compose -f compose.yaml -f compose.host-network.yaml up --build` (#1343)
+# The container shares the host's network, so 127.0.0.1:8100 is the datafeed on the host and the
+# loopback-only market rule holds as written. Both servers bind 127.0.0.1, as a native run does.
+services:
+  trading:
+    network_mode: host
+    ports: !reset []
+    environment:
+      BIND_HOST: 127.0.0.1

@@ -37,9 +37,12 @@ def test_dockerignore_leaves_out_no_tracked_file() -> None:
     assert hits == []
 
 
-def test_market_data_has_one_configured_source_and_no_stand_in() -> None:
-    assert COMPOSE.count("${DATAFEED_URL:-http://host.docker.internal:8100}") == 2
-    assert "fallback" not in COMPOSE.lower()
+def test_market_data_stays_on_loopback_and_has_no_stand_in() -> None:
+    # config_loader refuses a non-loopback datafeed URL; compose must not route around it.
+    for text in (COMPOSE, (ROOT / "compose.host-network.yaml").read_text(encoding="utf-8")):
+        assert "DATAFEED_URL" not in text and "host.docker.internal" not in text and "fallback" not in text.lower()
+    host = (ROOT / "compose.host-network.yaml").read_text(encoding="utf-8")
+    assert "network_mode: host" in host and "BIND_HOST: 127.0.0.1" in host
 
 
 def test_the_desk_binds_loopback_unless_told_otherwise() -> None:

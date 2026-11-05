@@ -11,16 +11,12 @@ services:
       - "127.0.0.1:8790:8790"   # 交易台 /trade, /desk
       - "127.0.0.1:8765:8765"   # GridMind console
     environment:
-      # Market data: zinan92/datafeed on the host. Absent → the chart says so and new entries stay
-      # blocked; no other source stands in.
-      TRADING_ORCHESTRATOR_DATAFEED_URL: "${DATAFEED_URL:-http://host.docker.internal:8100}"
-      TRADING_DESK_DATAFEED_URL: "${DATAFEED_URL:-http://host.docker.internal:8100}"
-      # Optional news rail (any service answering /api/news). Absent → "no source".
-      TRADING_DESK_INTEL_URL: "${INTEL_URL:-http://host.docker.internal:8001}"
+      # Market data must come from a loopback URL (services/config_loader.py refuses anything else),
+      # so the default 127.0.0.1:8100 inside this container finds no datafeed: the chart says
+      # "unavailable" and new entries stay blocked. On Linux, compose.host-network.yaml shares the
+      # host's loopback so a datafeed running there is used as is.
       TRADING_DESK_HL_ACCOUNT: "${HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS:-}"
       HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS: "${HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS:-}"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - trading-data:/data   # receipts, ledgers, read models, desk.db
     restart: unless-stopped
