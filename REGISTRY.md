@@ -9,6 +9,16 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 前端组件化第一块 · #1325)
+
+- 新增 `apps/web/`：Vite 8 + React 19 + TypeScript 7，打包成一个 `static/web/web.js`（gzip 73 KB），跟源码一起提交；交易台照旧是 Python 服务，不需要 node 才能跑。
+- 旧页面在要换的位置写一个 `data-island` 占位，`web.js` 自动把 React 组件挂上去；占位被旧代码换掉时组件自动卸载、定时器停掉。
+- 第一批换掉三块：「本周要看的三件事」、开仓前回测框、AI 建议下面的「依据」。`gm-backtest.js`、`gm-ai-sources.js` 删掉，测试搬到 Vitest。
+- 这几个组件只读（GET），没有按钮；有一条测试专门拦 `method:`、`/api/execute`、`dashboard-control`。下单和控制面板放到 #1329 最后搬，请求体逐字节对比。
+- `make test-web` 跑类型检查、Vitest、重新打包，打出来和提交的不一样就失败；已加进 `make test` 和 CI（CI 改用 Node 22）。
+
+_下一步_：#1326 复盘、#1327 今天的流程搬成组件。
+
 ## 现在在哪里(2026-11-05, AI 透明度上线 · #1317)
 
 - 生产 trading-system `d4ffa4c`：空闲检查通过，gate 在这个 sha 上 pass，只重启了交易台。

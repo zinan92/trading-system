@@ -1,5 +1,53 @@
 # Decision Log
 
+# 2026-11-05 — React + TypeScript islands on /trade (#1325)
+
+## Decision
+
+- `apps/web/` (Vite 8, React 19, TypeScript 7 strict) builds one IIFE,
+  `apps/trading-desk/src/trading_desk/static/web/web.js`. The bundle is
+  committed, so the desk still deploys as a Python service with no node at
+  runtime. `make test-web` rebuilds and fails if the committed file differs.
+- Islands, not a rewrite: legacy code writes `<div data-island="name"
+  data-props="{json}">`. A MutationObserver in `bridge.tsx` mounts the
+  component, re-renders when `data-props` changes, and unmounts when the
+  placeholder leaves the DOM, which stops its timers.
+- First islands: WatchPanel (三件事), BacktestBox (开仓前回测) and AiSources
+  (AI 依据). `gm-backtest.js` and `gm-ai-sources.js` are deleted. Their
+  node-subprocess pytest cases are ported to Vitest.
+- Islands are GET-only. `api.ts` has no POST helper, and a Vitest source check
+  rejects `method:`, `<button`, `/api/execute`, `dashboard-control` and
+  `/api/advice/refresh`. Order and control panels move last (#1329), with
+  byte-identical request bodies.
+- `web/web.js` is part of the content-hash `ASSET_VERSION`, and
+  `package-data` includes `static/web/*`.
+
+## Gotchas
+
+- Vite library mode does not replace `process.env.NODE_ENV`, so the build
+  defines it. The define is build-only: React's `act` (used by Testing
+  Library) refuses to run on the production build.
+- The legacy AI box is rebuilt every minute (`innerHTML`), so the AiSources
+  island is remounted each time. The open state is kept in a module map keyed
+  by judgment id. Component state alone would fold it every minute.
+- `?raw` imports (vite/client types) let a test read component source without
+  `@types/node`.
+- Vite 8 needs Node ^20.19 or >=22.12, so CI moved from Node 20 to 22.
+- If `web.js` fails to load, the three blocks are empty rather than stale. All
+  three are reference-only.
+
+## Verification
+
+- `make test-web`: typecheck OK; 21 Vitest tests pass; the rebuild is
+  identical to the committed file.
+- Desk suite: 117 passed (9 cases moved to Vitest; 1 new shell/bundle test).
+- Dev desk (:18790/trade):
+  - The 三件事 island shows 3 cards with source lines.
+  - The AI 依据 island mounts with evidence.
+  - After opening 依据, the minute refresh 77 s later replaced the element,
+    and it was still open.
+  - A backtest placeholder mounted and polled.
+
 # 2026-11-05 — 三件事 show their source and unbacked numbers (#1319)
 
 ## Decision
