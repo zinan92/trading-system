@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from . import plans, review
 from .config import Config
-from . import digest, gridmind, mainnet, remote
+from . import digest, gridmind, mainnet, remote, review_timeline
 from .advice import Advisor
 from .watch import Watch, codex_complete
 from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
@@ -346,6 +346,18 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         ai_rows = [r for r in rows if r.get("author") == "ai"][:100]
         return {"items": park_rows, "ai_items": ai_rows, "review_hours": config.review_hours,
                 "summary": tally(park_rows), "ai_summary": tally(ai_rows)}
+
+    @app.get("/api/review/runs")
+    def review_runs() -> dict[str, Any]:
+        return {"runs": review_timeline.runs(config.paper_output), "score": review_timeline.scoreboard(store.judgments(None, limit=5000, author=None))}
+
+    @app.get("/api/review/timeline")
+    def review_run(run: str) -> dict[str, Any]:
+        payload = review_timeline.timeline(config.paper_output, run, bars=sources.testnet_bars_between,
+                                           judgments=store.judgments(None, limit=5000, author=None))
+        if payload is None:
+            raise HTTPException(404, "没有这一轮的记录")
+        return payload
 
     @app.post("/api/notes")
     def add_note(body: NoteIn) -> dict[str, Any]:

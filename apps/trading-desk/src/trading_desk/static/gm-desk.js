@@ -166,7 +166,7 @@ if (typeof document !== "undefined") (() => {
     info: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8v.5"></path></svg>',
   };
   ICONS.warn = ICONS.bad; ICONS.wait = ICONS.idle;
-  const TABS = {positions: "持仓", orders: "委托", fills: "成交", review: "复盘", history: "收益曲线", supervisor: "运行监督", shadows: "影子策略"};
+  const TABS = {positions: "持仓", orders: "委托", fills: "成交", review: "交易回看", history: "收益曲线", supervisor: "运行监督", shadows: "影子策略"};
 
   function mountStatus(wrap, rail) {
     // First thing on the page, above 本周三件事: what is happening now and the one next step.
