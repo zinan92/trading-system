@@ -5,6 +5,7 @@ export interface KlinePayload {bars: unknown[]; symbol: string; timeframe: strin
 export interface KlineChart {
   candleSeries?: {applyOptions(options: Record<string, unknown>): void};
   setPayload(payload: KlinePayload, extras: {markers: unknown[]; priceLines: unknown[]}): void;
+  destroy(): void;
 }
 
 export interface StandardKlineGlobal {

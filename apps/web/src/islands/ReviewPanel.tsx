@@ -31,6 +31,8 @@ function Chart({data}: {data: Timeline}) {
     });
   }, [data]);
 
+  useEffect(() => () => { chart.current?.destroy(); chart.current = null; }, []);  // a filter with no runs unmounts the chart
+
   return <div ref={host}>{missing ? "K 线组件没有加载" : null}</div>;
 }
 
