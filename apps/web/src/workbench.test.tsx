@@ -20,7 +20,7 @@ test("starts one comparison, follows it with GETs and shows the table", async ()
   render(<Workbench />);
   fireEvent.change(screen.getByLabelText("品种"), {target: {value: "BTC"}});
   await act(async () => { fireEvent.click(screen.getByRole("button", {name: "开始回测"})); await vi.advanceTimersByTimeAsync(0); });
-  expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({asset: "BTC", strategy: "dca", variants: [{amount_usdt: 100, interval_hours: 24}, {amount_usdt: 100, interval_hours: 168}]});
+  expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({asset: "BTC", strategy: "dca", variants: [{amount_usdt: 100, interval_hours: 24}, {amount_usdt: 25, interval_hours: 6}]});
   expect(screen.getByRole("button", {name: "回测中…"})).toBeTruthy();
   await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS); });
   expect(screen.getByText("每 7 天买 100 USDT")).toBeTruthy();

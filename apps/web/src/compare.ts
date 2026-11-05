@@ -30,7 +30,7 @@ export interface CompareResult {
 }
 
 export const ASSETS: Array<[string, string]> = [["XAU", "黄金"], ["BTC", "BTC"]];
-export const DEFAULT_VARIANTS: DcaParams[] = [{amount_usdt: 100, interval_hours: 24}, {amount_usdt: 100, interval_hours: 168}];
+export const DEFAULT_VARIANTS: DcaParams[] = [{amount_usdt: 100, interval_hours: 24}, {amount_usdt: 25, interval_hours: 6}];  // the same 700 USDT a week, spread differently
 export const MAX_VARIANTS = 3;
 
 export const variantLabel = (p: DcaParams) =>
