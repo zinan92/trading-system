@@ -191,10 +191,12 @@ class Executor:
             "range": [entry.get("lower"), entry.get("upper")] if entry else plan["range"],
             "orders": [{"price": price, "notional": notional} for price in rungs],
             "max_loss": risk.get("theoretical_max_loss"),
+            "plan": draft.get("plan") if ready else None,
         }
 
     def execute_gold(self, plan: dict[str, Any], *, shown_max_loss: float | None) -> dict[str, Any]:
         fresh = self.preview_gold(plan)
+        fresh.pop("plan", None)
         if not fresh["execution_ready"]:
             raise ExecutionRefused("预览没有通过风险检查，没有下单。", {"blockers": fresh["blockers"]})
         if shown_max_loss is not None and fresh["max_loss"] is not None and float(fresh["max_loss"]) > float(shown_max_loss) * 1.05:
