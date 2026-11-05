@@ -36,6 +36,9 @@ RUN useradd --create-home --uid 10001 park \
  && ln -s /data/outputs /app/outputs \
  && chown -R park /data /app/data
 USER park
+# /app stays read-only for the runtime user; the boot receipt's compile probe writes bytecode under
+# PYTHONPYCACHEPREFIX instead of next to the sources.
+ENV PYTHONPYCACHEPREFIX=/tmp/pycache
 
 EXPOSE 8765 8790
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD curl -fsS http://127.0.0.1:8790/api/health || exit 1
