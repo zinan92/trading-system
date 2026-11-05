@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from . import plans, review
 from .config import Config
-from . import digest, gridmind, mainnet, remote, review_timeline
+from . import digest, gridmind, mainnet, open_api, remote, review_timeline
 from .backtest import Backtests, Busy, Comparisons
 from . import provenance
 from .advice import Advisor
@@ -91,6 +91,9 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     app = FastAPI(title="Park 交易台", docs_url=None, redoc_url=None)
     remote.install(app, config.remote_passcode)
     gridmind.install(app, config.dashboard_url)
+    # Installed last so it runs first: /api/v1 is token-gated and read-only (#1344).
+    open_api.install(app, open_api.Tokens(config.api_tokens),
+                     read_model=lambda: http_json(f"{config.dashboard_url}/api/trading-system/read-model", None, timeout=10))
 
     def asset_or_404(key: str) -> dict[str, Any]:
         asset = store.asset(key.upper())

@@ -108,6 +108,49 @@ file.
 - **Secrets never enter git.** `.gitignore` + gitleaks in `make gitleaks`;
   keys live in `0600` files referenced from `.env`.
 
+## Open API & MCP (read-only)
+
+Other tools can read what the desk knows. They can never place, approve,
+stop or change anything.
+
+```bash
+python -m trading_desk token create notebook   # prints the token once; only its SHA-256 is kept (0600)
+python -m trading_desk token list
+python -m trading_desk token revoke notebook
+
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8790/api/v1/status
+```
+
+`/api/v1/<path>` is a GET-only, token-gated mirror of a fixed list of
+desk routes. It answers exactly what the page gets.
+
+| Path | What |
+|---|---|
+| `status` | Paper summary: strategy active, open orders and positions, PnL, market trust |
+| `assets`, `desk/{asset}`, `bars/{asset}?tf=`, `news/{asset}` | the desk per asset |
+| `watch`, `advice` | this week's three things, AI advice with sources |
+| `review/runs?asset=&days=`, `review/timeline?run=` | past runs |
+| `backtest/compare/{key}`, `backtest/{key}`, `system` | backtest results, service health |
+
+The API answers:
+
+- **405** to anything but GET.
+- **401** without a valid token. A token is required on this Mac too.
+- **404** for any path not in the table, even one the desk has.
+
+Through the phone tunnel, a valid token passes the passcode gate for
+`/api/v1` only.
+
+**MCP** — `python -m trading_desk.mcp` (stdio) offers one read tool per
+row above. The desk enforces every permission; the MCP side holds none.
+For Claude Code:
+
+```bash
+claude mcp add park-trading-desk \
+  -e TRADING_DESK_API_TOKEN=<token> -e TRADING_DESK_API_URL=http://127.0.0.1:8790 \
+  -e PYTHONPATH=$PWD/apps/trading-desk/src -- $PWD/.venv/bin/python -m trading_desk.mcp
+```
+
 ## Day-to-day
 
 ```bash

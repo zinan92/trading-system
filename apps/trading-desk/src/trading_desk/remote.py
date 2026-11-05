@@ -68,6 +68,10 @@ async def _change_passcode(request: Request, passcode_file: Path, passcode: str 
 def install(app, passcode_file: Path) -> None:
     @app.middleware("http")
     async def gate(request: Request, call_next):
+        # The read-only open API (#1344) already checked a bearer token and only ever reaches GET
+        # routes on its allow-list; it never gets a session cookie and never reaches /login.
+        if request.scope.get("desk.api_token"):
+            return await call_next(request)
         if not is_remote(request):
             if request.url.path == "/passcode":
                 return await _change_passcode(request, passcode_file, _passcode(passcode_file))

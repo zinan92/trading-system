@@ -9,6 +9,18 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-06, 只读开放 API + MCP · #1344)
+
+- 别的工具（另一个 agent、笔记本、Claude）现在可以读交易台。
+  - 读得到：纸面盘状态、本周三件事、AI 建议和依据、复盘、回测结果。
+  - 下单、停止、修改都做不到。
+- `/api/v1/…`：只接受 GET，必须带 token（本机也要），只开放一张固定清单。清单外的地址一律 404，非 GET 一律 405。
+- token：`python -m trading_desk token create <名字>`，只显示一次；文件里只存哈希，权限 0600。
+- MCP：`python -m trading_desk.mcp` 提供 11 个只读工具，没有一个能写。README 里有接到 Claude Code 的命令。
+- 生产部署（2026-11-06）：b72e06a（#1338 定投对比 + #1339 黄金网格对比），用新的 `ops/deploy-paper.sh` 部署，只重启了交易台。
+  - 生产页面上 BTC 定投（每天 100 USDT）中位 −1.21%，最差 −10.96%。
+  - 黄金网格两组的数字和 dev 一致。
+
 ## 现在在哪里(2026-11-06, Docker 一键安装 · #1343)
 
 - `docker compose up --build` 一条命令起 `/trade`：同一个镜像里先写开机回执，再起 GridMind（8765）和交易台（8790）。端口只开在本机 127.0.0.1。

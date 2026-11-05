@@ -1,5 +1,93 @@
 # Decision Log
 
+# 2026-11-06 — Read-only open API and MCP (#1344)
+
+## Decision
+
+- `/api/v1/<path>` mirrors a fixed allow-list of the desk's own GET routes
+  (`open_api.ALLOWED`) plus one route of its own, `status`.
+  - A passing request is rewritten to the `/api/` route, so the answer is
+    the page's own.
+  - It has its own middleware, installed last so it runs first. The order
+    of checks: method (405), then token (401), then allow-list (404).
+- Nothing that writes is listed, including GETs that write: `/api/review`
+  resolves due judgments when read, so it is left out (`review/runs` and
+  `review/timeline` are in). Mainnet, accounts and the GridMind proxy
+  paths are left out too.
+- `status` is a summary of the Paper read model only: strategy active and
+  status, open and unknown orders, positions, PnL, market trust. It
+  carries no orders, fills, account ids or control events. If the
+  dashboard is down it answers 503 and never guesses a state.
+- Tokens: `python -m trading_desk token create|list|revoke`.
+  - Each token is `tsd_` plus 32 random bytes, printed once.
+  - The file stores name → SHA-256 and is written 0600. A file readable
+    by others makes every token invalid.
+  - The check is constant-time against every stored hash. A token is
+    required even from this Mac.
+- **Phone passcode gate change:** a request the open API has already
+  admitted (it carries an internal scope marker, which no client can set)
+  skips the passcode gate. The gate is unchanged for every other path, and
+  a remote request without a token gets 401 from the API, never the login
+  page.
+- MCP: `python -m trading_desk.mcp` is a hand-rolled stdio JSON-RPC server
+  (initialize, ping, tools/list, tools/call), so there is no new
+  dependency.
+  - It has 11 read tools, all marked `readOnlyHint`, each one GET on
+    `/api/v1`.
+  - Arguments are checked against each tool's schema (enum, pattern) before
+    any request.
+  - Without a token, every tool says how to make one.
+
+## Gotchas
+
+- `/api/assets` has both GET and POST. The allow-list matches the path, and
+  the 405 check is what keeps the POST out. A test pins both.
+- `POST /api/backtest/compare` (starting a backtest) is deliberately not
+  reachable. The MCP tool only reads a result by key.
+- The dev dashboard exits when the checkout's source changes (code-reload
+  guard). An end-to-end `status` check against dev needs it restarted, or
+  a read-only GET against production's read model.
+
+## Verification
+
+- `tests/test_open_api.py` (13 cases, 23 with parameters):
+  - no, wrong, revoked or exposed-file token → 401;
+  - every non-GET method → 405;
+  - 14 off-list paths → 404;
+  - `assets` and `watch` equal the page's answer;
+  - `review/runs?days=5` still 422;
+  - `status` leaks nothing else, and 503 when down;
+  - remote with a token → 200, remote without a token → 401, and the token
+    opens nothing outside v1;
+  - every allow-listed pattern reaches a GET route.
+- `tests/test_mcp.py` (7):
+  - every tool's path is on the allow-list;
+  - no write words in tool names;
+  - arguments are rejected before any request;
+  - HTTP errors become tool errors;
+  - a real subprocess over stdio sends `Bearer` to `/api/v1/status`.
+- Desk suite: 145 passed.
+- End to end, on a scratch token file:
+  - desk on 18791: no token → 401, POST → 405, `/api/v1/execute` → 404;
+  - MCP `watch_this_week` returned this week's items;
+  - MCP `paper_status` against production's read model (a read-only GET)
+    returned strategy inactive, 0 orders and positions, gold OKX trusted.
+  - The token was revoked afterwards.
+
+# 2026-11-06 — Deploy record: b72e06a (#1338, #1339)
+
+- Deployed with `ops/deploy-paper.sh b72e06a` from PR #1342's branch, its
+  first real run. It checked that b72e06a is main's head and that Paper
+  was idle, fast-forwarded production, saw the gate pass at b72e06a,
+  restarted only the desk, and got 200 from `/trade`,
+  `/static/web/web.js` and `/api/watch`.
+- Production 回测 tab:
+  - BTC DCA, BTC-USDT-SWAP 2026-05-09 → 2026-11-05, 25 windows:
+    100 USDT daily, median −1.21%, worst −10.96%, best +16.15%;
+    25 USDT every 6 h, median −1.42%.
+  - Gold grid, from the page: ±3% median +0.01%, edge broken 52%; ±5%
+    median +0.10%, edge broken 8%. Identical to dev.
+
 # 2026-11-06 — `docker compose up` for /trade (#1343)
 
 ## Decision
