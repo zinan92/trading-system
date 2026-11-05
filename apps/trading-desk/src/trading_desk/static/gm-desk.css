@@ -199,6 +199,7 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
 .desk-review-head{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
 .desk-review-head label{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted,#aab1bb)}
 .desk-review-head select{min-height:40px;max-width:100%;background:var(--gm-panel,#131519);color:inherit;border:1px solid var(--rule-strong,#2c3139);border-radius:8px;padding:0 10px;font-size:14px}
+.desk-review-filters{display:flex;flex-wrap:wrap;gap:8px 14px}
 .desk-review-source{font-size:12px;color:#d9a35b}
 .desk-review-kpis{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:baseline}
 .desk-review-kpis small{display:block;font-size:12px;color:var(--muted,#aab1bb)}

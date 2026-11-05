@@ -156,3 +156,26 @@ def test_reading_writes_nothing(paper: Path) -> None:
     rt.runs(paper)
     rt.timeline(paper, f"paper:{SESSION}", bars=no_bars, judgments=[])
     assert {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in paper.rglob("*") if p.is_file()} == before
+
+
+def test_filter_by_asset_and_period_keeps_runs_and_score_in_step() -> None:
+    from datetime import datetime, timezone
+    now = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
+    runs = [{"id": "a", "asset": "XAU", "started_at": "2026-11-01T00:00:00+00:00", "ended_at": "2026-11-02T00:00:00+00:00"},
+            {"id": "b", "asset": "BTC", "started_at": "2026-09-10T00:00:00+00:00", "ended_at": "2026-09-11T00:00:00+00:00"},
+            {"id": "c", "asset": "XAU", "started_at": "2026-09-20T00:00:00+00:00", "ended_at": "2026-10-20T00:00:00+00:00"}]
+    rows = [{"asset": "XAU", "author": "ai", "outcome": "hit", "created_at": "2026-11-03T00:00:00+00:00"},
+            {"asset": "BTC", "author": "ai", "outcome": "miss", "created_at": "2026-11-03T00:00:00+00:00"},
+            {"asset": "XAU", "author": "park", "outcome": "miss", "created_at": "2026-08-01T00:00:00+00:00"},
+            {"asset": "ETH", "author": "ai", "outcome": None, "created_at": "nope"}]
+    every = rt.filtered(runs, rows, asset=None, days=0, now=now)
+    assert [r["id"] for r in every["runs"]] == ["a", "b", "c"] and every["score"]["ai"]["total"] == 3
+    assert every["assets"] == ["BTC", "ETH", "XAU"] and every["filter"] == {"asset": None, "days": 0, "since": None}
+    week = rt.filtered(runs, rows, asset="xau", days=7, now=now)
+    assert [r["id"] for r in week["runs"]] == ["a"]
+    assert week["score"]["ai"] == {"total": 1, "hit": 1, "miss": 0, "even": 0, "unverifiable": 0, "pending": 0} and week["score"]["park"]["total"] == 0
+    assert week["assets"] == ["BTC", "ETH", "XAU"] and week["filter"]["since"] == "2026-10-29T12:00:00+00:00"
+    month = rt.filtered(runs, rows, asset="XAU", days=30, now=now)
+    assert [r["id"] for r in month["runs"]] == ["a", "c"]  # c ended inside the period
+    with pytest.raises(ValueError):
+        rt.filtered(runs, rows, asset=None, days=5, now=now)

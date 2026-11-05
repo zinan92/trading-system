@@ -358,8 +358,10 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
                 "summary": tally(park_rows), "ai_summary": tally(ai_rows)}
 
     @app.get("/api/review/runs")
-    def review_runs() -> dict[str, Any]:
-        return {"runs": review_timeline.runs(config.paper_output), "score": review_timeline.scoreboard(store.judgments(None, limit=5000, author=None))}
+    def review_runs(asset: str | None = None, days: int = 0) -> dict[str, Any]:
+        if days not in review_timeline.PERIODS:
+            raise HTTPException(422, f"days 只能是 {', '.join(map(str, review_timeline.PERIODS))}")
+        return review_timeline.filtered(review_timeline.runs(config.paper_output), store.judgments(None, limit=5000, author=None), asset=asset, days=days)
 
     @app.get("/api/review/timeline")
     def review_run(run: str) -> dict[str, Any]:

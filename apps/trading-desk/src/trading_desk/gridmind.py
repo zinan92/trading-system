@@ -47,9 +47,8 @@ WRITE_PATHS = frozenset({
 })
 SHELL = ('<link rel="stylesheet" href="/static/gm-desk.css?v={v}">'
          '<script src="/static/gm-desk.js?v={v}" defer></script>'
-         '<script src="/static/gm-review.js?v={v}" defer></script>'
          '<script src="/static/web/web.js?v={v}" defer></script>')  # React islands, built from apps/web (#1325)
-ASSET_FILES = ("gm-desk.js", "gm-desk.css", "gm-review.js", "web/web.js")
+ASSET_FILES = ("gm-desk.js", "gm-desk.css", "web/web.js")
 
 
 def _asset_version() -> str:
