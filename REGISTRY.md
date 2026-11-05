@@ -9,6 +9,16 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, CI 跑 Nautilus 真实运行时测试 · #1299)
+
+- CI 的 root 测试现在会跑 `tests/test_dualtrack_nautilus_runtime_integration.py` 的 9 个测试，
+  不再跳过：root 从 `3896 passed, 10 skipped` 变成 `3905 passed, 1 skipped`，和本地一致。
+- 只改了 `.github/workflows/test.yml` 的 Root suite 一步，没动门禁，没加证据文件，没碰生产路径。
+- 剩下 1 个跳过按本地结果判断是 `tests/test_dualtrack_nautilus_cutover_integration.py`（CI 日志不列名字）。
+  它是过期测试，不是缺证据：补上 preflight 后依次卡在 heartbeat、账户快照、品种不一致。
+
+_下一步_：修复或退役这个 cutover 测试，另开任务处理。
+
 ## 现在在哪里(2026-11-05, CI 与仓库整理 · #1297)
 
 - 每个 PR 和每次推到 main 都会在 GitHub Actions 上从干净的克隆跑一遍五组测试
