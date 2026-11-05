@@ -80,6 +80,9 @@ docker compose down           # stop; data stays in the trading-data volume
 - `WITH_NAUTILUS=1 docker compose up --build` adds `nautilus_trader`
   (Testnet orders, Paper ledger, grid backtests). Without it the product
   is read-only.
+- Read-only API token inside the container:
+  `docker compose exec trading python -m trading_desk token create notebook`.
+  It is stored (hash only) in the `trading-data` volume.
 - No key, passcode or `.env` is copied into the image. Build from a
   committed tree: the boot receipt binds the exact commit, and the build
   stops on uncommitted tracked changes.

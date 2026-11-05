@@ -40,6 +40,12 @@
 
 ## Gotchas
 
+- In Docker, `docker compose exec` skips the entrypoint, so the image
+  itself sets `PYTHONPATH` and `TRADING_DESK_API_TOKENS=/data/desk/api-tokens.json`
+  (in the volume). Without that, `token create` inside the container
+  fails to import the desk, or writes the token file into the image
+  layer, where the next rebuild loses it.
+
 - `/api/assets` has both GET and POST. The allow-list matches the path, and
   the 405 check is what keeps the POST out. A test pins both.
 - `POST /api/backtest/compare` (starting a backtest) is deliberately not
