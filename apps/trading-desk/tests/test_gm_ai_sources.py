@@ -55,3 +55,9 @@ def test_an_old_call_without_evidence_says_so() -> None:
 def test_view_calls_nothing() -> None:
     source = (STATIC / "gm-ai-sources.js").read_text(encoding="utf-8")
     assert "fetch(" not in source and "XMLHttpRequest" not in source
+
+
+def test_a_watch_line_names_its_source_and_unbacked_numbers() -> None:
+    item = {"why": "市场押注新增就业6.5万、失业率4.2%", "source_title": "美国 Non-Farm Employment Change", "detail": "预期 65K · 前值 22K", "unverified": ["4.2%"]}
+    assert run("watch", item) == {"source": "美国 Non-Farm Employment Change · 预期 65K · 前值 22K", "unverified": ["4.2%"]}
+    assert run("watch", {"why": "", "source_title": "x"}) == {"source": "", "unverified": []}  # rules fallback already shows the source
