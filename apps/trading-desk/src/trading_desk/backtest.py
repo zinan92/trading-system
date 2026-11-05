@@ -91,3 +91,82 @@ class Backtests:
         for path in [p for p in results if not p.name.endswith(".plan.json")][KEEP:]:
             path.unlink(missing_ok=True)
             (self.folder / f"{path.stem}.plan.json").unlink(missing_ok=True)
+
+
+class Busy(Exception):
+    """Another comparison is still running; the machine also runs Paper, so only one at a time."""
+
+
+class Comparisons:
+    """回测工作台 (#1335): one comparison at a time, each in its own process, one result file each.
+
+    The same request on the same data day reuses its result. Nothing here can allow or block a
+    start: the page shows numbers, and the only thing this starts is ``pipelines.backtest_compare``.
+    """
+
+    def __init__(self, config: Any, *, launch: Launch = subprocess.Popen, now: Callable[[], datetime] | None = None) -> None:
+        self.folder = Path(config.db_path).parent / "comparisons"
+        self.checkout = Path(config.trading_system_checkout)
+        self.python = Path(config.nautilus_python)
+        self.datafeed_url = str(getattr(config, "datafeed_url", "http://127.0.0.1:8100"))
+        self.launch = launch
+        self.now = now or (lambda: datetime.now(timezone.utc))
+
+    def key(self, request: dict[str, Any]) -> str:
+        day = self.now().date().isoformat()
+        return hashlib.sha256(json.dumps({"request": request, "day": day}, sort_keys=True).encode()).hexdigest()[:24]
+
+    def _running(self) -> list[str]:
+        out = []
+        for path in self.folder.glob("*.json"):
+            if path.name.endswith(".request.json"):
+                continue
+            try:
+                result = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if result.get("status") == "running" and self.now() - datetime.fromisoformat(result["started_at"]) < STALE_RUN:
+                out.append(path.stem)
+        return out
+
+    def start(self, request: dict[str, Any]) -> str:
+        """`request` must already be checked (pipelines.backtest_compare.check). Raises Busy."""
+
+        key = self.key(request)
+        current = self.read(key)
+        if current and (current.get("status") != "running" or key in self._running()):
+            return key
+        self.folder.mkdir(parents=True, exist_ok=True)
+        if self._running():
+            raise Busy("已有一个回测在跑，等它跑完再开始")
+        request_path = self.folder / f"{key}.request.json"
+        request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+        # Written before launch so a second click in the same second already sees it running.
+        self.path(key).write_text(json.dumps({"status": "running", "started_at": self.now().isoformat()}), encoding="utf-8")
+        environment = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "TZ") if os.environ.get(name)}
+        environment["PYTHONPATH"] = str(self.checkout)
+        self.launch(
+            [str(self.python), "-m", "pipelines.backtest_compare", "--request", str(request_path), "--output", str(self.path(key)),
+             "--datafeed-url", self.datafeed_url],
+            cwd=str(self.checkout), env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        self._prune()
+        return key
+
+    def path(self, key: str) -> Path:
+        return self.folder / f"{key}.json"
+
+    def read(self, key: str) -> dict[str, Any] | None:
+        if not KEY.match(key):
+            return None
+        try:
+            return json.loads(self.path(key).read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _prune(self) -> None:
+        results = sorted((p for p in self.folder.glob("*.json") if not p.name.endswith(".request.json")), key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in results[KEEP:]:
+            path.unlink(missing_ok=True)
+            (self.folder / f"{path.stem}.request.json").unlink(missing_ok=True)

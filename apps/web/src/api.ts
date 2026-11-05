@@ -1,6 +1,6 @@
 /* GET-only reads for the islands. Same error wording as gm-desk.js call(); a 401 goes to /login.
- * There is no POST helper here on purpose: order and control requests stay in the legacy page
- * until #1329 moves them with byte-identical bodies. */
+ * The only POST is startComparison below (a history calculation). Order and control requests stay
+ * in the legacy page until #1329 moves them with byte-identical bodies. */
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -20,4 +20,19 @@ export async function getJson<T>(path: string): Promise<T> {
     throw new ApiError(detail, res.status);
   }
   return data as T;
+}
+
+/** The one POST an island may send (#1335, decision-log): start a backtest comparison.
+ * It starts a history calculation only; it cannot place, approve or stop anything. */
+export const COMPARE_PATH = "/api/backtest/compare";
+
+export async function startComparison(body: unknown): Promise<{key: string}> {
+  const res = await fetch(COMPARE_PATH, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)});
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new ApiError("需要重新登录", 401);
+  }
+  if (!res.ok) throw new ApiError(typeof data.detail === "string" ? data.detail : "请求失败，请稍后再试", res.status);
+  return data as {key: string};
 }
