@@ -110,9 +110,28 @@ def write_result(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], replay: Replay | None = None, now: datetime | None = None) -> dict[str, Any]:
+def preflight_instrument(path: Path) -> str:
+    """The contract the replay will build: the newest preflight's instrument symbol ("" if unreadable)."""
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    latest = payload[-1] if isinstance(payload, list) and payload else payload
+    return str(((latest or {}).get("instrument") or {}).get("symbol") or "") if isinstance(latest, dict) else ""
+
+
+def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], replay: Replay | None = None,
+            replay_instrument: str | None = None, now: datetime | None = None) -> dict[str, Any]:
     checked = check(request)
     source, instrument, asset_class = ASSETS[checked["asset"]]
+    if checked["strategy"] == "grid":
+        if replay is None:
+            raise BacktestUnavailable("网格回测需要 Paper 的回放环境")
+        # The replay builds its contract from the Paper preflight; a different venue's contract would
+        # replay gold history against the wrong instrument, so say so before reading any history.
+        if replay_instrument is not None and replay_instrument != instrument:
+            raise BacktestUnavailable(f"Paper 预检的合约是 {replay_instrument or '（读不到）'}，回测历史是 {instrument}，两者不一致")
     fee_rate = float(config["paper_fee_model"]["taker_fee_rate"])
     history = load_history(client, source=source, instrument=instrument, asset_class=asset_class, now=now)
     bars, funding, funding_from = history["bars"], history["funding"], history["funding_from"]
@@ -122,8 +141,7 @@ def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], rep
             for params in checked["variants"]
         ]
     else:
-        if replay is None:
-            raise BacktestUnavailable("网格回测需要 Paper 的回放环境")
+        assert replay is not None
         equity = float(config["capital_per_track_usd"])
         variants = []
         for params in checked["variants"]:
@@ -151,7 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         request = json.loads(args.request.read_text(encoding="utf-8"))
         replay = subprocess_replay(args.nautilus_python, args.preflight) if args.preflight and args.nautilus_python else None
-        result = compare(request, client=DatafeedMarketClient(base_url=args.datafeed_url, timeout_seconds=60.0), config=dualtrack_config(), replay=replay)
+        result = compare(request, client=DatafeedMarketClient(base_url=args.datafeed_url, timeout_seconds=60.0), config=dualtrack_config(), replay=replay,
+                         replay_instrument=preflight_instrument(args.preflight) if args.preflight else None)
     except (BacktestUnavailable, ValueError) as error:
         result = {"schema_version": SCHEMA, "status": "unavailable", "reason": str(error)}
     except Exception as error:  # noqa: BLE001 - the page says it failed; it must not take anything down.

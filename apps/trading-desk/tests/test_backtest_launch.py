@@ -117,6 +117,14 @@ def test_a_comparison_runs_alone_and_a_second_one_waits(compare, launched) -> No
     assert other != key and len(launched) == 2
 
 
+def test_a_ready_result_is_reused_but_an_unavailable_one_runs_again(compare, launched) -> None:
+    key = compare.start(REQUEST)
+    compare.path(key).write_text(json.dumps({"status": "unavailable", "reason": "回测出错：RuntimeError"}))
+    assert compare.start(REQUEST) == key and len(launched) == 2 and compare.read(key)["status"] == "running"
+    compare.path(key).write_text(json.dumps({"status": "ready"}))
+    assert compare.start(REQUEST) == key and len(launched) == 2
+
+
 def test_a_stuck_comparison_does_not_block_forever(compare, launched) -> None:
     key = compare.start(REQUEST)
     compare.clock["now"] = NOW + timedelta(minutes=16)

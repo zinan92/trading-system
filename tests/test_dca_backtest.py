@@ -195,3 +195,19 @@ def test_grid_compare_replays_each_variant_through_the_grid_engine() -> None:
     assert len(calls) == 2 and {a.get("source") for a in client.asked} == {"okx_swap_public"}
     with pytest.raises(BacktestUnavailable, match="回放"):
         compare({"asset": "XAU", "strategy": "grid", "variants": [GRID]}, client=History(), config=dualtrack_config(paper_gold_venue="okx"), now=client.end)
+
+
+def test_grid_compare_refuses_a_preflight_for_another_contract(tmp_path) -> None:
+    import json
+
+    from pipelines.backtest_compare import compare, preflight_instrument
+    from services.dualtrack_config import dualtrack_config
+
+    stale = tmp_path / "preflight.json"
+    stale.write_text(json.dumps([{"status": "ready_for_park_paper", "instrument": {"symbol": "XAUUSDT"}}]))
+    assert preflight_instrument(stale) == "XAUUSDT" and preflight_instrument(tmp_path / "missing.json") == ""
+    client = History()
+    with pytest.raises(BacktestUnavailable, match="XAUUSDT.*XAU-USDT-SWAP"):
+        compare({"asset": "XAU", "strategy": "grid", "variants": [GRID]}, client=client, config=dualtrack_config(paper_gold_venue="okx"),
+                replay=lambda bundle: {}, replay_instrument=preflight_instrument(stale), now=client.end)
+    assert client.asked == []  # refused before any history was read

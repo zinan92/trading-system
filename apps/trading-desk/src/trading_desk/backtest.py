@@ -135,7 +135,9 @@ class Comparisons:
 
         key = self.key(request)
         current = self.read(key)
-        if current and (current.get("status") != "running" or key in self._running()):
+        # A ready result is today's answer; an unavailable one (gap, datafeed blip, stale preflight)
+        # is retried, so pressing the button again is a real retry.
+        if current and (current.get("status") == "ready" or key in self._running()):
             return key
         self.folder.mkdir(parents=True, exist_ok=True)
         if self._running():
