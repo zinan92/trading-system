@@ -109,7 +109,7 @@ def test_compare_reads_the_asset_s_own_series_once_and_runs_each_variant() -> No
 
 @pytest.mark.parametrize(("request_", "words"), [
     ({"asset": "ETH", "strategy": "dca", "variants": [{"amount_usdt": 50, "interval_hours": 24}]}, "品种"),
-    ({"asset": "XAU", "strategy": "grid", "variants": [{}]}, "定投"),
+    ({"asset": "XAU", "strategy": "martingale", "variants": [{}]}, "策略只能"),
     ({"asset": "XAU", "strategy": "dca", "variants": []}, "1–3"),
     ({"asset": "XAU", "strategy": "dca", "variants": [{"amount_usdt": 50, "interval_hours": 24}] * 4}, "1–3"),
     ({"asset": "XAU", "strategy": "dca", "variants": [{"amount_usdt": 1, "interval_hours": 24}]}, "每次金额"),
@@ -119,3 +119,79 @@ def test_requests_outside_what_the_page_offers_are_refused(request_: dict, words
 
     with pytest.raises(ValueError, match=words):
         check(request_)
+
+
+# ---- 网格参数对比 (#1336) ------------------------------------------------------------------
+
+GRID = {"direction": "long", "below_pct": 3, "above_pct": 3, "levels": 5, "notional_per_level": 200, "stop_pct": None}
+
+
+@pytest.mark.parametrize("direction", ["long", "short", "neutral"])
+def test_grid_shape_matches_the_planner_s_own_geometry(direction: str) -> None:
+    from pipelines.backtest_compare import grid_shape
+    from services.park_strategy_plan import _build_grid_risk_plan
+
+    shape = grid_shape({**GRID, "direction": direction, "levels": 6}, equity=10000)
+    plan = _build_grid_risk_plan({"direction": direction, "order_count": 6, "maximum_leverage": 1}, current_price=1.0, source="test",
+                                 observed_at="2026-11-05T00:00:00+00:00", equity=10000, lower=shape["lower"], upper=shape["upper"])
+    assert [(round(r["price"], 9), r["side"], round(r["take_profit"], 9)) for r in shape["rungs"]] == \
+        [(round(r["price"], 9), r["side"], round(r["take_profit"], 9)) for r in plan["risk"]["grid_rungs"]]
+
+
+def test_grid_shape_is_laid_at_price_one() -> None:
+    from pipelines.backtest_compare import grid_shape
+
+    shape = grid_shape(GRID, equity=10000)
+    assert shape["lower"] == pytest.approx(0.97) and shape["upper"] == pytest.approx(1.03) and shape["stop"] is None
+    assert [round(r["price"], 4) for r in shape["rungs"]] == [0.98, 0.99, 1.0, 1.01, 1.02]
+    assert [round(r["take_profit"], 4) for r in shape["rungs"]] == [0.99, 1.0, 1.01, 1.02, 1.03]
+    assert {r["side"] for r in shape["rungs"]} == {"buy"} and shape["quantity"] == 200 and shape["account_equity"] == 10000
+    neutral = grid_shape({**GRID, "direction": "neutral", "levels": 4}, equity=10000)
+    assert [r["side"] for r in neutral["rungs"]] == ["buy", "buy", "sell", "sell"]
+    assert [round(r["take_profit"], 4) for r in neutral["rungs"]][2:] == [0.994, 1.006]  # a sell takes profit one rung down
+    assert grid_shape({**GRID, "direction": "short", "stop_pct": 2}, equity=1)["stop"] == pytest.approx(1.02)
+
+
+@pytest.mark.parametrize(("params", "words"), [
+    ({**GRID, "direction": "up"}, "方向"),
+    ({**GRID, "below_pct": 0.1}, "上下沿"),
+    ({**GRID, "levels": 31}, "格数"),
+    ({**GRID, "levels": 2.5}, "格数"),
+    ({**GRID, "notional_per_level": 5}, "每格金额"),
+    ({**GRID, "stop_pct": 3}, "止损"),
+    ({**GRID, "direction": "neutral", "stop_pct": 1}, "双向"),
+])
+def test_grid_parameters_outside_the_form_are_refused(params: dict, words: str) -> None:
+    from pipelines.backtest_compare import validate_grid
+
+    with pytest.raises(ValueError, match=words):
+        validate_grid(params)
+
+
+def test_btc_grid_waits_for_its_own_contract() -> None:
+    from pipelines.backtest_compare import check
+
+    with pytest.raises(ValueError, match="#1337"):
+        check({"asset": "BTC", "strategy": "grid", "variants": [GRID]})
+    assert check({"asset": "XAU", "strategy": "grid", "variants": [GRID]})["variants"][0]["levels"] == 5
+
+
+def test_grid_compare_replays_each_variant_through_the_grid_engine() -> None:
+    from pipelines.backtest_compare import compare
+    from services.dualtrack_config import dualtrack_config
+
+    calls: list[dict] = []
+
+    def replay(bundle: dict) -> dict:  # nothing fills: every window ends flat at zero
+        calls.append(bundle)
+        return {"fills": [], "positions": []}
+
+    client = History()
+    result = compare({"asset": "XAU", "strategy": "grid", "variants": [GRID, {**GRID, "below_pct": 5, "above_pct": 5}]},
+                     client=client, config=dualtrack_config(paper_gold_venue="okx"), replay=replay, now=client.end)
+    assert result["status"] == "ready" and result["strategy"] == "grid" and len(result["variants"]) == 2
+    assert result["variants"][0]["summary"]["runs"] == 1 and result["variants"][0]["summary"]["median_return_pct"] == 0.0
+    assert result["variants"][1]["params"]["below_pct"] == 5 and result["variants"][0]["account_equity"] == 10000
+    assert len(calls) == 2 and {a.get("source") for a in client.asked} == {"okx_swap_public"}
+    with pytest.raises(BacktestUnavailable, match="回放"):
+        compare({"asset": "XAU", "strategy": "grid", "variants": [GRID]}, client=History(), config=dualtrack_config(paper_gold_venue="okx"), now=client.end)

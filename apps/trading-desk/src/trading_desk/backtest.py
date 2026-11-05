@@ -108,6 +108,7 @@ class Comparisons:
         self.folder = Path(config.db_path).parent / "comparisons"
         self.checkout = Path(config.trading_system_checkout)
         self.python = Path(config.nautilus_python)
+        self.preflight = Path(config.paper_output) / "park_strategy" / "paper_preflight_current.json"
         self.datafeed_url = str(getattr(config, "datafeed_url", "http://127.0.0.1:8100"))
         self.launch = launch
         self.now = now or (lambda: datetime.now(timezone.utc))
@@ -147,7 +148,7 @@ class Comparisons:
         environment["PYTHONPATH"] = str(self.checkout)
         self.launch(
             [str(self.python), "-m", "pipelines.backtest_compare", "--request", str(request_path), "--output", str(self.path(key)),
-             "--datafeed-url", self.datafeed_url],
+             "--datafeed-url", self.datafeed_url, "--preflight", str(self.preflight), "--nautilus-python", str(self.python)],
             cwd=str(self.checkout), env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )

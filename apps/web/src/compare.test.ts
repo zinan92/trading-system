@@ -33,3 +33,43 @@ test("labels and the same bounds the server checks", () => {
   expect(check([{amount_usdt: 50, interval_hours: 24}, {amount_usdt: 50, interval_hours: 1.5}])).toContain("第 2 组：间隔");
   expect(check([])).toContain("1–3");
 });
+
+// ---- 网格 (#1336) ----
+import {checkGrid, gridLabel, gridNotes, gridRows, DEFAULT_GRID_VARIANTS, GRID_ASSETS, type GridParams} from "./compare";
+
+const GRID: GridParams = {direction: "neutral", below_pct: 3, above_pct: 3, levels: 9, notional_per_level: 500, stop_pct: null};
+const gridSummary = (median: number) => ({runs: 25, median_return_pct: median, worst_return_pct: -2.1, best_return_pct: 1.8, stopped_pct: 12.0, mean_fills: 14.2,
+  funded_runs: 25, histogram: {low: -2.1, width: 0.3, counts: [1, 2]}});
+const GRID_RESULT: CompareResult = {status: "ready", asset: "XAU", strategy: "grid", instrument: "XAU-USDT-SWAP", source: "okx_swap_public", fee_rate: 0.0005,
+  history_start: "2026-05-09T08:26:00+00:00", history_end: "2026-11-05T08:25:00+00:00",
+  variants: [{params: GRID, summary: gridSummary(0.2), account_equity: 10000}, {params: {...GRID, below_pct: 5, above_pct: 5}, summary: gridSummary(-0.4), account_equity: 10000}]};
+
+test("grid rows use the same rows as the pre-open box and mark only the higher median", () => {
+  const table = gridRows(GRID_RESULT);
+  expect(table.map(r => r.label)).toEqual(["中位收益", "最差一次", "最好一次", "跌破下沿或止损", "平均成交"]);
+  expect(table[0]!.cells).toEqual(["+0.20%", "−0.40%"]);
+  expect(table[0]!.best).toBe(0);
+  expect(table[3]!.cells).toEqual(["12%", "12%"]);
+  expect(table[4]!.cells).toEqual(["14.2 笔", "14.2 笔"]);
+});
+
+test("grid notes say the replay, the account size and the fee assumption", () => {
+  const lines = gridNotes(GRID_RESULT);
+  expect(lines[1]).toBe("用 Paper 自己的 Nautilus 回放和补单规则；收益按 10,000 USDT 账户算，费后");
+  expect(lines).toContain("资金费已计入");
+  expect(lines).toContain("手续费是 OKX Paper 的假设费率，尚未用账户核实");
+});
+
+test("grid labels and bounds match the server's", () => {
+  expect(gridLabel(GRID)).toBe("双向 −3%/+3% · 9 格 × 500 USDT");
+  expect(gridLabel({...GRID, direction: "long", stop_pct: 2})).toBe("做多 −3%/+3% · 9 格 × 500 USDT · 止损 2%");
+  expect(checkGrid(DEFAULT_GRID_VARIANTS)).toBe("");
+  expect(checkGrid([{...GRID, below_pct: 0.1}])).toMatch(/上下沿/);
+  expect(checkGrid([{...GRID, levels: 31}])).toMatch(/格数/);
+  expect(checkGrid([{...GRID, levels: 2.5}])).toMatch(/格数/);
+  expect(checkGrid([{...GRID, notional_per_level: 5}])).toMatch(/每格金额/);
+  expect(checkGrid([{...GRID, direction: "long", stop_pct: 3}])).toMatch(/止损/);
+  expect(checkGrid([{...GRID, stop_pct: 1}])).toMatch(/双向/);
+  expect(checkGrid([GRID, GRID, GRID, GRID])).toMatch(/1–3/);
+  expect(GRID_ASSETS).toEqual(["XAU"]);
+});
