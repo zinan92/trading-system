@@ -1,5 +1,70 @@
 # Decision Log
 
+# 2026-11-05 — 回测工作台: DCA side by side (#1335)
+
+## Decision
+
+- DCA is simulated deterministically (`services/dca_backtest.py`):
+  - The amount is bought at the close of the first 1m bar at or after each
+    scheduled time.
+  - Paper's `paper_fee_model.taker_fee_rate` is the fee.
+  - The position is valued at the window's last close.
+  - Funding is counted only for windows inside the venue's funding history,
+    as the grid backtest counts it.
+  - DCA has no order lifecycle, so no Nautilus replay. Grid comparisons
+    (#1336) reuse `grid_backtest`, not a second grid engine.
+- The windows are the grid's: 7 days, non-overlapping, 180 days, from the
+  same `load_history`, which refuses gaps, stale data and partial history.
+- `pipelines/backtest_compare.py` runs everything in one process per
+  comparison:
+  - It reads history once, then runs up to 3 variants in turn.
+  - The asset maps to exactly one stored series: XAU to `okx_swap_public`,
+    BTC to `okx_swap_crypto_public`. There is no fallback between them.
+- The desk allows one comparison at a time machine-wide. A second start
+  returns 409, and a run older than 15 minutes stops counting as running.
+  The running file is written before launch, so a double click joins the
+  first run.
+- **Island safety check change:**
+  - Islands may now send exactly one POST: `api.ts`'s `startComparison` to
+    `/api/backtest/compare`.
+  - The Vitest check asserts that one `method:` and its path.
+  - It still rejects `/api/execute`, `dashboard-control`,
+    `/api/advice/refresh`, `/api/judgments`, `/api/plan` and `/api/grid/`
+    in every island.
+  - The POST starts a history calculation and cannot place, approve or stop
+    anything.
+
+## Gotchas
+
+- The desk imports `pipelines.backtest_compare.check`, so the desk process
+  needs the checkout root on `PYTHONPATH`. Production, dev and `make
+  test-desk` already have it. Running pytest from `apps/trading-desk`
+  without it fails with `No module named 'pipelines'`.
+- `/api/backtest/compare` is registered before `/api/backtest/{key}`.
+  Otherwise "compare" is matched as a key, and the result is 404 instead
+  of the POST route.
+- "最大浮亏" is the lowest (value − invested) / invested at any minute. It
+  is not a peak-to-trough drawdown of equity.
+
+## Verification
+
+- `tests/test_dca_backtest.py` (12):
+  - Hand-computed buys, value and the −25% floor.
+  - Fee per buy.
+  - A missing minute buys at the next bar.
+  - Funding is only counted inside the history.
+  - Bounds.
+  - Weekly windows.
+  - Compare reads BTC's own series once.
+  - Bad requests are refused.
+- Desk 115 passed: Comparisons single-flight, stale run, routes 422/409/404.
+- Vitest 37 passed:
+  - The workbench sends one POST with the exact body, then GETs only.
+  - The best median is bold, and a tie marks nothing.
+  - 409 and unavailable are shown.
+- Dev with production datafeed (read-only): XAU 2 variants, 25 windows, about
+  20 s.
+
 # 2026-11-05 — 交易回看 island with asset and period filters (#1326)
 
 ## Decision
