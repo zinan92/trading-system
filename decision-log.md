@@ -1,5 +1,46 @@
 # Decision Log
 
+# 2026-11-05 — Retire the three old replay pages (#1310)
+
+## Decision
+
+- Delete `dashboard-replay.html`, `dashboard-replay-v4.html` and
+  `dashboard-dualtrack-replay.html`, and `tools/verify_replay_desktop_interactions.mjs`.
+  The desk's 交易回看 (#1306) is where a past run is reviewed now.
+- The production access log since 2026-08-17 has no request for any of the three
+  pages or for `dashboard-v4.html`.
+- `dashboard-v4.html` built about 17 links to the multi-timeframe replay page
+  through two functions. They now open the page's own 交易索引 view
+  (`openInPageReplay`) instead of navigating away; the in-view 「多周期回放」
+  button is removed because it would only reopen the same view. They do not
+  point to the desk review, which covers gold Paper/Testnet runs only: the
+  per-strategy multi-timeframe replay for lab strategies is retired with the page.
+- The dual-track console drops its 回放 tab and the closeout replay links, and
+  the runtime status no longer returns `replay_url`. `/api/replay` stays.
+- The dashboard deployment feature probe no longer fetches the replay page or
+  its lightweight-charts vendor file. This narrows what the probe looks at
+  because the page no longer exists; no gate is loosened, and the probe only
+  feeds the status shown on the ops page.
+
+## Gotchas
+
+- `pipelines/dashboard_server.py` lines that listed the replay pages were the
+  no-cache list, not a serving allowlist. The files are gone, so the static
+  handler answers 404.
+- Running the root suite from a git worktree under `/private/tmp` fails 25
+  live-activation, schedule and soak tests on paths; the same modules pass in
+  the main checkout. CI is the check.
+
+## Verification
+
+- Dashboard static and server tests (`test_dashboard_server`,
+  `test_dashboard_dualtrack_static`, `test_dashboard_dualtrack_replay_static`,
+  `test_dashboard_desktop_contract_static`, `test_frontend_shell_static`,
+  `test_design_tokens_static`, `test_dashboard_v3_static`): 108 passed.
+- `dashboard-v4.html`, `dashboard-dualtrack-v5.html` and `assets/shell.js`
+  scripts parse; no tracked page, script or test outside docs and mockups names
+  a retired page.
+
 # 2026-11-05 — Pre-start backtest shown above the start button (#1309)
 
 ## Decision

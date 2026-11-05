@@ -319,9 +319,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/command-center.html",
             "/dashboard-dualtrack-split.html",
             "/dashboard-dualtrack-v5.html",
-            "/dashboard-dualtrack-replay.html",
-            "/dashboard-replay.html",
-            "/dashboard-replay-v4.html",
             "/ops-dashboard.html",
             "/assets/shell.js",
             "/assets/shell.css",
@@ -3993,13 +3990,11 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
         "closeout": {
             "attribution_available": bool(attribution_rows),
             "ledger_available": bool(ledger_rows),
-            "replay_url": f"dashboard-dualtrack-replay.html?layout=dualtrack&cycle={window.cycle_id}",
         },
         "previous_closeout": {
             "cycle_id": previous_window.cycle_id,
             "attribution_available": bool(previous_attribution_rows),
             "ledger_available": bool(previous_ledger_rows),
-            "replay_url": f"dashboard-dualtrack-replay.html?layout=dualtrack&cycle={previous_window.cycle_id}",
             "human_fill_count": len(previous_human_fills),
             "machine_fill_count": len(previous_machine_fills),
             "machine_fills_hidden": False,
@@ -4546,7 +4541,6 @@ def build_trader_overview_contract(payload: dict, *, strategy_id: str = "") -> d
         },
         "replay": {
             "api": "/api/replay",
-            "dashboard_url": "/dashboard-replay-v4.html",
             "default_strategy": selected_id,
         },
     }
@@ -5102,7 +5096,6 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
     elif is_v4:
         trader_checks = {
             "dashboard_v4_title": "GoldBot Trader Console V4",
-            "replay_v4_route": 'new URL("dashboard-replay-v4.html", window.location.href)',
             "trade_record_cards": "Trade record cards",
             "signal_to_ticket_funnel": "信号漏斗 · 为什么不开仓",
             "tp_sl_protection": "TP/SL protection",
@@ -5148,23 +5141,6 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         "ops_console_title": "GoldBot OPS Console",
         "ops_backend_signals": 'id="backend-signals"',
     }
-    if is_v4 or is_v5:
-        replay_checks = {
-            "replay_v4_body": '<body class="replay-v4">',
-            "replay_v4_backlink": 'new URL("dashboard-v4.html", window.location.href)',
-            "replay_lightweight_charts": "lightweight-charts.standalone.production.js",
-            "replay_api_client": "/api/replay",
-            "replay_trade_record": "这笔交易 · 病历",
-            "replay_lifecycle": "这笔的生命周期",
-            "replay_gate_funnel": "信号 → 出票 · 五道关口",
-        }
-    else:
-        replay_checks = {
-            "replay_page_title": "GoldBot Replay",
-            "replay_lightweight_charts": "lightweight-charts.standalone.production.js",
-            "replay_api_client": "/api/replay",
-            "replay_trader_focus": "Trader Focus",
-        }
     trader = _probe_html_features(public_url, timeout, trader_checks)
     if trader.get("access_protected"):
         return {
@@ -5183,11 +5159,6 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
     if not is_v5:
         trader_vendor_url += "?v=20260627-gateway"
     trader_vendor = _probe_http(trader_vendor_url, timeout)
-    replay_filename = "dashboard-replay-v4.html"
-    replay_url = _sibling_dashboard_url(public_url, replay_filename)
-    replay = _probe_html_features(replay_url, timeout, replay_checks)
-    replay_vendor_url = _sibling_dashboard_url(public_url, "data/vendor/lightweight-charts.standalone.production.js")
-    replay_vendor = _probe_http(replay_vendor_url, timeout)
     ops_url = _sibling_dashboard_url(public_url, "ops-dashboard.html")
     ops = _probe_html_features(ops_url, timeout, ops_checks)
     ops_protected = int(ops.get("status_code") or 0) in {401, 403}
@@ -5201,11 +5172,6 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         ],
         {"surface": "trader", "name": trader_vendor_name, "ok": _http_ok(trader_vendor)},
         *[
-            {"surface": "replay", "name": item["name"], "ok": item["ok"]}
-            for item in replay.get("checks", [])
-        ],
-        {"surface": "replay", "name": "replay_vendor_lightweight_charts", "ok": _http_ok(replay_vendor)},
-        *[
             {"surface": "ops", "name": item["name"], "ok": item["ok"]}
             for item in ops.get("checks", [])
         ],
@@ -5214,10 +5180,6 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         reason = "trader_probe_failed"
     elif not _http_ok(trader_vendor):
         reason = "trader_vendor_probe_failed"
-    elif not replay.get("ok"):
-        reason = "replay_probe_failed"
-    elif not _http_ok(replay_vendor):
-        reason = "replay_vendor_probe_failed"
     elif ops_protected:
         reason = "ops_access_forbidden"
     elif not ops.get("ok"):
@@ -5231,8 +5193,6 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
             not item.get("ok")
             and not (reason == "trader_probe_failed" and item.get("surface") == "trader")
             and not (reason == "trader_vendor_probe_failed" and item.get("name") == trader_vendor_name)
-            and not (reason == "replay_probe_failed" and item.get("surface") == "replay")
-            and not (reason == "replay_vendor_probe_failed" and item.get("name") == "replay_vendor_lightweight_charts")
             and not (reason in {"ops_access_forbidden", "ops_probe_failed"} and item.get("surface") == "ops")
         )
     ]
@@ -5245,13 +5205,9 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         "ops_access": "protected" if ops_protected else "public",
         "trader_url": public_url,
         "trader_vendor_url": trader_vendor_url,
-        "replay_url": replay_url,
-        "replay_vendor_url": replay_vendor_url,
         "ops_url": ops_url,
         "trader": trader,
         "trader_vendor": trader_vendor,
-        "replay": replay,
-        "replay_vendor": replay_vendor,
         "ops": ops_report,
         "checks": checks,
         "missing_features": missing,

@@ -7,9 +7,7 @@ HTML_OBJECTS = [
     "command-center.html",
     "dashboard-dualtrack-split.html",
     "dashboard-dualtrack-v5.html",
-    "dashboard-dualtrack-replay.html",
     "ops-dashboard.html",
-    "dashboard-replay-v4.html",
 ]
 OBJECTS = HTML_OBJECTS + ["assets/shell.css"]
 

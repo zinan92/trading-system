@@ -95,7 +95,6 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     assert "machine_fills_hidden" in html
     assert "previous_closeout" in html
     assert "最近已收盘" in html
-    assert "查看最近回放" in html
     assert "Obsidian fallback" in html
     assert "late/draft：显示与记录，不参与盲测评分" in html
     assert "state.candles.filter((_, i) => i %" not in html
@@ -275,14 +274,12 @@ def test_dualtrack_v5_task06_layers_are_display_mapped_to_chinese() -> None:
     assert "${esc(layer)}" not in extract_function(html, "renderMachine")
 
 
-def test_dualtrack_v5_task06_replay_links_disable_empty_urls() -> None:
+def test_dualtrack_v5_links_to_no_retired_replay_page() -> None:
     html = read_html()
 
-    assert "replayLink(" in html
-    assert "暂无可回放周期" in html
-    assert 'href=""' not in html
-    assert 'href="${esc(previousReplay)}"' not in html
-    assert 'href="${esc(closeout.replay_url ||' not in html
+    assert "dashboard-replay" not in html
+    assert "dashboard-dualtrack-replay" not in html
+    assert "replay_url" not in html
 
 
 def test_dualtrack_v5_task06_blind_protocol_does_not_feed_machine_points_to_intraday_charts() -> None:
@@ -606,4 +603,4 @@ def test_dashboard_server_runtime_status_exposes_previous_closed_cycle_summary(t
     assert response["previous_closeout"]["machine_fills_hidden"] is False
     assert response["previous_closeout"]["machine_fill_count"] == 1
     assert response["previous_closeout"]["human_fill_count"] == 1
-    assert response["previous_closeout"]["replay_url"].endswith(f"cycle={previous_cycle}")
+    assert "replay_url" not in response["previous_closeout"]

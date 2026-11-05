@@ -2084,7 +2084,6 @@ body.v1-dashboard .shell{display:none!important}
           <span id="replaySample" class="chip"></span>
           <span id="replayConfidence" class="chip"></span>
           <button id="replayCompareBtn" class="btn small" type="button" data-zh="叠加对比" data-en="Overlay compare">Overlay compare / 叠加对比</button>
-          <button id="multiTimeframeReplayBtn" class="btn small primary" type="button" data-zh="多周期回放" data-en="MTF Replay">MTF Replay / 多周期回放</button>
         </div>
         <div id="replayCursorContext" class="replay-cursor-context" aria-live="polite"></div>
         <details id="replayShortcutDetails" class="trade-tape-details replay-shortcut-details">
@@ -6649,9 +6648,7 @@ async function openMultiTimeframeReplayForStrategy(id, cursorOverride="", review
   app.selectedStrategy = id;
   if(target.tradeKey) app.focusedTradeId = target.tradeKey;
   const cursor = cursorOverride || target.cursor || (target.kind === "empty" ? "" : latestDecisionReplayCursor(detail));
-  const mergedReviewContext = mergeReplayReviewContext(defaultReplayReviewContextForTarget(id, target, detail), reviewContext);
-  const preserveRunDate = Boolean(cursorOverride && mergedReviewContext && Object.keys(mergedReviewContext).length);
-  window.location.href = multiTimeframeReplayUrl(detail, {strategy:id, cursor, preserveRunDate, ...replayOptions, ...mergedReviewContext});
+  openInPageReplay(detail, {strategy:id, cursor, ...replayOptions});
 }
 function headerReplayStrategyId(){
   return app.selectedStrategy || defaultTraderFocusId() || [...app.selectedIds][0] || board().active_strategy_id || rows()[0]?.strategy_id || "gold_1m_chan";
@@ -6678,19 +6675,7 @@ function renderHeaderReplayCta(){
 }
 async function openHeaderReplayCta(){
   const id = headerReplayStrategyId();
-  if(app.api && rows().length){
-    await openMultiTimeframeReplayForStrategy(id, "", headerReplayContext(id), {explicitDashboardDateOnly:true});
-    return;
-  }
-  const url = new URL("dashboard-replay-v4.html", window.location.href);
-  const date = $("dateInput")?.value || "";
-  if(date) url.searchParams.set("date", date);
-  url.searchParams.set("strategy", id);
-  url.searchParams.set("layout", "trader");
-  url.searchParams.set("ui", "left-main-v2");
-  url.searchParams.set("review_source", "trader_header_replay_cta");
-  url.searchParams.set("review_label", textPair("驾驶舱首屏多周期复盘", "Console header MTF replay"));
-  window.location.href = url.pathname + url.search;
+  await openMultiTimeframeReplayForStrategy(id, "", headerReplayContext(id), {explicitDashboardDateOnly:true});
 }
 function renderComparePresets(){
   const bar = $("comparePresetBar");
@@ -8976,7 +8961,7 @@ function renderStrategyFunnelMatrix(items=[]){
         reviewSummary: evidence.signal_id ? `${funnelMatrixActionCopy({frequency: frequencyRowsById().get(id) || {}})} · ${evidence.signal_id}` : funnelMatrixActionCopy({frequency: frequencyRowsById().get(id) || {}}),
         reviewSource: "strategy_frequency",
       };
-      window.location.href = multiTimeframeReplayUrl({}, {
+      openInPageReplay({}, {
         strategy:id,
         cursor,
         date:$("dateInput")?.value || app.api?.run_date || "",
@@ -10005,11 +9990,6 @@ function renderReplay(){
     await ensureReplayOverlayDetails({force:true}).catch(() => null);
     renderReplay();
   };
-  const multiBtn = $("multiTimeframeReplayBtn");
-	  if(multiBtn){
-	    multiBtn.onclick = () => { window.location.href = multiTimeframeReplayUrl(detail, {preferReplayCursor:true}); };
-	    multiBtn.title = textPair("打开多周期K线推演：1D / 4H / 15m / 5m / 1m，同一个 cursor 逐根推进。", "Open multi-timeframe candle replay: 1D / 4H / 15m / 5m / 1m, stepped by one shared cursor.");
-	  }
 	  renderReplayTargetBar(detail);
 	  renderReplayCursorContext(detail,row);
 	  renderPriceChart(detail);
@@ -10033,10 +10013,8 @@ async function ensureReplayOverlayDetails(options={}){
   await Promise.all(missing.map(id => fetchDetail(id).catch(() => null)));
   if(app.view === "replay") renderReplay();
 }
-function multiTimeframeReplayUrl(detail={}, options={}){
-  const url = new URL("dashboard-replay-v4.html", window.location.href);
-  const explicitDashboardDate = new URLSearchParams(window.location.search).get("date") || "";
-  const fallbackDate = options.explicitDashboardDateOnly ? explicitDashboardDate : ($("dateInput")?.value || app.api?.run_date || "");
+// The multi-timeframe replay page was retired with S6 (#1310). Replay entries stay on this page's 交易索引 view.
+function openInPageReplay(detail={}, options={}){
   const strategy = options.strategy || app.selectedStrategy || app.api?.strategy_id || "gold_1m_chan";
   const trade = focusedTradeFrom(replayTrades(detail || {}), app.focusedTradeId);
   const cursor = options.forceDateOnly ? "" : (
@@ -10048,33 +10026,9 @@ function multiTimeframeReplayUrl(detail={}, options={}){
     || app.replayCursor
     || latestDecisionReplayCursor(detail || {})
   );
-  const date = options.date || (options.preserveRunDate ? fallbackDate : (options.explicitDashboardDateOnly ? "" : replayDateFromCursor(cursor))) || fallbackDate;
-  if(date) url.searchParams.set("date", date);
-  if(strategy) url.searchParams.set("strategy", strategy);
-  if(cursor) url.searchParams.set("cursor", cursor);
-  url.searchParams.set("layout", options.layout || "trader");
-  url.searchParams.set("ui", "left-main-v2");
-  url.searchParams.set("return_view", options.returnView || app.view || "overview");
-  url.searchParams.set("return_date", options.returnDate || fallbackDate || date || "");
-  url.searchParams.set("return_family", options.returnFamily || app.family || "all");
-  url.searchParams.set("return_strategy_filter", options.returnStrategyFilter || app.strategyFilter || "all");
-  setOptionalReplayParam(url, "review_question", options.reviewQuestion);
-  setOptionalReplayParam(url, "review_action", options.reviewAction);
-  setOptionalReplayParam(url, "review_label", options.reviewLabel);
-  setOptionalReplayParam(url, "review_summary", options.reviewSummary);
-  setOptionalReplayParam(url, "review_source", options.reviewSource);
-  setOptionalReplayParam(url, "review_trade_id", options.reviewTradeId);
-  setOptionalReplayParam(url, "review_trade_status", options.reviewTradeStatus);
-  setOptionalReplayParam(url, "review_exit_reason", options.reviewExitReason);
-  setOptionalReplayParam(url, "review_closed_at", options.reviewClosedAt);
-  setOptionalReplayParam(url, "review_realized_pnl", options.reviewRealizedPnl);
-  setOptionalReplayParam(url, "review_trade_side", options.reviewTradeSide);
-  setOptionalReplayParam(url, "review_trade_opened_at", options.reviewTradeOpenedAt);
-  return url.pathname + url.search;
-}
-function setOptionalReplayParam(url, key, value){
-  const text = String(value || "").trim();
-  if(text) url.searchParams.set(key, text);
+  app.selectedStrategy = strategy;
+  app.replayCursor = cursor || "";
+  activate("replay");
 }
 function replayDateFromCursor(cursor=""){
   const value = String(cursor || "");
@@ -10128,7 +10082,7 @@ function renderReplayCursorContext(detail={}, row={}){
       <button class="btn small" type="button" data-replay-clear-cursor>${esc(textPair("清除上下文","Clear context"))}</button>
     </div>`;
   el.querySelector("[data-replay-continue-4tf]")?.addEventListener("click", () => {
-    window.location.href = multiTimeframeReplayUrl(detail, {preferReplayCursor:true});
+    openInPageReplay(detail, {preferReplayCursor:true});
   });
   el.querySelector("[data-replay-open-loop]")?.addEventListener("click", () => {
     activate("loop");
@@ -10299,11 +10253,7 @@ async function openSmartReplayForStrategy(id, options={}){
   const target = smartReplayTarget(detail);
   window.goldbotCharts.smartReplayTarget = {strategy_id:id, ...target};
   if(options.mode === "4tf"){
-    const previousStrategy = app.selectedStrategy;
-    app.selectedStrategy = id;
-    const href = multiTimeframeReplayUrl(detail, {cursor:target.cursor || app.replayCursor || latestDecisionReplayCursor(detail)});
-    app.selectedStrategy = previousStrategy || id;
-    window.location.href = href;
+    openInPageReplay(detail, {strategy:id, cursor:target.cursor || app.replayCursor || latestDecisionReplayCursor(detail)});
     return;
   }
   await setSelectedStrategy(id, "replay", target.tradeKey || "");
@@ -11490,7 +11440,7 @@ function renderTradeMap(detail,row){
       </div>
     </div>`;
     el.querySelector("[data-empty-open-strategies]")?.addEventListener("click", () => activate("strategies"));
-    el.querySelector("[data-empty-open-mtf]")?.addEventListener("click", () => { window.location.href = multiTimeframeReplayUrl(detail, {forceDateOnly:true}); });
+    el.querySelector("[data-empty-open-mtf]")?.addEventListener("click", () => { openInPageReplay(detail, {forceDateOnly:true}); });
     return;
   }
   const labels = tradeLabelMap(trades);
@@ -11906,7 +11856,7 @@ function renderTradeMap(detail,row){
   el.querySelector("[data-workbench-4tf]")?.addEventListener("click", event => {
     app.focusedTradeId = event.currentTarget.dataset.workbench4tf || key;
     app.replayScope = "focus";
-    window.location.href = multiTimeframeReplayUrl(detail);
+    openInPageReplay(detail);
   });
   el.querySelector("[data-workbench-all]")?.addEventListener("click", () => {
     app.focusedTradeId = "";
@@ -12183,7 +12133,7 @@ function renderTradeNotes(detail,row){
         event.stopPropagation();
         app.focusedTradeId = btn.dataset.tradeOpen4tf || "";
         app.replayScope = "focus";
-        window.location.href = multiTimeframeReplayUrl(detail);
+        openInPageReplay(detail);
       };
     });
     $("tradeNotes").querySelectorAll("[data-trade-focus-inline]").forEach(btn => {
