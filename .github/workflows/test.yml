@@ -39,7 +39,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"  # Vite 8 (apps/web) needs ^20.19 or >=22.12
 
       - name: Install
         run: |
@@ -66,3 +66,6 @@ jobs:
 
       - name: K-line widget suite
         run: make VENV=.venv test-kline
+
+      - name: Web islands (typecheck, vitest, committed build is current)
+        run: make VENV=.venv test-web
