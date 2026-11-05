@@ -72,13 +72,40 @@ def _header_model(
     return model
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Header follows the selected K-line feed since 0b93ab8; fixture still drives the read model. https://github.com/zinan92/trading-system/issues/1288",
-)
+def _minute_feed(price: float, step: int, *, provider: str = "binance_usdm_futures", trusted: bool = True) -> dict:
+    """One 1m K-line snapshot: since 0b93ab8 the header follows the selected chart feed (#1288)."""
+
+    timestamp = f"2026-07-18T01:{step:02d}:00+00:00"
+    return {
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "provider": provider,
+        "provider_symbol": "XAUUSDT",
+        "trusted": trusted,
+        "status": "ok" if trusted else "untrusted",
+        "latest_close": price,
+        "latest_timestamp": timestamp,
+        "bars": [{"timestamp": timestamp, "open": price, "high": price, "low": price, "close": price}],
+    }
+
+
 def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
+    # The header price follows the 1m chart feed; the run badge still follows the read model.
+    # Both advance one step per load() after the chart is switched to 1m.
+    minutes = [
+        _minute_feed(4000.0, 0),
+        _minute_feed(4001.0, 1),
+        _minute_feed(4001.0, 2),
+        _minute_feed(3999.0, 3),
+        _minute_feed(5000.0, 4, provider="backup_venue"),
+        _minute_feed(5001.0, 5, provider="backup_venue"),
+        _minute_feed(5001.0, 6, provider="backup_venue"),
+        _minute_feed(5002.0, 7, provider="backup_venue", trusted=False),
+        _minute_feed(5003.0, 8),
+    ]
     responses = [
+        _header_model(4000.0),
         _header_model(4000.0),
         _header_model(4001.0),
         _header_model(4001.0),
@@ -117,7 +144,11 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
 
     def fulfill_bars(route) -> None:
         timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
-        if timeframe == "1d":
+        if timeframe == "1m":
+            # A load may read the 1m feed more than once; key it to the load's read-model step
+            # (step 1 is the switch to 1m, so it gets minute 0).
+            payload = minutes[min(max(response_index - 2, 0), len(minutes) - 1)]
+        elif timeframe == "1d":
             payload = {
                 "symbol": "GOLD",
                 "timeframe": "1d",
@@ -175,29 +206,35 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
         assert page.locator("#marketBadge").inner_text() == "运行中"
         assert page.locator("#healthButton").count() == 0
 
+        page.evaluate("() => { state.timeframe = '1m'; return load(); }")
+        assert page.locator("#headerPrice").inner_text() == "4,000"
+        assert page.locator("#headerPrice").get_attribute("title").startswith("最新 1m 行情")
+
         classes: list[str] = []
         for _ in range(3):
-            page.evaluate("() => load({withMarket:false})")
+            page.evaluate("() => load()")
             classes.append(page.locator("#headerPrice").get_attribute("class") or "")
         assert classes == ["tick-up", "tick-up", "tick-down"]
 
-        page.evaluate("() => load({withMarket:false})")
+        page.evaluate("() => load()")  # another venue: no tick against the old venue's price
+        assert page.locator("#headerPrice").inner_text() == "5,000"
         assert page.locator("#headerPrice").get_attribute("class") == ""
         assert page.locator("#marketBadge").inner_text() == "运行中"
 
-        page.evaluate("() => load({withMarket:false})")
+        page.evaluate("() => load()")
         assert page.locator("#marketBadge").inner_text() == "运行中"
 
-        page.evaluate("() => load({withMarket:false})")
+        page.evaluate("() => load()")
         assert page.locator("#marketBadge").inner_text() == "运行异常"
 
-        page.evaluate("() => load({withMarket:false})")
+        page.evaluate("() => load()")
+        assert page.locator("#headerPrice").get_attribute("class") == ""  # an untrusted feed never ticks
         assert "running" not in (
             page.locator("#marketBadge").get_attribute("class") or ""
         ).split()
         assert page.locator("#marketBadge").inner_text() == "运行异常"
 
-        page.evaluate("() => load({withMarket:false})")
+        page.evaluate("() => load()")
         assert page.locator("#marketBadge").inner_text() == "运行降级"
         assert browser_errors == []
         browser.close()
