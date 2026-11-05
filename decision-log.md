@@ -20,6 +20,13 @@
 - `checkout` uses `fetch-depth: 0`: source-attestation tests read git history.
 - Local `make test` takes about 6 minutes. Commit first, because the
   attestation tests fail on a dirty tracked tree.
+- The first CI run failed 3 Testnet replay tests (#1261) with
+  `KeyError: 'native_client_order_id'`. The Hyperliquid cloid is derived by
+  `nautilus_trader`, which lives in `requirements-optional.txt`; without it the
+  lifecycle keeps only the local client id, and the row has no native cloid.
+  CI now installs the pinned `nautilus_trader` line from that file so the
+  Testnet path is tested like local. The three tests also skip explicitly
+  when it is missing (same as `test_paper_gold_venue.py`). No gate changed.
 
 ## Verification
 

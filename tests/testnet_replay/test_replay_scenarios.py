@@ -807,6 +807,7 @@ def _venue_flattened(exchange: ReplayExchange, *, cloid: str) -> None:
 
 
 def test_issue_1261_unknown_flatten_reply_keeps_row_and_seals_attributed(tmp_path: Path) -> None:
+    pytest.importorskip("nautilus_trader", reason="the native Hyperliquid cloid is derived by nautilus_trader")
     lifecycle, exchange, plan, stopped = _flatten_reply_lost(tmp_path)
     assert stopped["status"].startswith("blocked")
     assert stopped["blocker"] == "position_open_unprotected"
@@ -857,6 +858,7 @@ def test_issue_1261_flat_venue_with_foreign_open_order_stays_blocked_loudly(tmp_
 
 
 def test_issue_1261_review_unknown_flatten_still_open_is_not_resubmitted(tmp_path: Path) -> None:
+    pytest.importorskip("nautilus_trader", reason="the native Hyperliquid cloid is derived by nautilus_trader")
     lifecycle, exchange, plan, stopped = _flatten_reply_lost(tmp_path)
     row = next(item for item in stopped["orders"] if item["event"] == "hard_stop")
     # The lost-reply IOC is still resting at the venue: the open order carries oid and native cloid.
@@ -871,6 +873,7 @@ def test_issue_1261_review_unknown_flatten_still_open_is_not_resubmitted(tmp_pat
 
 
 def test_issue_1261_review_unapplied_exit_fill_blocks_instead_of_sealing(tmp_path: Path) -> None:
+    pytest.importorskip("nautilus_trader", reason="the native Hyperliquid cloid is derived by nautilus_trader")
     lifecycle, exchange, plan, stopped = _flatten_reply_lost(tmp_path)
     row = next(item for item in stopped["orders"] if item["event"] == "hard_stop")
     _venue_flattened(exchange, cloid=row["native_client_order_id"])
