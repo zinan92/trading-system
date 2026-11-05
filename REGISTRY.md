@@ -9,6 +9,15 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, AI 透明度上线 · #1317)
+
+- 生产 trading-system `d4ffa4c`：空闲检查通过，gate 在这个 sha 上 pass，只重启了交易台。
+- 迁移前备份 `~/park-data/trading-desk/desk.db.pre-evidence-20261105`；`evidence` 列已加，240 条判断都在，旧 AI 建议都是 `{}`。
+- 生产 `/api/watch`：三张卡都有来源行，快讯显示「东方财富」，今天的理由里没有找不到的数。
+- **还没验证**：生产上第一条带依据的 AI 建议要等 2026-11-06 08:40 的定时任务。没有点「刷新 AI 建议」，因为那会改写今天已经计分的 AI 建议。#1317 等明早看过再关。
+
+_下一步_：明早确认依据；前端组件化。
+
 ## 现在在哪里(2026-11-05, 三件事显示来源并核对数字 · #1319)
 
 - 「本周要看的三件事」每张卡底部加一行来源：日历事件写名称、预期、前值；快讯写原标题和来源（东方财富、财联社……，不再是内部代号）。
