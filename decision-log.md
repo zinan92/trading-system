@@ -1,5 +1,65 @@
 # Decision Log
 
+# 2026-11-05 — 回测工作台: gold grid side by side (#1336)
+
+## Decision
+
+- Grid variants run through `services/grid_backtest.run_backtest`, the
+  engine behind the pre-open backtest box: Nautilus replay, Paper's refill
+  and edge-close rules, 7-day non-overlapping windows over 180 days.
+  There is no second, simplified grid engine.
+- The shape comes from the form, not from today's plan. `grid_shape` lays
+  the planner's own geometry at price 1.0:
+  - Spacing is (upper − lower) / (levels + 1).
+  - A buy takes profit one rung up (or at the upper edge); a sell one rung
+    down (or at the lower edge).
+  - A test pins it to `_build_grid_risk_plan(...)["risk"]["grid_rungs"]`
+    for long, short and neutral.
+  - `grid_backtest.scaled` then moves it to each window's first open.
+- Quantity per rung is the form's USDT notional; returns are on Paper's
+  `capital_per_track_usd` account (10,000 USDT), and the page says so.
+- Only gold. A BTC grid is refused by `check` and disabled on the page
+  until it has its own replay contract (#1337). The replay still accepts
+  only the gold Paper preflight; nothing about the replay entry changed.
+- The comparison passes `--preflight` (the Paper preflight file the desk
+  already reads) and `--nautilus-python` to the pipeline. Replay workers
+  are 3 per comparison; the comparison is still single-flight machine-wide.
+- The page waits up to 15 minutes for a grid (DCA keeps 5).
+
+## Gotchas
+
+- 「跌破下沿或止损」 counts windows that ended at `lower` or `stop` — the
+  engine's existing `stopped_pct`, the same row the pre-open box shows. A
+  short grid breaking its upper edge is not counted there.
+- A neutral grid has no separate stop: the edges are its stop. The form
+  hides the stop field for neutral and the server refuses one.
+- The stop must sit strictly between the price and the adverse edge;
+  anything else is refused rather than clamped.
+
+## Verification
+
+- `tests/test_dca_backtest.py` (25): geometry equals the planner's for all
+  three directions; bounds; BTC grid refused with `#1337`; compare replays
+  each variant once through a fake replay and reads gold's own series.
+- Desk 115 passed (launch passes `--preflight` and `--nautilus-python`).
+- Vitest 41 passed: grid rows, notes, bounds, the island sends grid sets
+  and shows grid rows, and BTC cannot pick grid.
+- Dev, production datafeed read-only, gold 2026-05-09 → 2026-11-05, 25
+  windows, 45 s for two sets:
+  - Neutral ±3%, 9 levels × 500 USDT: median +0.01%, worst −0.47%, best
+    +0.48%, edge broken in 52% of windows, 11.5 fills.
+  - Neutral ±5%, same: median +0.10%, worst −0.76%, best +0.59%, edge
+    broken in 8%, 9.0 fills. Funding counted in 12 / 25.
+- The first dev run failed with `RuntimeError`: the dev preflight was a
+  stale Binance `XAUUSDT` contract, and the replay refused gold OKX history.
+  Production's preflight is `XAU-USDT-SWAP`. Two fixes followed:
+  - The comparison now refuses up front, before reading history, naming
+    both contracts.
+  - An `unavailable` result is no longer cached for the day. Pressing
+    「开始回测」 again reruns it; only `ready` results are reused.
+- Not done: the spec's "same number as the pre-open box on the same day"
+  check needs a live gold plan; geometry is pinned by test instead.
+
 # 2026-11-05 — 回测工作台: DCA side by side (#1335)
 
 ## Decision
