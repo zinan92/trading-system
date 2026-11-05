@@ -33,3 +33,8 @@ $CODEX_HOME/
 *.db-wal
 *.db-journal
 .gstack/
+
+# screenshots belong under docs/ (evidence or archive), never in the root
+/*.png
+/*.jpg
+/*.jpeg
