@@ -9,6 +9,16 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 交易回看搬成组件，可按品种和时间筛 · #1326)
+
+- 「交易回看」整块换成 React 组件（`ReviewPanel`），`gm-review.js` 删掉；第一次点开这个标签才读数据，跟以前一样。
+- 新增两个筛选：品种（全部 / BTC / XAU …，列出所有有记录的品种）和时间（全部 / 近 7 天 / 近 30 天 / 近 90 天）。只要一轮有一部分落在时间段里就算。
+- 下面的「判断战绩」跟着同样的筛选算（按判断的品种和创建时间），标题写明筛的是什么，例如「判断战绩（XAU · 近 30 天）」。
+- 筛完没有记录时直接说「XAU · 近 30 天 没有跑过的记录」，不显示空图。
+- 还是只读：`/api/review/runs?asset=&days=` 和 `/api/review/timeline`，`days` 只收 0/7/30/90，别的值返回 422。
+
+_下一步_：#1327 今天的流程搬成组件。
+
 ## 现在在哪里(2026-11-05, 前端组件化第一块 · #1325)
 
 - 新增 `apps/web/`：Vite 8 + React 19 + TypeScript 7，打包成一个 `static/web/web.js`（gzip 73 KB），跟源码一起提交；交易台照旧是 Python 服务，不需要 node 才能跑。
