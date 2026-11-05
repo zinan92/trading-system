@@ -46,8 +46,13 @@ const DeskStatus = (() => {
     const terminal = current.terminal || {};
     let body = "还没有上一轮策略的记录。";
     if (terminal.reason) {
-      const exits = terminal.exit_receipts || [], ended = exits.map(r => r?.ts).filter(Boolean).sort().pop(), rec = terminal.reconciliation?.status;
-      body = `上一轮${ended ? `在 ${bjDay(ended)} ` : ""}结束：${TERMINAL[terminal.reason] || "已结束（原因见系统详情）"}${exits.length ? `，平仓 ${exits.length} 笔` : ""}${rec === "ok" ? "，对账一致" : rec ? "，对账未完成" : ""}。`;
+      const {closed_count: closed, ended_at: ended, ended_flat: flat, open_positions: open, sealed_open_positions: sealed} = terminal;
+      const rec = terminal.reconciliation?.status, late = finite(sealed) && Number(sealed) > 0;
+      const reconciled = rec === "ok" ? "，对账一致" : rec ? "，对账未完成" : "";
+      const state = flat === true ? (late ? `，现已无持仓（停止时还有 ${num(sealed)} 笔未平，之后才平完）` : `，已无持仓${reconciled}`)
+        : flat === false ? `，仍有 ${num(open)} 笔持仓未平` : "，持仓情况未知";
+      body = `上一轮${ended ? `在 ${bjDay(ended)} ` : ""}结束：${TERMINAL[terminal.reason] || "已结束（原因见系统详情）"}${finite(closed) && Number(closed) > 0 ? `，平仓 ${num(closed)} 笔` : ""}${state}。`;
+      if (flat === false) return {tone: "warn", title: "现在没有在跑的策略", body, action: {kind: "details", label: "查看原因"}};
     }
     return {tone: "idle", title: "现在没有在跑的策略", body, action: {kind: "start", label: "开始今天的计划"}};
   }

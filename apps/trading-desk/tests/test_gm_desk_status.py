@@ -39,8 +39,13 @@ def idle_view(**market) -> dict:
                 "blockers": ["active_strategy_missing", "grid_geometry_invalid"],
                 "terminal": {
                     "reason": "lower_boundary_invalidated",
-                    "exit_receipts": [{"ts": "2026-09-14T09:19:35+00:00"}, {"ts": "2026-09-14T09:19:36+00:00"}, {"ts": "2026-09-14T09:19:37+00:00"}],
-                    "reconciliation": {"status": "ok"},
+                    "exit_receipts": [{"ts": "2026-09-14T09:19:35+00:00"}] * 3,
+                    "closed_count": 10,
+                    "ended_at": "2026-09-14T16:21:19+00:00",
+                    "ended_flat": True,
+                    "open_positions": 0,
+                    "sealed_open_positions": 10,
+                    "reconciliation": {"status": "ok", "counts": {"open_positions": 10}},
                 },
             },
             "completeness": {"status": "degraded", "issues": ["production_plan_missing", "risk_decision_missing"]},
@@ -65,9 +70,32 @@ def test_idle_is_calm_and_says_how_the_last_run_ended() -> None:
     banner = run("banner", idle_view(), {"asset": "黄金"})
     assert banner["tone"] == "idle"
     assert banner["title"] == "现在没有在跑的策略"
-    assert banner["body"] == "上一轮在 9/14 结束：价格跌破区间下沿，平仓 3 笔，对账一致。"
+    assert banner["body"] == "上一轮在 9/15 结束：价格跌破区间下沿，平仓 10 笔，现已无持仓（停止时还有 10 笔未平，之后才平完）。"
+    assert "对账一致" not in banner["body"]
     assert banner["action"] == {"kind": "start", "label": "开始今天的计划"}
     assert "lower_boundary_invalidated" not in json.dumps(banner, ensure_ascii=False)
+
+
+def test_clean_stop_says_flat_and_reconciled() -> None:
+    view = idle_view()
+    view["data"]["current_strategy"]["terminal"].update(closed_count=3, ended_at="2026-09-14T09:19:35+00:00", sealed_open_positions=0)
+    assert run("banner", view, {"asset": "黄金"})["body"] == "上一轮在 9/14 结束：价格跌破区间下沿，平仓 3 笔，已无持仓，对账一致。"
+
+
+def test_open_exposure_is_a_warning_not_an_invitation_to_start() -> None:
+    view = idle_view()
+    view["data"]["current_strategy"]["terminal"].update(closed_count=3, ended_at=None, ended_flat=False, open_positions=7)
+    banner = run("banner", view, {"asset": "黄金"})
+    assert banner["tone"] == "warn"
+    assert "仍有 7 笔持仓未平" in banner["body"] and "对账一致" not in banner["body"]
+    assert banner["action"]["kind"] == "details"
+
+
+def test_unknown_flat_state_claims_neither_flat_nor_reconciled() -> None:
+    view = idle_view()
+    view["data"]["current_strategy"]["terminal"].update(closed_count=None, ended_flat=None, open_positions=None)
+    body = run("banner", view, {"asset": "黄金"})["body"]
+    assert "持仓情况未知" in body and "对账一致" not in body and "平仓" not in body
 
 
 def test_idle_health_is_grey_not_green_and_keeps_every_record() -> None:
