@@ -543,22 +543,28 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
 
 
 def current_state(sources: Sources, asset: dict[str, Any]) -> dict[str, Any]:
-    """Price and grid for one asset, from the venue its grid trades on."""
+    """Price and grid for one asset, from the venue its grid trades on.
+
+    `price_source` says where the price came from: 'venue', 'bars_1h' (the last 1-hour close, used
+    when the venue gives none) or 'none'. AI advice records it so the page can say which (#1318)."""
+    source = "none"
     if asset["kind"] == "watch":
-        latest = sources.bars(asset, "1h", limit=2)
-        return {"grid": {"ok": False, "none": True, "reason": f"{asset['label']}只记判断和复盘，还没有可以下单的交易所。"},
-                "price": latest["bars"][-1][4] if latest.get("ok") else None}
-    if asset["kind"] == "xau_paper":
+        grid: dict[str, Any] = {"ok": False, "none": True, "reason": f"{asset['label']}只记判断和复盘，还没有可以下单的交易所。"}
+        price = None
+    elif asset["kind"] == "xau_paper":
         paper = sources.xau_paper()
         grid = paper["grid"] if paper.get("ok") else {"ok": False, "reason": paper.get("reason")}
         price = paper.get("price") if paper.get("ok") else None
     else:
         grid = sources.hl_grid(asset)
         price = grid.get("price") if grid.get("ok") else None
-    if price is None:
+    if price is not None:
+        source = "venue"
+    else:
         latest = sources.bars(asset, "1h", limit=2)
         price = latest["bars"][-1][4] if latest.get("ok") else None
-    return {"grid": grid, "price": price}
+        source = "bars_1h" if price is not None else "none"
+    return {"grid": grid, "price": price, "price_source": source}
 
 
 def _read_desktop_html(path: Path, cache_dir: Path) -> str:

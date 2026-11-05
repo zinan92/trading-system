@@ -9,6 +9,16 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, AI 建议记下依据 · #1318)
+
+- 每天 08:40 的 AI 方向建议，现在按品种存下这次喂给模型的东西（`judgments.evidence`）：现价和来源（交易场所 / 1 小时 K 线 / 读不到）、K 线日报日期和截止时间、编号的新闻（Intel id、标题、来源、时间、是否旧列表）、三件事、模型通道。
+- 模型要回 `cited`：它依据的输入编号，只保留真给过它的编号；没回就空着，页面写「AI 没说依据哪几条」，建议照常保存。
+- `provenance.py` 逐个核对理由里的数字：65K 和 6.5万、4% 和 4.00% 算同一个数，「25 基点」可以是两个百分数之差；找不到的标「输入里没有」。
+- 「今天」第 1 步的 AI 卡下面多一行「依据」，可展开；每分钟刷新不会把它收起。旧建议显示「这条建议生成时还没有记录依据」，不补。
+- dev 上用真实输入试过：BTC 的 12 条新闻里大多是芯片和 ETF，和比特币关系不大。这是新闻挑选的问题，以前看不到，现在能看到了；这次不改。
+
+_下一步_：#1319 三件事的来源和数字核对。
+
 ## 现在在哪里(2026-11-05, 退役 3 个旧回放页 · #1310)
 
 - 删掉 `dashboard-replay.html`、`dashboard-replay-v4.html`、`dashboard-dualtrack-replay.html`。看过去的一轮，用 `/trade` 底部的「交易回看」（trade.park-ai-intel.com）。

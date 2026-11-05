@@ -93,10 +93,13 @@ class Store:
         with self._conn() as conn:
             self._migrate_asset_kinds(conn)
             conn.executescript(SCHEMA)
-            if "author" not in {row[1] for row in conn.execute("pragma table_info(judgments)")}:
-                # 'park' = Park's own call; 'ai' = the model's daily suggestion, scored the same way.
+            # author: 'park' = Park's own call; 'ai' = the model's daily suggestion, scored the same way.
+            # evidence: what an AI call was given (AI 透明度 #1318); '{}' for Park's calls and older AI calls.
+            for column, ddl in (("author", "author text not null default 'park'"), ("evidence", "evidence text not null default '{}'")):
+                if column in {row[1] for row in conn.execute("pragma table_info(judgments)")}:
+                    continue
                 try:
-                    conn.execute("alter table judgments add column author text not null default 'park'")
+                    conn.execute(f"alter table judgments add column {ddl}")
                 except sqlite3.OperationalError as exc:  # the server and a scheduled job migrated at the same moment
                     if "duplicate column" not in str(exc):
                         raise
@@ -135,27 +138,29 @@ class Store:
 
     def add_judgment(self, *, asset: str, direction: str, confidence: int, reason: str,
                      cited: list[dict[str, Any]], price_at: float | None, plan: dict[str, Any] | None,
-                     action: str, created_at: str | None = None, author: str = "park") -> dict[str, Any]:
+                     action: str, created_at: str | None = None, author: str = "park",
+                     evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._conn() as conn:
             cur = conn.execute(
-                "insert into judgments (created_at, asset, direction, confidence, reason, cited, price_at, plan, action, author)"
-                " values (?,?,?,?,?,?,?,?,?,?)",
+                "insert into judgments (created_at, asset, direction, confidence, reason, cited, price_at, plan, action, author, evidence)"
+                " values (?,?,?,?,?,?,?,?,?,?,?)",
                 (created_at or now_iso(), asset, direction, int(confidence), reason.strip(),
                  json.dumps(cited, ensure_ascii=False), price_at,
-                 json.dumps(plan, ensure_ascii=False) if plan else None, action, author),
+                 json.dumps(plan, ensure_ascii=False) if plan else None, action, author,
+                 json.dumps(evidence or {}, ensure_ascii=False)),
             )
             return self.judgment(cur.lastrowid, conn)
 
     def revise_judgment(self, judgment_id: int, *, direction: str, confidence: int, reason: str,
                         cited: list[dict[str, Any]], price_at: float | None, plan: dict[str, Any] | None,
-                        action: str) -> dict[str, Any]:
+                        action: str, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         """Park changed his mind the same day: one call per asset per day, timed and priced from the latest change."""
         with self._conn() as conn:
             conn.execute(
-                "update judgments set created_at=?, direction=?, confidence=?, reason=?, cited=?, price_at=?, plan=?, action=?"
+                "update judgments set created_at=?, direction=?, confidence=?, reason=?, cited=?, price_at=?, plan=?, action=?, evidence=?"
                 " where id=? and resolved_at is null",
                 (now_iso(), direction, int(confidence), reason.strip(), json.dumps(cited, ensure_ascii=False), price_at,
-                 json.dumps(plan, ensure_ascii=False) if plan else None, action, judgment_id),
+                 json.dumps(plan, ensure_ascii=False) if plan else None, action, json.dumps(evidence or {}, ensure_ascii=False), judgment_id),
             )
             return self.judgment(judgment_id, conn)
 
@@ -267,6 +272,7 @@ class Store:
 def _judgment(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["cited"] = json.loads(item.get("cited") or "[]")
+    item["evidence"] = json.loads(item.get("evidence") or "{}")
     item["plan"] = json.loads(item["plan"]) if item.get("plan") else None
     return item
 

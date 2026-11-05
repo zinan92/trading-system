@@ -1,5 +1,39 @@
 # Decision Log
 
+# 2026-11-05 — AI advice records what it was given (#1318)
+
+## Decision
+
+- Each AI call stores `evidence` in a new `judgments.evidence` column (JSON,
+  default `{}`, added by ALTER like `author`): price with `source`
+  (`venue`, `bars_1h`, `none`) and time, the K-line reading or why it is
+  missing, the numbered news with Intel ids and whether the list was stale,
+  三件事, and the model channel. `current_state` now returns `price_source`.
+- The prompt numbers every input and asks for `cited`. Only ids the model was
+  shown are kept, each once. No ids: the call is still stored with `cited: []`
+  and the page says so. Nothing is invented or dropped.
+- `provenance.unverified` is deterministic: K/M/B/万/亿 are scaled, a percent
+  only matches a percent, and "N 基点/bp" matches 100 × the gap between two
+  given percentages. It checks content only (price, K-line text, news titles,
+  三件事), never timestamps, ids or URLs, so dates cannot vouch for a number.
+- Read-only evidence: direction, confidence, plan and every gate are unchanged.
+
+## Gotchas
+
+- The 依据 panel is re-rendered by the one-minute desk refresh; `renderAi`
+  keeps it open when it was open.
+- Old AI calls (240 in production) have no inputs on record and stay `{}`.
+- The dev desk computes the static asset version at start; restart it after a
+  static change or the browser keeps the old script under the same `?v=`.
+
+## Verification
+
+- Desk suite 123 passed, including `test_provenance.py`,
+  `test_gm_ai_sources.py` and four new cases in `test_advice.py`.
+- Dev desk with real inputs and a fixed model answer: BTC price `venue`,
+  XAU price `bars_1h`, `n99` dropped from `cited`, `4.2%` flagged; panel
+  stays open across a refresh; 375 px without horizontal scroll.
+
 # 2026-11-05 — Retire the three old replay pages (#1310)
 
 ## Decision
