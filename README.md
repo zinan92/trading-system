@@ -1,12 +1,14 @@
 # Trading Platform
 
+[![test](https://github.com/zinan92/trading-system/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/zinan92/trading-system/actions/workflows/test.yml)
+
 Everything behind **trade.park-ai-intel.com/trade** lives in this one repository:
 the trading console (GridMind), the desk that wraps it, the broker adapters, the
 strategy engine and the K-line widget. Clone it, run one script, open `/trade`.
 
 ```
 in   Hyperliquid Testnet (public account reads, K-line bars, optional signed orders)
-     Binance XAUUSDT perpetual bars (gold paper track)
+     OKX XAU-USDT-SWAP perpetual (gold paper track), via zinan92/datafeed on :8100
      optional: a news service on :8001, daily newsletter HTML files, Telegram/Feishu
 out  http://127.0.0.1:8790/trade   交易：GridMind console + news rail + judgment/execution panel
      http://127.0.0.1:8790/desk    日报 / 系统：morning brief, K-line cards, health, execution log
@@ -14,6 +16,7 @@ out  http://127.0.0.1:8790/trade   交易：GridMind console + news rail + judgm
 
 fail no pre-deploy receipt          → dashboard refuses to boot (exit 79); run `make gate`
 fail dashboard down                 → desk /trade shows the reason; /desk still works
+fail datafeed down or untrusted      → chart says so; new Paper entries blocked; no other source stands in
 fail news service absent            → news rail shows "no source"; nothing else changes
 fail Testnet key file absent        → everything is read-only; execute buttons stay disabled
 fail preview digest ≠ confirm       → order path rejects; no retry, no auto-next-plan
@@ -83,6 +86,11 @@ make gate           # refresh the paper pre-deploy receipt after pulling
 make gitleaks       # before every commit
 ```
 
+CI (`.github/workflows/test.yml`) runs the same five suites, including the
+Playwright browser checks, on every pull request and every push to `main`.
+Commit before running `make test` locally: source-attestation tests fail on a
+dirty tracked tree.
+
 Testnet execution replay and mutation gates: `scripts/testnet_replay.sh`,
 `scripts/testnet_replay_mutations.sh`.
 
@@ -94,13 +102,16 @@ Linux/systemd variant, kept as reference.
 
 ## Optional upstreams
 
-Separate repositories the production instance also runs; the platform degrades
-gracefully without them.
+**Required for charts and Paper trading:** [zinan92/datafeed](https://github.com/zinan92/datafeed)
+on `:8100` (`TRADING_ORCHESTRATOR_DATAFEED_URL`). It serves every K-line bar,
+the gold instrument definition and the execution-market price. Without it the
+console runs, but charts show unavailable and new Paper entries stay blocked.
+
+Optional; the platform degrades gracefully without them:
 
 | Service | Repo | Used by |
 |---|---|---|
 | News feed on `:8001` | [zinan92/intel](https://github.com/zinan92/intel) | desk news rail |
-| Market data on `:8100` | [zinan92/datafeed](https://github.com/zinan92/datafeed) | cloud paper preflight only |
 | Morning brief / K-line newsletters | [zinan92/park-morning](https://github.com/zinan92/park-morning), [zinan92/daily-newsletter](https://github.com/zinan92/daily-newsletter) | `/desk#news` cards |
 
 ## Project records
@@ -108,6 +119,8 @@ gracefully without them.
 `REGISTRY.md` is where the project is now and what is next. `decision-log.md`
 holds the reasons and the traps. `NORTH_STAR.md` holds the destination. The
 original gold-pipeline documentation moved to `docs/gold-pipeline-readme.md`.
+Old screenshots, Codex task briefs and the May roadmap are kept, with history,
+in `docs/archive/`.
 
 ## License
 

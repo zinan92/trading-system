@@ -1,0 +1,65 @@
+# Every suite `make test` runs, on a fresh clone, for every PR and every push to main.
+# No secrets, no exchange access: the suites use fixtures and stub upstreams only.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      TZ: UTC
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # source-attestation tests read git history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-optional.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: |
+          python -m venv .venv
+          # nautilus_trader backs the Hyperliquid Testnet path (native cloid, exit-fill attribution);
+          # install the pinned line from requirements-optional.txt so CI covers it like local does.
+          .venv/bin/python -m pip install -r requirements-dev.txt playwright "$(grep -E '^nautilus_trader==' requirements-optional.txt)"
+          .venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Root suite
+        run: make VENV=.venv test-root
+
+      - name: Desk suite
+        run: make VENV=.venv test-desk
+
+      - name: Broker suite
+        run: make VENV=.venv test-broker
+
+      - name: Strategy suite
+        run: make VENV=.venv test-strategy
+
+      - name: K-line widget suite
+        run: make VENV=.venv test-kline

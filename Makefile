@@ -40,8 +40,9 @@ test-broker:
 test-strategy:
 	cd packages/trading-strategy && $(ROOT)/$(VPY) -m pytest tests -q -p no:cacheprovider
 
+# A failing widget test must fail the target; only a missing node is a skip.
 test-kline:
-	@command -v node >/dev/null && (cd packages/standard-kline && node --test standard-kline.test.js) || echo "node not found; skipping standard-kline tests"
+	@if command -v node >/dev/null; then cd packages/standard-kline && node --test standard-kline.test.js; else echo "node not found; skipping standard-kline tests"; fi
 
 gate:
 	$(VPY) -m pipelines.paper_predeploy_gate --python $(ROOT)/$(VPY) --json | tail -c 400

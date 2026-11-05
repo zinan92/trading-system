@@ -9,6 +9,18 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, CI 与仓库整理 · #1297)
+
+- 每个 PR 和每次推到 main 都会在 GitHub Actions 上从干净的克隆跑一遍五组测试
+  （root、desk、broker、strategy、K 线），包括 Playwright 浏览器测试。没有密钥，不连交易所。
+- 修了一个真 bug：`make test-kline` 以前在 K 线测试失败时打印 "node not found; skipping"
+  然后算通过。现在失败就是失败。
+- 仓库根目录从 82 个文件减到 26 个：41 张截图、12 份 Codex 任务说明、早期实现笔记和
+  5 月的 ROADMAP 用 `git mv` 搬进 `docs/archive/`（历史保留）。根目录新截图会被忽略。
+- README 改正：黄金走 OKX（经 datafeed），datafeed 是必需的。
+
+_下一步_：S6 交易回看，顺带把"开仓前回测这组参数"放进「今天」面板第 2 步。
+
 ## 现在在哪里(2026-11-05, 交易台 /trade 改版 · #1294)
 
 - Park 先看 mockup 再拍板（https://claude.ai/artifact/6s2EPPMkA9DSVjgxE469C9）。只改展示，

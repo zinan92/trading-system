@@ -1,5 +1,41 @@
 # Decision Log
 
+# 2026-11-05 — CI on every PR, and a clean repository root (#1297)
+
+## Decision
+
+- CI is GitHub Actions on Ubuntu 24.04 with Python 3.13 and Node 20. It runs
+  the same Makefile targets as `make test`, so local and CI cannot drift.
+  Playwright Chromium is installed so GridMind's browser checks run in CI
+  rather than being skipped.
+- Unreferenced root files are moved with `git mv`, not deleted, to keep their
+  history. Served HTML pages stay in the root because the dashboard server
+  and tests address them by path.
+
+## Gotchas
+
+- `test-kline` was `node … && … || echo "node not found; skipping"`. With
+  `A && B || C`, a failing B runs C and the target exits 0. A broken widget
+  test would never have failed `make test`.
+- `checkout` uses `fetch-depth: 0`: source-attestation tests read git history.
+- Local `make test` takes about 6 minutes. Commit first, because the
+  attestation tests fail on a dirty tracked tree.
+- The first CI run failed 3 Testnet replay tests (#1261) with
+  `KeyError: 'native_client_order_id'`. The Hyperliquid cloid is derived by
+  `nautilus_trader`, which lives in `requirements-optional.txt`; without it the
+  lifecycle keeps only the local client id, and the row has no native cloid.
+  CI now installs the pinned `nautilus_trader` line from that file so the
+  Testnet path is tested like local. The three tests also skip explicitly
+  when it is missing (same as `test_paper_gold_venue.py`). No gate changed.
+
+## Verification
+
+- Local baseline on `3d4bbc0`, all green: root 3905 passed (1 skipped,
+  19 xfailed), desk 73, broker 366, strategy 48, K-line 21.
+- With a deliberately failing K-line test, `make test-kline` exits 2. It
+  passes again with the real file.
+- CI result on the PR: recorded in the PR.
+
 # 2026-11-05 — Deployed the trade page redesign (#1294) to production
 
 ## Decision
