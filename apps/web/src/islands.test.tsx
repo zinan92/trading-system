@@ -9,6 +9,7 @@ import bridgeSource from "./bridge.tsx?raw";
 import aiSource from "./islands/AiSources.tsx?raw";
 import backtestSource from "./islands/BacktestBox.tsx?raw";
 import watchSource from "./islands/WatchPanel.tsx?raw";
+import workbenchSource from "./islands/Workbench.tsx?raw";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status, headers: {"content-type": "application/json"}});
 
@@ -122,9 +123,15 @@ describe("bridge", () => {
   });
 });
 
-test("islands never send anything: no POST, no order or control endpoint, no button", () => {
-  for (const source of [apiSource, bridgeSource, aiSource, backtestSource, watchSource]) {
-    expect(source).not.toMatch(/method:|<button|\/api\/execute|dashboard-control|\/api\/advice\/refresh/);
+test("islands send nothing but the one comparison POST, and never reach an order or control endpoint", () => {
+  // #1335 (decision-log): api.ts may hold exactly one POST, to /api/backtest/compare. Nothing else changes.
+  expect(apiSource.match(/method:/g)).toHaveLength(1);
+  expect(apiSource).toMatch(/COMPARE_PATH = "\/api\/backtest\/compare"/);
+  expect(apiSource).toMatch(/fetch\(COMPARE_PATH, \{method: "POST"/);
+  for (const source of [apiSource, bridgeSource, aiSource, backtestSource, watchSource, workbenchSource]) {
+    expect(source).not.toMatch(/\/api\/execute|dashboard-control|\/api\/advice\/refresh|\/api\/judgments|\/api\/plan|\/api\/grid\//);
   }
+  for (const source of [bridgeSource, aiSource, backtestSource, watchSource, workbenchSource]) expect(source).not.toMatch(/method:/);
+  expect(backtestSource).not.toMatch(/<button/);
   expect(["健康", "退役", "推荐", "评分"].some(word => backtestSource.includes(word))).toBe(false);
 });

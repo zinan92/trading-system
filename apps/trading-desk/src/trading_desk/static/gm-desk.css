@@ -232,3 +232,24 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
 .desk-backtest-bars i{flex:1;min-height:1px;background:#7fb2ff;border-radius:2px 2px 0 0;opacity:.75}
 .desk-backtest-axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted,#aab1bb)}
 @media (max-width:520px){.desk-backtest dl{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* 回测工作台 (#1335) */
+.desk-bench{display:flex;flex-direction:column;gap:12px}
+.desk-bench-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.desk-bench-head label{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted,#aab1bb)}
+.desk-bench-head select,.desk-bench-variants input{min-height:40px;background:var(--gm-panel,#131519);color:inherit;border:1px solid var(--rule-strong,#2c3139);border-radius:8px;padding:0 10px;font-size:14px}
+.desk-bench-head small{font-size:12px;color:#d9a35b}
+.desk-bench-variants{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.desk-bench-variants fieldset{display:grid;gap:6px;margin:0;padding:8px 10px 10px;border:1px solid var(--rule,#23272e);border-radius:8px;min-width:0}
+.desk-bench-variants legend{font-size:12px;color:var(--muted,#aab1bb);padding:0 4px}
+.desk-bench-variants label{display:grid;gap:4px;font-size:12px;color:var(--muted,#aab1bb)}
+.desk-bench-variants input{width:9em}
+.desk-bench-run{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.desk-bench-run .note,.desk-bench .note{font-size:12px;color:var(--muted,#aab1bb);margin:0}
+.desk-bench .note.warn{color:#f0a24b}
+.desk-bench-result{overflow-x:auto}
+.desk-bench-result table{border-collapse:collapse;min-width:100%;font-size:14px}
+.desk-bench-result th,.desk-bench-result td{padding:8px 10px;border-bottom:1px solid var(--rule,#23272e);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.desk-bench-result th[scope="row"],.desk-bench-result thead th:first-child{text-align:left;color:var(--muted,#aab1bb);font-weight:500}
+.desk-bench-result td.best{font-weight:700}
+.desk-bench-result .desk-backtest-bars{height:36px;min-width:120px}

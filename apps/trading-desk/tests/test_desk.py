@@ -690,7 +690,7 @@ def test_react_islands_bundle_is_shipped_and_replaces_the_old_scripts():
     for retired in ("gm-backtest.js", "gm-ai-sources.js", "gm-review.js"):
         assert retired not in shell and not (static / retired).exists()
     desk = (static / "gm-desk.js").read_text(encoding="utf-8")
-    for island in ("watch", "ai-sources", "backtest", "review"):
+    for island in ("watch", "ai-sources", "backtest", "review", "workbench"):
         assert f'data-island="{island}"' in desk
 
 

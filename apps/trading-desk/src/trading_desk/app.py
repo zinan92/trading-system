@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from . import plans, review
 from .config import Config
 from . import digest, gridmind, mainnet, remote, review_timeline
-from .backtest import Backtests
+from .backtest import Backtests, Busy, Comparisons
 from . import provenance
 from .advice import Advisor
 from .watch import Watch, codex_complete
@@ -80,13 +80,14 @@ class ExecuteIn(BaseModel):
 
 def create_app(config: Config | None = None, sources: Sources | None = None, store: Store | None = None,
                executor: Executor | None = None, watch: Watch | None = None, model: Callable[[str], str] | None = None,
-               backtests: Backtests | None = None) -> FastAPI:
+               backtests: Backtests | None = None, comparisons: Comparisons | None = None) -> FastAPI:
     config = config or Config()
     sources = sources or Sources(config)
     store = store or Store(config.db_path)
     executor = executor or Executor(config, lambda url, body: http_json(url, body, timeout=150))
     watch = watch or Watch(config.watch_folder, config.intel_url)
     backtests = backtests or Backtests(config)
+    comparisons = comparisons or Comparisons(config)
     app = FastAPI(title="Park 交易台", docs_url=None, redoc_url=None)
     remote.install(app, config.remote_passcode)
     gridmind.install(app, config.dashboard_url)
@@ -370,6 +371,27 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         if payload is None:
             raise HTTPException(404, "没有这一轮的记录")
         return payload
+
+    # 回测工作台 (#1335). Registered before /api/backtest/{key} so "compare" is not read as a key.
+    @app.post("/api/backtest/compare")
+    def backtest_compare_start(body: dict[str, Any]) -> dict[str, Any]:
+        from pipelines.backtest_compare import check
+
+        try:
+            request = check(body)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        try:
+            return {"key": comparisons.start(request)}
+        except Busy as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/backtest/compare/{key}")
+    def backtest_compare_result(key: str) -> dict[str, Any]:
+        result = comparisons.read(key)
+        if result is None:
+            raise HTTPException(404, "没有这次回测")
+        return result
 
     @app.get("/api/backtest/{key}")
     def backtest_result(key: str) -> dict[str, Any]:

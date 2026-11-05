@@ -497,8 +497,18 @@ if (typeof document !== "undefined") (() => {
     $d("#tabs")?.addEventListener("click", event => { if (event.target.closest('[data-tab="review"]')) $d("#deskReview").dataset.props = '{"active":true}'; });
   }
 
+  // 回测工作台 (apps/web Workbench, #1335): a tab of its own next to 交易回看. GridMind's tab handler
+  // switches any [data-tab] / [data-panel] pair, so the button and panel are all that is needed.
+  function mountBench() {
+    const tabs = $d("#tabs"), section = tabs?.closest("section");
+    if (!tabs || !section || $d('[data-panel="bench"]')) return;
+    tabs.insertAdjacentHTML("beforeend", `<button data-tab="bench" type="button">回测</button>`);
+    section.insertAdjacentHTML("beforeend", `<div class="tab card-body" data-panel="bench" data-island="workbench" data-props="{}"></div>`);
+  }
+
   async function boot() {
     mountReview();
+    mountBench();
     mountShell();
     syncSteps();
     renderStatus();

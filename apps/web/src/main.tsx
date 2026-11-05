@@ -4,8 +4,9 @@ import {AiSources} from "./islands/AiSources";
 import {BacktestBox} from "./islands/BacktestBox";
 import {ReviewPanel} from "./islands/ReviewPanel";
 import {WatchPanel} from "./islands/WatchPanel";
+import {Workbench} from "./islands/Workbench";
 
-export const islands = {"watch": WatchPanel, "backtest": BacktestBox, "ai-sources": AiSources, "review": ReviewPanel};
+export const islands = {"watch": WatchPanel, "backtest": BacktestBox, "ai-sources": AiSources, "review": ReviewPanel, "workbench": Workbench};
 
 const bridge = createBridge(islands);
 const boot = () => bridge.start(document.body);
