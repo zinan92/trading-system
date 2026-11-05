@@ -18,10 +18,6 @@ from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def read_replay_html() -> str:
-    return (ROOT / "dashboard-dualtrack-replay.html").read_text(encoding="utf-8")
-
-
 def _bar(ts: datetime, open_: float, close: float) -> Bar:
     return Bar(
         symbol="GOLD",
@@ -56,46 +52,6 @@ def _plan(cycle_id: str) -> dict:
         "invalidation": [{"side": "below", "price": 3940.0, "confirm": "touch"}],
         "confidence": 7,
     }
-
-
-def test_dualtrack_replay_page_uses_closed_attribution_only() -> None:
-    html = read_replay_html()
-
-    assert "<title>双轨同步回放 - Trading Orchestrator</title>" in html
-    assert "D6-1 CLOSED CYCLES ONLY" in html
-    assert "data/vendor/lightweight-charts.standalone.production.js" in html
-    assert "packages/standard-kline/standard-kline.js" in html
-    assert "StandardKline.StandardKlineChart" in html
-    assert "window.dualtrackReplayKlines" in html
-    assert "function buildTrackFillPriceLines(fills, color)" in html
-    assert "function buildTrackFillMarkers(fills, candles, track, color)" in html
-    assert '<svg id="humanChart"' not in html
-    assert '<svg id="machineChart"' not in html
-    assert 'api(`/api/dualtrack/attribution/${encodeURIComponent(state.cycleId)}`)' in html
-    assert 'api("/api/dualtrack/market/bars?limit=720")' in html
-    assert "/api/dualtrack/machine" not in html
-    assert "/api/dualtrack/human" not in html
-    assert "renderClosedOnly" in html
-    assert "renderPane(\"human\"" in html
-    assert "renderPane(\"machine\"" in html
-    assert "selectFillFromEvent" in html
-    assert "shared replay cursor" in html
-
-
-def test_dualtrack_console_deep_links_to_dt6_replay() -> None:
-    html = (ROOT / "dashboard-dualtrack-v5.html").read_text(encoding="utf-8")
-
-    assert "replayLink(closeout.replay_url" in html
-    assert "replayLink(previous.replay_url" in html
-    assert "暂无可回放周期" in html
-    assert "DT6 · 双轨同步回放" in html
-
-
-def test_dashboard_server_disables_cache_for_dualtrack_replay() -> None:
-    handler = object.__new__(dashboard_server.DashboardHandler)
-    handler.path = "/dashboard-dualtrack-replay.html?layout=dualtrack&cycle=2026-07-05_DAY"
-
-    assert handler._should_disable_static_cache() is True
 
 
 def test_d6_1_open_cycle_replay_data_refuses_machine_fills(tmp_path: Path) -> None:

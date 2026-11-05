@@ -1528,18 +1528,14 @@ def test_deployment_feature_summary_reports_missing_trader_and_ops_features(monk
     assert summary["status"] == "warn"
     assert summary["ops_url"] == "https://goldbot.park-ai-intel.com/ops-dashboard.html"
     assert summary["trader_vendor_url"] == "https://goldbot.park-ai-intel.com/data/vendor/echarts.min.js?v=20260627-gateway"
-    assert summary["replay_url"] == "https://goldbot.park-ai-intel.com/dashboard-replay-v4.html"
-    assert summary["replay_vendor_url"] == "https://goldbot.park-ai-intel.com/data/vendor/lightweight-charts.standalone.production.js"
+    assert "replay_url" not in summary and "replay" not in summary
     assert "ops:ops_command_copy" in summary["missing_features"]
     assert any(item["name"] == "nav_detail_preload" for item in summary["checks"])
     assert any(item["name"] == "trader_vendor_echarts" for item in summary["checks"])
     assert any(item["name"] == "replay_source_timeframe_scope" for item in summary["checks"])
     assert any(item["name"] == "dashboard_v4_title" for item in summary["checks"])
-    assert any(item["name"] == "replay_v4_route" for item in summary["checks"])
-    assert any(item["name"] == "replay_v4_body" for item in summary["checks"])
-    assert any(item["name"] == "replay_vendor_lightweight_charts" for item in summary["checks"])
     assert any(item["name"] == "gold_cadence_nav_sampling" for item in summary["checks"])
-    assert all(item["surface"] in {"trader", "replay", "ops"} for item in summary["checks"])
+    assert all(item["surface"] in {"trader", "ops"} for item in summary["checks"])
 
 
 def test_deployment_feature_summary_recognizes_public_v5_console(monkeypatch):
@@ -1564,55 +1560,24 @@ def test_deployment_feature_summary_recognizes_public_v5_console(monkeypatch):
     assert any(item["name"] == "trader_vendor_standard_kline" for item in summary["checks"])
 
 
-def test_deployment_feature_summary_warns_when_replay_page_is_missing(monkeypatch):
+def test_deployment_feature_summary_no_longer_probes_the_retired_replay_page(monkeypatch):
+    probed = []
+
     def fake_feature_probe(url, _timeout, features):
-        if "dashboard-replay-v4.html" in url:
-            return {
-                "ok": False,
-                "status_code": 404,
-                "reason": "Not Found",
-                "checks": [{"name": name, "ok": False} for name in features],
-            }
-        return {
-            "ok": True,
-            "status_code": 200,
-            "reason": "OK",
-            "checks": [{"name": name, "ok": True} for name in features],
-        }
+        probed.append(url)
+        return {"ok": True, "status_code": 200, "reason": "OK", "checks": [{"name": name, "ok": True} for name in features]}
+
+    def fake_http(url, _timeout):
+        probed.append(url)
+        return {"ok": True, "status_code": 200}
 
     monkeypatch.setattr(dashboard_server, "_probe_html_features", fake_feature_probe)
-    monkeypatch.setattr(dashboard_server, "_probe_http", lambda _url, _timeout: {"ok": True, "status_code": 200})
+    monkeypatch.setattr(dashboard_server, "_probe_http", fake_http)
 
     summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v4.html", 1)
 
-    assert summary["status"] == "warn"
-    assert summary["reason"] == "replay_probe_failed"
-    assert summary["replay"]["status_code"] == 404
-    assert not any(item.startswith("replay:") for item in summary["missing_features"])
-
-
-def test_deployment_feature_summary_warns_when_replay_vendor_is_missing(monkeypatch):
-    def fake_feature_probe(_url, _timeout, features):
-        return {
-            "ok": True,
-            "status_code": 200,
-            "reason": "OK",
-            "checks": [{"name": name, "ok": True} for name in features],
-        }
-
-    monkeypatch.setattr(dashboard_server, "_probe_html_features", fake_feature_probe)
-    monkeypatch.setattr(
-        dashboard_server,
-        "_probe_http",
-        lambda url, _timeout: {"ok": False, "status_code": 404} if "lightweight-charts" in url else {"ok": True, "status_code": 200},
-    )
-
-    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v4.html", 1)
-
-    assert summary["status"] == "warn"
-    assert summary["reason"] == "replay_vendor_probe_failed"
-    assert summary["replay_vendor"]["status_code"] == 404
-    assert not any(item == "replay:replay_vendor_lightweight_charts" for item in summary["missing_features"])
+    assert summary["status"] == "ok"
+    assert not any("replay" in url or "lightweight-charts" in url for url in probed)
 
 
 def test_deployment_feature_summary_warns_when_trader_vendor_is_missing(monkeypatch):
@@ -1705,8 +1670,6 @@ def test_dashboard_handler_disables_cache_for_dashboard_html():
         "/dashboard-v4.html",
         "/dashboard-v5.html",
         "/dashboard.html",
-        "/dashboard-replay.html",
-        "/dashboard-replay-v4.html",
         "/ops-dashboard.html?v=123",
         "/assets/shell.js",
         "/assets/shell.css?v=20260710",

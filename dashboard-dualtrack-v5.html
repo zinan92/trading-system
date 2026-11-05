@@ -34,7 +34,6 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
     <nav class="tabs" aria-label="primary navigation">
       <a class="tab" href="dashboard-v4.html">指挥台</a>
       <a class="tab active" href="dashboard-dualtrack-v5.html">双轨作战台</a>
-      <a class="tab" href="dashboard-replay-v4.html">回放</a>
       <a class="tab" href="ops-dashboard.html">运维</a>
     </nav>
     <div class="spacer"></div>
@@ -448,15 +447,14 @@ function renderAttribution(){
   const weeklyTotal = Number(state.ledger?.daily?.reduce?.((sum, row) => sum + Number(row.total_pnl || 0), 0) || attr?.ledger?.weekly?.total_pnl || 0);
   $("cashFlowCard").innerHTML = `<div style="font-size:11px;color:var(--faint);letter-spacing:.07em">月均日现金流 · 双轨合计</div><div class="cash-big ${weeklyTotal >= 0 ? "pos" : "neg"}">${money(weeklyTotal)}</div><div class="cash-sub">当前台账合计 · 周/月结论以 ledger 为准</div><div class="target-bar"><i></i></div><div class="calib">目标区间 <b>$200-300/天</b> -- 校准（$10k · 10x）：<br>系统地板（方向不可知网格）≈ <b>$80/天</b> · 神谕天花板 ≈ <b>$140/天</b><br><span class="warn">按当前本金，目标高于天花板；达标需本金 >=$25k 或目标降档</span></div>`;
   if(!attr){
-    const previousLink = previous.attribution_available ? replayLink(previous.replay_url, "查看最近回放", "暂无可回放周期") : replayLink("", "查看最近回放", "暂无可回放周期");
     $("attributionTable").innerHTML = `<div class="panel-h"><span class="t">周期对账 · 未收盘</span><span class="right">waiting close</span></div><div class="judge"><div class="row"><span>机器 fills</span><span class="dim">盘中隐藏</span><span class="warn">收盘揭示</span></div><div class="row"><span>归因</span><span class="dim">周期结束后生成</span><span class="warn">等待</span></div><div class="row"><span>Ledger</span><span class="dim">收盘写入</span><span class="${closeout.ledger_available ? "pos" : "dim"}">${closeout.ledger_available ? "已存在" : "等待"}</span></div><div class="row" style="border-top:1px dashed var(--rule);padding-top:10px"><span>最近已收盘</span><span class="dim">${esc(previous.cycle_id || "--")}</span><span class="${previous.attribution_available ? "pos" : "warn"}">${previous.attribution_available ? "可复盘" : "待归因"}</span></div></div>`;
-    $("planJudgeCard").innerHTML = `<div class="track-h" style="color:var(--muted)">复盘闭环 · ${esc(state.cycle?.cycle_id || "--")}</div><div class="judge"><div class="row"><span class="who">Replay</span><span class="dim">当前周期收盘后开放机器 fills</span><span class="warn">等待</span></div><div class="row"><span class="who">上一周期</span><span class="dim">机器 ${esc(previous.machine_fill_count ?? 0)} / 人 ${esc(previous.human_fill_count ?? 0)} fills</span><span>${previousLink}</span></div><div class="row"><span class="who">判卷</span><span class="dim">direction-only</span><span class="warn">等待</span></div><div class="row"><span class="who">Ledger</span><span class="dim">最近周期</span><span class="${previous.ledger_available ? "pos" : "warn"}">${previous.ledger_available ? "最近已入账" : "等待写入"}</span></div></div>`;
+    $("planJudgeCard").innerHTML = `<div class="track-h" style="color:var(--muted)">复盘闭环 · ${esc(state.cycle?.cycle_id || "--")}</div><div class="judge"><div class="row"><span class="who">Replay</span><span class="dim">当前周期收盘后开放机器 fills</span><span class="warn">等待</span></div><div class="row"><span class="who">上一周期</span><span class="dim">机器 ${esc(previous.machine_fill_count ?? 0)} / 人 ${esc(previous.human_fill_count ?? 0)} fills</span></div><div class="row"><span class="who">判卷</span><span class="dim">direction-only</span><span class="warn">等待</span></div><div class="row"><span class="who">Ledger</span><span class="dim">最近周期</span><span class="${previous.ledger_available ? "pos" : "warn"}">${previous.ledger_available ? "最近已入账" : "等待写入"}</span></div></div>`;
     return;
   }
   const tracks = attr?.tracks || {};
   $("attributionTable").innerHTML = `<div class="panel-h"><span class="t">周期对账 · ${esc(attr?.cycle_id || "未收盘")}</span><span class="right">closed cycles only</span></div><table><thead><tr><th>轨</th><th>笔数</th><th>胜率</th><th>已实现</th><th>捕获比</th><th>纪律违规</th></tr></thead><tbody>${trackRow("人轨", "human", tracks.human)}${trackRow("机器轨", "ai", tracks.machine)}</tbody></table><div class="verdict-in"><input id="verdictText" placeholder="一句话裁决..." style="flex:1;font-family:inherit"><button class="btn" onclick="submitVerdict()">归档</button></div>`;
   const grades = attr?.plan_grades || {};
-  $("planJudgeCard").innerHTML = `<div class="track-h" style="color:var(--muted)">作战单判卷 · ${esc(attr?.cycle_id || "--")}</div><div class="judge">${judgeRow("你", grades.human)}${judgeRow("AI", grades.ai)}<div class="row dim" style="font-size:11px"><span>判卷口径</span><span>direction-only grading</span><span>flat plans ungraded</span></div><div class="row"><span>Attribution</span><span class="dim">收盘归因</span><span class="${closeout.attribution_available ? "pos" : "warn"}">${closeout.attribution_available ? "ready" : "missing"}</span></div><div class="row"><span>Ledger</span><span class="dim">台账写入</span><span class="${closeout.ledger_available ? "pos" : "warn"}">${closeout.ledger_available ? "ready" : "missing"}</span></div><div class="row" style="border-top:1px dashed var(--rule);padding-top:10px"><span>Replay</span><span class="dim">DT6 · 双轨同步回放</span><span>${replayLink(closeout.replay_url, "查看完整回放", "暂无完整回放")}</span></div></div>`;
+  $("planJudgeCard").innerHTML = `<div class="track-h" style="color:var(--muted)">作战单判卷 · ${esc(attr?.cycle_id || "--")}</div><div class="judge">${judgeRow("你", grades.human)}${judgeRow("AI", grades.ai)}<div class="row dim" style="font-size:11px"><span>判卷口径</span><span>direction-only grading</span><span>flat plans ungraded</span></div><div class="row"><span>Attribution</span><span class="dim">收盘归因</span><span class="${closeout.attribution_available ? "pos" : "warn"}">${closeout.attribution_available ? "ready" : "missing"}</span></div><div class="row"><span>Ledger</span><span class="dim">台账写入</span><span class="${closeout.ledger_available ? "pos" : "warn"}">${closeout.ledger_available ? "ready" : "missing"}</span></div></div>`;
 }
 function renderLedger(){
   const rows = state.ledger?.daily || state.attribution?.ledger?.weekly?.days || [];
@@ -812,11 +810,6 @@ function compactMachineFillSummary(fills){
     if(Number.isFinite(ts)) timeBuckets.add(Math.floor(ts / 60000));
   });
   return `${rows.length} fills · ${priceLevels.size} 去重价位 · ${timeBuckets.size} 时间桶`;
-}
-function replayLink(url, label, disabledLabel){
-  const href = String(url || "").trim();
-  if(!href) return `<span class="btn disabled" aria-disabled="true">${esc(disabledLabel)}</span>`;
-  return `<a class="btn" href="${esc(href)}">${esc(label)}</a>`;
 }
 function dirText(direction){ return ({long:"做多", short:"做空", flat:"观望", absent:"缺失"})[direction] || "--"; }
 function seconds(value){ const s = Math.max(0, Number(value || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h${String(m).padStart(2,"0")}m`; }

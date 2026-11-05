@@ -9,6 +9,22 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 退役 3 个旧回放页 · #1310)
+
+- 删掉 `dashboard-replay.html`、`dashboard-replay-v4.html`、`dashboard-dualtrack-replay.html`。看过去的一轮，用 `/trade` 底部的「交易回看」（trade.park-ai-intel.com）。
+- 生产访问日志从 8/17 起，这三页和 `dashboard-v4.html` 都是 0 次访问。
+- `dashboard-v4.html` 里原来跳到多周期回放页的入口（约 17 处）改为切到本页的「交易索引」视图；页内那个「多周期回放」按钮去掉了。实验室策略的多周期 K 线回放随页面一起退役。
+- 双轨作战台去掉「回放」标签和收盘对账里的回放链接；`/api/dualtrack/runtime-status` 不再给 `replay_url`。`/api/replay` 保留，v4 页内视图还在用。
+- dashboard 部署体检不再探测回放页和它的 lightweight-charts 文件：页面已不存在，这是缩小探测范围，不是放宽闸门。
+
+### 生产部署（2026-11-05）
+
+- trading-system `5423375`（#1314 回测引擎 + #1315 回测显示）：空闲检查通过（无运行策略，挂单 / 未知单 / 持仓都是 0），predeploy gate 和 boot receipt 都在这个 sha 上 pass，`/trade` 200，`gm-backtest.js` 已加载。
+- 没有为了验证去点「开始今天的计划」或记录判断；直接用生产路径（8100 datafeed、生产 preflight、Nautilus 运行时）对 9/8 的计划跑了一次 CLI，结果写在临时目录：ready，25 段，43.7 秒，中位 +0.25%，最差 −2.11%，36% 触下沿或止损，资金费计入 12 / 25 段。
+- datafeed `caf1dd4`（#185）已发布；生产 OKX 回填完成：259,200 根 1 分钟线（2026-05-09 08:26 到 11-05 08:25 UTC），缺 0 分钟，`/api/history/okx_swap_public/XAU-USDT-SWAP/report` 可读。每天 08:40 自动补。
+
+_下一步_：S6 收尾，然后 AI 透明度，再做前端组件化。
+
 ## 现在在哪里(2026-11-05, 开仓前回测显示在启动按钮上方 · #1309)
 
 - 黄金 Paper 预览通过时，desk 用同一份计划起一个后台回测（`trading_desk/backtest.py`，跑 `pipelines.grid_backtest`），

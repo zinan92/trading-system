@@ -37,22 +37,8 @@
     return "";
   }
 
-  function sourceRoom() {
-    const params = new URLSearchParams(window.location.search);
-    const source = `${params.get("from") || ""} ${params.get("source") || ""} ${params.get("layout") || ""}`.toLowerCase();
-    if (source.includes("dualtrack")) return "dualtrack";
-    const ref = String(document.referrer || "").toLowerCase();
-    if (ref.includes("dashboard-dualtrack")) return "dualtrack";
-    return "cockpit";
-  }
-
   function navHtml() {
     const page = filename();
-    if (page === "dashboard-replay-v4.html" || page === "dashboard-dualtrack-replay.html") {
-      const room = page === "dashboard-dualtrack-replay.html" ? "dualtrack" : sourceRoom();
-      const label = room === "dualtrack" ? "返回作战台" : "返回驾驶舱";
-      return `<a class="gb-shell-return" href="${ROOM_URLS[room]}">${label}</a>`;
-    }
     const items = [
       ["command", "指挥台", "command-center.html"],
       ["dualtrack", "作战台", "dashboard-dualtrack-v5.html"],

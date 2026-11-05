@@ -673,27 +673,15 @@ async function run() {
     }
   }
 
+  // The replay pages were retired (#1310): the header CTA now opens this page's own 交易索引 view.
   await page.locator("#headerReplayBtn").click();
-  await page.waitForURL(/dashboard-replay\.html/, { timeout: 10000 });
-  await page.waitForLoadState("domcontentloaded");
+  await page.waitForSelector("#view-replay.active", { timeout: 10000 });
   const replayRoute = await page.evaluate(() => ({
     url: window.location.href,
-    title: document.title,
-    body_text: document.body.innerText.replace(/\s+/g, " ").slice(0, 300),
-    is_404: /404|not found/i.test(document.body.innerText),
+    replay_view_active: Boolean(document.querySelector("#view-replay.active")),
   }));
-  assertPass(replayRoute.url.includes("dashboard-replay-v4.html"), "Header replay CTA did not route to dashboard-replay-v4.html", replayRoute);
-  assertPass(!replayRoute.is_404, "Header replay CTA opened a 404/not-found page", replayRoute);
-  if (!noTradeIndex.skipped) {
-    const expectedDate = new URL(url).searchParams.get("date") || "";
-    const replayDate = new URL(replayRoute.url).searchParams.get("date") || "";
-    assertPass(replayDate === expectedDate, "Header replay CTA drifted from the current dashboard date after selecting a zero-trade strategy", {
-      expected_date: expectedDate,
-      replay_date: replayDate,
-      replay_url: replayRoute.url,
-      zero_trade_index: noTradeIndex,
-    });
-  }
+  assertPass(replayRoute.url.includes("dashboard-v4.html"), "Header replay CTA left the console page", replayRoute);
+  assertPass(replayRoute.replay_view_active, "Header replay CTA did not open the in-page replay view", replayRoute);
 
   const result = {
     status: "pass",

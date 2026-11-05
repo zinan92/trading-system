@@ -10,9 +10,7 @@ ACTIVE_PAGES = [
     "command-center.html",
     "ops-dashboard.html",
     "dashboard-v4.html",
-    "dashboard-replay-v4.html",
     "dashboard-dualtrack-v5.html",
-    "dashboard-dualtrack-replay.html",
 ]
 
 
@@ -39,7 +37,6 @@ def test_legacy_pages_redirect_to_current_targets() -> None:
     targets = {
         "dashboard-v3.html": "dashboard-v4.html",
         "dashboard.html": "dashboard-v4.html",
-        "dashboard-replay.html": "dashboard-replay-v4.html",
     }
     for page, target in targets.items():
         html = _read(page)
