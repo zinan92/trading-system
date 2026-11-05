@@ -753,6 +753,7 @@ load();setInterval(()=>{if(!state.busy&&!document.hidden)load()},PUBLIC_OBSERVER
     if(market){const when=market.observed_at?String(market.observed_at).replace("T"," ").slice(0,16)+" UTC":"时间未知";const good=market.trusted===true&&market.fresh===true;parts.push({text:`行情 ${text(market.provider)}${market.symbol?" "+market.symbol:""} ${market.price===null||market.price===undefined?"无价格":Number(market.price).toLocaleString("en-US",{maximumFractionDigits:2})} · ${when} · ${good?"可信":"不可信"}`,bad:!good})}
     else parts.push({text:"未读取行情",bad:false});
     if(account)parts.push({text:`账户 权益 ${account.equity===null||account.equity===undefined?"未知":Number(account.equity).toLocaleString("en-US",{maximumFractionDigits:2})} · 持仓 ${text(account.open_positions)} · 挂单 ${text(account.open_orders)}`,bad:account.equity===null||account.equity===undefined});
+    else parts.push({text:"未读取账户",bad:false});
     const node=document.createElement("div");node.className="park-ai-sources";node.dataset.sources="1";
     const label=document.createElement("span");label.textContent="依据";node.appendChild(label);
     parts.forEach(part=>{const item=document.createElement("span");item.textContent=part.text;if(part.bad)item.className="bad";node.appendChild(item)});

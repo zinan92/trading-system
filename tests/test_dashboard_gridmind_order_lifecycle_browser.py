@@ -786,6 +786,6 @@ def test_gridmind_ai_reply_shows_what_it_was_based_on() -> None:
         assert "行情 okx XAU-USDT-SWAP 4,106.7 · 2026-11-06 03:40 UTC · 可信" in first
         assert "账户 权益 10,000 · 持仓 0 · 挂单 0" in first
         assert lines.nth(0).locator(".bad").count() == 0
-        assert "本地规则解析，未调用模型" in second and "无价格" in second and "不可信" in second
+        assert "本地规则解析，未调用模型" in second and "无价格" in second and "不可信" in second and "未读取账户" in second
         assert lines.nth(1).locator(".bad").inner_text().endswith("不可信")
         browser.close()
