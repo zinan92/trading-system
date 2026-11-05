@@ -46,6 +46,7 @@ WRITE_PATHS = frozenset({
     "/api/dashboard-control/acceptance",
 })
 SHELL = ('<link rel="stylesheet" href="/static/gm-desk.css?v={v}">'
+         '<script src="/static/gm-ai-sources.js?v={v}" defer></script>'
          '<script src="/static/gm-desk.js?v={v}" defer></script>'
          '<script src="/static/gm-review.js?v={v}" defer></script>'
          '<script src="/static/gm-backtest.js?v={v}" defer></script>')
@@ -61,7 +62,7 @@ def _asset_version() -> str:
 
     static = Path(__file__).resolve().parent / "static"
     digest = hashlib.sha256()
-    for name in ("gm-desk.js", "gm-desk.css", "gm-review.js", "gm-backtest.js"):
+    for name in ("gm-desk.js", "gm-desk.css", "gm-review.js", "gm-backtest.js", "gm-ai-sources.js"):
         digest.update((static / name).read_bytes())
     return digest.hexdigest()[:12]
 

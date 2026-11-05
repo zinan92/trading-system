@@ -404,7 +404,7 @@ if (typeof document !== "undefined") (() => {
     else {
       const at = new Date(ai.created_at).toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"});
       box.innerHTML = `<div class="desk-ai-line"><span class="k">AI 建议</span><b class="d-${ai.direction === "flat" ? "wait" : ai.direction}">${AI_CALL[ai.direction]}</b><span class="muted">信心 ${ai.confidence}/5 · ${at}</span>${refresh}</div>
-        <p>${escD(ai.reason)}</p>${D.d === null ? `<button type="button" class="desk-link" id="deskAiAdopt">照 AI 的方向判断</button>` : ""}`;
+        <p>${escD(ai.reason)}</p>${aiSources(ai)}${D.d === null ? `<button type="button" class="desk-link" id="deskAiAdopt">照 AI 的方向判断</button>` : ""}`;
       const adopt = $d("#deskAiAdopt");
       if (adopt) adopt.onclick = () => { D.d = ai.direction; syncDir(); loadPlan(); adopt.remove(); };
     }
@@ -413,6 +413,16 @@ if (typeof document !== "undefined") (() => {
       try { await call("/api/advice/refresh", {}); } catch (e) { $d("#deskAiRefresh").textContent = e.message; return; }
       const poll = setInterval(async () => { const st = await call("/api/advice").catch(() => null); if (st && !st.running) { clearInterval(poll); loadDesk(); } }, 5000);
     };
+  }
+
+  function aiSources(ai) {  // AI 透明度 (#1318): what the call was given and used
+    if (!window.DeskSources) return "";
+    const v = window.DeskSources.advice(ai);
+    if (v.empty) return `<p class="desk-ai-src muted">${escD(v.empty)}</p>`;
+    const warn = [...(v.unverified.length ? [`输入里没有：${v.unverified.join("、")}`] : []), ...v.flags];
+    return `<details class="desk-ai-src"><summary>依据：${escD(v.summary)}${warn.length ? ` <span class="warn">${escD(warn.join(" · "))}</span>` : ""}</summary>
+      <ul>${v.items.map(item => `<li class="${item.cited ? "cited" : ""}"><span class="k">${escD(item.label)}</span>${item.url ? `<a href="${escD(item.url)}" target="_blank" rel="noopener noreferrer">${escD(item.text)}</a>` : escD(item.text)}${item.cited ? '<span class="cite">已引用</span>' : ""}</li>`).join("")}</ul>
+      ${v.model ? `<p class="muted">${escD(v.model)}</p>` : ""}</details>`;
   }
 
   function renderStop(c) {

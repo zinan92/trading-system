@@ -671,7 +671,7 @@ def test_desk_assets_are_cache_busted_by_content():
     from trading_desk import gridmind
 
     static = Path(gridmind.__file__).resolve().parent / "static"
-    expected = hashlib.sha256(b"".join((static / name).read_bytes() for name in ("gm-desk.js", "gm-desk.css", "gm-review.js", "gm-backtest.js"))).hexdigest()[:12]
+    expected = hashlib.sha256(b"".join((static / name).read_bytes() for name in ("gm-desk.js", "gm-desk.css", "gm-review.js", "gm-backtest.js", "gm-ai-sources.js"))).hexdigest()[:12]
     assert gridmind.ASSET_VERSION == expected
     assert f"gm-desk.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
     assert f"gm-review.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
