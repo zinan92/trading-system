@@ -5,12 +5,13 @@ VPY := $(VENV)/bin/python
 ROOT := $(CURDIR)
 export PYTHONPATH := $(ROOT):$(ROOT)/src:$(ROOT)/packages/standard-broker/src:$(ROOT)/packages/trading-strategy/src:$(ROOT)/apps/trading-desk/src
 
-.PHONY: help setup setup-nautilus test test-root test-desk test-broker test-strategy test-kline test-web web gate dashboard desk lint gitleaks clean
+.PHONY: help setup setup-nautilus test test-root test-desk test-broker test-strategy test-kline test-web web coverage coverage-report gate dashboard desk lint gitleaks clean
 
 help:
 	@echo "make setup          create $(VENV) and install requirements-dev.txt (runtime + test deps)"
 	@echo "make setup-nautilus create .venv-nautilus with nautilus_trader (Testnet execution only)"
 	@echo "make test           run every suite (root, desk, broker, strategy, kline, web)"
+	@echo "make coverage       root + desk suites with line coverage; per-package summary + coverage.xml"
 	@echo "make web            rebuild the React islands into apps/trading-desk/.../static/web/web.js"
 	@echo "make gate           write the paper pre-deploy receipt the dashboard needs to boot"
 	@echo "make dashboard      serve GridMind on http://127.0.0.1:8765"
@@ -29,11 +30,30 @@ setup-nautilus:
 
 test: test-root test-desk test-broker test-strategy test-kline test-web
 
+# COV=1 measures line coverage while the suites run (no second run); coverage-report sums it up.
+# pytest-cov starts each data file fresh, so a stale run never leaks into the numbers.
+ifeq ($(COV),1)
+ROOT_COV := --cov=services --cov=pipelines --cov=schemas --cov-report=
+DESK_COV := --cov=trading_desk --cov-report=
+endif
+
 test-root:
-	$(VPY) -m pytest tests -q -p no:cacheprovider
+	COVERAGE_FILE=$(ROOT)/.coverage.root $(VPY) -m pytest tests -q -p no:cacheprovider $(ROOT_COV)
 
 test-desk:
-	cd apps/trading-desk && $(ROOT)/$(VPY) -m pytest tests -q -p no:cacheprovider
+	cd apps/trading-desk && COVERAGE_FILE=$(ROOT)/.coverage.desk $(ROOT)/$(VPY) -m pytest tests -q -p no:cacheprovider $(DESK_COV)
+
+coverage:
+	$(MAKE) test-root test-desk COV=1
+	$(MAKE) coverage-report
+
+coverage-report:
+	$(VPY) -m coverage combine --keep .coverage.root .coverage.desk
+	@for pkg in services pipelines schemas trading_desk; do \
+		printf '%-14s %s%%\n' $$pkg "$$($(VPY) -m coverage report --include="*/$$pkg/*" --format=total)"; \
+	done
+	@printf '%-14s %s%%\n' total "$$($(VPY) -m coverage report --format=total)"
+	$(VPY) -m coverage xml -q -o coverage.xml
 
 test-broker:
 	cd packages/standard-broker && $(ROOT)/$(VPY) -m pytest tests -q -p no:cacheprovider

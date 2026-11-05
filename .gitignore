@@ -38,3 +38,8 @@ $CODEX_HOME/
 /*.png
 /*.jpg
 /*.jpeg
+
+# make coverage (#1341)
+.coverage
+.coverage.*
+coverage.xml

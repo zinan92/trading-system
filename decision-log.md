@@ -1,5 +1,55 @@
 # Decision Log
 
+# 2026-11-06 — One deploy script, and a coverage number (#1341)
+
+## Decision
+
+- `ops/deploy-paper.sh <sha>` replaces the hand-run checklist. In order:
+  1. `<sha>` must be origin/main's head; production must fast-forward to
+     it and have no tracked changes.
+  2. Paper must be idle per the read model: no active strategy, no open or
+     unknown order, no open position.
+  3. Fast-forward `~/work/trading-platform`.
+  4. Wait (30 min by default) for the pre-deploy receipt to be `pass` at
+     that exact sha.
+  5. Restart the desk (`--dashboard` also restarts GridMind), then require
+     200 from `/trade`, `/static/web/web.js` and `/api/watch`.
+  - `--dry-run` runs checks 1–2 and changes nothing.
+- It never places, cancels or closes an order and never reads credentials.
+  Restarting the dashboard is possible only after the idle check, so no
+  order lifecycle is restarted mid-flight. No gate was loosened: the
+  script only waits for the existing gate.
+- The script is bash, not zsh, so CI (Ubuntu, no zsh) runs its tests.
+- Coverage is measured in the same CI run (`COV=1` on the root and desk
+  steps), not a second run. CI prints a per-package summary into the job
+  summary and uploads `coverage.xml`. `make coverage` does the same locally.
+- `pytest-cov==7.1.0` and `coverage==7.17.0` are pinned. 7.17.1 and
+  7.17.2 were days old.
+
+## Gotchas
+
+- If the gate does not pass in time, production is already fast-forwarded
+  but nothing was restarted. The running services keep the old code until
+  the next restart; rerun the script after the gate passes.
+- The gate receipt lives in `~/work/park-paper-output/release_gates/`, not
+  `~/park-paper-output/`.
+- `combine --keep` is used so `make coverage-report` can be rerun without
+  rerunning the suites.
+
+## Verification
+
+- `tests/test_deploy_paper_script.py` (11) runs the real script against a
+  throwaway origin + production clone, a fake read model/desk and a
+  recording `launchctl` stub. Covered:
+  - Clean run restarts only the desk; `--dashboard` adds GridMind.
+  - Dry run changes nothing.
+  - Each busy reason is refused with production untouched.
+  - A non-head sha, a gate blocked or at another sha, a 404 after restart
+    and a dirty checkout are all refused.
+- Local `make coverage-report` on the desk suite plus a root subset
+  printed the summary and wrote `coverage.xml`. Full numbers are in the
+  first CI run.
+
 # 2026-11-06 — No xfails left in the suite (#1340, #1288)
 
 ## Decision

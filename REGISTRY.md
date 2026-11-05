@@ -9,6 +9,17 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-06, 一键部署 + 覆盖率 · #1341)
+
+- 部署改成一条命令：`ops/deploy-paper.sh <main 的 sha>`。它会依次：
+  - 核对这是 main 最新的提交；
+  - 确认 Paper 空闲（没有在跑的策略、挂单、未知单、持仓）；
+  - 快进生产目录；
+  - 等 predeploy gate 在这个 sha 上 pass；
+  - 只重启交易台，再检查三个地址都返回 200。
+  任何一步不满足就停下，不重启任何东西。`--dry-run` 只检查不动手。
+- 覆盖率：CI 在跑测试的同时量覆盖率，任务页面上写每个包的百分比，并附上 `coverage.xml`；本地是 `make coverage`。
+
 ## 现在在哪里(2026-11-06, 测试里不再有 xfail · #1340)
 
 - 19 个「已知失败」清零：
