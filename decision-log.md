@@ -1,5 +1,38 @@
 # Decision Log
 
+# 2026-11-05 — Pre-start backtest shown above the start button (#1309)
+
+## Decision
+
+- The desk starts the backtest when a gold Paper preview is ready. It launches
+  `pipelines.grid_backtest` with the Nautilus python in a new session, with an
+  environment cut down to PATH/HOME/TMPDIR/LANG/TZ plus `PYTHONPATH`, so no
+  desk secret reaches it. Results live in the desk's own `backtests/` folder.
+- Results are keyed by the plan's shape relative to the current price, plus
+  the UTC day. The same shape on the same day reuses a result; a `running`
+  result older than 15 minutes is restarted. 60 results are kept.
+- The page reads only `GET /api/backtest/{key}`. A launch error leaves
+  `backtest_key` empty and never fails the preview; the start button does not
+  read the backtest. The order path and every gate are unchanged.
+- `preview_gold` now returns the draft `plan`; the approval route pops it before
+  the preview is stored or shown, and `execute_gold` pops it from its fresh
+  preview, so the plan is not echoed to the page or into receipts.
+
+## Gotchas
+
+- The box is prepended to `#deskExecBox`; StandardKline is not used, the
+  histogram is plain CSS bars, so it works at 375 px without a fixed host.
+- Polling stops after 120 tries (6 minutes) and then says so instead of
+  spinning forever.
+
+## Verification
+
+- Desk suite 110 passed, including `test_backtest_launch.py`,
+  `test_gm_backtest.py` and two gold-preview tests in `test_desk.py`.
+- Dev desk end to end: launch to ready in 38.4 s, key reused on a second
+  preview; box rendered in the 「你亲手启动」 step at desktop width and at
+  375 px with no horizontal scroll.
+
 # 2026-11-05 — Pre-start backtest engine and its calibration (#1308)
 
 ## Decision
