@@ -50,3 +50,9 @@ def test_the_desk_binds_loopback_unless_told_otherwise() -> None:
     assert 'os.environ.get("TRADING_DESK_HOST", "127.0.0.1")' in main
     entry = (ROOT / "deploy/docker/entrypoint.sh").read_text(encoding="utf-8")
     assert "paper_predeploy_gate" in entry.split("dashboard_server", 1)[0]  # receipt before the dashboard boots
+
+
+def test_api_tokens_live_in_the_volume_and_exec_finds_the_desk() -> None:
+    # #1344: `docker compose exec trading python -m trading_desk token create` runs without the entrypoint.
+    assert "TRADING_DESK_API_TOKENS=/data/desk/api-tokens.json" in DOCKERFILE
+    assert re.search(r"PYTHONPATH=[^\s]*/app/apps/trading-desk/src", DOCKERFILE)

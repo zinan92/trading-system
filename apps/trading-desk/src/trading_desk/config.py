@@ -38,6 +38,7 @@ class Config:
     kline_latest_html: Path = Path(_env("TRADING_DESK_KLINE_HTML", str(Path.home() / "Desktop/K线日报/latest.html")))
     weekly_latest_html: Path = Path(_env("TRADING_DESK_WEEKLY_HTML", str(Path.home() / "Desktop/宏观K线周报/latest.html")))
     remote_passcode: Path = Path(_env("TRADING_DESK_REMOTE_PASSCODE", str(Path.home() / "park-data/trading-desk/remote-passcode")))
+    api_tokens: Path = Path(_env("TRADING_DESK_API_TOKENS", str(Path.home() / "park-data/trading-desk/api-tokens.json")))  # 只读开放 API (#1344)
     watch_folder: Path = Path(_env("TRADING_DESK_WATCH", str(Path.home() / "park-data/trading-desk/watch")))
     paused_manifest: Path = Path(_env("TRADING_DESK_PAUSED", str(Path.home() / "park-data/trading-desk/paused-services.md")))
     # Execution (Hyperliquid Testnet only): the desk reuses the operator's proven preview -> confirm -> driver path.

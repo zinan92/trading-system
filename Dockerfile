@@ -38,7 +38,11 @@ RUN useradd --create-home --uid 10001 park \
 USER park
 # /app stays read-only for the runtime user; the boot receipt's compile probe writes bytecode under
 # PYTHONPYCACHEPREFIX instead of next to the sources.
-ENV PYTHONPYCACHEPREFIX=/tmp/pycache
+ENV PYTHONPYCACHEPREFIX=/tmp/pycache \
+    PYTHONPATH=/app:/app/src:/app/packages/standard-broker/src:/app/packages/trading-strategy/src:/app/apps/trading-desk/src \
+    TRADING_DESK_API_TOKENS=/data/desk/api-tokens.json
+# PYTHONPATH and the token file are image-wide so `docker compose exec trading python -m trading_desk
+# token create <name>` works without the entrypoint; the token file lives in the volume (#1344).
 
 EXPOSE 8765 8790
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD curl -fsS http://127.0.0.1:8790/api/health || exit 1
