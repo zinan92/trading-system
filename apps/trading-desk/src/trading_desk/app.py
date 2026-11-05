@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from . import plans, review
 from .config import Config
 from . import digest, gridmind, mainnet, remote, review_timeline
+from .backtest import Backtests
 from .advice import Advisor
 from .watch import Watch, codex_complete
 from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
@@ -77,12 +78,14 @@ class ExecuteIn(BaseModel):
 
 
 def create_app(config: Config | None = None, sources: Sources | None = None, store: Store | None = None,
-               executor: Executor | None = None, watch: Watch | None = None, model: Callable[[str], str] | None = None) -> FastAPI:
+               executor: Executor | None = None, watch: Watch | None = None, model: Callable[[str], str] | None = None,
+               backtests: Backtests | None = None) -> FastAPI:
     config = config or Config()
     sources = sources or Sources(config)
     store = store or Store(config.db_path)
     executor = executor or Executor(config, lambda url, body: http_json(url, body, timeout=150))
     watch = watch or Watch(config.watch_folder, config.intel_url)
+    backtests = backtests or Backtests(config)
     app = FastAPI(title="Park 交易台", docs_url=None, redoc_url=None)
     remote.install(app, config.remote_passcode)
     gridmind.install(app, config.dashboard_url)
@@ -231,6 +234,12 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
                 preview = {"execution_ready": False, "blockers": [str(exc)]}
             except Exception as exc:  # noqa: BLE001 - preview failure must not lose the recorded judgment
                 preview = {"execution_ready": False, "blockers": [f"预览失败：{type(exc).__name__}"]}
+            plan_for_backtest = preview.pop("plan", None)
+            if preview.get("execution_ready") and plan_for_backtest:
+                try:
+                    preview["backtest_key"] = backtests.start(plan_for_backtest)
+                except Exception:  # noqa: BLE001 - the backtest is reference only; it never stops a preview
+                    preview["backtest_key"] = None
             store.log_execution(asset=asset["key"], stage="preview", judgment_id=saved["id"], preview_digest=preview.get("preview_digest"), detail=preview)
             saved["preview"] = preview
             saved["handoff"] = ("预览通过：以下是交易所会挂的真实价位。确认没问题再按「执行」，不按不会下单。" if preview.get("execution_ready")
@@ -358,6 +367,13 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         if payload is None:
             raise HTTPException(404, "没有这一轮的记录")
         return payload
+
+    @app.get("/api/backtest/{key}")
+    def backtest_result(key: str) -> dict[str, Any]:
+        result = backtests.read(key)
+        if result is None:
+            raise HTTPException(404, "没有这次回测")
+        return result
 
     @app.post("/api/notes")
     def add_note(body: NoteIn) -> dict[str, Any]:

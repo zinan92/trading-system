@@ -489,6 +489,7 @@ if (typeof document !== "undefined") (() => {
       <p class="warn">${paper ? "按下后确认这份黄金纸面盘计划（模拟资金），约 1 分钟内挂单。已有黄金网格在跑时系统会拒绝。" : "按下后会在 Hyperliquid 测试盘真实挂单（假钱）。已有网格在跑时系统会拒绝。"}</p>
       <button type="button" class="desk-btn exec" id="deskExec">执行</button><div class="desk-toast" id="deskExecToast" role="status"></div>`;
     plan.appendChild(box); syncSteps();
+    if (paper && preview.backtest_key && window.DeskBacktest) window.DeskBacktest.mount(plan, preview.backtest_key);
     $d("#deskExec").onclick = async () => {
       if (!confirm(`确认在${paper ? "黄金纸面盘" : "测试盘"}执行这份计划？\n最多亏 ${fmtD(preview.max_loss)} ${unit}`)) return;
       $d("#deskExec").disabled = true; $d("#deskExecToast").textContent = "正在复核预览并下单，可能需要一两分钟…";

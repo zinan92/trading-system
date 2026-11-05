@@ -30,9 +30,26 @@ class FakeExecutor(Executor):
         return {"HYPERLIQUID_TESTNET_SECRET_FILE": "/s", "HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS": "0xA", "HYPERLIQUID_TESTNET_RUNTIME_ID": "r", "TRADING_ORCHESTRATOR_RELEASE_SHA": "x"}
 
 
-def client_for(config, sources, store, fetch):
+class FakeBacktests:
+    """Records the plans it was asked to backtest; never starts a process."""
+
+    def __init__(self) -> None:
+        self.plans: list[dict] = []
+        self.results: dict[str, dict] = {}
+
+    def start(self, plan):
+        if (plan.get("normalized_input") or {}).get("strategy_type") != "grid":
+            return None
+        self.plans.append(plan)
+        return "a" * 24
+
+    def read(self, key):
+        return self.results.get(key)
+
+
+def client_for(config, sources, store, fetch, backtests=None):
     ex = FakeExecutor(config, fetch)
-    return TestClient(create_app(config, sources, store, ex)), ex
+    return TestClient(create_app(config, sources, store, ex, backtests=backtests or FakeBacktests())), ex
 
 
 def test_news_rolls_newest_first_for_the_asset_and_drops_reddit(sources, btc):
@@ -280,6 +297,43 @@ def test_gold_approval_drafts_only_and_execute_confirms_once(config, sources, st
     assert ok["started"] is True and "纸面盘" in ok["message"]
     assert confirms == [{"action": "confirm", "draft_id": "draft-1", "plan_digest": "sha256:gold"}]
     assert ex.driver_calls == []  # never the Testnet driver
+
+
+GRID_PLAN = {"normalized_input": {"strategy_type": "grid", "direction": "long"}, "market": {"price": 4304.0},
+             "risk": {"theoretical_max_loss": 270.0, "grid_rung_prices": [4150.0, 4300.0], "maximum_notional": 1700.0,
+                      "grid_entry_range": {"lower": 4150.0, "upper": 4300.0}, "grid_rungs": [{"rung": 1}]}}
+
+
+def test_a_passed_gold_preview_starts_its_backtest_and_start_stays_independent(config, sources, store, fetch, monkeypatch):
+    fetch.routes["/api/park-paper/read-model"] = {"strategy": {"active": False}, "market": {"price": 4304.0}, "terminal": {}}
+    monkeypatch.setitem(GOLD_DRAFT["draft"], "plan", GRID_PLAN)
+    tests = FakeBacktests()
+    client, _ex = client_for(config, sources, store, fetch, backtests=tests)
+    _gold_chat(fetch)
+    saved = client.post("/api/judgments", json={"asset": "XAU", "direction": "long", "confidence": 3, "action": "approved"}).json()
+    assert saved["preview"]["execution_ready"] is True and saved["preview"]["backtest_key"] == "a" * 24
+    assert "plan" not in saved["preview"] and tests.plans == [GRID_PLAN]
+    logged = [e for e in client.get("/api/desk/XAU").json()["executions"] if e["stage"] == "preview"][0]
+    assert logged["detail"]["backtest_key"] == "a" * 24 and "plan" not in logged["detail"]
+    assert client.get(f"/api/backtest/{'a' * 24}").status_code == 404  # still running: nothing to read yet
+    tests.results["a" * 24] = {"status": "unavailable", "reason": "历史数据有缺口：3 分钟"}
+    assert client.get(f"/api/backtest/{'a' * 24}").json()["reason"] == "历史数据有缺口：3 分钟"
+    ok = client.post("/api/execute", json={"judgment_id": saved["id"], "shown_max_loss": 270.0, "confirm_text": "执行"}).json()
+    assert ok["started"] is True  # an unavailable backtest never blocks the start
+
+
+def test_a_broken_backtest_does_not_break_the_preview(config, sources, store, fetch, monkeypatch):
+    fetch.routes["/api/park-paper/read-model"] = {"strategy": {"active": False}, "market": {"price": 4304.0}, "terminal": {}}
+    monkeypatch.setitem(GOLD_DRAFT["draft"], "plan", GRID_PLAN)
+
+    class Broken(FakeBacktests):
+        def start(self, plan):
+            raise OSError("no python")
+
+    client, _ex = client_for(config, sources, store, fetch, backtests=Broken())
+    _gold_chat(fetch)
+    saved = client.post("/api/judgments", json={"asset": "XAU", "direction": "long", "confidence": 3, "action": "approved"}).json()
+    assert saved["preview"]["execution_ready"] is True and saved["preview"]["backtest_key"] is None
 
 
 # ---- assets, newsletters, system ---------------------------------------------------------
@@ -617,7 +671,7 @@ def test_desk_assets_are_cache_busted_by_content():
     from trading_desk import gridmind
 
     static = Path(gridmind.__file__).resolve().parent / "static"
-    expected = hashlib.sha256(b"".join((static / name).read_bytes() for name in ("gm-desk.js", "gm-desk.css", "gm-review.js"))).hexdigest()[:12]
+    expected = hashlib.sha256(b"".join((static / name).read_bytes() for name in ("gm-desk.js", "gm-desk.css", "gm-review.js", "gm-backtest.js"))).hexdigest()[:12]
     assert gridmind.ASSET_VERSION == expected
     assert f"gm-desk.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
     assert f"gm-review.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")

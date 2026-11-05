@@ -9,6 +9,16 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-05, 开仓前回测显示在启动按钮上方 · #1309)
+
+- 黄金 Paper 预览通过时，desk 用同一份计划起一个后台回测（`trading_desk/backtest.py`，跑 `pipelines.grid_backtest`），
+  「你亲手启动」上方出现一个框：过去 180 天、费后、25 段不重叠周窗口的中位收益、最差一次、跌破下沿或止损比例、平均成交和分布。
+- 只读参考：`GET /api/backtest/{key}`，页面只轮询这一个 GET；回测失败或不可用写「回测不可用：…。不影响启动。」，启动按钮不受影响。
+- 同一形状（按现价百分比）同一天复用结果；跑了 15 分钟还没写完的视为卡住、重跑；结果只保留 60 份，放在 desk 自己的 `backtests/` 目录。
+- 页面写明：只是历史参考、手续费是 OKX Paper 假设费率、资金费只计入了几段。
+
+_下一步_：#1310 下线 3 个旧回放页。
+
 ## 现在在哪里(2026-11-05, 开仓前回测引擎与校准 · #1308)
 
 - `services/grid_backtest.py` + `pipelines/grid_backtest.py`：把一份网格计划按百分比形状挪到过去每个起点，用 Paper 同一个隔离 Nautilus 回放跑，
