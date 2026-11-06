@@ -17,9 +17,25 @@ from tests.test_trading_system_read_model import _broker, _risk, _source
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# GridMind's 持仓/委托/成交 tables are React islands (#1328). /trade loads web.js through the desk
+# shell; the raw page served here gets the same bundle so these tests see what /trade shows.
+ISLANDS = '<script src="/apps/trading-desk/src/trading_desk/static/web/web.js" defer></script>'
+
+
 class _QuietStaticHandler(SimpleHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         return
+
+    def do_GET(self) -> None:
+        if self.path.split("?", 1)[0] != "/dashboard-gridmind.html":
+            return super().do_GET()
+        html = (ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8").replace("</body>", ISLANDS + "</body>", 1)
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 @contextmanager

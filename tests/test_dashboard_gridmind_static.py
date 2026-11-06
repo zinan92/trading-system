@@ -8,6 +8,11 @@ def _html() -> str:
     return (ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8")
 
 
+def _tables() -> str:
+    """#1328: the 持仓/委托/成交 cells are laid out by this React island; GridMind publishes the rows."""
+    return (ROOT / "apps" / "web" / "src" / "islands" / "ExecTables.tsx").read_text(encoding="utf-8")
+
+
 def test_gridmind_keeps_the_compact_production_console_layout() -> None:
     html = _html()
 
@@ -374,14 +379,15 @@ def test_gridmind_review_is_a_same_cycle_evidence_ledger() -> None:
 def test_gridmind_positions_show_lifecycle_times_and_keeps_immutable_fill_trace() -> None:
     html = _html()
 
-    assert 'table("#positions",["状态","方向","数量","开仓时间（北京）","开仓价","止盈","止损","未实现","操作"]' in html
+    tables = _tables()
+    assert '["状态", "方向", "数量", "开仓时间（北京）", "开仓价", "止盈", "止损", "未实现", "操作"]' in tables
     assert 'fills=execution.fills||[]' in html
-    assert 'fillAction(fill)' in html
-    assert 'beijingDateTime(order.updated_at??order.ts)' in html
-    assert 'trades.slice().reverse().map(trade=>' in html
-    assert 'trade.entry_quantity??trade.quantity??trade.units' in html
-    assert 'trade.close_reason_label||"未知"' in html
-    assert 'trade.realized_pnl' in html
+    assert 'fillAction(fill)' in tables
+    assert 'beijingDateTime(order.updated_at ?? order.ts)' in tables
+    assert 'trades.slice().reverse().map(trade =>' in tables
+    assert 'trade.entry_quantity ?? trade.quantity ?? trade.units' in tables
+    assert 'trade.close_reason_label || "未知"' in tables
+    assert 'trade.realized_pnl' in tables
 
 
 def test_gridmind_consumes_stable_read_model_without_recalculating_trading_truth() -> None:
@@ -444,7 +450,8 @@ def test_gridmind_current_order_table_uses_only_backend_classified_accepted_life
     assert "acceptedLifecycleOrders=displayedAcceptedOrderLifecycle()" in html
     assert "current.has(orderId)" in html
     assert "renderTables(execution,acceptedLifecycleOrders)" in html
-    assert 'acceptedOrders.slice().reverse().map(order=>[esc(order.state_label||"未知状态")' in html
+    assert 'publishTable("#orders",{table:"orders",orders:acceptedOrders.map(' in html
+    assert '(props.orders || []).slice().reverse().map(order => [\n      str(order.state_label || "未知状态")' in _tables()
     assert "openOrders.map(order=>" not in html
     assert '["挂单中",side(order.side)' not in html
 
@@ -452,18 +459,21 @@ def test_gridmind_current_order_table_uses_only_backend_classified_accepted_life
 def test_gridmind_order_protection_never_guesses_across_plans() -> None:
     html = _html()
 
-    assert 'const protection=order?.protection||{}' in html
-    assert 'protection.status==="known"?num(protection[key]):"未知"' in html
-    assert 'protectionText(order,"tp")' in html
-    assert 'protectionText(order,"sl")' in html
-    assert 'protectionText(trade,"tp")' in html
-    assert 'protectionText(trade,"sl")' in html
-    assert "plannedProfitText(order)" in html
-    assert "planned_net_profit_usd" in html
-    assert "remaining_quantity??trade.remaining_units??trade.quantity" in html
+    tables = _tables()
+    assert "const protection = (order?.protection || {}) as Row;" in tables
+    assert 'protection.status === "known" ? num(protection[key]) : "未知"' in tables
+    assert 'protectionText(order, "tp")' in tables
+    assert 'protectionText(order, "sl")' in tables
+    assert 'protectionText(trade, "tp")' in tables
+    assert 'protectionText(trade, "sl")' in tables
+    assert "plannedProfitText(order)" in tables
+    assert "planned_net_profit_usd" in tables
+    assert "trade.remaining_quantity ?? trade.remaining_units ?? trade.quantity" in tables
+    # The rung a GridMind plan protects an order with is still GridMind's call, published per order.
+    assert 'rung_tp:rungProtection(order,"tp"),rung_sl:rungProtection(order,"sl")' in html
     table_body = html.split("function renderTables", 1)[1].split("function reviewNumber", 1)[0]
-    assert '"计划版本"' not in table_body
-    assert '"版本"' not in table_body
+    assert '"计划版本"' not in table_body + tables
+    assert '"版本"' not in table_body + tables
 
 
 def test_gridmind_history_uses_real_machine_ledger_and_paper_nav_fields() -> None:
@@ -599,8 +609,11 @@ def test_response_recovery_reads_audit_receipt_without_repeating_control_actions
 def test_gridmind_order_state_is_always_escaped_as_text() -> None:
     html = _html()
 
-    assert 'esc(order.state_label||"未知状态")' in html
+    # React renders the label as a text node, so it is always escaped.
+    assert 'str(order.state_label || "未知状态")' in _tables()
+    assert "dangerouslySetInnerHTML" not in _tables()
     assert "order.state_label||order.state" not in html
+    assert "order.state_label || order.state" not in _tables()
 
 
 def test_v5_route_serves_gridmind_without_removing_legacy_console() -> None:
