@@ -1,5 +1,63 @@
 # Decision Log
 
+# 2026-11-06 — Backtest evidence pack (#1369, part of #1359)
+
+## Decision
+
+- One module, `services/backtest_evidence.py`, called from both pipeline
+  `main()`s (pre-start grid, workbench grid and DCA). Every finished result, ready
+  or unavailable, carries `evidence` (`backtest-evidence-v1`). It is built at run
+  time only; older results show 「这次回测当时没有记录」 and are never back-filled.
+- **Code:** `git rev-parse HEAD` and `git status --porcelain --untracked-files=no`
+  in the checkout. Untracked files do not count as a change. If git cannot
+  answer, the commit is 未核实 with the reason.
+- **Data:** sha256 over the bars as used, one line per bar
+  (`opened_at.isoformat(),repr(open),repr(close)\n`), so anyone can recompute it.
+  Also a funding digest, counts against the report's expected count, and the
+  report's `generated_at`. `load_history` now returns the report; no check that
+  raises changed.
+- **Inputs:** the Paper preflight file and the backtest contract are hashed,
+  never copied, because the preflight names a runtime.
+- **Parameters:** the plan shape or the checked request, plus a whitelist of
+  settings that change results (fee rate, equity, leverage, increments, window,
+  step, data age). `dualtrack_config()` is not dumped.
+- **Future-data checks run on this run's own data:** history closed before the
+  run; each window's bars inside its 7 days; each fill or buy inside its window;
+  each funding settlement inside its window; no settlement charged before the
+  first fill. Verdict `ok` only if every check ran and passed.
+- The prefix test ("change the future bars, the past fills do not change") is a
+  unit test with a price-aware fake replay, for grid and DCA. Laying the grid at
+  the window's mean price instead of its first price makes it fail. The pack
+  lists it as covered by tests, not as run.
+- A fixed note says the parameters were chosen after the period was visible.
+  That selection risk is not a mechanical check and is never shown as passed.
+
+## Gotchas
+
+- DCA keyed a buy at its bar's open but filled it at the close. A settlement at
+  that open counted a position not yet held. Buys are now stamped at the bar's
+  end and `held_at` is strictly before. No effect on current results: history
+  starts at :40 past the hour, so buys never fall on the :00 settlements.
+- Grid and DCA meant different things by `ended_at` (the last close event vs.
+  the last bar's open). A fill check on `ended_at` would have failed every DCA
+  buy on a window's last bar. Each window now records `closed_at`, the time of
+  the last price it saw, and the checks use that.
+- Grid compares fill and funding times as strings. Fills carry a microsecond
+  (`_after_fill_timestamp`) and funding does not; the order is still right
+  (`.` sorts after `+`). The new check compares parsed times, so it would catch
+  a format change.
+
+## Verification
+
+- `tests/test_backtest_evidence.py` 29, DCA and grid tests, real Nautilus
+  replays: 85 passed. Desk suite 195. Web 136 and tsc.
+- Real runs against the datafeed (GETs only, output to scratchpad, no production
+  comparison running): BTC DCA 50 windows, XAU grid 25, pre-start XAU grid 25 with
+  Paper's preflight hashed. All five checks ok. No runtime, account or address
+  field in the output.
+- Dev desk: the workbench shows the evidence line and the folded record, no
+  console errors, no overflow at 375 px.
+
 # 2026-11-06 — Idle Paper is not a fault (#1367)
 
 ## Decision
@@ -18,6 +76,9 @@
 ## Verification
 
 - `tests/test_paper_status.py` (4 tests); desk suite 195 passed.
+- Production, 28d1d72: the system page shows 「纸面盘：空闲，没有运行中的策略」;
+  console clean. Nine log warnings at the time were the desk's market reads
+  timing out or losing the TLS connection (`sources.bars`, `_realtime_feed`).
 
 # 2026-11-06 — One log format, redacted, with a request id (#1364, part of #1358)
 
