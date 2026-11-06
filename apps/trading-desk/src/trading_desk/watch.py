@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.request import Request, urlopen
 
+from services.structured_log import get_logger
+
+LOG = get_logger("desk.watch")
+
 BJT = timezone(timedelta(hours=8))
 CALENDAR_URLS = ("https://nfs.faireconomy.media/ff_calendar_thisweek.json", "https://nfs.faireconomy.media/ff_calendar_nextweek.json")
 CALENDAR_TTL_SECONDS = 2 * 3600  # the feed asks clients not to poll it more than a few times an hour
@@ -100,10 +104,12 @@ class Watch:
         try:
             events = [row for row in self.fetch(this_week) or [] if isinstance(row, dict)]
         except Exception:  # noqa: BLE001 - rate limited or down: keep the last good calendar
+            LOG.warning("caught_exception", exc_info=True)
             return cached["events"] if cached else []
         try:  # published only late in the week; a 404 before that is normal
             events.extend(row for row in self.fetch(next_week) or [] if isinstance(row, dict))
         except Exception:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             pass
         self.folder.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps({"fetched_at": time.time(), "events": events}, ensure_ascii=False), encoding="utf-8")
@@ -135,6 +141,7 @@ class Watch:
         try:
             feed = self.fetch(f"{self.intel_url}{INTEL_REALTIME}")
         except Exception:  # noqa: BLE001 - calendar alone still makes a list
+            LOG.warning("caught_exception", exc_info=True)
             feed = {}
         titles: set[str] = set()
         for row in (feed or {}).get("items") or []:

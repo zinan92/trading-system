@@ -15,6 +15,7 @@ from typing import Any, Callable, Hashable, Mapping, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 from services.run_date import utc_run_date
+from services.structured_log import configure as configure_log, event as log_event, get_logger, set_request_id
 from services.accounting_projection_core import project_execution_accounting
 from services.broker_adapter import PaperBrokerAdapter
 from services.broker_read_model import project_broker_read_model
@@ -230,11 +231,16 @@ class KeyedSingleFlight:
 _TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT = KeyedSingleFlight()
 _SUPERVISOR_HISTORY_SINGLE_FLIGHT = KeyedSingleFlight()
 
+LOG = get_logger("dashboard")
+
 
 class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     """Bound handler threads; the listening socket queues excess clients."""
 
     request_queue_size = 64
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        LOG.error("unhandled_exception", exc_info=True)
 
     def __init__(
         self,
@@ -297,6 +303,21 @@ _TIGER_PAPER_ORDER_REFRESH_RUNBOOK_ENDPOINT_SAFETY = {
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
+    def parse_request(self) -> bool:
+        parsed = super().parse_request()
+        if parsed:
+            set_request_id(self.headers.get("X-Request-Id"))  # the desk's id, so one request reads as one line of work
+        return parsed
+
+    def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        log_event(LOG, "http", method=self.command, path=urlparse(self.path).path, status=str(code))  # no query string
+
+    def log_error(self, format: str, *args: Any) -> None:
+        log_event(LOG, "http_error", level=30, detail=format % args, path=urlparse(getattr(self, "path", "") or "").path)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        LOG.debug(format, *args)
+
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -631,6 +652,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         try:
             payload = build_park_public_read_model(_dualtrack_output_root())
         except Exception:  # noqa: BLE001 - observer uncertainty is fail-closed.
+            LOG.warning("caught_exception", exc_info=True)
             payload = {
                 "schema_version": "park-paper-public-read-model-v1",
                 "status": "blocked",
@@ -648,6 +670,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         try:
             self._write_json(200, build_park_ai_chat_read_model(output_root=_dualtrack_output_root()))
         except Exception as exc:  # noqa: BLE001 - read model is fail-closed.
+            LOG.warning("caught_exception", exc_info=True)
             self._write_error(503, "park_ai_read_model_unavailable", type(exc).__name__)
 
     def _handle_park_ai_chat_post(self) -> None:
@@ -668,6 +691,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         except ValueError as exc:
             self._write_error(400, "invalid_park_ai_chat_request", str(exc))
         except Exception as exc:  # noqa: BLE001 - no provider exception may become an order.
+            LOG.warning("caught_exception", exc_info=True)
             self.log_error("Park AI chat failed: %s", exc)
             self._write_error(503, "park_ai_chat_unavailable", type(exc).__name__)
 
@@ -709,6 +733,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         try:
             self._write_json(200, build_cloud_health(persist=True))
         except Exception as exc:  # noqa: BLE001 - preserve classified failure.
+            LOG.warning("caught_exception", exc_info=True)
             self._write_json(
                 503,
                 {
@@ -887,6 +912,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         try:
             self._write_json(200, build_dashboard_control_catalog_response())
         except Exception as exc:  # noqa: BLE001 - read-only catalog blocker.
+            LOG.warning("caught_exception", exc_info=True)
             self._write_error(503, "dashboard_control_catalog_unavailable", type(exc).__name__)
 
     def _handle_dashboard_control_selection_get(self) -> None:
@@ -1024,6 +1050,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         except ValueError as exc:
             self._write_error(400, "invalid_market_view_intake", str(exc))
         except Exception as exc:  # noqa: BLE001 — local write endpoint must fail closed.
+            LOG.warning("caught_exception", exc_info=True)
             self.log_error("market view intake failed: %s", exc)
             self._write_error(500, "market_view_intake_failed", "internal error recording market view")
 
@@ -1090,6 +1117,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_error(400, "invalid_replay_request", str(exc))
             return
         except Exception as exc:  # noqa: BLE001 — replay endpoint must stay defensive.
+            LOG.warning("caught_exception", exc_info=True)
             self.log_error("replay snapshot failed: %s", exc)
             self._write_error(500, "replay_snapshot_failed", "internal error generating replay snapshot")
             return
@@ -1144,6 +1172,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 payload = compact_strategy_payload(payload) if strategy_id else compact_ops_payload(payload)
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         except Exception as exc:  # noqa: BLE001 — defensive: never crash the handler.
+            LOG.warning("caught_exception", exc_info=True)
             self.log_error("dashboard snapshot failed: %s", exc)
             self._write_error(500, "snapshot_failed", "internal error generating dashboard snapshot")
             return
@@ -1183,6 +1212,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             payload = state.snapshot(run_date)
             body = json.dumps(builder(payload, strategy_id=strategy_id), ensure_ascii=False).encode("utf-8")
         except Exception as exc:  # noqa: BLE001 — contract endpoints must fail closed.
+            LOG.warning("caught_exception", exc_info=True)
             self.log_error("dashboard contract failed: %s", exc)
             self._write_error(500, "contract_failed", "internal error generating dashboard contract")
             return
@@ -1213,6 +1243,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             payload = build_public_access_health()
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         except Exception as exc:  # noqa: BLE001 — health endpoint must stay defensive.
+            LOG.warning("caught_exception", exc_info=True)
             self.log_error("public access health failed: %s", exc)
             self._write_error(500, "public_access_health_failed", "internal error generating public access health")
             return
@@ -1438,6 +1469,7 @@ def _build_selected_testnet_read_model(
     try:
         market = dict(HyperliquidTestnetMarketReader().read(instrument))
     except Exception as exc:  # noqa: BLE001 - typed source blocker below.
+        LOG.warning("caught_exception", exc_info=True)
         blockers.append(f"testnet_market_unavailable:{type(exc).__name__}")
     account_reader = build_dashboard_account_reader()
     if account_reader is None:
@@ -1446,6 +1478,7 @@ def _build_selected_testnet_read_model(
         try:
             account = dict(account_reader.read(instrument_id=instrument))
         except Exception as exc:  # noqa: BLE001 - typed source blocker below.
+            LOG.warning("caught_exception", exc_info=True)
             blockers.append(f"testnet_account_unavailable:{type(exc).__name__}")
 
     if market:
@@ -2168,6 +2201,7 @@ def _assemble_strategy_console_snapshot(
     try:
         daily_reports = build_strategy_console_daily_reports_response(output_root=output)
     except Exception as exc:  # noqa: BLE001 - the read model must expose evidence loss, not hide it.
+        LOG.warning("caught_exception", exc_info=True)
         daily_reports = {
             "schema_version": "strategy-daily-reports-v1",
             "reports": [],
@@ -2506,6 +2540,7 @@ def build_strategy_console_control_response(
                 as_of=payload.get("as_of"),
             ))
         except Exception as exc:
+            LOG.warning("caught_exception", exc_info=True)
             trusted_market = {
                 "schema_version": "dualtrack-market-bars-v1",
                 "status": "blocked",
@@ -4772,6 +4807,7 @@ def _effective_open_trade_limit(strategy_id: str) -> dict:
     try:
         demo = (load_pipeline_config().get("demo_trading", {}) or {})
     except Exception:  # noqa: BLE001 - dashboard status should degrade gracefully if config is unreadable.
+        LOG.warning("caught_exception", exc_info=True)
         demo = {}
     requires_flat = (
         bool(demo.get("enabled") is True)
@@ -5247,6 +5283,7 @@ def _probe_html_features(url: str, timeout: float, features: dict[str, str]) -> 
                 "checks": [] if access_protected else checks,
             }
     except Exception as exc:  # noqa: BLE001 - deployment freshness should degrade gracefully.
+        LOG.warning("caught_exception", exc_info=True)
         return {
             "ok": False,
             "status_code": int(getattr(exc, "code", 0) or 0) or None,
@@ -5285,6 +5322,7 @@ def _probe_http(url: str, timeout: float) -> dict:
                 "elapsed_ms": round((time.perf_counter() - started) * 1000),
             }
     except Exception as exc:  # noqa: BLE001 - expose concise health failure.
+        LOG.warning("caught_exception", exc_info=True)
         status_code = int(getattr(exc, "code", 0) or 0)
         return {
             "ok": False,
@@ -5314,6 +5352,7 @@ def _cloudflared_process_summary() -> dict:
             timeout=2,
         )
     except Exception as exc:  # noqa: BLE001 - health should not raise.
+        LOG.warning("caught_exception", exc_info=True)
         return {"running": False, "error": str(exc), "processes": []}
     processes = [
         line.strip()
@@ -5410,6 +5449,7 @@ def main() -> None:
             flush=True,
         )
         raise SystemExit(PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE)
+    configure_log("dashboard", Path(_dualtrack_output_root()) / "logs")
     server = BoundedThreadingHTTPServer((args.host, args.port), DashboardHandler)
     print(f"Dashboard server: http://{args.host}:{args.port}/dashboard-v4.html")
     print(f"Dashboard API: http://{args.host}:{args.port}/api/dashboard?date={utc_run_date()}")

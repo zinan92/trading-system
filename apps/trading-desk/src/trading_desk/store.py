@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from services.structured_log import event, get_logger
+
+LOG = get_logger("desk.store")
+
 SCHEMA = """
 create table if not exists judgments (
   id integer primary key autoincrement,
@@ -244,6 +248,7 @@ class Store:
             row = conn.execute("select * from executions where id=?", (cur.lastrowid,)).fetchone()
         item = dict(row)
         item["detail"] = json.loads(item["detail"])
+        event(LOG, "execution", stage=stage, asset=asset, judgment_id=judgment_id, preview_digest=preview_digest)
         return item
 
     def executions(self, asset: str | None = None, limit: int = 20) -> list[dict[str, Any]]:

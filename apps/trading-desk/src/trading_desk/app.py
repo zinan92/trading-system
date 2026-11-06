@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from . import plans, review
 from .config import Config
-from . import digest, gridmind, mainnet, open_api, remote, review_timeline, why
+from . import digest, gridmind, mainnet, observe, open_api, remote, review_timeline, why
 from .backtest import Backtests, Busy, Comparisons
 from . import provenance
 from .advice import Advisor
@@ -26,6 +26,10 @@ from .watch import Watch, codex_complete
 from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
 from .sources import SOURCE_LABEL, Sources, http_json
 from .store import Store
+
+from services.structured_log import get_logger, log_path, recent_problems
+
+LOG = get_logger("desk.app")
 
 STATIC = Path(__file__).parent / "static"
 KLINE_PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>K 线日报 {title}</title>
@@ -104,6 +108,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     # Installed last so it runs first: /api/v1 is token-gated and read-only (#1344).
     open_api.install(app, open_api.Tokens(config.api_tokens),
                      read_model=lambda: http_json(f"{config.dashboard_url}/api/trading-system/read-model", None, timeout=10))
+    observe.install(app)  # last again: it sees every request first (#1364)
 
     def asset_or_404(key: str) -> dict[str, Any]:
         asset = store.asset(key.upper())
@@ -248,12 +253,14 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             except ExecutionRefused as exc:
                 preview = {"execution_ready": False, "blockers": [str(exc)]}
             except Exception as exc:  # noqa: BLE001 - preview failure must not lose the recorded judgment
+                LOG.warning("caught_exception", exc_info=True)
                 preview = {"execution_ready": False, "blockers": [f"预览失败：{type(exc).__name__}"]}
             plan_for_backtest = preview.pop("plan", None)
             if preview.get("execution_ready") and plan_for_backtest:
                 try:
                     preview["backtest_key"] = backtests.start(plan_for_backtest)
                 except Exception:  # noqa: BLE001 - the backtest is reference only; it never stops a preview
+                    LOG.warning("caught_exception", exc_info=True)
                     preview["backtest_key"] = None
             store.log_execution(asset=asset["key"], stage="preview", judgment_id=saved["id"], preview_digest=preview.get("preview_digest"), detail=preview)
             saved["preview"] = preview
@@ -575,6 +582,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             try:
                 ok, detail = fn()
             except Exception as exc:  # noqa: BLE001
+                LOG.warning("caught_exception", exc_info=True)
                 ok, detail = False, type(exc).__name__
             checks.append({"name": name, "ok": ok, "detail": detail})
         first = store.assets()[0]
@@ -595,6 +603,11 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         current_watch = watch.current()
         checks.append({"name": "本周三件事", "ok": bool(current_watch.get("items")) and current_watch.get("provider") == "codex",
                        "detail": f"{str(current_watch.get('generated_at') or '没有生成')[5:16]} · {current_watch.get('provider') or '—'}"})
+        logs = config.paper_output / "logs"
+        problems = recent_problems([log_path(logs, "desk"), log_path(logs, "dashboard")])
+        latest = problems["latest"]
+        checks.append({"name": "日志（24 小时）", "ok": problems["errors"] == 0,
+                       "detail": f"错误 {problems['errors']} · 警告 {problems['warnings']}" + (f" · 最新 {latest['event']}，编号 {latest['request_id']}" if latest else "")})
         paused = []
         if config.paused_manifest.exists():
             for line in config.paused_manifest.read_text(encoding="utf-8").splitlines():

@@ -1,5 +1,46 @@
 # Decision Log
 
+# 2026-11-06 — One log format, redacted, with a request id (#1364, part of #1358)
+
+## Decision
+
+- **stdlib `logging` with one JSON-lines formatter** (`services/structured_log.py`),
+  no new dependency. One file per service under `<output>/logs`; the desk and the
+  Dashboard both resolve to `/Users/wendy/work/park-paper-output/logs` in
+  production (desk `paper_output`, Dashboard `TRADING_ORCHESTRATOR_OUTPUT_ROOT`).
+- **Redaction is in the formatter**, so every handler and every traceback goes
+  through it. It masks by key name (secret, token, passw, passcode, api key,
+  private key, authorization, cookie, signature, mnemonic) and by text shape
+  (Bearer, `tsd_`, `sk-`, `0x`+64 hex, `token=`/`password:`). Wallet addresses
+  (`0x`+40 hex) and sha256 digests stay readable on purpose: they are the join keys.
+- **Request id:** a contextvar. An incoming `X-Request-Id` is accepted only as
+  8–40 hex characters; anything else gets a fresh 12-hex id, so a caller cannot
+  write arbitrary text into the log through the header. The desk forwards it on
+  its Dashboard and relay calls.
+- An unhandled desk exception returns 500 with `服务器出错，参考编号 <id>`. The
+  page never shows the traceback; the log has it under that id.
+- Caught exceptions keep their traceback (`caught_exception`, WARNING). Behaviour
+  of each `except` is unchanged: nothing new is raised and no gate moved.
+- Dashboard access lines drop the query string.
+- A read-only disk does not stop a service: file logging is skipped and warnings
+  still reach stderr.
+
+## Gotchas
+
+- `RotatingFileHandler` opens the new file after a rollover with the process
+  umask (0644 here), so a 0600 first file silently became world-readable after
+  10 MB. `PrivateRotatingFile` opens every file 0600; a test rolls over and checks
+  all files.
+- The desk news endpoint returns ok through a cached or fallback result even when
+  the source fails, so a test cannot assert failure there; it asserts the log line.
+- Not covered: the CLI scripts still `print`. Only long-running services log.
+
+## Verification
+
+- Desk suite 191 passed after rebasing on c145af6. Root logging and Dashboard
+  log tests 32 passed. The rollover test fails without the fix.
+- Production: see the deploy line in `REGISTRY.md`. Unverified until then.
+
 # 2026-11-06 — 这一笔为什么: one chain per run (#1362, part of #1359)
 
 ## Decision
