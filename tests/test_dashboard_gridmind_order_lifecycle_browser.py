@@ -848,3 +848,32 @@ def test_manual_close_on_the_react_positions_table_still_posts_gridminds_exit() 
         "cycle_id": model["cycle"]["cycle_id"], "trade_id": trade_id, "side": "sell" if side in ("buy", "long") else "buy",
         "event": "exit", "order_type": "market", "source": "strategy_production_console",
     }, separators=(",", ":")))]
+
+
+def test_without_the_react_bundle_the_top_bar_stays_on_its_loading_placeholders() -> None:
+    """#1353: if web.js fails to load, the operator must not see a healthy-looking state."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True, open_trade=True)
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/web.js", lambda route: route.abort())
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.wait_for_function("() => document.getElementById('gmStatus').getAttribute('data-props') !== '{}'")
+        assert page.locator("#marketBadge").inner_text() == "状态读取中"
+        assert page.locator("#runBadge").inner_text() == "状态读取中"
+        browser.close()

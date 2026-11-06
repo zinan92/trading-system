@@ -450,7 +450,7 @@ def test_gridmind_current_order_table_uses_only_backend_classified_accepted_life
     assert "acceptedLifecycleOrders=displayedAcceptedOrderLifecycle()" in html
     assert "current.has(orderId)" in html
     assert "renderTables(execution,acceptedLifecycleOrders)" in html
-    assert 'publishTable("#orders",{table:"orders",orders:acceptedOrders.map(' in html
+    assert 'publishIsland("#orders",{table:"orders",orders:acceptedOrders.map(' in html
     assert '(props.orders || []).slice().reverse().map(order => [\n      str(order.state_label || "未知状态")' in _tables()
     assert "openOrders.map(order=>" not in html
     assert '["挂单中",side(order.side)' not in html
@@ -671,3 +671,15 @@ def test_gridmind_trend_card_gives_the_real_reason_on_a_trusted_non_1m_chart() -
 
 def test_gridmind_exposes_what_it_rendered_for_the_desk_status_line() -> None:
     assert "window.gridmindView=Object.freeze({data,market,livePlan,marketTrusted:fresh,renderedAt:Date.now()})" in _html()
+
+
+def test_gridmind_publishes_the_top_bar_and_cards_instead_of_writing_them() -> None:
+    """#1353: React owns these elements. A direct write would be silently overwritten on the next render."""
+    html = _html()
+    script = html.split("<script>", 1)[1]
+    for element_id in ("envBadge", "marketBadge", "sourceBadge", "headerPair", "headerPrice", "headerChange", "cycleBadge", "accessBadge", "runBadge", "account"):
+        assert f'$("#{element_id}")' not in script
+    assert 'publishHeader({marketClass:"pill run-state error",marketLabel:"运行异常"' in html
+    # The static placeholders stay inside the mount, so a failed bundle shows 读取中 rather than nothing.
+    mount = html.split('id="gmStatus">', 1)[1].split("</header>", 1)[0]
+    assert '<span>状态读取中</span>' in mount and 'id="runBadge">状态读取中<' in mount
