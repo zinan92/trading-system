@@ -16,6 +16,10 @@ from typing import Any, Callable
 
 from .config import Config
 
+from services.structured_log import get_logger
+
+LOG = get_logger("desk.executor")
+
 LIVE_COORDINATOR_STATES = {"grid_running", "grid_paused_range", "grid_blocked", "dca_running", "candidate_selected", "stop_requested"}
 STOPPABLE_COORDINATOR_STATES = {"grid_running", "grid_paused_range", "grid_blocked", "grid_interrupted"}
 TERMINAL_COORDINATOR_STATES = {"grid_terminal"}
@@ -157,6 +161,7 @@ class Executor:
         try:
             model = self.fetch(f"{self.config.dashboard_url}/api/park-paper/read-model", None) or {}
         except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             raise ExecutionRefused("读不到黄金纸面盘状态，为安全起见不执行。") from exc
         return (model.get("strategy") or {}).get("active") is True
 

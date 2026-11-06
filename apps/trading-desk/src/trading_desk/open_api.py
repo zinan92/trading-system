@@ -28,6 +28,9 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from services.structured_log import get_logger
+
+LOG = get_logger("desk.open_api")
 PREFIX = "/api/v1"
 SCOPE_KEY = "desk.api_token"
 _KEY = r"[A-Za-z0-9_-]{1,32}"
@@ -146,6 +149,7 @@ def install(app, tokens: Tokens, read_model: Callable[[], dict[str, Any]]) -> No
             try:
                 body = paper_status(await run_in_threadpool(read_model))
             except Exception as exc:  # noqa: BLE001 - say the backend is down; never guess a state
+                LOG.warning("caught_exception", exc_info=True)
                 return JSONResponse({"detail": f"交易后台读不到：{type(exc).__name__}"}, status_code=503, headers={"Cache-Control": "no-store"})
             return JSONResponse(body, headers={"Cache-Control": "no-store"})
         if not any(pattern.fullmatch(rest) for pattern in ALLOWED):

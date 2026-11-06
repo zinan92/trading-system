@@ -7,6 +7,8 @@ import sys
 
 import uvicorn
 
+from services.structured_log import configure
+
 from .advice import Advisor
 from .app import create_app, current_state
 from .config import Config
@@ -30,6 +32,7 @@ def main() -> None:
     config = Config()
     if args.command == "token":
         raise SystemExit(_token(config, args.rest))
+    configure("desk" if args.command == "serve" else f"desk-{args.command}", config.paper_output / "logs")  # one writer per file
     if args.command in {"watch", "tick"}:
         watch = Watch(config.watch_folder, config.intel_url)
         result = watch.refresh(force=args.force)

@@ -10,6 +10,8 @@ from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
 
+from services.structured_log import request_id
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
@@ -75,7 +77,7 @@ Fetch = Callable[[str, str, bytes | None, str, float], tuple[int, bytes, str]]
 
 
 def urllib_fetch(url: str, method: str, body: bytes | None, content_type: str, timeout: float) -> tuple[int, bytes, str]:
-    request = UrlRequest(url, data=body, method=method, headers={"Content-Type": content_type} if body is not None else {})
+    request = UrlRequest(url, data=body, method=method, headers={**({"Content-Type": content_type} if body is not None else {}), **({"X-Request-Id": request_id()} if request_id() else {})})
     try:
         with urlopen(request, timeout=timeout) as response:
             return response.status, response.read(), response.headers.get("Content-Type") or "application/octet-stream"

@@ -15,6 +15,10 @@ from typing import Any, Callable
 from .config import Config
 from .digest import latest_kline_file
 
+from services.structured_log import get_logger, request_id
+
+LOG = get_logger("desk.sources")
+
 BUCKET_RANK = {"high_impact": 0, "watch": 1, "unrated": 2, "noise": 3}
 SOURCE_LABEL = {"blockbeats_newsflash": "律动", "cls_telegraph": "财联社", "eastmoney_global_news": "东方财富", "reddit": "Reddit"}
 
@@ -23,7 +27,8 @@ Fetch = Callable[[str, dict[str, Any] | None], Any]
 
 def http_json(url: str, body: dict[str, Any] | None = None, timeout: float = 12.0) -> Any:
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, headers={"content-type": "application/json"}, method="POST" if data else "GET")
+    headers = {"content-type": "application/json", **({"X-Request-Id": request_id()} if request_id() else {})}
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
@@ -78,6 +83,7 @@ class Sources:
         try:
             data = self.fetch(f"{self.config.intel_url}/api/ui/realtime?" + urllib.parse.urlencode({"window": "24h", "limit": 200}), None)
         except Exception:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             return None
         rows = [row for row in (data or {}).get("items") or [] if isinstance(row, dict)]
         self._news_cache["__realtime__"] = (time.monotonic(), rows)
@@ -126,6 +132,7 @@ class Sources:
             try:
                 return self.fetch(url, None)
             except Exception:  # noqa: BLE001 - one failed query must not blank the list
+                LOG.warning("caught_exception", exc_info=True)
                 return None
 
         # Intel serialises requests; parallel queries are slower than sequential ones and time out.
@@ -173,6 +180,7 @@ class Sources:
             end_ms = int(datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() * 1000) + self.HL_INTERVAL_MS["1h"] * 6
             rows = self.fetch(self.config.hyperliquid_info_url, {"type": "candleSnapshot", "req": {"coin": coin, "interval": "1h", "startTime": start_ms, "endTime": end_ms}})
         except Exception as exc:  # noqa: BLE001 - the page says the bars are missing.
+            LOG.warning("caught_exception", exc_info=True)
             return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
         bars = [[datetime.fromtimestamp(int(r["t"]) / 1000, timezone.utc).isoformat(), float(r["o"]), float(r["h"]), float(r["l"]), float(r["c"])]
                 for r in rows or [] if isinstance(r, dict) and all(k in r for k in ("t", "o", "h", "l", "c"))]
@@ -188,6 +196,7 @@ class Sources:
             try:
                 rows = self.fetch(self.config.hyperliquid_info_url, {"type": "candleSnapshot", "req": {"coin": asset["coin"], "interval": timeframe, "startTime": start, "endTime": end}})
             except Exception as exc:  # noqa: BLE001
+                LOG.warning("caught_exception", exc_info=True)
                 return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
             bars = [[datetime.fromtimestamp(int(r["t"]) / 1000, timezone.utc).isoformat(), float(r["o"]), float(r["h"]), float(r["l"]), float(r["c"])]
                     for r in rows or [] if isinstance(r, dict) and all(k in r for k in ("t", "o", "h", "l", "c"))][-limit:]
@@ -202,6 +211,7 @@ class Sources:
         try:
             payload = self.fetch(url, None)
         except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
         bars = [
             [b["timestamp"], float(b["open"]), float(b["high"]), float(b["low"]), float(b["close"])]
@@ -229,6 +239,7 @@ class Sources:
         try:
             payload = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
         except Exception:  # noqa: BLE001 - unreachable catalog is reported by the caller.
+            LOG.warning("caught_exception", exc_info=True)
             return None
         profile = next((p for p in (payload or {}).get("venue_profiles") or [] if p.get("environment") == "paper"), None)
         instrument = next((i for i in (profile or {}).get("instruments") or [] if i.get("asset") == "XAU"), None)
@@ -248,6 +259,7 @@ class Sources:
         try:
             payload = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
         except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             return {"ok": False, "reason": f"交易所品种目录读不到：{type(exc).__name__}", "instruments": []}
         profile = next((p for p in payload.get("venue_profiles") or [] if p.get("id") == "hyperliquid.testnet"), None)
         if not profile:
@@ -293,6 +305,7 @@ class Sources:
         try:
             rows = {row.get("asset_key"): row for row in (self.fetch(url, None) or {}).get("assets") or [] if isinstance(row, dict)}
         except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             return {"ok": False, "reason": type(exc).__name__}
         newest = []
         for key in keys:
@@ -304,6 +317,7 @@ class Sources:
         try:
             self.slow_fetch(url + "?refresh=true", None)
         except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             return {"ok": False, "reason": type(exc).__name__}
         self._news_cache.pop("__overview__", None)
         return {"ok": True, "refreshed": True}
@@ -320,6 +334,7 @@ class Sources:
                 cached = (time.monotonic(), {row.get("asset_key"): row for row in (payload or {}).get("assets") or [] if isinstance(row, dict)})
                 self._news_cache["__overview__"] = cached
             except Exception as exc:  # noqa: BLE001
+                LOG.warning("caught_exception", exc_info=True)
                 if not cached:
                     return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
         row = cached[1].get(asset.get("kline_key") or "")
@@ -381,6 +396,7 @@ class Sources:
             state = self.fetch(self.config.hyperliquid_info_url, {"type": "clearinghouseState", "user": address})
             fills = self.fetch(self.config.hyperliquid_info_url, {"type": "userFills", "user": address})
         except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             return {"ok": False, "reason": f"Hyperliquid 测试盘账户读不到：{type(exc).__name__}"}
         positions = []
         unrealized = 0.0
@@ -424,6 +440,7 @@ class Sources:
         try:
             model = self.fetch(f"{self.config.dashboard_url}/api/park-paper/read-model", None)
         except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
             return {"ok": False, "reason": f"黄金纸面盘读不到：{type(exc).__name__}"}
         strategy = model.get("strategy") or {}
         execution = model.get("execution") or {}
