@@ -1,5 +1,24 @@
 # Decision Log
 
+# 2026-11-06 — Idle Paper is not a fault (#1367)
+
+## Decision
+
+- `/api/park-paper/read-model` answers 503 with a full body whenever no strategy
+  runs: `status: blocked`, blockers `active_strategy_missing` and
+  `grid_geometry_invalid`, `strategy.state: IDLE_CLEAN`. Deliberate since #714.
+  Every consumer reads the body (desk `http_json` keeps 503 bodies). Production
+  has been idle since 2026-09-14, the last 200 in the old stderr log.
+- **The 503 contract stays.** Changing it to 200 could make an external probe
+  read idle or blocked as healthy. Only the desk's wording changes.
+- The system page says 「纸面盘：空闲，没有运行中的策略」 only when the state is
+  `IDLE_CLEAN`, the strategy is not active, and the blockers are a subset of the
+  two idle ones. Any other blocker is named.
+
+## Verification
+
+- `tests/test_paper_status.py` (4 tests); desk suite 195 passed.
+
 # 2026-11-06 — One log format, redacted, with a request id (#1364, part of #1358)
 
 ## Decision
@@ -47,9 +66,9 @@
 - The first text here said the desk accepts an incoming id. Production showed it
   does not: a request sent with `X-Request-Id: abcdef1234567890` was logged under
   a new id. The code is right for a public entry point; the record was wrong.
-- Open: the Dashboard logs 5xx at INFO and the desk at WARNING. The 503 from
-  `/api/park-paper/read-model` (804 times in the old stderr log, before this
-  change) is therefore not counted as a warning on the system page.
+- The Dashboard logs 5xx at INFO and the desk at WARNING. Kept: the Dashboard's
+  503 from `/api/park-paper/read-model` is a designed idle answer (#1367), so
+  counting it as a warning would be noise.
 
 # 2026-11-06 — 这一笔为什么: one chain per run (#1362, part of #1359)
 

@@ -83,6 +83,18 @@ class ExecuteIn(BaseModel):
     confirm_text: Literal["执行"]
 
 
+IDLE_BLOCKERS = {"active_strategy_missing", "grid_geometry_invalid"}
+
+
+def paper_status_text(model: dict[str, Any]) -> str:
+    """#1367: the Dashboard calls idle Paper `blocked` (HTTP 503 with a full body). Say idle when that is all it is."""
+    status, blockers = model.get("status"), list(model.get("blockers") or [])
+    strategy = model.get("strategy") or {}
+    if status == "blocked" and strategy.get("state") == "IDLE_CLEAN" and strategy.get("active") is not True and set(blockers) <= IDLE_BLOCKERS:
+        return "纸面盘：空闲，没有运行中的策略"
+    return f"纸面盘：{status}" + (f"（{', '.join(blockers)}）" if blockers else "")
+
+
 def release_of(checkout: Path) -> str:
     """The commit this process serves, or "" when it cannot be read; a record then says it was not recorded."""
     try:
@@ -587,7 +599,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             checks.append({"name": name, "ok": ok, "detail": detail})
         first = store.assets()[0]
         check("新闻（Intel 8001）", lambda: (lambda r: (r.get("ok", False), r.get("reason") or f"{len(r.get('items', []))} 条"))(sources.news(first)))
-        check("交易后台（Dashboard 8765）", lambda: (lambda r: (bool(r.get("schema_version")), f"纸面盘：{r.get('status')}"))(http_json(f"{config.dashboard_url}/api/park-paper/read-model", None, timeout=10)))
+        check("交易后台（Dashboard 8765）", lambda: (lambda r: (bool(r.get("schema_version")), paper_status_text(r)))(http_json(f"{config.dashboard_url}/api/park-paper/read-model", None, timeout=10)))
         check("测试盘 K 线（Hyperliquid）", lambda: (lambda r: (r["ok"], r.get("reason") or r.get("latest_timestamp")))(sources.bars(next((a for a in store.assets() if a["kind"] == "hl_testnet"), first), "1h", 2)))
         coordinator = executor.coordinator()
         scheduler = _json_last(config.paper_output / "testnet_automation" / "scheduler" / "current.json")
