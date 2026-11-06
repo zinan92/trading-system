@@ -1,5 +1,64 @@
 # Decision Log
 
+# 2026-11-06 — 前端: 「今天」 steps 1–2 and the news rail as React islands (#1327)
+
+## Decision
+
+- Steps 1–2 of the today card (judgment, AI advice, plan, approve/record)
+  are `TodayPanel` (`data-island="today"`). The news rail is `NewsRail`
+  (`data-island="news"`). Both are mounted by gm-desk.js's shell, which
+  now keeps only asset selection, the status line and step 3 (执行, 停止,
+  暂停补单). gm-desk.js went from 43 KB to 32 KB.
+- **The island write allow-list is widened.** `api.ts` was the only place
+  with `method:` and could POST only to the comparison path. It now also
+  allows `/api/plan`, `/api/judgments` and `/api/advice/refresh`. These
+  write Park's own judgment data, never an order. `/api/execute`,
+  `/api/grid/*`, dashboard control, dualtrack orders, park-paper and
+  mainnet paths must not appear in any non-test source under `apps/web`
+  (`islands.test.tsx`, via `import.meta.glob`).
+- 执行 stays in gm-desk.js on purpose. The handoff is an event: after
+  approval TodayPanel dispatches `desk:exec` with `{judgmentId, preview,
+  done}`, and the legacy script renders the confirm and sends the
+  unchanged body `{judgment_id, shown_max_loss, confirm_text:"执行"}`.
+- The legacy script tells the island which asset is selected through
+  `data-props`; the island re-renders only when the props change. A
+  `desk:reload` event re-reads the desk after an execute or stop.
+- Cited news is shared between the two islands through a small store
+  (`todayStore.ts`), keyed by asset.
+- On reload, today's saved judgment is restored only while the user has
+  not picked a direction yet, so a minute refresh never overwrites input.
+  An executed judgment restores as done (`DONE_STAGES`), with no 执行
+  button; restoring re-plans and never re-submits.
+- 「AI 用了什么」 is no longer its own island mount; `AiSources` renders
+  inside the AI card.
+
+## Gotchas
+
+- GridMind's control script returns early on localhost unless the port is
+  8765, 8766 or 8790. A page-level test on another port must set
+  `window.dashboardControlState` itself, or the desk never learns the
+  console's venue.
+- Playwright route handlers get `(route, request)`. A lambda with a
+  default argument (`lambda route, name=name:`) receives the request as
+  `name`. Use a closure factory.
+- Islands share module state because they are one bundle. That is what
+  lets the cite store work across TodayPanel and NewsRail; it also means a
+  store must be keyed by asset, or switching assets carries cites over.
+
+## Verification
+
+- Vitest (50): bytes of every POST, approve hands off `{judgmentId,
+  preview}`, executed restore, a refresh not overwriting input, the AI
+  adopt/refresh rules, one fresh panel per asset, NewsRail 「新」 and
+  cites, and the allow-list guard.
+- `tests/test_gm_desk_today_browser.py` (3): the real /trade shell
+  (GridMind + `inject_shell` + gm-desk.js + web.js) with every `/api`
+  routed to a mock. Approve → 执行 sends exactly `/api/plan`,
+  `/api/judgments`, then the mocked `/api/execute` with the unchanged
+  body; an executed judgment reloads as done and posts only `/api/plan`;
+  a running grid keeps 停止 and 暂停补单 in step 3.
+- Desk suite 146 passed.
+
 # 2026-11-06 — 回测工作台: BTC grid against a backtest contract (#1337)
 
 ## Decision

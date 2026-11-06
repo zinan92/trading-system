@@ -690,8 +690,10 @@ def test_react_islands_bundle_is_shipped_and_replaces_the_old_scripts():
     for retired in ("gm-backtest.js", "gm-ai-sources.js", "gm-review.js"):
         assert retired not in shell and not (static / retired).exists()
     desk = (static / "gm-desk.js").read_text(encoding="utf-8")
-    for island in ("watch", "ai-sources", "backtest", "review", "workbench"):
+    # #1327: 「AI 用了什么」 now renders inside the today island's AI card, not as its own mount.
+    for island in ("watch", "today", "news", "backtest", "review", "workbench"):
         assert f'data-island="{island}"' in desk
+    assert 'data-island="ai-sources"' not in desk
 
 
 def _review_ledger(config):
