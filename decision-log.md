@@ -1,5 +1,75 @@
 # Decision Log
 
+# 2026-11-06 — 回测工作台: BTC grid against a backtest contract (#1337)
+
+## Decision
+
+- Grid comparisons no longer replay against Paper's preflight. They replay
+  against a backtest contract (`backtest-contract-v1`, status
+  `backtest_only`) that `pipelines.backtest_compare` builds per run:
+  - The instrument is the venue's own definition from the datafeed, read
+    from the same source as the history:
+    `/api/instruments/{class}/{instrument}?source=…`. It passes the same
+    `validate_instrument_definition` checks Paper uses: upstream,
+    execution venue, not synthetic, TRADING.
+  - It must also name exactly the history's instrument and source, or
+    the run says so before reading any history.
+  - Fees come from Paper's fee model (maker 0, taker 0.04%, unverified),
+    the same numbers gold's preflight carries.
+  - No other source stands in. If the datafeed cannot serve the
+    definition, the result is 「读不到 … 的合约说明」.
+- Execution precision (`execution_contract`) is taken from that
+  instrument, so BTC rounds at 0.0001 BTC. Gold's comes out identical to
+  Paper's config: `XAU-USDT-SWAP`, 0.1 / 0.001.
+- **Two fail-closed checks are widened, only for the backtest entry:**
+  - The replay script accepts `backtest_only` only with
+    `--backtest-contract`, and with that flag it accepts nothing else.
+    Without the flag, Paper and every other caller, it still requires
+    `ready_for_paper_shadow` / `ready_for_park_paper` and refuses a
+    `backtest_only` contract.
+  - `validate_instrument_definition` defaults to commodity only. Only the
+    backtest entry passes `BACKTEST_ASSET_CLASSES` (commodity, crypto).
+    The Nautilus instrument for a crypto definition is built as
+    `CRYPTOCURRENCY`.
+- The desk no longer passes `--preflight` to the comparison. The CLI
+  still accepts it and ignores it for one release, so a desk started
+  before a deploy can launch a run during the restart window.
+- The page offers grid for BTC. Its notes say which contract precision
+  the backtest used.
+
+## Gotchas
+
+- The datafeed's instrument endpoint without `?source=` picked another
+  source for BTC and answered 502. Always ask with the series' source.
+- `run_backtest` takes its rounding from `config["execution_contract"]`,
+  not from the replay's instrument. Without `contract_config`, a BTC grid
+  would have rounded quantities to gold's 0.001 BTC.
+
+## Verification
+
+- Gold unchanged, real Nautilus, same datafeed, same day: one request
+  (±3% and ±5%, 9 levels × 500) at 886bf47 with Paper's preflight and at
+  71a7c23 with the backtest contract. Both cover 2026-05-10 → 2026-11-06
+  and every variant's output is identical: ±3% median +0.01%, worst
+  −0.47%, edge 52%, 11.3 fills; ±5% median +0.10%, worst −0.76%, edge 8%,
+  9.0 fills.
+- BTC end to end, same request, 25 windows, funding in 12:
+  - ±3%: median +0.14%, worst −0.47%, best +0.73%, edge broken 48%,
+    14.1 fills.
+  - ±5%: median +0.21%, worst −0.82%, best +0.82%, edge broken 20%,
+    11.7 fills.
+- Tests:
+  - `tests/test_dca_backtest.py`: contract built, BTC precision in every
+    command, a wrong or synthetic definition refused before history, no
+    stand-in when the datafeed is down.
+  - `tests/test_grid_backtest.py`: real Nautilus. The backtest entry
+    replays BTC, Paper's entry refuses the same contract, and the
+    backtest entry refuses a Paper preflight. Ran locally with
+    `TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON`; skipped in CI, which has
+    no Nautilus.
+  - `tests/test_dualtrack_nautilus_instrument.py`: Paper's default still
+    refuses crypto.
+
 # 2026-11-06 — Deploy record: ab95fa0 (#1345, #1342, #1349, #1346, #1347)
 
 - `ops/deploy-paper.sh ab95fa0 --dashboard`: main's head, Paper idle, gate

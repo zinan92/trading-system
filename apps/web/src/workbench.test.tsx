@@ -45,7 +45,7 @@ test("an unavailable result names the reason", async () => {
   expect(await screen.findByText("回测不可用：历史数据有缺口：3 分钟")).toBeTruthy();
 });
 
-test("a gold grid comparison sends grid sets and shows grid rows; BTC cannot pick grid yet", async () => {
+test("a gold grid comparison sends grid sets and shows grid rows; BTC can pick grid too", async () => {
   vi.useFakeTimers();
   const calls: Array<[string, RequestInit | undefined]> = [];
   const grid = {runs: 25, median_return_pct: 0.3, worst_return_pct: -2, best_return_pct: 1.5, stopped_pct: 8, mean_fills: 11.5, funded_runs: 25, histogram: {low: -2, width: 0.3, counts: [1]}};
@@ -70,7 +70,7 @@ test("a gold grid comparison sends grid sets and shows grid rows; BTC cannot pic
   vi.useRealTimers();
 
   fireEvent.change(screen.getByLabelText("品种"), {target: {value: "BTC"}});
-  expect(screen.getByText(/BTC 网格回测还没开通/)).toBeTruthy();
-  expect((screen.getByRole("button", {name: "开始回测"}) as HTMLButtonElement).disabled).toBe(true);
-  expect((screen.getByRole("option", {name: "网格（BTC 即将开通）"}) as HTMLOptionElement).disabled).toBe(true);
+  expect(screen.queryByText(/网格回测还没开通/)).toBeNull();
+  expect((screen.getByRole("option", {name: "网格"}) as HTMLOptionElement).disabled).toBe(false);
+  expect((screen.getByRole("button", {name: "开始回测"}) as HTMLButtonElement).disabled).toBe(false);
 });

@@ -58,6 +58,9 @@ test("grid notes say the replay, the account size and the fee assumption", () =>
   expect(lines[1]).toBe("用 Paper 自己的 Nautilus 回放和补单规则；收益按 10,000 USDT 账户算，费后");
   expect(lines).toContain("资金费已计入");
   expect(lines).toContain("手续费是 OKX Paper 的假设费率，尚未用账户核实");
+  expect(lines.some((line) => line.startsWith("合约精度"))).toBe(false);  // an older result has no contract
+  const btc = gridNotes({...GRID_RESULT, contract: {status: "backtest_only", price_increment: "0.1", size_increment: "0.0001"}});
+  expect(btc).toContain("合约精度取自 OKX 的合约说明：价格 0.1，数量 0.0001；只用于回测");
 });
 
 test("grid labels and bounds match the server's", () => {
@@ -71,5 +74,5 @@ test("grid labels and bounds match the server's", () => {
   expect(checkGrid([{...GRID, direction: "long", stop_pct: 3}])).toMatch(/止损/);
   expect(checkGrid([{...GRID, stop_pct: 1}])).toMatch(/双向/);
   expect(checkGrid([GRID, GRID, GRID, GRID])).toMatch(/1–3/);
-  expect(GRID_ASSETS).toEqual(["XAU"]);
+  expect(GRID_ASSETS).toEqual(["XAU", "BTC"]);
 });

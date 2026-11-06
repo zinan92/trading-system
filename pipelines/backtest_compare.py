@@ -13,13 +13,14 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from services.datafeed_market_client import DatafeedMarketClient
 from services.dca_backtest import run_backtest as run_dca
 from services.dca_backtest import validate as validate_dca
 from services.dualtrack_config import dualtrack_config
-from services.grid_backtest import BacktestUnavailable, Replay, load_history, subprocess_replay
+from services.dualtrack_nautilus_instrument import BACKTEST_ASSET_CLASSES, validate_instrument_definition
+from services.grid_backtest import BacktestUnavailable, Replay, backtest_replay, load_history
 from services.grid_backtest import run_backtest as run_grid
 
 SCHEMA = "backtest-compare-v1"
@@ -30,9 +31,10 @@ ASSETS: dict[str, tuple[str, str, str]] = {
     "BTC": ("okx_swap_crypto_public", "BTC-USDT-SWAP", "crypto"),
 }
 STRATEGIES = ("dca", "grid")
-# Grids replay through Paper's Nautilus replay, which needs that instrument's contract. Only gold
-# has one today (the Paper preflight); BTC grids wait for #1337 rather than borrow gold's contract.
-GRID_ASSETS = ("XAU",)
+# Grids replay through Paper's Nautilus replay against a backtest contract (#1337): the venue's own
+# instrument definition for that exact series, plus Paper's fee model, status backtest_only.
+GRID_ASSETS = ("XAU", "BTC")
+CONTRACT_SCHEMA = "backtest-contract-v1"
 GRID_WORKERS = 3  # of 10 cores; Paper runs on the same machine
 
 
@@ -95,7 +97,7 @@ def check(request: dict[str, Any]) -> dict[str, Any]:
     if strategy not in STRATEGIES:
         raise ValueError("策略只能是定投（dca）或网格（grid）")
     if strategy == "grid" and asset not in GRID_ASSETS:
-        raise ValueError("BTC 网格回测还没开通（#1337）：回放需要 BTC 的合约说明")
+        raise ValueError(f"网格回测只开通了 {' / '.join(GRID_ASSETS)}")
     variants = request.get("variants")
     if not isinstance(variants, list) or not 1 <= len(variants) <= MAX_VARIANTS:
         raise ValueError(f"参数要有 1–{MAX_VARIANTS} 组")
@@ -110,28 +112,70 @@ def write_result(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def preflight_instrument(path: Path) -> str:
-    """The contract the replay will build: the newest preflight's instrument symbol ("" if unreadable)."""
+def backtest_contract(client: Any, asset: str, config: dict[str, Any]) -> dict[str, Any]:
+    """The contract a grid backtest replays against (#1337). Raises BacktestUnavailable.
 
+    The instrument is the venue's own definition, read from the same datafeed source as the history
+    and checked like Paper checks its preflight. Fees are Paper's fee model. The status is
+    ``backtest_only``: the replay accepts it only from the backtest entry, and Paper never does.
+    """
+
+    source, instrument, asset_class = ASSETS[asset]
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ""
-    latest = payload[-1] if isinstance(payload, list) and payload else payload
-    return str(((latest or {}).get("instrument") or {}).get("symbol") or "") if isinstance(latest, dict) else ""
+        definition = client.instrument_definition(asset_class=asset_class, instrument=instrument, source=source)
+    except Exception as error:  # noqa: BLE001 - any failure is "no contract", said on the page
+        raise BacktestUnavailable(f"读不到 {instrument} 的合约说明（{source}）：{type(error).__name__}") from error
+    if not isinstance(definition, dict):
+        raise BacktestUnavailable(f"{instrument} 的合约说明不是一个对象")
+    try:
+        validate_instrument_definition(definition, asset_classes=BACKTEST_ASSET_CLASSES)
+    except ValueError as error:
+        raise BacktestUnavailable(f"{instrument} 的合约说明不可用：{error}") from error
+    if definition.get("symbol") != instrument or definition.get("provider") != source:
+        raise BacktestUnavailable(
+            f"合约说明是 {definition.get('symbol')}（{definition.get('provider')}），回测历史是 {instrument}（{source}），两者不一致")
+    fees = dict(config["paper_fee_model"])
+    return {
+        "schema_version": CONTRACT_SCHEMA,
+        "status": "backtest_only",
+        "paper_only": True,
+        "real_money_eligible": False,
+        "instrument": definition,
+        "fee_model": {
+            "mode": "backtest_contract",
+            "maker_fee_rate": str(fees.get("maker_fee_rate") or "0"),
+            "taker_fee_rate": str(fees["taker_fee_rate"]),
+            "funding_rate": "0",
+            "source": "park_paper_config",
+            "environment": "paper",
+            "real_money_eligible": False,
+        },
+    }
 
 
-def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], replay: Replay | None = None,
-            replay_instrument: str | None = None, now: datetime | None = None) -> dict[str, Any]:
+def contract_config(config: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
+    """Paper's config with the execution precision of the contract's instrument (gold's is unchanged)."""
+
+    definition = contract["instrument"]
+    return {**config, "execution_contract": {
+        **dict(config.get("execution_contract") or {}),
+        "execution_instrument_id": str(definition["symbol"]),
+        "price_precision": int(definition["price_precision"]),
+        "price_increment": str(definition["price_increment"]),
+        "quantity_precision": int(definition["size_precision"]),
+        "quantity_increment": str(definition["size_increment"]),
+    }}
+
+
+def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], replay_for: Callable[[dict[str, Any]], Replay] | None = None,
+            now: datetime | None = None) -> dict[str, Any]:
     checked = check(request)
     source, instrument, asset_class = ASSETS[checked["asset"]]
+    contract: dict[str, Any] | None = None
     if checked["strategy"] == "grid":
-        if replay is None:
+        if replay_for is None:
             raise BacktestUnavailable("网格回测需要 Paper 的回放环境")
-        # The replay builds its contract from the Paper preflight; a different venue's contract would
-        # replay gold history against the wrong instrument, so say so before reading any history.
-        if replay_instrument is not None and replay_instrument != instrument:
-            raise BacktestUnavailable(f"Paper 预检的合约是 {replay_instrument or '（读不到）'}，回测历史是 {instrument}，两者不一致")
+        contract = backtest_contract(client, checked["asset"], config)  # before any history is read
     fee_rate = float(config["paper_fee_model"]["taker_fee_rate"])
     history = load_history(client, source=source, instrument=instrument, asset_class=asset_class, now=now)
     bars, funding, funding_from = history["bars"], history["funding"], history["funding_from"]
@@ -141,18 +185,23 @@ def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], rep
             for params in checked["variants"]
         ]
     else:
-        assert replay is not None
+        assert replay_for is not None and contract is not None
         equity = float(config["capital_per_track_usd"])
+        replay, grid_config = replay_for(contract), contract_config(config, contract)
         variants = []
         for params in checked["variants"]:
-            result = run_grid(grid_shape(params, equity=equity), bars, replay=replay, config=config, instrument=instrument, source=source,
+            result = run_grid(grid_shape(params, equity=equity), bars, replay=replay, config=grid_config, instrument=instrument, source=source,
                               funding=funding, funding_from=funding_from, workers=GRID_WORKERS, now=now)
             variants.append({"params": params, "summary": result["summary"], "account_equity": equity})
+    contract_note = None if contract is None else {
+        "status": contract["status"], "observed_at": contract["instrument"].get("observed_at"),
+        "price_increment": contract["instrument"]["price_increment"], "size_increment": contract["instrument"]["size_increment"],
+    }
     return {
         "schema_version": SCHEMA, "status": "ready", **checked, "variants": variants,
         "source": source, "instrument": instrument, "fee_rate": fee_rate,
         "history_start": bars[0].opened_at.isoformat(), "history_end": bars[-1].opened_at.isoformat(),
-        "funding_from": history["funding_from"], "paper_only": True,
+        "funding_from": history["funding_from"], "contract": contract_note, "paper_only": True,
     }
 
 
@@ -161,16 +210,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--datafeed-url", default="http://127.0.0.1:8100")
-    parser.add_argument("--preflight", type=Path, help="Paper preflight (grid only: the instrument contract the replay uses)")
     parser.add_argument("--nautilus-python", help="Python with nautilus_trader (grid only)")
+    # Ignored since #1337 (grids build their own backtest contract). Kept for one release so a desk
+    # started before the deploy can still launch this CLI during the restart window.
+    parser.add_argument("--preflight", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     started = datetime.now(timezone.utc)
     write_result(args.output, {"schema_version": SCHEMA, "status": "running", "started_at": started.isoformat()})
     try:
         request = json.loads(args.request.read_text(encoding="utf-8"))
-        replay = subprocess_replay(args.nautilus_python, args.preflight) if args.preflight and args.nautilus_python else None
-        result = compare(request, client=DatafeedMarketClient(base_url=args.datafeed_url, timeout_seconds=60.0), config=dualtrack_config(), replay=replay,
-                         replay_instrument=preflight_instrument(args.preflight) if args.preflight else None)
+        python = args.nautilus_python
+        replay_for = (lambda contract: backtest_replay(python, contract)) if python else None
+        result = compare(request, client=DatafeedMarketClient(base_url=args.datafeed_url, timeout_seconds=60.0), config=dualtrack_config(),
+                         replay_for=replay_for)
     except (BacktestUnavailable, ValueError) as error:
         result = {"schema_version": SCHEMA, "status": "unavailable", "reason": str(error)}
     except Exception as error:  # noqa: BLE001 - the page says it failed; it must not take anything down.

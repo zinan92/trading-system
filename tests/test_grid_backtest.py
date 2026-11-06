@@ -204,3 +204,43 @@ def test_real_replay_rearms_a_line_and_ends_flat(tmp_path: Path) -> None:
     )
     assert result["open_after_close"] == 0
     assert result["fill_count"] > 4  # more than one pass over the two rungs
+
+
+def _contract(status: str, symbol: str, asset_class: str, size: str) -> dict:
+    from tests.test_dualtrack_nautilus_runtime_integration import _definition
+
+    return {
+        "status": status,
+        "instrument": {**_definition(), "symbol": symbol, "asset_class": asset_class, "size_increment": size, "min_quantity": size,
+                       "size_precision": len(size.split(".")[1])},
+        "fee_model": {"mode": "backtest_contract", "maker_fee_rate": "0", "taker_fee_rate": "0.000400", "funding_rate": "0", "real_money_eligible": False},
+    }
+
+
+def test_backtest_replay_takes_only_a_backtest_only_contract() -> None:
+    with pytest.raises(gb.BacktestUnavailable, match="backtest_only"):
+        gb.backtest_replay("python", _contract("ready_for_park_paper", INSTRUMENT, "commodity", "0.001"))
+
+
+@pytest.mark.skipif(not NAUTILUS or not Path(NAUTILUS).exists(), reason="Nautilus runtime missing; set TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON")
+def test_a_btc_backtest_contract_replays_and_paper_refuses_it(tmp_path: Path) -> None:
+    """#1337: the backtest entry replays BTC at BTC's precision; the Paper entry refuses the same contract."""
+
+    btc = "BTC-USDT-SWAP"
+    contract = _contract("backtest_only", btc, "crypto", "0.0001")
+    swing = ([100.0] + [94.0] * 3 + [106.0] * 3) * 12
+    shape = {**SHAPE, "quantity": 0.0123}
+    config = {**CONFIG, "execution_contract": {**CONFIG["execution_contract"], "execution_instrument_id": btc,
+                                               "quantity_increment": "0.0001", "quantity_precision": 4}}
+    result = gb.run_window(shape, bars(swing), replay=gb.backtest_replay(NAUTILUS, contract), config=config, instrument=btc,
+                           source="okx_swap_crypto_public", price_step="0.1", quantity_step="0.0001")
+    assert result["open_after_close"] == 0 and result["fill_count"] > 4
+    paper = tmp_path / "contract.json"
+    paper.write_text(json.dumps([contract]))
+    with pytest.raises(RuntimeError, match="(?s)Nautilus replay failed.*not ready for paper"):
+        gb.run_window(shape, bars(swing), replay=gb.subprocess_replay(NAUTILUS, paper), config=config, instrument=btc,
+                      source="okx_swap_crypto_public", price_step="0.1", quantity_step="0.0001")
+    gold_preflight = tmp_path / "preflight.json"
+    gold_preflight.write_text(json.dumps([{**_contract("ready_for_park_paper", INSTRUMENT, "commodity", "0.001")}]))
+    with pytest.raises(gb.BacktestUnavailable):
+        gb.backtest_replay(NAUTILUS, json.loads(gold_preflight.read_text())[0])

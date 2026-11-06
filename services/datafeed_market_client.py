@@ -80,6 +80,10 @@ class DatafeedMarketClient:
     def history_funding(self, *, source: str, instrument: str) -> dict:
         return self._get(f"/api/history/{source}/{instrument}/funding", {})
 
+    def instrument_definition(self, *, asset_class: str, instrument: str, source: str) -> dict:
+        """The venue's own contract for one series, from that source only (no fallback)."""
+        return self._get(f"/api/instruments/{asset_class}/{instrument}", {"source": source})
+
     def health(self) -> dict:
         return self._get("/api/health", {})
 

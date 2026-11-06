@@ -25,7 +25,13 @@ def not_applicable_fields(definition: dict[str, Any]) -> frozenset[str]:
     return frozenset(declared)
 
 
-def validate_instrument_definition(definition: dict[str, Any]) -> dict[str, Any]:
+PAPER_ASSET_CLASSES = ("commodity",)
+# The backtest entry (#1337) also replays a crypto perpetual. Paper and every other caller keep the
+# default, commodity only; only the backtest replay passes this wider set.
+BACKTEST_ASSET_CLASSES = ("commodity", "crypto")
+
+
+def validate_instrument_definition(definition: dict[str, Any], *, asset_classes: tuple[str, ...] = PAPER_ASSET_CLASSES) -> dict[str, Any]:
     absent = not_applicable_fields(definition)
     required = {
         "instrument_id",
@@ -70,8 +76,8 @@ def validate_instrument_definition(definition: dict[str, Any]) -> dict[str, Any]
         raise ValueError("instrument definition must be served from upstream")
     if str(definition.get("status")).upper() != "TRADING":
         raise ValueError("instrument is not in TRADING status")
-    if str(definition.get("asset_class")).lower() != "commodity":
-        raise ValueError("DualTrack Nautilus spike requires a commodity instrument")
+    if str(definition.get("asset_class")).lower() not in asset_classes:
+        raise ValueError(f"instrument asset class must be one of {', '.join(asset_classes)}")
     if bool(definition.get("is_inverse")):
         raise ValueError("inverse contracts are not supported by the GOLD spike")
     derived_fields = definition.get("derived_fields") or {}
@@ -103,8 +109,9 @@ def build_nautilus_instrument(
     *,
     maker_fee_rate: str | Decimal | None = None,
     taker_fee_rate: str | Decimal | None = None,
+    asset_classes: tuple[str, ...] = PAPER_ASSET_CLASSES,
 ):
-    definition = validate_instrument_definition(definition)
+    definition = validate_instrument_definition(definition, asset_classes=asset_classes)
     maker = _resolve_fee_rate(definition.get("maker_fee_rate"), maker_fee_rate, "maker")
     taker = _resolve_fee_rate(definition.get("taker_fee_rate"), taker_fee_rate, "taker")
 
@@ -125,7 +132,7 @@ def build_nautilus_instrument(
         instrument_id=InstrumentId.from_str(f"{symbol}-PERP.{venue}"),
         raw_symbol=Symbol(symbol),
         underlying=str(definition["base_currency"]),
-        asset_class=AssetClass.COMMODITY,
+        asset_class=AssetClass.CRYPTOCURRENCY if str(definition["asset_class"]).lower() == "crypto" else AssetClass.COMMODITY,
         base_currency=Currency.from_str(str(definition["base_currency"])),
         quote_currency=quote_currency,
         settlement_currency=Currency.from_str(str(definition["settlement_currency"])),

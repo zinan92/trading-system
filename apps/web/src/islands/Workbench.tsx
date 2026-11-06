@@ -47,7 +47,7 @@ export function Workbench() {
 
   const running = result?.status === "running";
   const gridOk = GRID_ASSETS.includes(asset);
-  const problem = strategy === "grid" ? (gridOk ? checkGrid(grids) : "BTC 网格回测还没开通（#1337）") : check(variants);
+  const problem = strategy === "grid" ? (gridOk ? checkGrid(grids) : `${asset} 网格回测还没开通`) : check(variants);
   const set = (i: number, field: keyof DcaParams, value: string) =>
     setVariants(variants.map((v, j) => j === i ? {...v, [field]: Number(value)} : v));
   const setGrid = (i: number, field: keyof GridParams, value: string) =>
@@ -79,7 +79,7 @@ export function Workbench() {
         </select></label>
         <label>策略 <select aria-label="策略" value={strategy} onChange={e => setStrategy(e.target.value as Strategy)} disabled={running}>
           <option value="dca">定投</option>
-          <option value="grid" disabled={!gridOk}>{gridOk ? "网格" : "网格（BTC 即将开通）"}</option>
+          <option value="grid" disabled={!gridOk}>{gridOk ? "网格" : `网格（${asset} 未开通）`}</option>
         </select></label>
         <small>过去 180 天 OKX 历史，每段 7 天、互不重叠；只是参考，不能用来开仓</small>
       </div>
