@@ -1,22 +1,28 @@
-/* 这一笔为什么 (#1359). Read-only: GET /api/why only. */
+/* 这一笔为什么 (#1359). Read-only: GET /api/why only.
+ * A finished run (交易回看) or a desk judgment whose preview or order failed (「今天」 step 3, #1374). */
 import {useEffect, useState} from "react";
 import {getJson} from "../api";
 import {when} from "../review";
 import {STATUS_TEXT, identityRows, verdict, type WhyChain} from "../why";
 
-export function WhyPanel({run}: {run: string}) {
+export const whyUrl = ({run, judgment}: {run?: string; judgment?: number | string}) =>
+  run ? `/api/why?run=${encodeURIComponent(run)}` : `/api/why?judgment=${encodeURIComponent(String(judgment ?? ""))}`;
+
+export function WhyPanel({run, judgment}: {run?: string; judgment?: number | string}) {
   const [chain, setChain] = useState<WhyChain | null>(null);
   const [error, setError] = useState("");
+  const url = whyUrl({run, judgment});
 
   useEffect(() => {
     let alive = true;
     setChain(null);
     setError("");
-    getJson<WhyChain>(`/api/why?run=${encodeURIComponent(run)}`)
+    if (!run && (judgment === undefined || judgment === "")) return;
+    getJson<WhyChain>(url)
       .then(data => { if (alive) setChain(data); })
       .catch(e => { if (alive) setError(`链路读不出来：${e instanceof Error ? e.message : e}`); });
     return () => { alive = false; };
-  }, [run]);
+  }, [url, run, judgment]);
 
   if (error) return <div className="desk-review-missing" role="status">{error}</div>;
   if (!chain) return null;

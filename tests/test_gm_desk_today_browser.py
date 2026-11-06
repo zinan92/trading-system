@@ -28,7 +28,7 @@ PLAN = {"kind": "new", "title": "做多网格", "lines": [["区间", "70,000 –
 PREVIEW = {"execution_ready": True, "orders": [{"price": 72000}, {"price": 74000}], "max_loss": 12.5, "preview_digest": "sha256:x"}
 
 
-def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list):
+def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers: dict | None = None, reads_extra: dict | None = None):
     from trading_desk.gridmind import inject_shell
 
     html = inject_shell((ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8"))
@@ -49,12 +49,14 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list):
         path = "/" + path
         if request.method == "POST":
             posts.append((path, request.post_data))
-            answers = {
-                "/api/plan": PLAN,
-                "/api/judgments": {"id": 99, "handoff": "预览通过：确认没问题再按「执行」", "preview": PREVIEW},
-                "/api/execute": {"message": "已提交（mock）"},
+            answered = {
+                "/api/plan": (PLAN, 200),
+                "/api/judgments": ({"id": 99, "handoff": "预览通过：确认没问题再按「执行」", "preview": PREVIEW}, 200),
+                "/api/execute": ({"message": "已提交（mock）"}, 200),
+                **(answers or {}),
             }
-            return fulfill(route, answers.get(path, {"detail": "not mocked"}), 200 if path in answers else 500)
+            body, status = answered.get(path, ({"detail": "not mocked"}, 500))
+            return fulfill(route, body, status)
         reads = {
             "/api/assets": ASSETS,
             "/api/desk/BTC": desk,
@@ -62,6 +64,7 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list):
                                                      "collected_at": "2026-11-06T02:00:00Z"}]},
             "/api/watch": {"items": []},
             "/api/trading-system/read-model": model,
+            **(reads_extra or {}),
         }
         if path in reads:
             return fulfill(route, reads[path])
@@ -144,4 +147,50 @@ def test_a_running_grid_keeps_its_stop_button_in_step_three() -> None:
         browser, page = _page(runtime, origin, _desk(control={"can_stop": True, "rearm_paused": False}), [], [])
         page.locator("#deskStopBtn").wait_for()
         assert page.locator("#deskHoldBtn").inner_text() == "暂停补单"
+        browser.close()
+
+
+# ---- #1374: a blocked preview or a refused order shows where its judgment broke ----------------
+WHY_PREVIEW = {"status": "broken", "first_problem": {"key": "preview", "label": "预览", "summary": "预览没通过：缺少实时行情"},
+               "note": "这些是记录，不是交易所动作的证明。", "identity": {},
+               "steps": [{"key": "preview", "label": "预览", "status": "failed", "summary": "预览没通过：缺少实时行情"},
+                         {"key": "press", "label": "按下执行", "status": "not_reached", "summary": "没走到这一步"}]}
+WHY_RESULT = {**WHY_PREVIEW, "first_problem": {"key": "result", "label": "下单结果", "summary": "确认没有通过，没有下单。"},
+              "steps": [{"key": "preview", "label": "预览", "status": "ok", "summary": "预览通过"},
+                        {"key": "result", "label": "下单结果", "status": "failed", "summary": "确认没有通过，没有下单。"}]}
+
+
+def _judge(page) -> None:
+    page.locator(".desk-dir [data-d=long]").click()
+    page.get_by_role("button", name="批准这份计划").click()
+
+
+def test_a_blocked_preview_shows_its_chain_under_step_three() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    blocked = {"id": 99, "handoff": "预览没有通过，不能执行：缺少实时行情", "preview": {"execution_ready": False, "blockers": ["缺少实时行情"]}}
+    posts: list = []
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), posts, [], answers={"/api/judgments": (blocked, 200)}, reads_extra={"/api/why": WHY_PREVIEW})
+        requests: list = []
+        page.on("request", lambda r: requests.append((r.method, r.url.split("/", 3)[3])) if "/api/why" in r.url else None)
+        _judge(page)
+        box = page.locator("#deskExecBox")
+        box.locator(".desk-why-verdict", has_text="断在「预览」：预览没通过：缺少实时行情").wait_for()
+        assert box.locator("#deskExec").count() == 0
+        assert requests == [("GET", "api/why?judgment=99")]
+        assert [path for path, _ in posts] == ["/api/plan", "/api/judgments"]
+        browser.close()
+
+
+def test_a_refused_order_shows_its_chain_after_the_press() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    posts: list = []
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), posts, [], answers={"/api/execute": ({"detail": "确认没有通过，没有下单。"}, 409)},
+                              reads_extra={"/api/why": WHY_RESULT})
+        _judge(page)
+        page.locator("#deskExec").click()
+        page.locator("#deskExecToast", has_text="确认没有通过，没有下单。").wait_for()
+        page.locator("#deskExecBox .desk-why-verdict", has_text="断在「下单结果」：确认没有通过，没有下单。").wait_for()
+        assert [path for path, _ in posts] == ["/api/plan", "/api/judgments", "/api/execute"]  # one press, one request
         browser.close()

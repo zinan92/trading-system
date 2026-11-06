@@ -1,5 +1,41 @@
 # Decision Log
 
+# 2026-11-07 — #1359 acceptance: three induced failures, found from the page (#1374)
+
+## Decision
+
+- Acceptance runs on the real desk app with every upstream faked (scratch
+  launcher, NoDrive executor, a static Dashboard shell on 18766). Nothing reaches
+  a venue; the mock execute press ran on the dev port only, with a port guard.
+- The same three failures are pinned as tests in
+  `apps/trading-desk/tests/test_acceptance_1359.py`: feed down, preview blocked,
+  confirm refused, plus one log file run through all three with planted secrets.
+- The trade page now mounts the why chain (`data-island="why"`, by judgment id)
+  under step 3 when the preview is blocked, after a press, and when execute fails.
+  Before this the chain only lived on the review page, so failure 2 and 3 were
+  not findable from where Park presses.
+
+## Gotchas
+
+- The acceptance desk fetches `dashboard-v5.html` from the Dashboard for /trade;
+  without it /trade answers 503. Serve the shell files from a temp folder.
+- The Today panel needs `window.dashboardControlState` with a selection before it
+  shows an asset, as the browser test sets it.
+- The system page's log line counts warnings but shows the latest event only for
+  errors. A feed outage is warnings only, so the location is found through the
+  request id in the log, not on the page. Left as is.
+
+## Verification
+
+- Acceptance tests 4, desk suite 203, vitest 138, browser tests 5 (two new: a
+  blocked preview and a refused order each show their chain).
+- Dev acceptance desk, all three on the page; log scan: 0 planted secrets, the
+  planted text present 5 times, masked. Executions recorded: preview, preview,
+  execute_started, refused; no driver calls.
+- Production 6b868cd (#1372): `/api/desk/BTC` price 76143.5 vs Testnet mid
+  ~76186.5 at the same minute; grid card 76253 unchanged. System page all green
+  except the stale morning brief (09-27), which predates this work.
+
 # 2026-11-07 — BTC price is the venue mid, never a grid record (#1372)
 
 ## Decision
