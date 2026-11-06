@@ -211,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--datafeed-url", default="http://127.0.0.1:8100")
     parser.add_argument("--nautilus-python", help="Python with nautilus_trader (grid only)")
+    # Ignored since #1337 (grids build their own backtest contract). Kept for one release so a desk
+    # started before the deploy can still launch this CLI during the restart window.
+    parser.add_argument("--preflight", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     started = datetime.now(timezone.utc)
     write_result(args.output, {"schema_version": SCHEMA, "status": "running", "started_at": started.isoformat()})
