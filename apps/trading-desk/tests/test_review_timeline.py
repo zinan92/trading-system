@@ -179,3 +179,12 @@ def test_filter_by_asset_and_period_keeps_runs_and_score_in_step() -> None:
     assert [r["id"] for r in month["runs"]] == ["a", "c"]  # c ended inside the period
     with pytest.raises(ValueError):
         rt.filtered(runs, rows, asset=None, days=5, now=now)
+
+
+def test_a_testnet_run_blocked_before_any_fill_is_still_listed(tmp_path: Path) -> None:
+    folder = tmp_path / "dualtrack" / "grid_testnet_lifecycle"
+    folder.mkdir(parents=True)
+    (folder / "dashboard-plan:x.json").write_text(json.dumps([{"strategy_plan_id": "dashboard-plan:x", "instrument_id": "BTC-USD-PERP", "status": "blocked_reconciliation",
+                                                               "created_at": "2026-09-10T00:00:00+00:00", "fills": []}]))
+    (folder / "empty.json").write_text("[]")
+    assert [(run["id"], run["fill_count"], run["status"]) for run in rt.runs(tmp_path)] == [("testnet:dashboard-plan:x", 0, "对账拦下")]

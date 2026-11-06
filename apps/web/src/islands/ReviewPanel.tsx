@@ -1,9 +1,10 @@
 /* 交易回看 tab (#1306 → island #1326), with 品种 and 时间 filters (#1326).
- * Read-only: GET /api/review/runs and /api/review/timeline only. It loads when the tab is first
+ * Read-only: GET /api/review/runs, /api/review/timeline and /api/why only. It loads when the tab is first
  * opened (the legacy shim flips `active`), not on page load. */
 import {useEffect, useRef, useState} from "react";
 import {getJson} from "../api";
 import {standardKline, type KlineChart} from "../kline";
+import {WhyPanel} from "./WhyPanel";
 import {PERIODS, emptyText, markers, runLabel, runsUrl, score, summary, when, type RunsResponse, type Timeline} from "../review";
 
 function Chart({data}: {data: Timeline}) {
@@ -70,6 +71,7 @@ function RunView({data}: {data: Timeline}) {
           </pre>
         </div>
       </div>
+      {data.run?.id ? <WhyPanel run={data.run.id} /> : null}
     </>
   );
 }

@@ -133,6 +133,7 @@ desk routes. It answers exactly what the page gets.
 | `assets`, `desk/{asset}`, `bars/{asset}?tf=`, `news/{asset}` | the desk per asset |
 | `watch`, `advice` | this week's three things, AI advice with sources |
 | `review/runs?asset=&days=`, `review/timeline?run=` | past runs |
+| `why?run=` or `why?judgment=` | one chain from AI advice to the end of a run, with the first break |
 | `backtest/compare/{key}`, `backtest/{key}`, `system` | backtest results, service health |
 
 The API answers:

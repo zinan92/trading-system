@@ -30,7 +30,7 @@ export interface TimelineJudgment {created_at: string; author?: string}
 export interface TimelineEvent {ts?: string; title: string; source: string; record: unknown}
 
 export interface Timeline {
-  run?: {environment?: string; reason?: string};
+  run?: {id?: string; environment?: string; reason?: string};
   result?: {net?: number | null; gross?: number | null; fees?: number | null; flat?: boolean; fill_count?: number; entries?: number; exits?: number; ended_flat?: boolean | null};
   market?: {source?: string; instrument?: string; timeframe?: string; bars?: unknown[]};
   fills?: Fill[];
