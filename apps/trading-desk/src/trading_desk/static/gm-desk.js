@@ -336,16 +336,18 @@ if (typeof document !== "undefined") (() => {
     if (!ready) exec.innerHTML = `<button type="button" class="desk-btn wide" disabled>${kind === "new" ? "先批准第 2 步的计划" : kind ? "这份计划不需要新启动" : "先完成前两步"}</button>`;
     $d('.desk-step[data-step="3"]')?.classList.toggle("on", Boolean(D.steps.direction && ready));
   }
+  // 这一笔为什么 for this judgment, under a blocked preview or a refused or unfinished order (#1374). GET only.
+  const whyIsland = id => `<div class="desk-exec-why" data-island="why" data-props="${escD(JSON.stringify({judgment: id}))}"></div>`;
   function renderExec(judgmentId, preview, done) {
     const plan = $d("#deskExecBox"); plan.innerHTML = "";
     const box = document.createElement("div"); box.className = "desk-exec"; box.style.display = "grid"; box.style.gap = "7px";
     const paper = D.desk?.meta?.kind === "xau_paper", unit = paper ? "USDT" : "USDC";
     if (done) {
       const txt = {executed: paper ? "已执行：计划已确认，纸面盘约 1 分钟内挂单。" : "已执行：网格已挂上测试盘。", execute_started: "执行中或上次中断，请到系统页查看记录。", execute_failed: "上次执行没有完成，请到系统页查看记录。", refused: `上次执行被拒绝：${done.detail?.reason || ""}`}[done.stage];
-      box.innerHTML = `<p class="note">${escD(txt)}</p>`; plan.appendChild(box); syncSteps(); return;
+      box.innerHTML = `<p class="note">${escD(txt)}</p>${done.stage === "executed" ? "" : whyIsland(judgmentId)}`; plan.appendChild(box); syncSteps(); return;
     }
     const BLOCKER = {instrument_not_eligible: "这个品种还没在交易系统里开通下单（测试盘目前只开通了 BTC）"};
-    if (!preview.execution_ready) { box.innerHTML = `<p class="warn">预览没通过，不能执行：${escD((preview.blockers || []).map(b => BLOCKER[b] || b).join("；"))}</p>`; plan.appendChild(box); syncSteps(); return; }
+    if (!preview.execution_ready) { box.innerHTML = `<p class="warn">预览没通过，不能执行：${escD((preview.blockers || []).map(b => BLOCKER[b] || b).join("；"))}</p>${whyIsland(judgmentId)}`; plan.appendChild(box); syncSteps(); return; }
     box.innerHTML = `<dl><dt>${paper ? "纸面盘预览价位" : "交易所预览价位"}</dt><dd>${(preview.orders || []).map(o => fmtD(o.price)).join(" / ")}</dd><dt>预览最多亏</dt><dd>${fmtD(preview.max_loss)} ${unit}</dd></dl>
       <p class="warn">${paper ? "按下后确认这份黄金纸面盘计划（模拟资金），约 1 分钟内挂单。已有黄金网格在跑时系统会拒绝。" : "按下后会在 Hyperliquid 测试盘真实挂单（假钱）。已有网格在跑时系统会拒绝。"}</p>
       <button type="button" class="desk-btn exec" id="deskExec">执行</button><div class="desk-toast" id="deskExecToast" role="status"></div>`;
@@ -355,7 +357,10 @@ if (typeof document !== "undefined") (() => {
       if (!confirm(`确认在${paper ? "黄金纸面盘" : "测试盘"}执行这份计划？\n最多亏 ${fmtD(preview.max_loss)} ${unit}`)) return;
       $d("#deskExec").disabled = true; $d("#deskExecToast").textContent = "正在复核预览并下单，可能需要一两分钟…";
       try { const r = await call("/api/execute", {judgment_id: judgmentId, shown_max_loss: preview.max_loss, confirm_text: "执行"}); $d("#deskExecToast").textContent = r.message; reloadToday(); }
-      catch (e) { $d("#deskExecToast").textContent = e.message; $d("#deskExec").disabled = false; }
+      catch (e) {
+        $d("#deskExecToast").textContent = e.message; $d("#deskExec").disabled = false;
+        if (!box.querySelector('[data-island="why"]')) box.insertAdjacentHTML("beforeend", whyIsland(judgmentId));
+      }
     };
   }
 

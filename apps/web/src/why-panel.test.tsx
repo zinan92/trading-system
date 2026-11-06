@@ -43,3 +43,16 @@ test("a failed read says so instead of showing a clean chain", async () => {
   await act(async () => { render(<WhyPanel run="paper:x" />); });
   expect(screen.getByRole("status").textContent).toBe("链路读不出来：没有这一轮的记录");
 });
+
+test("a desk judgment reads its own chain (#1374)", async () => {
+  const fetchMock = mock(chain({status: "broken", first_problem: {key: "preview", label: "预览", summary: "预览没通过：缺少实时行情"}}));
+  await act(async () => { render(<WhyPanel judgment={99} />); });
+  expect(fetchMock.mock.calls[0]?.[0 as never]).toBe("/api/why?judgment=99");
+  expect(screen.getByRole("status").textContent).toBe("断在「预览」：预览没通过：缺少实时行情");
+});
+
+test("with neither a run nor a judgment it asks nothing", async () => {
+  const fetchMock = mock(chain());
+  await act(async () => { render(<WhyPanel />); });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
