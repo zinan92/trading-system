@@ -37,6 +37,13 @@ test("shows the newest run, its missing parts and a picked raw record", async ()
   expect(screen.getByText(/判断战绩/).textContent).toContain("AI：命中 1 · 未中 1");
 });
 
+test("the chart sits in the fixed-height box, so it cannot grow with itself", async () => {
+  route(url => url.includes("timeline") ? TIMELINE : RUNS);
+  const {container} = render(<ReviewPanel active />);
+  await screen.findByText("开仓 买入");
+  expect(container.querySelector("#deskRunChart")).toBeTruthy();
+});
+
 test("a run with an id shows why, from one more GET", async () => {
   const why = {status: "broken", first_problem: {key: "end", label: "结束", summary: "对账拦下"}, identity: {}, steps: [], note: "记录"};
   const fetch = route(url => url.startsWith("/api/why") ? why : url.includes("timeline") ? {...TIMELINE, run: {...TIMELINE.run, id: "paper:s1"}} : RUNS);

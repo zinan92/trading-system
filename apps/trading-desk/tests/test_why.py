@@ -295,3 +295,9 @@ def test_execution_records_carry_the_serving_commit(tmp_path: Path) -> None:
     store.log_execution(asset="BTC", stage="preview", judgment_id=1, preview_digest=None, detail={"a": 1})
     assert store.executions_of(1)[0]["detail"] == {"a": 1, "release": "deadbeef"}
     assert Store(tmp_path / "e.db").log_execution(asset="BTC", stage="preview", judgment_id=1, preview_digest=None, detail={})["detail"] == {}
+
+
+def test_the_review_chart_box_has_a_fixed_height() -> None:
+    """The chart sizes itself to its box: without a fixed height it grows with itself, to 80,000 px."""
+    css = (Path(why.__file__).parent / "static" / "gm-desk.css").read_text(encoding="utf-8")
+    assert "#deskRunChart{height:420px;overflow:hidden}" in css

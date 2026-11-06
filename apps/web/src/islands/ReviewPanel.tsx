@@ -34,7 +34,7 @@ function Chart({data}: {data: Timeline}) {
 
   useEffect(() => () => { chart.current?.destroy(); chart.current = null; }, []);  // a filter with no runs unmounts the chart
 
-  return <div ref={host}>{missing ? "K 线组件没有加载" : null}</div>;
+  return <div id="deskRunChart" ref={host}>{missing ? "K 线组件没有加载" : null}</div>;  // the fixed height in gm-desk.css stops the chart growing with itself
 }
 
 function RunView({data}: {data: Timeline}) {

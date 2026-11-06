@@ -32,8 +32,15 @@
 - Paper `confirmed_at` is epoch seconds; everything else is ISO.
 - `testnet_automation/events.json` makes a Testnet chain take about 0.5 s. It
   runs on demand only.
+- The review chart grew without limit in production since #1326 (82,736 px when
+  Park saw it). The chart sizes itself to its box, and the island dropped
+  `id="deskRunChart"`, the only thing that fixed that box's height. The id is
+  back and a test pins the CSS. Fixed here because the new section sits under
+  that chart and could not be reached.
 - The comparison count in #1358 was revised: 175 of the 180 files using `print`
-  are command-line scripts. 26 service files are the ones to convert.
+  are command-line scripts, and a first recount of 26 service files was also
+  wrong because the search matched `fingerprint(`. The real number is 11, 7 of
+  them vendored, and none on the order path. The gap is no `logging`, not `print`.
 - #1360's first text said venue work started from Hyperliquid alone. Six
   registries and Binance, Tiger, OANDA and MT5 adapters already exist, so that
   Issue is now about unifying them. #1361 is confirmed against OKX's public
@@ -41,7 +48,8 @@
 
 ## Verification
 
-- `apps/trading-desk` pytest: all 183 passed. Vitest: 130 passed. `tsc` clean.
+- `apps/trading-desk` pytest: all 184 passed. Vitest: 131 passed. `tsc` clean.
+- Chart on dev: 420 px at every sample over 12 s, on the run Park reported.
 - Real records: all 11 runs, read-only script; no account or runtime field in
   the output.
 - Browser on dev with a copy of those records: desktop and 375 px, no sideways
