@@ -637,7 +637,8 @@ def current_state(sources: Sources, asset: dict[str, Any]) -> dict[str, Any]:
     """Price and grid for one asset, from the venue its grid trades on.
 
     `price_source` says where the price came from: 'venue', 'bars_1h' (the last 1-hour close, used
-    when the venue gives none) or 'none'. AI advice records it so the page can say which (#1318)."""
+    when the venue gives none) or 'none'. AI advice records it so the page can say which (#1318).
+    A Testnet grid record's last price is what that grid saw, not the price now: it is never used (#1372)."""
     source = "none"
     if asset["kind"] == "watch":
         grid: dict[str, Any] = {"ok": False, "none": True, "reason": f"{asset['label']}只记判断和复盘，还没有可以下单的交易所。"}
@@ -648,7 +649,7 @@ def current_state(sources: Sources, asset: dict[str, Any]) -> dict[str, Any]:
         price = paper.get("price") if paper.get("ok") else None
     else:
         grid = sources.hl_grid(asset)
-        price = grid.get("price") if grid.get("ok") else None
+        price = sources.hl_mid(asset)
     if price is not None:
         source = "venue"
     else:

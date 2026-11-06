@@ -1,5 +1,33 @@
 # Decision Log
 
+# 2026-11-07 — BTC price is the venue mid, never a grid record (#1372)
+
+## Decision
+
+- `current_state` for a Testnet asset takes the price from Hyperliquid Testnet
+  `allMids` (public info endpoint, no account), source `venue`. If that fails, the
+  last 1-hour close (`bars_1h`), then none. A grid record's `last_market_price` is
+  never the current price; it stays on the grid card as what that grid saw.
+- Fail-closed is unchanged and now real: with the mid and bars both down there is
+  no price, and approval is refused with 「现价读不到」.
+
+## Gotchas
+
+- Found while preparing the #1359 acceptance run: with the K-line feed cut, BTC
+  still had a price. It came from the newest lifecycle file, a terminal, sealed
+  grid last updated 2026-09-15 (76,253 vs a 76,149.5 mid on 2026-11-07), and was
+  labelled `venue`, so AI advice recorded it as a venue price too.
+- The Dashboard preview gate still decides every order, so this never placed an
+  order on the old price. The desk did offer plans built on it.
+- Tests used the fixture grid's price as BTC's price. The fixture now has an
+  `allMids` route with the same value, so those tests keep their numbers. Two
+  tests changed on purpose: the "no price" advice test also takes the mid down,
+  and an added ETH with no grid now gets the venue mid.
+
+## Verification
+
+- `tests/test_live_price.py` (4), red before the fix. Desk suite 199 passed.
+
 # 2026-11-06 — Backtest evidence pack (#1369, part of #1359)
 
 ## Decision
