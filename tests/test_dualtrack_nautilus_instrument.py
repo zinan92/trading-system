@@ -77,3 +77,13 @@ def test_rejects_unexplained_contract_multiplier() -> None:
 def test_builder_has_no_implicit_fee_default() -> None:
     with pytest.raises(ValueError, match="maker fee rate is required explicitly"):
         build_nautilus_instrument(_definition())
+
+
+def test_paper_keeps_commodity_only_and_only_the_backtest_entry_widens_it() -> None:
+    """#1337: a crypto perpetual is accepted only where the caller asks for the backtest set."""
+    from services.dualtrack_nautilus_instrument import BACKTEST_ASSET_CLASSES
+
+    crypto = {**_definition(), "asset_class": "crypto", "symbol": "BTC-USDT-SWAP"}
+    with pytest.raises(ValueError, match="asset class must be one of commodity"):
+        validate_instrument_definition(crypto)
+    assert validate_instrument_definition(crypto, asset_classes=BACKTEST_ASSET_CLASSES)["symbol"] == "BTC-USDT-SWAP"

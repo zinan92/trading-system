@@ -93,6 +93,22 @@ class History:
     def history_funding(self, **kwargs) -> dict:
         return {"funding": []}
 
+    def instrument_definition(self, *, asset_class: str, instrument: str, source: str) -> dict:
+        self.asked.append({"definition": instrument, "source": source})
+        return definition(instrument, source, asset_class)
+
+
+def definition(instrument: str, source: str, asset_class: str, **overrides) -> dict:
+    """An upstream instrument definition as the datafeed serves it (BTC's real increments)."""
+    from tests.test_dualtrack_nautilus_runtime_integration import _definition
+
+    btc = instrument.startswith("BTC")
+    return {**_definition(), "instrument_id": f"{instrument}.OKX", "symbol": instrument, "provider": source, "source_mode": source,
+            "asset_class": asset_class, "base_currency": instrument.split("-")[0],
+            "price_increment": "0.1", "price_precision": 1,
+            "size_increment": "0.0001" if btc else "0.001", "size_precision": 4 if btc else 3, "min_quantity": "0.0001" if btc else "0.001",
+            **overrides}
+
 
 def test_compare_reads_the_asset_s_own_series_once_and_runs_each_variant() -> None:
     from pipelines.backtest_compare import compare
@@ -168,11 +184,10 @@ def test_grid_parameters_outside_the_form_are_refused(params: dict, words: str) 
         validate_grid(params)
 
 
-def test_btc_grid_waits_for_its_own_contract() -> None:
+def test_both_assets_can_compare_grids() -> None:
     from pipelines.backtest_compare import check
 
-    with pytest.raises(ValueError, match="#1337"):
-        check({"asset": "BTC", "strategy": "grid", "variants": [GRID]})
+    assert check({"asset": "BTC", "strategy": "grid", "variants": [GRID]})["asset"] == "BTC"
     assert check({"asset": "XAU", "strategy": "grid", "variants": [GRID]})["variants"][0]["levels"] == 5
 
 
@@ -181,33 +196,90 @@ def test_grid_compare_replays_each_variant_through_the_grid_engine() -> None:
     from services.dualtrack_config import dualtrack_config
 
     calls: list[dict] = []
+    contracts: list[dict] = []
 
-    def replay(bundle: dict) -> dict:  # nothing fills: every window ends flat at zero
-        calls.append(bundle)
-        return {"fills": [], "positions": []}
+    def replay_for(contract: dict):
+        contracts.append(contract)
+
+        def replay(bundle: dict) -> dict:  # nothing fills: every window ends flat at zero
+            calls.append(bundle)
+            return {"fills": [], "positions": []}
+        return replay
 
     client = History()
     result = compare({"asset": "XAU", "strategy": "grid", "variants": [GRID, {**GRID, "below_pct": 5, "above_pct": 5}]},
-                     client=client, config=dualtrack_config(paper_gold_venue="okx"), replay=replay, now=client.end)
+                     client=client, config=dualtrack_config(paper_gold_venue="okx"), replay_for=replay_for, now=client.end)
     assert result["status"] == "ready" and result["strategy"] == "grid" and len(result["variants"]) == 2
     assert result["variants"][0]["summary"]["runs"] == 1 and result["variants"][0]["summary"]["median_return_pct"] == 0.0
     assert result["variants"][1]["params"]["below_pct"] == 5 and result["variants"][0]["account_equity"] == 10000
     assert len(calls) == 2 and {a.get("source") for a in client.asked} == {"okx_swap_public"}
+    assert len(contracts) == 1 and contracts[0]["status"] == "backtest_only" and contracts[0]["fee_model"]["taker_fee_rate"] == "0.000400"
+    assert result["contract"] == {"status": "backtest_only", "observed_at": contracts[0]["instrument"].get("observed_at"),
+                                  "price_increment": "0.1", "size_increment": "0.001"}
     with pytest.raises(BacktestUnavailable, match="回放"):
         compare({"asset": "XAU", "strategy": "grid", "variants": [GRID]}, client=History(), config=dualtrack_config(paper_gold_venue="okx"), now=client.end)
 
 
-def test_grid_compare_refuses_a_preflight_for_another_contract(tmp_path) -> None:
-    import json
-
-    from pipelines.backtest_compare import compare, preflight_instrument
+def test_a_btc_grid_rounds_at_btc_s_own_precision() -> None:
+    from pipelines.backtest_compare import compare
     from services.dualtrack_config import dualtrack_config
 
-    stale = tmp_path / "preflight.json"
-    stale.write_text(json.dumps([{"status": "ready_for_park_paper", "instrument": {"symbol": "XAUUSDT"}}]))
-    assert preflight_instrument(stale) == "XAUUSDT" and preflight_instrument(tmp_path / "missing.json") == ""
+    bundles: list[dict] = []
     client = History()
-    with pytest.raises(BacktestUnavailable, match="XAUUSDT.*XAU-USDT-SWAP"):
-        compare({"asset": "XAU", "strategy": "grid", "variants": [GRID]}, client=client, config=dualtrack_config(paper_gold_venue="okx"),
-                replay=lambda bundle: {}, replay_instrument=preflight_instrument(stale), now=client.end)
-    assert client.asked == []  # refused before any history was read
+    compare({"asset": "BTC", "strategy": "grid", "variants": [GRID]}, client=client, config=dualtrack_config(paper_gold_venue="okx"),
+            replay_for=lambda contract: (lambda bundle: (bundles.append(bundle), {"fills": [], "positions": []})[1]), now=client.end)
+    assert {a.get("source") for a in client.asked} == {"okx_swap_crypto_public"}
+    commands = [c["command"] for b in bundles for c in b.get("commands") or []]
+    assert commands, "the grid placed no orders"
+    for command in commands:
+        contract = command["execution_contract"]
+        assert contract["execution_instrument_id"] == "BTC-USDT-SWAP" and contract["quantity_increment"] == "0.0001"
+    assert all(event["instrument_id"] == "BTC-USDT-SWAP" for b in bundles for event in b["market_events"])
+
+
+def test_the_execution_precision_for_gold_is_what_paper_uses() -> None:
+    from pipelines.backtest_compare import backtest_contract, contract_config
+    from services.dualtrack_config import dualtrack_config
+
+    config = dualtrack_config(paper_gold_venue="okx")
+    gold = contract_config(config, backtest_contract(History(), "XAU", config))
+    assert gold["execution_contract"] == config["execution_contract"]
+
+
+@pytest.mark.parametrize(("served", "words"), [
+    ({"symbol": "XAU-USDT-SWAP"}, "XAU-USDT-SWAP.*BTC-USDT-SWAP"),
+    ({"provider": "okx_swap_public"}, "两者不一致"),
+    ({"served_from": "cache"}, "不可用"),
+    ({"is_synthetic": True}, "不可用"),
+    ({"price_increment": None}, "不可用"),
+])
+def test_a_contract_that_is_not_btc_s_own_is_refused_before_history(served: dict, words: str) -> None:
+    from pipelines.backtest_compare import compare
+    from services.dualtrack_config import dualtrack_config
+
+    class Wrong(History):
+        def instrument_definition(self, **kwargs) -> dict:
+            self.asked.append(kwargs)
+            return definition("BTC-USDT-SWAP", "okx_swap_crypto_public", "crypto", **served)
+
+    client = Wrong()
+    with pytest.raises(BacktestUnavailable, match=words):
+        compare({"asset": "BTC", "strategy": "grid", "variants": [GRID]}, client=client, config=dualtrack_config(paper_gold_venue="okx"),
+                replay_for=lambda contract: (lambda bundle: {}), now=client.end)
+    assert client.asked == [{"asset_class": "crypto", "instrument": "BTC-USDT-SWAP", "source": "okx_swap_crypto_public"}]  # no history read
+
+
+def test_no_definition_means_no_grid_backtest_and_no_other_source_stands_in() -> None:
+    from pipelines.backtest_compare import compare
+    from services.dualtrack_config import dualtrack_config
+
+    class Down(History):
+        def instrument_definition(self, **kwargs) -> dict:
+            self.asked.append(kwargs)
+            raise RuntimeError("502")
+
+    client = Down()
+    with pytest.raises(BacktestUnavailable, match="读不到 BTC-USDT-SWAP 的合约说明"):
+        compare({"asset": "BTC", "strategy": "grid", "variants": [GRID]}, client=client, config=dualtrack_config(paper_gold_venue="okx"),
+                replay_for=lambda contract: (lambda bundle: {}), now=client.end)
+    assert client.asked == [{"asset_class": "crypto", "instrument": "BTC-USDT-SWAP", "source": "okx_swap_crypto_public"}]

@@ -14,15 +14,29 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from services.dualtrack_nautilus_instrument import build_nautilus_instrument
+from services.dualtrack_nautilus_instrument import BACKTEST_ASSET_CLASSES, PAPER_ASSET_CLASSES, build_nautilus_instrument
 from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.journal_store import write_json
 
 
-def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, Any]:
+BACKTEST_ONLY = "backtest_only"
+
+
+def run_replay(preflight_path: str | Path, input_path: str | Path, *, backtest_contract: bool = False) -> dict[str, Any]:
+    """Replay one bundle against a ready Paper preflight, or (backtest entry only) a backtest contract.
+
+    A backtest contract (#1337) is the venue's own instrument definition plus Paper's fee model,
+    status ``backtest_only``. Only the backtest entry passes ``backtest_contract=True``; every
+    other caller, Paper included, still needs a ready preflight and refuses a backtest contract.
+    """
+
     preflight = _latest(preflight_path, "preflight")
     bundle = _latest(input_path, "shadow input")
-    if preflight.get("status") not in {"ready_for_paper_shadow", "ready_for_park_paper"}:
+    status = preflight.get("status")
+    if backtest_contract:
+        if status != BACKTEST_ONLY:
+            raise RuntimeError("the backtest entry replays only a backtest_only contract")
+    elif status not in {"ready_for_paper_shadow", "ready_for_park_paper"}:
         raise RuntimeError("preflight is not ready for paper execution")
     if bundle.get("schema_version") != "dualtrack-shadow-input-v1":
         raise ValueError("unsupported shadow input schema")
@@ -39,6 +53,7 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
         preflight["instrument"],
         maker_fee_rate=str(fee.get("maker_fee_rate") or ""),
         taker_fee_rate=str(fee.get("taker_fee_rate") or ""),
+        asset_classes=BACKTEST_ASSET_CLASSES if backtest_contract else PAPER_ASSET_CLASSES,
     )
     commands = _replayable_commands(list(bundle.get("commands") or []))
     native_commands = _native_replay_commands(commands)
@@ -901,7 +916,9 @@ if __name__ == "__main__":
     parser.add_argument("--preflight", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--backtest-contract", action="store_true",
+                        help="backtest entry only: --preflight is a backtest_only contract, not a Paper preflight")
     args = parser.parse_args()
-    result = run_replay(args.preflight, args.input)
+    result = run_replay(args.preflight, args.input, backtest_contract=args.backtest_contract)
     write_json(Path(args.output), [result])
     print(json.dumps(result, ensure_ascii=False, indent=2))

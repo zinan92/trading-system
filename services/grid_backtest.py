@@ -430,14 +430,34 @@ def load_history(client: Any, *, source: str, instrument: str, asset_class: str 
 def subprocess_replay(python: str | Path, preflight: str | Path) -> Replay:
     """The isolated replay Paper runs, with Paper's stripped environment."""
 
+    return _replay(python, lambda folder: (Path(preflight), []))
+
+
+def backtest_replay(python: str | Path, contract: Mapping[str, Any]) -> Replay:
+    """The same isolated replay, given a ``backtest_only`` contract instead of Paper's preflight (#1337)."""
+
+    if contract.get("status") != "backtest_only":
+        raise BacktestUnavailable("回测合约说明的状态必须是 backtest_only")
+
+    def write(folder: Path) -> tuple[Path, list[str]]:
+        path = folder / "contract.json"
+        path.write_text(json.dumps([dict(contract)]), encoding="utf-8")
+        return path, ["--backtest-contract"]
+
+    return _replay(python, write)
+
+
+def _replay(python: str | Path, contract_for: Callable[[Path], tuple[Path, list[str]]]) -> Replay:
     def replay(bundle: dict[str, Any]) -> dict[str, Any]:
         environment = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if os.environ.get(key) is not None}
         environment["PYTHONPATH"] = str(ROOT)
         with tempfile.TemporaryDirectory(prefix="grid-backtest-") as folder:
             source, target = Path(folder) / "input.json", Path(folder) / "output.json"
             source.write_text(json.dumps([bundle]), encoding="utf-8")
+            contract, flags = contract_for(Path(folder))
             result = subprocess.run(
-                [str(python), str(ROOT / "spikes" / "dualtrack_nautilus_shadow_replay.py"), "--preflight", str(preflight), "--input", str(source), "--output", str(target)],
+                [str(python), str(ROOT / "spikes" / "dualtrack_nautilus_shadow_replay.py"), "--preflight", str(contract), *flags,
+                 "--input", str(source), "--output", str(target)],
                 cwd=ROOT, env=environment, capture_output=True, text=True, check=False,
             )
             if result.returncode:
