@@ -1,0 +1,37 @@
+[
+ [
+  "POST",
+  "/api/dashboard-control/selection",
+  "{\"venue_profile_id\":\"binance.paper\",\"instrument_id\":\"XAUUSDT.BINANCE\",\"strategy_family\":\"grid\"}"
+ ],
+ [
+  "POST",
+  "/api/dashboard-control/preview",
+  "{\"venue_profile_id\":\"binance.paper\",\"instrument_id\":\"XAUUSDT.BINANCE\",\"strategy_family\":\"grid\",\"strategy\":{\"direction\":\"neutral\",\"style\":\"steady\",\"range\":{\"low\":3900,\"high\":4100,\"scope\":\"full\"},\"grid\":{\"mode\":\"arithmetic\",\"count\":50,\"notional_per_grid\":2800,\"notional_mode\":\"manual\"},\"risk_budget\":{\"leverage\":10}}}"
+ ],
+ [
+  "POST",
+  "/api/dashboard-control/confirm",
+  "{\"preview_digest\":\"sha256:abc\",\"confirmation\":{\"acknowledged\":true,\"operator_id\":\"park\",\"statement\":\"我确认当前 Strategy Preview 与 Effective Plan，并授权 Testnet Coordinator 继续。\"}}"
+ ],
+ [
+  "POST",
+  "/api/strategy-console/control",
+  "{\"cycle_id\":\"2026-07-18_DAY\",\"action\":\"preview\",\"direction\":\"neutral\",\"style\":\"steady\",\"out_of_range\":\"pause_keep_orders\",\"grid\":{\"mode\":\"arithmetic\",\"notional_mode\":\"auto\",\"out_of_range\":\"pause_keep_orders\",\"trailing_up\":false},\"solver\":{\"mode\":\"manual_adaptive\",\"locked\":[],\"current_grid_count\":50,\"current_direction\":\"neutral\"}}"
+ ],
+ [
+  "POST",
+  "/api/strategy-console/control",
+  "{\"cycle_id\":\"2026-07-18_DAY\",\"action\":\"prepare_start\",\"direction\":\"neutral\",\"style\":\"steady\",\"out_of_range\":\"pause_keep_orders\",\"grid\":{\"mode\":\"arithmetic\",\"notional_mode\":\"auto\",\"out_of_range\":\"pause_keep_orders\",\"trailing_up\":false},\"solver\":{\"mode\":\"manual_adaptive\",\"locked\":[],\"current_grid_count\":50,\"current_direction\":\"neutral\"}}"
+ ],
+ [
+  "POST",
+  "/api/strategy-console/control",
+  "{\"cycle_id\":\"2026-07-18_DAY\",\"action\":\"start\",\"direction\":\"neutral\",\"style\":\"steady\",\"out_of_range\":\"pause_keep_orders\",\"grid\":{\"mode\":\"arithmetic\",\"notional_mode\":\"auto\",\"out_of_range\":\"pause_keep_orders\",\"trailing_up\":false},\"solver\":{\"mode\":\"manual_adaptive\",\"locked\":[],\"current_grid_count\":50,\"current_direction\":\"neutral\"},\"expected_preview_id\":\"profit-preview-browser-1\",\"prepared_start_id\":\"operator-journey-prepared\"}"
+ ],
+ [
+  "POST",
+  "/api/strategy-console/control",
+  "{\"cycle_id\":\"2026-07-18_DAY\",\"action\":\"stop\"}"
+ ]
+]

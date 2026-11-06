@@ -34,6 +34,57 @@ def _recommendation() -> dict:
     }
 
 
+def _control_response(payload: dict, model: dict) -> dict:
+    """What the console answers for one control action; shared with the wire test (#1329)."""
+    action = payload["action"]
+    if action == "refresh_recommendation":
+        model["strategy"]["proposals"] = [_recommendation()]
+        response = {"action": action, "proposal": _recommendation()}
+    elif action == "preview":
+        response = _preview()
+    elif action == "prepare_start":
+        response = {**_preview(), "action": action, "prepared_start_id": "operator-journey-prepared"}
+    elif action == "start":
+        model["runtime"].update({
+            "actual_state": "running",
+            "desired_state": "running",
+            "status": "running",
+            "can_stop_when_authorized": True,
+        })
+        model["execution"]["counts"].update({"open_order_count": 30, "accepted_order_count": 30})
+        accepted = model["execution"]["accepted_orders"][0]
+        accepted_orders = [
+            {**accepted, "order_id": f"operator-journey-{index:02d}"}
+            for index in range(30)
+        ]
+        model["execution"].update({
+            "orders": accepted_orders,
+            "open_orders": accepted_orders,
+            "accepted_orders": accepted_orders,
+        })
+        response = {
+            "action": action,
+            "plan": {"version": 8},
+            "preview": _preview()["preview"],
+            "created_orders": 30,
+            "accepted_orders": 30,
+            "filled_orders": 0,
+        }
+    elif action == "stop":
+        model["runtime"].update({
+            "actual_state": "stopped",
+            "desired_state": "stopped",
+            "status": "stopped",
+            "can_stop_when_authorized": False,
+        })
+        model["execution"]["counts"].update({"open_order_count": 0, "accepted_order_count": 0})
+        model["execution"].update({"orders": [], "open_orders": [], "accepted_orders": []})
+        response = {"action": action, "cancelled_orders": 30, "flattened_positions": 0}
+    else:  # pragma: no cover - assertion makes new controls intentional
+        raise AssertionError(f"unexpected control action: {action}")
+    return response
+
+
 def test_gridmind_paper_operator_journey_uses_visible_results_and_control_requests() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     model = _header_model(4_000.0)
@@ -56,53 +107,7 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
     def fulfill_control(route) -> None:
         payload = route.request.post_data_json
         requests.append(payload)
-        action = payload["action"]
-        if action == "refresh_recommendation":
-            model["strategy"]["proposals"] = [_recommendation()]
-            response = {"action": action, "proposal": _recommendation()}
-        elif action == "preview":
-            response = _preview()
-        elif action == "prepare_start":
-            response = {**_preview(), "action": action, "prepared_start_id": "operator-journey-prepared"}
-        elif action == "start":
-            model["runtime"].update({
-                "actual_state": "running",
-                "desired_state": "running",
-                "status": "running",
-                "can_stop_when_authorized": True,
-            })
-            model["execution"]["counts"].update({"open_order_count": 30, "accepted_order_count": 30})
-            accepted = model["execution"]["accepted_orders"][0]
-            accepted_orders = [
-                {**accepted, "order_id": f"operator-journey-{index:02d}"}
-                for index in range(30)
-            ]
-            model["execution"].update({
-                "orders": accepted_orders,
-                "open_orders": accepted_orders,
-                "accepted_orders": accepted_orders,
-            })
-            response = {
-                "action": action,
-                "plan": {"version": 8},
-                "preview": _preview()["preview"],
-                "created_orders": 30,
-                "accepted_orders": 30,
-                "filled_orders": 0,
-            }
-        elif action == "stop":
-            model["runtime"].update({
-                "actual_state": "stopped",
-                "desired_state": "stopped",
-                "status": "stopped",
-                "can_stop_when_authorized": False,
-            })
-            model["execution"]["counts"].update({"open_order_count": 0, "accepted_order_count": 0})
-            model["execution"].update({"orders": [], "open_orders": [], "accepted_orders": []})
-            response = {"action": action, "cancelled_orders": 30, "flattened_positions": 0}
-        else:  # pragma: no cover - assertion makes new controls intentional
-            raise AssertionError(f"unexpected control action: {action}")
-        route.fulfill(status=200, content_type="application/json", body=json.dumps(response, ensure_ascii=False))
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(_control_response(payload, model), ensure_ascii=False))
 
     with _static_server() as origin, playwright.sync_playwright() as runtime:
         try:

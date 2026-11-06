@@ -2,6 +2,7 @@
  * the matching React component there. New placeholders are found by a MutationObserver, a changed
  * data-props re-renders, and a placeholder that leaves the page is unmounted (its timers stop). */
 import type {ComponentType} from "react";
+import {flushSync} from "react-dom";
 import {createRoot, type Root} from "react-dom/client";
 
 export type Registry = Record<string, ComponentType<any>>;
@@ -25,7 +26,10 @@ export function createBridge(registry: Registry) {
     }
     let root = roots.get(el);
     if (!root) { root = createRoot(el); roots.set(el, root); }
-    root.render(<Component {...props} />);
+    // Synchronously: GridMind enables a button in the same task it publishes the numbers beside it, so
+    // the two must never be on screen out of step (#1329). Observer callbacks run outside React's render.
+    const mounted = root;
+    flushSync(() => mounted.render(<Component {...props} />));
   }
 
   function scan(scope: ParentNode) {
