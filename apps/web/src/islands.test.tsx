@@ -47,6 +47,7 @@ describe("BacktestBox", () => {
     expect(screen.getByText(/正在用过去 180 天/)).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS); });
     expect(screen.getByText("这组网格过去 180 天的表现（OKX，费后）")).toBeTruthy();
+    expect(screen.getByText("证据：这次回测当时没有记录")).toBeTruthy();  // READY predates #1369
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls[0]?.[0]).toBe("/api/backtest/k%201");
     expect(fetch.mock.calls.every(([, init]) => !init?.method)).toBe(true);
@@ -64,6 +65,7 @@ describe("BacktestBox", () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(json({}, 500));
     render(<BacktestBox backtestKey="k" />);
     expect(await screen.findByText("回测不可用：HTTP 500。不影响启动。")).toBeTruthy();
+    expect(screen.queryByText(/证据/)).toBeNull();  // a failed read is not an old result
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

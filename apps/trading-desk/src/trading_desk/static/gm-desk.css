@@ -255,6 +255,16 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
 .desk-bench-result th[scope="row"],.desk-bench-result thead th:first-child{text-align:left;color:var(--muted,#aab1bb);font-weight:500}
 .desk-bench-result td.best{font-weight:700}
 .desk-bench-result .desk-backtest-bars{height:36px;min-width:120px}
+.desk-evidence{font-size:12px;color:var(--muted,#aab1bb);min-width:0}
+.desk-evidence summary{cursor:pointer;display:flex;flex-wrap:wrap;gap:4px 12px;overflow-wrap:anywhere}
+.desk-evidence-verdict.ok{color:#5bbf8a}
+.desk-evidence-verdict.failed{color:#f0a24b;font-weight:600}
+.desk-evidence-verdict.unverified{color:#d9a35b}
+.desk-evidence dl{display:grid;grid-template-columns:96px minmax(0,1fr);gap:4px 10px;margin:8px 0}
+.desk-evidence dl div{display:contents}
+.desk-evidence dd{margin:0;overflow-wrap:anywhere;font-family:ui-monospace,Menlo,monospace}
+.desk-evidence ul{margin:6px 0;padding-left:18px}
+.desk-evidence-none{font-size:12px}
 .desk-why{margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
 .desk-why h3{margin:0 0 6px;font-size:15px}
 .desk-why-verdict{margin:0 0 10px;font-size:14px;font-weight:600}

@@ -13,7 +13,7 @@ Nothing here reaches a ledger, a venue or a gate; the numbers are history shown 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 import statistics
 from typing import Any
 
@@ -39,6 +39,22 @@ def validate(params: Mapping[str, Any]) -> dict[str, Any]:
     return {"amount_usdt": amount, "interval_hours": interval}
 
 
+def buys(params: Mapping[str, Any], bars: Sequence[Bar], *, fee_rate: float) -> list[dict[str, Any]]:
+    """Each scheduled buy: due at a bar's open, filled at that bar's close, so stamped when the bar ended."""
+
+    amount, every = float(params["amount_usdt"]), timedelta(hours=int(params["interval_hours"]))
+    due = bars[0].opened_at if bars else None
+    out: list[dict[str, Any]] = []
+    for bar in bars:
+        if bar.opened_at >= due:
+            fee = amount * fee_rate
+            out.append({"at": (bar.opened_at + timedelta(minutes=1)).isoformat(), "bar": bar.opened_at.isoformat(),
+                        "price": bar.close, "quantity": (amount - fee) / bar.close, "amount": amount, "fee": fee})
+            while due <= bar.opened_at:
+                due += every
+    return out
+
+
 def run_window(
     params: Mapping[str, Any],
     bars: Sequence[Bar],
@@ -47,21 +63,19 @@ def run_window(
     funding: Sequence[Mapping[str, Any]] = (),
     funding_from: str | None = None,
 ) -> dict[str, Any]:
-    amount, every = float(params["amount_usdt"]), timedelta(hours=int(params["interval_hours"]))
     started = bars[0].opened_at
-    due = started
+    bought = buys(params, bars, fee_rate=fee_rate)
+    by_bar = {row["bar"]: row for row in bought}
     quantity = invested = fees = 0.0
-    held: list[tuple[str, float]] = []  # (bar time, quantity held after it), one row per buy
+    held: list[tuple[datetime, float]] = []  # (fill time, quantity held after it), one row per buy
     worst = 0.0  # lowest (value − invested) / invested seen at any minute, in percent
     for bar in bars:
-        if bar.opened_at >= due:
-            fee = amount * fee_rate
-            quantity += (amount - fee) / bar.close
-            invested += amount
-            fees += fee
-            held.append((bar.opened_at.isoformat(), quantity))
-            while due <= bar.opened_at:
-                due += every
+        row = by_bar.get(bar.opened_at.isoformat())
+        if row:
+            quantity += row["quantity"]
+            invested += row["amount"]
+            fees += row["fee"]
+            held.append((datetime.fromisoformat(row["at"]), quantity))
         if invested:
             worst = min(worst, (quantity * bar.close - invested) / invested * 100)
     last = bars[-1]
@@ -69,7 +83,9 @@ def run_window(
     prices = {bar.opened_at.isoformat(): bar.close for bar in bars}
 
     def held_at(moment: str) -> float:
-        return next((qty for at, qty in reversed(held) if at <= moment), 0.0)
+        # Strictly before: a settlement at the very moment a buy fills does not count that buy (#1369).
+        at = datetime.fromisoformat(moment)
+        return next((qty for filled, qty in reversed(held) if filled < at), 0.0)
 
     settlements = [row for row in funding if started.isoformat() <= str(row["funding_time"]) <= window_end and str(row["funding_time"]) in prices]
     paid = sum(
@@ -77,6 +93,7 @@ def run_window(
         * float(row["realized_rate"] if row.get("realized_rate") is not None else row["funding_rate"])
         for row in settlements
     )
+    funded = [str(row["funding_time"]) for row in settlements if held_at(str(row["funding_time"]))]
     funding_complete = funding_from is not None and started.isoformat() >= funding_from
     value = quantity * last.close
     net = value - invested - (paid if funding_complete else 0.0)
@@ -92,6 +109,15 @@ def run_window(
         "return_pct": round(net / invested * 100, 4) if invested else 0.0,
         "average_cost": round((invested - fees) / quantity, 6) if quantity else None,
         "max_drawdown_pct": round(worst, 4),
+        # What the future-data checks read (#1369).
+        "last_bar_at": window_end,
+        "closed_at": (last.opened_at + timedelta(minutes=1)).isoformat(),
+        "first_fill_at": bought[0]["at"] if bought else None,
+        "last_fill_at": bought[-1]["at"] if bought else None,
+        "fill_times_complete": True,
+        "funding_first_at": min(str(row["funding_time"]) for row in settlements) if settlements else None,
+        "funding_last_at": max(str(row["funding_time"]) for row in settlements) if settlements else None,
+        "first_funded_at": min(funded) if funded else None,
     }
 
 

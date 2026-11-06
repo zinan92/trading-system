@@ -1,5 +1,6 @@
 /* 回测工作台 (#1335): view logic for a comparison result. Pure; it sends nothing. */
 import {pct} from "./backtest";
+import type {Evidence} from "./evidence";
 
 export interface DcaParams {amount_usdt: number; interval_hours: number}
 
@@ -42,6 +43,8 @@ export interface CompareResult {
   variants?: Array<{params: DcaParams; summary: DcaSummary} | {params: GridParams; summary: GridSummary; account_equity?: number}>;
   /** Grid only (#1337): the backtest_only contract the replay used. */
   contract?: {status: string; observed_at?: string; price_increment: string; size_increment: string} | null;
+  /** #1369: what produced these numbers. Absent on results from before it. */
+  evidence?: Evidence;
 }
 
 export type Strategy = "dca" | "grid";

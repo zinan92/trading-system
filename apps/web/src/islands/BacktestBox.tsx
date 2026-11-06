@@ -2,6 +2,7 @@
  * ready, for at most 6 minutes. History only: it has no button and sends nothing. */
 import {useEffect, useState} from "react";
 import {view, type BacktestResult} from "../backtest";
+import {EvidenceLine} from "./EvidenceLine";
 
 export const POLL_MS = 3000;
 export const MAX_TRIES = 120;
@@ -35,7 +36,12 @@ export function BacktestBox({backtestKey}: {backtestKey: string}) {
   }, [backtestKey]);
 
   const v = view(result);
-  if (v.state !== "ready") return <section className="desk-backtest" aria-live="polite"><p className="note">{v.text}</p></section>;
+  if (v.state !== "ready") return (
+    <section className="desk-backtest" aria-live="polite">
+      <p className="note">{v.text}</p>
+      {v.state === "unavailable" && result?.evidence ? <EvidenceLine evidence={result.evidence} /> : null}
+    </section>
+  );
   const top = Math.max(...v.bars, 1);
   return (
     <section className="desk-backtest" aria-live="polite">
@@ -47,6 +53,7 @@ export function BacktestBox({backtestKey}: {backtestKey: string}) {
       </div>
       <div className="desk-backtest-axis"><span>{v.range[0]}</span><span>{v.range[1]}</span></div>
       <p className="note">{v.notes.join(" · ")}</p>
+      <EvidenceLine evidence={result?.evidence} />
     </section>
   );
 }
