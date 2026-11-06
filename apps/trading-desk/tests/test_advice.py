@@ -92,6 +92,7 @@ def test_a_call_without_cited_ids_is_kept_and_says_so(store, sources):
 def test_a_missing_price_and_an_old_news_list_are_recorded(store, sources, fetch, config):
     import shutil
     shutil.rmtree(config.paper_output / "dualtrack")  # no Testnet grid price
+    fetch.routes["allMids"] = ConnectionError("down")  # no venue mid (#1372)
     fetch.routes["candleSnapshot"] = ConnectionError("down")  # and no 1-hour bars
     fetch.routes["/api/dualtrack/market/bars"] = ConnectionError("down")
     sources.news(store.asset("BTC"))  # a good list is cached

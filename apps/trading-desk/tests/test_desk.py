@@ -347,7 +347,7 @@ def test_add_and_remove_asset_from_catalog(config, sources, store, fetch):
     assert client.post("/api/assets", json={"coin": "DOGEX"}).status_code == 422
     assert client.put("/api/assets/ETH/news", json={"news_queries": ["以太坊"]}).json()["news_queries"] == ["以太坊"]
     desk = client.get("/api/desk/ETH").json()
-    assert desk["grid"]["ok"] is False and desk["price"] == 114.0
+    assert desk["grid"]["ok"] is False and desk["price"] == 3000.0  # the venue's mid, with no grid of its own (#1372)
     assert client.delete("/api/assets/ETH").json()["ok"] is True
     assert client.get("/api/desk/ETH").status_code == 404
 

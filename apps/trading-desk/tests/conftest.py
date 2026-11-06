@@ -43,6 +43,7 @@ def paper_output(tmp_path: Path) -> Path:
 @pytest.fixture
 def fetch() -> FakeFetch:
     f = FakeFetch()
+    f.routes["allMids"] = {"BTC": "77862.5", "ETH": "3000.0"}  # the venue's live mid (#1372)
     f.routes["clearinghouseState"] = {"marginSummary": {"accountValue": "995.31"}, "assetPositions": []}
     f.routes["userFills"] = [{"coin": "BTC", "closedPnl": "0.04416", "fee": "0.01"}, {"coin": "PAXG", "closedPnl": "-2", "fee": "0"}]
     f.routes["/api/park-paper/read-model"] = {

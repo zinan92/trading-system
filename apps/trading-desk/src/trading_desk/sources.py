@@ -352,6 +352,16 @@ class Sources:
         return {"ok": True, "bars": bars, "source": source, "fresh": False, "latest_timestamp": bars[-1][0]}
 
     # ---- BTC: Hyperliquid Testnet grid + account ---------------------------
+    def hl_mid(self, asset: dict[str, Any]) -> float | None:
+        """The venue's live mid for this coin (public, no account), or None. Never a recorded price (#1372)."""
+        try:
+            mids = self.fetch(self.config.hyperliquid_info_url, {"type": "allMids"})
+            value = float((mids or {})[asset["coin"]])
+        except Exception:  # noqa: BLE001 - no mid means no venue price; the caller says which source it used
+            LOG.warning("caught_exception", exc_info=True)
+            return None
+        return value if value > 0 else None
+
     def hl_grid(self, asset: dict[str, Any]) -> dict[str, Any]:
         folder = self.config.paper_output / "dualtrack" / "grid_testnet_lifecycle"
         # The live grid is the state with the newest updated_at; file mtime can be touched by hand edits.
