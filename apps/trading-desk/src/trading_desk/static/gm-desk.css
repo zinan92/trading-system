@@ -255,3 +255,20 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
 .desk-bench-result th[scope="row"],.desk-bench-result thead th:first-child{text-align:left;color:var(--muted,#aab1bb);font-weight:500}
 .desk-bench-result td.best{font-weight:700}
 .desk-bench-result .desk-backtest-bars{height:36px;min-width:120px}
+.desk-why{margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
+.desk-why h3{margin:0 0 6px;font-size:15px}
+.desk-why-verdict{margin:0 0 10px;font-size:14px;font-weight:600}
+.desk-why-verdict.broken{color:#f0a24b}
+.desk-why ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.desk-why li{display:grid;grid-template-columns:64px minmax(0,1fr);gap:10px;font-size:13px}
+.desk-why li b{font-weight:600}
+.desk-why li small{margin-left:8px;font-size:12px;color:var(--muted,#aab1bb)}
+.desk-why li p{margin:2px 0;overflow-wrap:anywhere}
+.desk-why-pill{align-self:start;padding:1px 6px;border-radius:6px;font-size:12px;text-align:center;background:rgba(255,255,255,.06);color:var(--muted,#aab1bb)}
+.desk-why li.attention .desk-why-pill,.desk-why li.failed .desk-why-pill,.desk-why li.unknown .desk-why-pill{color:#f0a24b;background:rgba(240,162,75,.12)}
+.desk-why dl{margin:4px 0 0;display:flex;flex-wrap:wrap;gap:2px 16px;font-size:12px;color:var(--muted,#aab1bb)}
+.desk-why dl div{display:flex;gap:4px;min-width:0}
+.desk-why dt{font-weight:400}
+.desk-why dd{margin:0;color:inherit;overflow-wrap:anywhere}
+.desk-why li .desk-why-source{display:block;margin-left:0}
+.desk-why-identity,.desk-why-note{margin:10px 0 0;font-size:12px;color:var(--muted,#aab1bb)}

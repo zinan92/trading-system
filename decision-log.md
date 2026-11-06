@@ -1,5 +1,62 @@
 # Decision Log
 
+# 2026-11-06 — 这一笔为什么: one chain per run (#1362, part of #1359)
+
+## Decision
+
+- **No new trace id yet.** #1359 planned one id across the chain. Existing
+  records already join on `plan_digest`: on all 11 production runs every step
+  from proposal or preview through activation joined. A new field would touch
+  the order path for nothing. Add one only at a join that is actually missing.
+- **The chain is keyed by run, not only by judgment.** The desk's `executions`
+  table is empty in production (0 rows, 245 AI judgments, 0 Park judgments):
+  every real run started from GridMind. A judgment-only view would have shown
+  nothing. `/api/why` takes `run` or `judgment`.
+- A missing record is `unknown` and counts as the break. It is never filled from
+  today's state. `release_sha` is shown only if the run recorded it, so Paper
+  runs say 「当时没有记录」 rather than today's commit.
+- Fields are read by name, so account fingerprints, runtime ids and user ids
+  cannot reach the page. A test pins this.
+- `/api/why` is on the open API allow-list and is a pure GET.
+- `review_timeline.runs` now lists Testnet runs with no fills. They were hidden,
+  and they are the ones that failed.
+
+## Gotchas
+
+- AI advice has no key to a run. The step is matched by time (same asset, within
+  36 hours before start) and says so; it is not evidence the run followed the
+  advice. All 11 runs predate any matching advice, so this path has only test
+  data so far. A real link needs a key on the plan: open.
+- `lifecycle_blocked` is not the only block event: `ladder_incomplete` is the
+  one on runs stopped before a fill, and the reason sits in `state.blocker`.
+- Paper `confirmed_at` is epoch seconds; everything else is ISO.
+- `testnet_automation/events.json` makes a Testnet chain take about 0.5 s. It
+  runs on demand only.
+- The review chart grew without limit in production since #1326 (82,736 px when
+  Park saw it). The chart sizes itself to its box, and the island dropped
+  `id="deskRunChart"`, the only thing that fixed that box's height. The id is
+  back and a test pins the CSS. Fixed here because the new section sits under
+  that chart and could not be reached.
+- The comparison count in #1358 was revised: 175 of the 180 files using `print`
+  are command-line scripts, and a first recount of 26 service files was also
+  wrong because the search matched `fingerprint(`. The real number is 11, 7 of
+  them vendored, and none on the order path. The gap is no `logging`, not `print`.
+- #1360's first text said venue work started from Hyperliquid alone. Six
+  registries and Binance, Tiger, OANDA and MT5 adapters already exist, so that
+  Issue is now about unifying them. #1361 is confirmed against OKX's public
+  instrument list.
+
+## Verification
+
+- `apps/trading-desk` pytest: all 184 passed. Vitest: 131 passed. `tsc` clean.
+- Chart on dev: 420 px at every sample over 12 s, on the run Park reported.
+- Real records: all 11 runs, read-only script; no account or runtime field in
+  the output.
+- Browser on dev with a copy of those records: desktop and 375 px, no sideways
+  scroll. No request was sent beyond GETs.
+- **Not verified:** the production page, until this merges and deploys; a
+  `judgment` chain against real rows, because production has none.
+
 # 2026-11-06 — 前端: control panel text as React islands (#1329)
 
 ## Decision

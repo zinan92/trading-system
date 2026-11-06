@@ -37,6 +37,22 @@ test("shows the newest run, its missing parts and a picked raw record", async ()
   expect(screen.getByText(/判断战绩/).textContent).toContain("AI：命中 1 · 未中 1");
 });
 
+test("the chart sits in the fixed-height box, so it cannot grow with itself", async () => {
+  route(url => url.includes("timeline") ? TIMELINE : RUNS);
+  const {container} = render(<ReviewPanel active />);
+  await screen.findByText("开仓 买入");
+  expect(container.querySelector("#deskRunChart")).toBeTruthy();
+});
+
+test("a run with an id shows why, from one more GET", async () => {
+  const why = {status: "broken", first_problem: {key: "end", label: "结束", summary: "对账拦下"}, identity: {}, steps: [], note: "记录"};
+  const fetch = route(url => url.startsWith("/api/why") ? why : url.includes("timeline") ? {...TIMELINE, run: {...TIMELINE.run, id: "paper:s1"}} : RUNS);
+  render(<ReviewPanel active />);
+  expect(await screen.findByText("断在「结束」：对账拦下")).toBeTruthy();
+  expect(fetch).toHaveBeenCalledWith("/api/why?run=paper%3As1", {cache: "no-store"});
+  expect(fetch.mock.calls.every(call => !call[1] || !("method" in (call[1] as object)))).toBe(true);
+});
+
 test("filters ask the server and an empty result names the filter", async () => {
   const fetch = route(url => url.startsWith("/api/review/runs?") ? {...RUNS, runs: [], score: {ai: {total: 0}, park: {total: 0}}} : url.startsWith("/api/review/runs") ? RUNS : TIMELINE);
   render(<ReviewPanel active />);

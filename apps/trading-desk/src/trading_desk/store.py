@@ -87,8 +87,9 @@ def now_iso() -> str:
 
 
 class Store:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, release: str = "") -> None:
         self.path = Path(path)
+        self.release = release  # the commit serving this process; stamped on execution records (#1359)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             self._migrate_asset_kinds(conn)
@@ -238,7 +239,7 @@ class Store:
         with self._conn() as conn:
             cur = conn.execute(
                 "insert into executions (created_at, judgment_id, asset, stage, preview_digest, detail) values (?,?,?,?,?,?)",
-                (now_iso(), judgment_id, asset, stage, preview_digest, json.dumps(detail, ensure_ascii=False, default=str)),
+                (now_iso(), judgment_id, asset, stage, preview_digest, json.dumps({**detail, **({"release": self.release} if self.release else {})}, ensure_ascii=False, default=str)),
             )
             row = conn.execute("select * from executions where id=?", (cur.lastrowid,)).fetchone()
         item = dict(row)
@@ -254,6 +255,11 @@ class Store:
             item["detail"] = json.loads(item["detail"])
             out.append(item)
         return out
+
+    def executions_of(self, judgment_id: int) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute("select * from executions where judgment_id=? order by id", (judgment_id,)).fetchall()
+        return [{**dict(row), "detail": json.loads(row["detail"])} for row in rows]
 
     def add_note(self, *, asset: str, body: str) -> dict[str, Any]:
         body = body.strip()

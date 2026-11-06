@@ -147,7 +147,7 @@ def _testnet_fills(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def runs(paper_output: Path) -> list[dict[str, Any]]:
-    """Every past run with at least one fill, newest first."""
+    """Every past Paper run with a fill and every Testnet run, newest first."""
     root = Path(paper_output)
     items: list[dict[str, Any]] = []
     records, _ = _paper_records(root)
@@ -162,10 +162,10 @@ def runs(paper_output: Path) -> list[dict[str, Any]]:
                       "fill_count": len(fills), "status": "ended"})
     for path in sorted((root / "dualtrack" / "grid_testnet_lifecycle").glob("*.json")):
         state = _latest(_json(path))
-        fills = _testnet_fills(state)
-        if not fills:
+        if not state:
             continue
-        items.append({"id": f"testnet:{state.get('strategy_plan_id')}", "asset": _coin(state), "environment": "testnet", "label": f"{_coin(state)} Testnet", "started_at": state.get("created_at"),
+        fills = _testnet_fills(state)  # a run blocked before any fill stays listed: those are the ones to look into (#1359)
+        items.append({"id": f"testnet:{path.stem}", "asset": _coin(state), "environment": "testnet", "label": f"{_coin(state)} Testnet", "started_at": state.get("created_at"),
                       "ended_at": next((f["ts"] for f in reversed(fills) if f["ts"]), state.get("created_at")), "fill_count": len(fills), "status": TESTNET_STATUS.get(str(state.get("status")), "已结束")})
     return sorted(items, key=lambda item: str(item["started_at"]), reverse=True)
 

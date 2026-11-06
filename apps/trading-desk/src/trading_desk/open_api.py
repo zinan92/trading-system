@@ -40,6 +40,7 @@ ALLOWED: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in (
     r"/advice",
     r"/review/runs",
     r"/review/timeline",
+    r"/why",
     r"/backtest/compare/[0-9a-f]{24}",
     r"/backtest/[0-9a-f]{8,64}",
     r"/system",

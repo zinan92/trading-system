@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from . import plans, review
 from .config import Config
-from . import digest, gridmind, mainnet, open_api, remote, review_timeline
+from . import digest, gridmind, mainnet, open_api, remote, review_timeline, why
 from .backtest import Backtests, Busy, Comparisons
 from . import provenance
 from .advice import Advisor
@@ -78,12 +79,21 @@ class ExecuteIn(BaseModel):
     confirm_text: Literal["执行"]
 
 
+def release_of(checkout: Path) -> str:
+    """The commit this process serves, or "" when it cannot be read; a record then says it was not recorded."""
+    try:
+        done = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
 def create_app(config: Config | None = None, sources: Sources | None = None, store: Store | None = None,
                executor: Executor | None = None, watch: Watch | None = None, model: Callable[[str], str] | None = None,
                backtests: Backtests | None = None, comparisons: Comparisons | None = None) -> FastAPI:
     config = config or Config()
     sources = sources or Sources(config)
-    store = store or Store(config.db_path)
+    store = store or Store(config.db_path, release=release_of(config.trading_system_checkout))
     executor = executor or Executor(config, lambda url, body: http_json(url, body, timeout=150))
     watch = watch or Watch(config.watch_folder, config.intel_url)
     backtests = backtests or Backtests(config)
@@ -374,6 +384,22 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         if payload is None:
             raise HTTPException(404, "没有这一轮的记录")
         return payload
+
+    @app.get("/api/why")
+    def why_this_trade(run: str | None = None, judgment: int | None = None) -> dict[str, Any]:
+        """这一笔为什么 (#1359): the chain for a past run or a desk judgment. Pure read."""
+        if (run is None) == (judgment is None):
+            raise HTTPException(422, "run 和 judgment 必须给且只给一个")
+        judgments = store.judgments(None, limit=5000, author=None)
+        if run is not None:
+            payload = why.explain_run(config.paper_output, run, judgments)
+            if payload is None:
+                raise HTTPException(404, "没有这一轮的记录")
+            return payload
+        row = store.judgment(judgment)
+        if not row:
+            raise HTTPException(404, "没有这条判断")
+        return why.explain_judgment(config.paper_output, row, store.executions_of(judgment), judgments)
 
     # 回测工作台 (#1335). Registered before /api/backtest/{key} so "compare" is not read as a key.
     @app.post("/api/backtest/compare")

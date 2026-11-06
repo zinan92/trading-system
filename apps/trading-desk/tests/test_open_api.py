@@ -92,6 +92,7 @@ def test_an_allowed_path_answers_exactly_what_the_page_gets(desk) -> None:
     key = desk.comparisons.start({"asset": "XAU", "strategy": "dca", "variants": [{"amount_usdt": 50, "interval_hours": 24}]})
     assert desk.client.get(f"/api/v1/backtest/compare/{key}", headers=auth(token)).json()["status"] == "running"
     assert desk.client.get("/api/v1/review/runs?days=5", headers=auth(token)).status_code == 422  # the route's own checks still apply
+    assert desk.client.get("/api/v1/why?run=paper:nope", headers=auth(token)).status_code == 404  # 这一笔为什么 is reachable, and read-only (#1359)
 
 
 def test_status_is_a_summary_of_paper_and_nothing_more(desk) -> None:

@@ -709,9 +709,9 @@ def test_review_lists_a_run_and_keeps_a_zero_author_visible(config, sources, sto
     _review_ledger(config)
     client, _ = client_for(config, sources, store, fetch)
     body = client.get("/api/review/runs").json()
-    assert [run["id"] for run in body["runs"]] == ["paper:session-abc"]
+    assert sorted(run["id"] for run in body["runs"]) == ["paper:session-abc", "testnet:dashboard-plan:abc"]  # no fills, still listed (#1362)
     assert body["score"]["park"]["total"] == 0
-    assert client.get("/api/review/runs", params={"asset": "btc"}).json()["runs"] == []
+    assert [run["id"] for run in client.get("/api/review/runs", params={"asset": "btc"}).json()["runs"]] == ["testnet:dashboard-plan:abc"]
     assert client.get("/api/review/runs", params={"asset": "XAU"}).json()["filter"]["asset"] == "XAU"
     assert client.get("/api/review/runs", params={"days": 5}).status_code == 422
 
