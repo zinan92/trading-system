@@ -334,6 +334,8 @@ def run_window(
     funded = funding_cost(fills, settlements, prices)
     funding_complete = funding_from is not None and started.isoformat() >= funding_from
     net = gross - fees - (funded if funding_complete else 0.0)
+    fill_times = sorted(datetime.fromisoformat(str(fill["ts"]).replace("Z", "+00:00")) for fill in fills if fill.get("ts"))
+    held_at_settlement = [str(row["funding_time"]) for row in settlements if _signed_quantity(fills, str(row["funding_time"]))]
     return {
         "started_at": started.isoformat(),
         "ended_at": window_end,
@@ -345,6 +347,15 @@ def run_window(
         "net": round(net, 4),
         "return_pct": round(net / float(shape["account_equity"]) * 100, 4),
         "open_after_close": sum(1 for row in snapshot.get("positions") or [] if str(row.get("status") or "").lower() == "open"),
+        # What the future-data checks read (#1369).
+        "last_bar_at": bars[-1].opened_at.isoformat(),
+        "closed_at": window_end,
+        "first_fill_at": fill_times[0].isoformat() if fill_times else None,
+        "last_fill_at": fill_times[-1].isoformat() if fill_times else None,
+        "fill_times_complete": len(fill_times) == len(fills),
+        "funding_first_at": min(str(row["funding_time"]) for row in settlements) if settlements else None,
+        "funding_last_at": max(str(row["funding_time"]) for row in settlements) if settlements else None,
+        "first_funded_at": min(held_at_settlement) if held_at_settlement else None,
     }
 
 
@@ -424,7 +435,7 @@ def load_history(client: Any, *, source: str, instrument: str, asset_class: str 
     expected = int(report.get("expected_bars") or 0)
     if len({bar.opened_at for bar in bars}) != expected:
         raise BacktestUnavailable(f"历史数据不完整：{len(bars)} / {expected} 根")
-    return {"bars": bars, "funding": funding, "funding_from": funding[0]["funding_time"] if funding else None}
+    return {"bars": bars, "funding": funding, "funding_from": funding[0]["funding_time"] if funding else None, "report": report}
 
 
 def subprocess_replay(python: str | Path, preflight: str | Path) -> Replay:

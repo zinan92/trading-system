@@ -283,3 +283,11 @@ def test_no_definition_means_no_grid_backtest_and_no_other_source_stands_in() ->
         compare({"asset": "BTC", "strategy": "grid", "variants": [GRID]}, client=client, config=dualtrack_config(paper_gold_venue="okx"),
                 replay_for=lambda contract: (lambda bundle: {}), now=client.end)
     assert client.asked == [{"asset_class": "crypto", "instrument": "BTC-USDT-SWAP", "source": "okx_swap_crypto_public"}]
+
+
+def test_funding_at_the_minute_of_a_buy_is_not_charged_on_that_buy() -> None:
+    """#1369: a buy fills at its bar's close, so a settlement at that bar's open came before it."""
+    bars = minutes([100.0] * 120)
+    funding = [{"funding_time": (T0 + timedelta(minutes=60)).isoformat(), "funding_rate": 0.001, "realized_rate": None}]
+    row = run_window({"amount_usdt": 100, "interval_hours": 1}, bars, fee_rate=0.0, funding=funding, funding_from=T0.isoformat())
+    assert row["buys"] == 2 and row["funding"] == pytest.approx(1 * 100 * 0.001)

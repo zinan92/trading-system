@@ -1,11 +1,13 @@
 /* 开仓前回测 (#1309): history for the previewed gold grid, shown above 「你亲手启动」.
  * Reference only. View logic over one GET result; it never touches the start button. */
+import type {Evidence} from "./evidence";
 
 export interface BacktestResult {
   status: "running" | "ready" | "unavailable" | string;
   reason?: string;
   history_start?: string;
   history_end?: string;
+  evidence?: Evidence;
   summary?: {
     runs: number;
     funded_runs: number;

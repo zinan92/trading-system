@@ -15,12 +15,14 @@ from pathlib import Path
 import sys
 from typing import Any, Callable
 
+from services import backtest_evidence as evidence
+from services.config_loader import ROOT
 from services.datafeed_market_client import DatafeedMarketClient
 from services.dca_backtest import run_backtest as run_dca
 from services.dca_backtest import validate as validate_dca
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_nautilus_instrument import BACKTEST_ASSET_CLASSES, validate_instrument_definition
-from services.grid_backtest import BacktestUnavailable, Replay, backtest_replay, load_history
+from services.grid_backtest import MAX_DATA_AGE, STEP, WINDOW, BacktestUnavailable, Replay, backtest_replay, load_history
 from services.grid_backtest import run_backtest as run_grid
 
 SCHEMA = "backtest-compare-v1"
@@ -167,8 +169,13 @@ def contract_config(config: dict[str, Any], contract: dict[str, Any]) -> dict[st
     }}
 
 
+def settings(**extra: Any) -> dict[str, Any]:
+    """The settings besides the request that change a result (#1369)."""
+    return {"window_days": WINDOW.days, "step_days": STEP.days, "max_data_age_days": MAX_DATA_AGE.days, **extra}
+
+
 def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], replay_for: Callable[[dict[str, Any]], Replay] | None = None,
-            now: datetime | None = None) -> dict[str, Any]:
+            now: datetime | None = None, code: dict[str, Any] | None = None, started: datetime | None = None) -> dict[str, Any]:
     checked = check(request)
     source, instrument, asset_class = ASSETS[checked["asset"]]
     contract: dict[str, Any] | None = None
@@ -179,11 +186,13 @@ def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], rep
     fee_rate = float(config["paper_fee_model"]["taker_fee_rate"])
     history = load_history(client, source=source, instrument=instrument, asset_class=asset_class, now=now)
     bars, funding, funding_from = history["bars"], history["funding"], history["funding_from"]
+    windows: list[dict[str, Any]] = []
     if checked["strategy"] == "dca":
-        variants = [
-            {key: value for key, value in run_dca(params, bars, fee_rate=fee_rate, funding=funding, funding_from=funding_from).items() if key != "windows"}
-            for params in checked["variants"]
-        ]
+        variants = []
+        for params in checked["variants"]:
+            result = run_dca(params, bars, fee_rate=fee_rate, funding=funding, funding_from=funding_from)
+            windows.extend(result["windows"])
+            variants.append({key: value for key, value in result.items() if key != "windows"})
     else:
         assert replay_for is not None and contract is not None
         equity = float(config["capital_per_track_usd"])
@@ -192,13 +201,27 @@ def compare(request: dict[str, Any], *, client: Any, config: dict[str, Any], rep
         for params in checked["variants"]:
             result = run_grid(grid_shape(params, equity=equity), bars, replay=replay, config=grid_config, instrument=instrument, source=source,
                               funding=funding, funding_from=funding_from, workers=GRID_WORKERS, now=now)
+            windows.extend(result["windows"])
             variants.append({"params": params, "summary": result["summary"], "account_equity": equity})
     contract_note = None if contract is None else {
         "status": contract["status"], "observed_at": contract["instrument"].get("observed_at"),
         "price_increment": contract["instrument"]["price_increment"], "size_increment": contract["instrument"]["size_increment"],
     }
+    extra = {"fee_rate": fee_rate}
+    if contract is not None:
+        extra |= {"account_equity": float(config["capital_per_track_usd"]), "max_leverage": float(config["max_leverage"]),
+                  "price_increment": contract["instrument"]["price_increment"], "size_increment": contract["instrument"]["size_increment"]}
+    pack = evidence.pack(
+        code=code or evidence.code_identity(ROOT),
+        data=evidence.data_evidence(source=source, instrument=instrument, bars=bars, funding=funding, funding_from=funding_from,
+                                    report=history.get("report")),
+        params={"request": checked, **settings(**extra)},
+        inputs={"contract_sha256": evidence.value_sha256(contract)} if contract is not None else {},
+        checks=[evidence.history_check(last_bar=bars[-1].opened_at, run_started=started or now or datetime.now(timezone.utc)),
+                *evidence.window_checks(windows, length=WINDOW, fill_word="成交" if checked["strategy"] == "grid" else "买入")],
+    )
     return {
-        "schema_version": SCHEMA, "status": "ready", **checked, "variants": variants,
+        "schema_version": SCHEMA, "status": "ready", **checked, "variants": variants, "evidence": pack,
         "source": source, "instrument": instrument, "fee_rate": fee_rate,
         "history_start": bars[0].opened_at.isoformat(), "history_end": bars[-1].opened_at.isoformat(),
         "funding_from": history["funding_from"], "contract": contract_note, "paper_only": True,
@@ -217,16 +240,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     started = datetime.now(timezone.utc)
     write_result(args.output, {"schema_version": SCHEMA, "status": "running", "started_at": started.isoformat()})
+    code = evidence.code_identity(ROOT)
+    request: Any = None
     try:
         request = json.loads(args.request.read_text(encoding="utf-8"))
         python = args.nautilus_python
         replay_for = (lambda contract: backtest_replay(python, contract)) if python else None
         result = compare(request, client=DatafeedMarketClient(base_url=args.datafeed_url, timeout_seconds=60.0), config=dualtrack_config(),
-                         replay_for=replay_for)
+                         replay_for=replay_for, code=code, started=started)
     except (BacktestUnavailable, ValueError) as error:
         result = {"schema_version": SCHEMA, "status": "unavailable", "reason": str(error)}
     except Exception as error:  # noqa: BLE001 - the page says it failed; it must not take anything down.
         result = {"schema_version": SCHEMA, "status": "unavailable", "reason": f"回测出错：{type(error).__name__}", "detail": str(error)[-500:]}
+    if "evidence" not in result:
+        result["evidence"] = evidence.pack(code=code, data=None, params={"request": request, **settings()}, reason=result.get("reason"))
     result["started_at"] = started.isoformat()
     result["generated_at"] = datetime.now(timezone.utc).isoformat()
     result["duration_seconds"] = round((datetime.now(timezone.utc) - started).total_seconds(), 1)

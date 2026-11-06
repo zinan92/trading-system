@@ -6,6 +6,7 @@ import {useEffect, useState} from "react";
 import {getJson, startComparison} from "../api";
 import {ASSETS, DEFAULT_GRID_VARIANTS, DEFAULT_VARIANTS, GRID_ASSETS, MAX_VARIANTS, check, checkGrid, gridLabel, gridNotes, gridRows, notes, rows, variantLabel,
   type CompareResult, type DcaParams, type GridParams, type Strategy} from "../compare";
+import {EvidenceLine} from "./EvidenceLine";
 
 export const POLL_MS = 2000;
 // A DCA is arithmetic; a grid replays every window through Nautilus, a few minutes per set.
@@ -113,7 +114,7 @@ export function Workbench() {
         <button type="button" className="desk-btn" disabled={running || Boolean(problem)} onClick={() => void start()}>{running ? "回测中…" : "开始回测"}</button>
         <span className="note" role="status">{problem || message || (running ? (polling === "grid" ? "正在逐段回放过去 180 天，每组要几分钟" : "正在用过去 180 天的行情算，通常不到半分钟") : "")}</span>
       </div>
-      {result?.status === "unavailable" ? <p className="note warn">回测不可用：{result.reason || "原因未知"}</p> : null}
+      {result?.status === "unavailable" ? <><p className="note warn">回测不可用：{result.reason || "原因未知"}</p>{result.evidence ? <EvidenceLine evidence={result.evidence} /> : null}</> : null}
       {shown ? (
         <div className="desk-bench-result">
           <table>
@@ -126,6 +127,7 @@ export function Workbench() {
             </tbody>
           </table>
           <p className="note">{(isGrid ? gridNotes(shown) : notes(shown)).join(" · ")}</p>
+          <EvidenceLine evidence={shown.evidence} />
         </div>
       ) : null}
     </div>
