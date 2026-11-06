@@ -53,7 +53,17 @@
   target) × 4 tables: all 20 `innerHTML` identical. The legacy HTML and
   the published props are saved as `apps/web/src/gridmind/legacy-tables.json`;
   `exec-tables.test.tsx` renders each case and compares (vitest 75 passed).
-- GridMind browser tests (now on the React tables): 55 passed; node
+- 手动平仓 handoff, mocked `/api/dualtrack/orders` only: clicking the React
+  button on bc12a08's page and on this branch posts the same body
+  (`{"cycle_id":"2026-07-18_DAY","trade_id":"trade-1","side":"sell",
+  "event":"exit","order_type":"market","source":"strategy_production_console"}`).
+  Kept as `test_manual_close_on_the_react_positions_table_still_posts_gridminds_exit`.
+- No GridMind or desk code reads the table rows after `renderTables`
+  (React renders a mutation tick later); only the delegated listener on
+  `#positions` touches the table.
+- React escapes `"` in `data-close`; GridMind's `esc` did not. Only a
+  trade id containing a quote would differ, and React's is the safer output.
+- GridMind browser tests (now on the React tables): 56 passed; node
   GridMind tests 32 passed; static/UI/server 103 passed; desk 146 passed.
 
 # 2026-11-06 — 前端: 「今天」 steps 1–2 and the news rail as React islands (#1327)
