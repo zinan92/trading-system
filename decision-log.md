@@ -1,5 +1,65 @@
 # Decision Log
 
+# 2026-11-06 — 前端: control panel text as React islands (#1329)
+
+## Decision
+
+- Only text moved: `#gridSummary`, `#previewSummary`, `#startRiskBlockers`.
+  GridMind computes every value and publishes it.
+- **No order path entered `apps/web`.** The `islands.test.tsx` ban on
+  `dashboard-control`, `/api/dualtrack/orders` and `/api/execute` is
+  unchanged. A static test bars inputs, buttons, handlers and `fetch` from
+  `ControlSummaries.tsx`.
+- Not moved, and why:
+  - Selects, strategy, preview and confirm buttons: the control script binds
+    them by reference at load. A React re-render would drop the listener
+    with no error.
+  - Risk checkboxes: read back as approval. A re-render that kept a tick
+    across a new preview would open the gate.
+  - Main K-line: canvas, and its drag ends in
+    `executeGridRangeReplacement`. Moved to #1356.
+- **Fail-safe:** without `web.js`, `publishPreview` writes plain text into
+  `#previewSummary`, so 预计最大损失 stays visible. `window.DeskWeb` tells
+  them apart: React replaces that text when it mounts.
+- **The bridge now renders synchronously (`flushSync`).** GridMind enables a
+  button in the same task it publishes the numbers beside it; async
+  rendering left a moment where the button was new and the numbers old.
+  This applies to every island.
+
+## Gotchas
+
+- The control script returns early on localhost unless the port is 8765,
+  8766 or 8790, so an old-vs-new diff on a random port compares two idle
+  pages and passes. The wire test serves from `gridmind.test` and fails if
+  `dashboardControlState` never loads its catalog.
+- A `.test` host counts as public, so start stays disabled until
+  `/api/auth/session` is mocked with `can_control`.
+- Do not change a select or click a strategy button in production to verify
+  a deploy: each POSTs `/api/dashboard-control/selection` and rewrites
+  Park's saved selection.
+- A DCA browser test failed about 1 run in 5 after these islands went in.
+  It was the async render above, not a test problem: 0 failures in 15 runs
+  after `flushSync`.
+
+## Verification
+
+- `tests/test_dashboard_control_wire_browser.py`, every endpoint mocked:
+  selection, preview, confirm, then control preview, prepare_start, start,
+  stop. 8ef4b3a and this branch send identical bytes. Saved as
+  `tests/fixtures/gridmind_control_wire.json`.
+- 21 render cases (7 preview, 11 grid summary, 3 blockers) plus 7 journey
+  snapshots identical to 8ef4b3a, including injected `<`, `&` and null.
+  Saved as `legacy-control.json`.
+- Removing the fallback makes its test fail (checked once by hand).
+- Vitest 125 passed; GridMind browser, static, UI and server 182 passed;
+  node GridMind 32 passed; desk 146 passed.
+
+# 2026-11-06 — Deploy record: 8ef4b3a (#1353)
+
+- `ops/deploy-paper.sh 8ef4b3a --dashboard`: Paper idle, gate pass,
+  restarted, three endpoints 200. Production: top bar, five account cards,
+  tables and 今天 steps render, no console errors. Nothing was clicked.
+
 # 2026-11-06 — 前端: GridMind top bar and account cards as React islands (#1353)
 
 ## Decision
