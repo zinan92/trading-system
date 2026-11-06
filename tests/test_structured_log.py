@@ -113,3 +113,17 @@ def test_recent_problems_counts_the_window_and_names_the_latest(tmp_path: Path) 
     out = sl.recent_problems([path, tmp_path / "missing.jsonl"], now=datetime(2026, 11, 6, 4, tzinfo=timezone.utc))
     assert (out["errors"], out["warnings"]) == (2, 1)
     assert out["latest"] == {"at": "2026-11-06T03:00:00+00:00", "event": "last", "where": "x:y:1", "request_id": "2"}
+
+
+def test_the_file_after_a_rollover_is_still_owner_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(sl, "MAX_BYTES", 200)
+    path = sl.configure("roll", tmp_path)
+    try:
+        logger = sl.get_logger("roll")
+        for i in range(20):
+            logger.info("line %s %s", i, "x" * 40)
+        files = sorted(tmp_path.glob("roll.jsonl*"))
+        assert len(files) > 1
+        assert all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in files)
+    finally:
+        sl.configure("roll", None)

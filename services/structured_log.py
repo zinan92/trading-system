@@ -92,6 +92,14 @@ def event(logger: logging.Logger, name: str, *, level: int = logging.INFO, **fie
     logger.log(level, name, extra={"fields": fields}, stacklevel=2)
 
 
+class PrivateRotatingFile(RotatingFileHandler):
+    """Every file it opens, including the fresh one after a rollover, is owner-only (0600)."""
+
+    def _open(self):
+        return open(self.baseFilename, self.mode, encoding=self.encoding, errors=self.errors,
+                     opener=lambda name, flags: os.open(name, flags, 0o600))
+
+
 def log_path(directory: Path, service: str) -> Path:
     return Path(directory) / f"{service}.jsonl"
 
@@ -117,7 +125,7 @@ def configure(service: str, directory: Path | None, *, level: int = logging.INFO
         os.chmod(path, 0o600)
     except OSError:
         return None  # a read-only disk must not stop a service; warnings still reach stderr
-    file_handler = RotatingFileHandler(path, maxBytes=MAX_BYTES, backupCount=BACKUPS, encoding="utf-8")
+    file_handler = PrivateRotatingFile(path, maxBytes=MAX_BYTES, backupCount=BACKUPS, encoding="utf-8")
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
     return path
