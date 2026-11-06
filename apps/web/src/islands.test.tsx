@@ -5,11 +5,7 @@ import {AiSources, resetAiSourcesMemory} from "./islands/AiSources";
 import {BacktestBox, MAX_TRIES, POLL_MS} from "./islands/BacktestBox";
 import {WatchPanel} from "./islands/WatchPanel";
 import apiSource from "./api.ts?raw";
-import bridgeSource from "./bridge.tsx?raw";
-import aiSource from "./islands/AiSources.tsx?raw";
 import backtestSource from "./islands/BacktestBox.tsx?raw";
-import watchSource from "./islands/WatchPanel.tsx?raw";
-import workbenchSource from "./islands/Workbench.tsx?raw";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status, headers: {"content-type": "application/json"}});
 
@@ -123,15 +119,19 @@ describe("bridge", () => {
   });
 });
 
-test("islands send nothing but the one comparison POST, and never reach an order or control endpoint", () => {
-  // #1335 (decision-log): api.ts may hold exactly one POST, to /api/backtest/compare. Nothing else changes.
+test("islands POST only to the allow-list, and never reach an order or control endpoint", () => {
+  // #1335 allowed one POST (backtest/compare); #1327 adds plan, judgments and advice/refresh
+  // (decision-log). All of them go through postJson in api.ts; no other file may send a method.
   expect(apiSource.match(/method:/g)).toHaveLength(1);
-  expect(apiSource).toMatch(/COMPARE_PATH = "\/api\/backtest\/compare"/);
-  expect(apiSource).toMatch(/fetch\(COMPARE_PATH, \{method: "POST"/);
-  for (const source of [apiSource, bridgeSource, aiSource, backtestSource, watchSource, workbenchSource]) {
-    expect(source).not.toMatch(/\/api\/execute|dashboard-control|\/api\/advice\/refresh|\/api\/judgments|\/api\/plan|\/api\/grid\//);
+  expect(apiSource).toMatch(/POST_PATHS = \[COMPARE_PATH, "\/api\/plan", "\/api\/judgments", "\/api\/advice\/refresh"\] as const/);
+  const sources = import.meta.glob("./**/*.{ts,tsx}", {query: "?raw", import: "default", eager: true}) as Record<string, string>;
+  const code = Object.entries(sources).filter(([path]) => !/\.test\.tsx?$/.test(path));
+  expect(code.length).toBeGreaterThan(10);
+  for (const [path, source] of code) {
+    // Until #1329: 执行, 停止, 补单 and GridMind's own controls stay in the legacy page.
+    expect([path, /\/api\/execute|\/api\/grid\/|dashboard-control|\/api\/dualtrack\/orders|\/api\/park-paper|\/api\/mainnet/.test(source)]).toEqual([path, false]);
+    if (!path.endsWith("/api.ts")) expect([path, /method:/.test(source)]).toEqual([path, false]);
   }
-  for (const source of [bridgeSource, aiSource, backtestSource, watchSource, workbenchSource]) expect(source).not.toMatch(/method:/);
   expect(backtestSource).not.toMatch(/<button/);
   expect(["健康", "退役", "推荐", "评分"].some(word => backtestSource.includes(word))).toBe(false);
 });

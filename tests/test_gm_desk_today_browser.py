@@ -1,0 +1,147 @@
+"""「今天」 on the real /trade page (#1327): GridMind + gm-desk.js + the React islands, every API mocked.
+
+Steps 1–2 are React; step 3 (执行, 停止, 暂停补单) is still gm-desk.js. These tests drive the
+handoff between them through the page the desk serves (`inject_shell`), with routed endpoints only:
+nothing here reaches a backend, and 执行 is answered by a mock that records the request body.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+from tests.test_dashboard_gridmind_order_lifecycle_browser import _read_model, _static_server
+
+ROOT = Path(__file__).resolve().parents[1]
+STATIC = ROOT / "apps" / "trading-desk" / "src" / "trading_desk" / "static"
+sys.path.insert(0, str(ROOT / "apps" / "trading-desk" / "src"))
+
+ASSETS = {"assets": [
+    {"key": "BTC", "label": "BTC", "kind": "hl_testnet", "instrument_id": "BTC-USD-PERP"},
+    {"key": "XAU", "label": "黄金", "kind": "xau_paper", "instrument_id": "XAU-USDT-SWAP"},
+    {"key": "ETH", "label": "ETH", "kind": "watch", "instrument_id": "ETH"},
+]}
+PLAN = {"kind": "new", "title": "做多网格", "lines": [["区间", "70,000 – 80,000"]], "note": "先给你看", "rungs": [72000, 74000]}
+PREVIEW = {"execution_ready": True, "orders": [{"price": 72000}, {"price": 74000}], "max_loss": 12.5, "preview_digest": "sha256:x"}
+
+
+def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list):
+    from trading_desk.gridmind import inject_shell
+
+    html = inject_shell((ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8"))
+    model = _read_model("accepted", full_orders=True)
+    try:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+    except Exception as exc:  # pragma: no cover - depends on local browser install
+        pytest.skip(f"Playwright Chromium unavailable: {exc}")
+    page = browser.new_page(viewport={"width": 1680, "height": 1050})
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.accept()))
+
+    def fulfill(route, body, status=200):
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body, ensure_ascii=False))
+
+    def api(route) -> None:
+        request = route.request
+        path = request.url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        path = "/" + path
+        if request.method == "POST":
+            posts.append((path, request.post_data))
+            answers = {
+                "/api/plan": PLAN,
+                "/api/judgments": {"id": 99, "handoff": "预览通过：确认没问题再按「执行」", "preview": PREVIEW},
+                "/api/execute": {"message": "已提交（mock）"},
+            }
+            return fulfill(route, answers.get(path, {"detail": "not mocked"}), 200 if path in answers else 500)
+        reads = {
+            "/api/assets": ASSETS,
+            "/api/desk/BTC": desk,
+            "/api/news/BTC": {"ok": True, "items": [{"id": "n1", "title": "比特币 ETF 净流入", "bucket": "high_impact", "source": "cls",
+                                                     "collected_at": "2026-11-06T02:00:00Z"}]},
+            "/api/watch": {"items": []},
+            "/api/trading-system/read-model": model,
+        }
+        if path in reads:
+            return fulfill(route, reads[path])
+        if path.startswith("/api/dualtrack/market"):
+            return fulfill(route, {**model["market"], "bars": []})
+        fulfill(route, {"detail": "not mocked"}, 503)
+
+    page.route("**/api/**", api)
+    page.route("**/trade", lambda route: route.fulfill(status=200, content_type="text/html", body=html))
+    def static(name: str):
+        kind = "text/css" if name.endswith(".css") else "application/javascript"
+        return lambda route: route.fulfill(status=200, content_type=kind, body=(STATIC / name).read_text(encoding="utf-8"))
+
+    for name in ("gm-desk.js", "gm-desk.css", "web/web.js"):
+        page.route(f"**/static/{name}?*", static(name))
+    page.goto(f"{origin}/trade", wait_until="load")
+    # GridMind's control script only runs on its own ports, so publish the selection it would:
+    # the console is on BTC (Hyperliquid Testnet).
+    page.evaluate("() => { window.dashboardControlState = {catalog: {venue_profiles: []}, preview: null,"
+                  " selection: {venue_profile_id: 'hyperliquid.testnet', instrument_id: 'BTC-USD-PERP'}}; }")
+    page.locator("#deskJudgeTitle", has_text="今天 · BTC").wait_for()
+    return browser, page
+
+
+def _desk(**overrides) -> dict:
+    desk = {"kline": {"ok": True, "structure": "日线偏多", "synthesis": "比特币修复。"}, "today_judgment": None, "executions": [],
+            "ai_today": None, "ai_running": False, "control": {"can_stop": False}, "meta": {"kind": "hl_testnet"}}
+    desk.update(overrides)
+    return desk
+
+
+def test_today_flow_hands_an_approved_preview_to_the_legacy_execute_step() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    posts: list = []
+    dialogs: list = []
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), posts, dialogs)
+        exec_box = page.locator("#deskExecBox")
+        assert exec_box.inner_text() == "先完成前两步"
+        page.locator("#deskNews li", has_text="比特币 ETF 净流入").click()
+        page.locator(".desk-dir [data-d=long]").click()
+        page.locator("#deskReason").fill("ETF 流入")
+        page.get_by_role("button", name="批准这份计划").click()
+        page.locator("#deskToast", has_text="预览通过").wait_for()
+        exec_box.locator("#deskExec").wait_for()
+        assert "72,000 / 74,000" in exec_box.inner_text() and "12.50 USDC" in exec_box.inner_text()
+        assert page.locator('.desk-step[data-step="3"]').get_attribute("class").split() == ["desk-step", "on"]
+        page.locator("#deskExec").click()
+        page.locator("#deskExecToast", has_text="已提交（mock）").wait_for()
+        assert posts == [
+            ("/api/plan", '{"asset":"BTC","direction":"long"}'),
+            ("/api/judgments", '{"asset":"BTC","direction":"long","confidence":3,"reason":"ETF 流入",'
+                               '"cited":[{"id":"n1","title":"比特币 ETF 净流入","bucket":"high_impact"}],"action":"approved"}'),
+            # 执行 is still gm-desk.js, body unchanged; answered by the mock above.
+            ("/api/execute", '{"judgment_id":99,"shown_max_loss":12.5,"confirm_text":"执行"}'),
+        ]
+        assert dialogs and "最多亏 12.50 USDC" in dialogs[0]
+        browser.close()
+
+
+def test_a_reload_of_an_executed_plan_shows_it_done_and_offers_no_execute_button() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    desk = _desk(
+        today_judgment={"id": 5, "direction": "long", "reason": "早上判断", "confidence": 4, "cited": [], "action": "approved"},
+        executions=[{"judgment_id": 5, "stage": "preview", "detail": deepcopy(PREVIEW)}, {"judgment_id": 5, "stage": "executed", "detail": {}}],
+    )
+    posts: list = []
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, desk, posts, [])
+        page.locator("#deskExecBox", has_text="已执行：网格已挂上测试盘。").wait_for()
+        assert page.locator("#deskExec").count() == 0
+        assert page.locator("#deskReason").input_value() == "早上判断"
+        assert [path for path, _ in posts] == ["/api/plan"]  # restoring re-plans; it never re-submits or executes
+        browser.close()
+
+
+def test_a_running_grid_keeps_its_stop_button_in_step_three() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(control={"can_stop": True, "rearm_paused": False}), [], [])
+        page.locator("#deskStopBtn").wait_for()
+        assert page.locator("#deskHoldBtn").inner_text() == "暂停补单"
+        browser.close()

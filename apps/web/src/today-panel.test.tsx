@@ -1,0 +1,183 @@
+import {act, fireEvent, render, screen} from "@testing-library/react";
+import {NewsRail} from "./islands/NewsRail";
+import {ADVICE_POLL_MS, REFRESH_MS, TodayPanel} from "./islands/TodayPanel";
+import {execRestore, judgmentBody, planBody} from "./today";
+import {citeStore} from "./todayStore";
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status, headers: {"content-type": "application/json"}});
+const ASSETS = [{key: "XAU", label: "黄金", kind: "xau_paper"}, {key: "ETH", label: "ETH", kind: "watch"}];
+const PLAN_NEW = {kind: "new", title: "做多网格", lines: [["区间", "4,000 – 4,200"]], note: "先给你看", rungs: [4000, 4100]};
+const AI = {id: 7, direction: "short", confidence: 4, reason: "美元走强", created_at: "2026-11-06T00:41:00Z", cited: [], evidence: null};
+
+type Call = {url: string; method: string; body: string | undefined};
+let calls: Call[] = [];
+let events: Array<{name: string; detail: any}> = [];
+const listen = (name: string) => { const fn = (e: Event) => events.push({name, detail: (e as CustomEvent).detail}); window.addEventListener(name, fn); return () => window.removeEventListener(name, fn); };
+let unlisten: Array<() => void> = [];
+
+function serve(routes: Record<string, (body?: string) => unknown>) {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = String(input), method = init?.method ?? "GET", body = init?.body as string | undefined;
+    calls.push({url, method, body});
+    const key = `${method} ${url}`;
+    const handler = routes[key] ?? routes[`${method} ${url.split("?")[0]}`];
+    if (!handler) return json({detail: `no route ${key}`}, 500);
+    const out = handler(body);
+    return out instanceof Response ? out : json(out);
+  });
+}
+
+beforeEach(() => {
+  calls = []; events = []; citeStore.reset();
+  unlisten = ["desk:desk", "desk:exec", "desk:steps", "desk:pick-asset"].map(listen);
+});
+afterEach(() => { unlisten.forEach(fn => fn()); vi.restoreAllMocks(); vi.useRealTimers(); document.body.innerHTML = ""; });
+
+test("request bodies are byte for byte the legacy ones", () => {
+  // gm-desk.js: JSON.stringify({asset: D.asset, direction: D.d}) and
+  // JSON.stringify({asset, direction, confidence: +conf, reason, cited: D.cites, action})
+  expect(planBody("XAU", "long")).toBe('{"asset":"XAU","direction":"long"}');
+  expect(judgmentBody("XAU", "short", "4" as unknown as number, "美元", [{id: "n1", title: "金价", bucket: "watch"}], "approved"))
+    .toBe('{"asset":"XAU","direction":"short","confidence":4,"reason":"美元","cited":[{"id":"n1","title":"金价","bucket":"watch"}],"action":"approved"}');
+});
+
+test("pick → plan → approve sends the legacy bodies and hands the preview to step 3", async () => {
+  const preview = {execution_ready: true, orders: [{price: 4000}], max_loss: 12.5};
+  serve({
+    "GET /api/desk/XAU": () => ({kline: {ok: true, structure: "日线偏多", synthesis: "金价修复。后面再看"}, today_judgment: null, executions: [], ai_today: null, meta: {kind: "xau_paper"}}),
+    "POST /api/plan": () => PLAN_NEW,
+    "POST /api/judgments": () => ({id: 99, handoff: "预览通过", preview}),
+  });
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  expect(await screen.findByText("K 线日报 ▲ 偏多")).toBeTruthy();
+  citeStore.toggle("XAU", {id: "n1", title: "金价跳水", bucket: "watch"});
+  fireEvent.click(screen.getByRole("button", {name: "做多"}));
+  fireEvent.change(screen.getByLabelText("一句理由"), {target: {value: "ETF 流入"}});
+  fireEvent.change(screen.getByLabelText("信心"), {target: {value: "5"}});
+  fireEvent.click(await screen.findByRole("button", {name: "批准这份计划"}));
+  expect(await screen.findByText("预览通过")).toBeTruthy();
+  const posts = calls.filter(c => c.method === "POST");
+  expect(posts.map(c => [c.url, c.body])).toEqual([
+    ["/api/plan", '{"asset":"XAU","direction":"long"}'],
+    ["/api/judgments", '{"asset":"XAU","direction":"long","confidence":5,"reason":"ETF 流入","cited":[{"id":"n1","title":"金价跳水","bucket":"watch"}],"action":"approved"}'],
+  ]);
+  const exec = events.filter(e => e.name === "desk:exec");
+  expect(exec[0]!.detail).toEqual({asset: "XAU", clear: true});
+  expect(exec.at(-1)!.detail).toEqual({asset: "XAU", judgmentId: 99, preview, done: null});
+  expect(events.filter(e => e.name === "desk:steps").at(-1)!.detail).toEqual({asset: "XAU", direction: true, planKind: "new", handed: true});
+  expect(events.find(e => e.name === "desk:desk")!.detail.desk.meta.kind).toBe("xau_paper");
+});
+
+test("a reload restores today's approved judgment, and an already executed plan stays done", async () => {
+  const desk = {
+    kline: {ok: false, reason: "还没出"},
+    today_judgment: {id: 5, direction: "long", reason: "早上判断", confidence: 4, cited: [{id: "a", title: "旧新闻", bucket: "high_impact"}], action: "approved"},
+    executions: [
+      {judgment_id: 5, stage: "preview", detail: {execution_ready: true, orders: [], max_loss: 3}},
+      {judgment_id: 5, stage: "executed", detail: {}},
+      {judgment_id: 4, stage: "refused", detail: {}},
+    ],
+    ai_today: null, meta: {kind: "xau_paper"},
+  };
+  expect(execRestore(desk as never)!.done!.stage).toBe("executed");
+  serve({"GET /api/desk/XAU": () => desk, "POST /api/plan": () => PLAN_NEW});
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  expect(await screen.findByDisplayValue("早上判断")).toBeTruthy();
+  await screen.findByText("做多网格");
+  expect(screen.getByRole("button", {name: "做多"}).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("旧新闻…")).toBeTruthy();
+  const handed = events.filter(e => e.name === "desk:exec").at(-1)!.detail;
+  expect(handed).toEqual({asset: "XAU", judgmentId: 5, preview: {execution_ready: true, orders: [], max_loss: 3}, done: {judgment_id: 5, stage: "executed", detail: {}}});
+  // Restoring re-plans (a POST that saves nothing) but never re-submits the judgment.
+  expect(calls.filter(c => c.method === "POST").map(c => c.url)).toEqual(["/api/plan"]);
+});
+
+test("the minute refresh never overwrites a direction or reason Park is working on", async () => {
+  vi.useFakeTimers({shouldAdvanceTime: true});
+  let judgment: unknown = null;
+  serve({"GET /api/desk/XAU": () => ({kline: null, today_judgment: judgment, executions: [], ai_today: null}), "POST /api/plan": () => PLAN_NEW});
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  await screen.findByText("K 线日报：暂无");
+  fireEvent.click(screen.getByRole("button", {name: "做空"}));
+  fireEvent.change(screen.getByLabelText("一句理由"), {target: {value: "我自己在写"}});
+  judgment = {id: 1, direction: "long", reason: "别处记的", confidence: 2, cited: [], action: "recorded"};
+  await act(async () => { await vi.advanceTimersByTimeAsync(REFRESH_MS); });
+  expect(calls.filter(c => c.url === "/api/desk/XAU")).toHaveLength(2);
+  expect((screen.getByLabelText("一句理由") as HTMLTextAreaElement).value).toBe("我自己在写");
+  expect(screen.getByRole("button", {name: "做空"}).getAttribute("aria-pressed")).toBe("true");
+});
+
+test("照 AI 的方向判断 shows only before a direction is picked; refresh asks once and polls", async () => {
+  vi.useFakeTimers({shouldAdvanceTime: true});
+  let running = true;
+  serve({
+    "GET /api/desk/XAU": () => ({kline: null, today_judgment: null, executions: [], ai_today: AI}),
+    "POST /api/plan": () => PLAN_NEW,
+    "POST /api/advice/refresh": () => ({started: true}),
+    "GET /api/advice": () => ({running}),
+  });
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  fireEvent.click(await screen.findByRole("button", {name: "照 AI 的方向判断"}));
+  expect(screen.getByRole("button", {name: "做空"}).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByRole("button", {name: "照 AI 的方向判断"})).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "刷新 AI 建议"}));
+  expect(await screen.findByRole("button", {name: "AI 正在看…"})).toBeTruthy();
+  expect(calls.filter(c => c.url === "/api/advice/refresh").map(c => c.body)).toEqual(["{}"]);
+  running = false;
+  await act(async () => { await vi.advanceTimersByTimeAsync(ADVICE_POLL_MS); });
+  expect(calls.filter(c => c.url === "/api/desk/XAU").length).toBeGreaterThanOrEqual(2);
+});
+
+test("a chip asks the legacy page to switch; a plan that cannot be approved stays disabled", async () => {
+  serve({"GET /api/desk/XAU": () => ({kline: null, executions: []}), "POST /api/plan": () => ({kind: "unavailable", title: "读不到现价", lines: [], note: "稍后"})});
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  fireEvent.click(screen.getByRole("button", {name: "ETH"}));
+  expect(events.find(e => e.name === "desk:pick-asset")!.detail).toEqual({key: "ETH"});
+  expect(screen.getByRole("button", {name: "黄金"}).title).toBe("图表和交易在 GridMind");
+  expect(screen.getByRole("button", {name: "ETH"}).title).toBe("只记判断和复盘");
+  fireEvent.click(screen.getByRole("button", {name: "观望"}));
+  expect((await screen.findByRole("button", {name: "确认并记录"}) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText("暂不可用")).toBeTruthy();
+});
+
+test("a new asset starts a fresh panel", async () => {
+  serve({"GET /api/desk/XAU": () => ({executions: []}), "GET /api/desk/ETH": () => ({executions: []}), "POST /api/plan": () => PLAN_NEW});
+  const view = render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  fireEvent.click(screen.getByRole("button", {name: "做多"}));
+  fireEvent.change(screen.getByLabelText("一句理由"), {target: {value: "黄金的理由"}});
+  view.rerender(<TodayPanel asset="ETH" assets={ASSETS} gridmind={["XAU"]} />);
+  expect((screen.getByLabelText("一句理由") as HTMLTextAreaElement).value).toBe("");
+  expect(screen.getByRole("button", {name: "做多"}).getAttribute("aria-pressed")).toBe("false");
+});
+
+describe("NewsRail", () => {
+  const items = [
+    {id: "n1", title: "金价跳水", bucket: "high_impact", source: "cls", collected_at: new Date().toISOString()},
+    {id: "n2", title: "无关小事", bucket: "noise", source: "x", collected_at: new Date().toISOString()},
+  ];
+
+  test("filters, cites into today's judgment, and marks new items on the next read", async () => {
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    let list = items;
+    serve({"GET /api/news/XAU": () => ({ok: true, items: list})});
+    citeStore.forAsset("XAU");
+    render(<NewsRail asset="XAU" />);
+    expect(await screen.findByText("金价跳水")).toBeTruthy();
+    expect(screen.queryByText("无关小事")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "全部"}));
+    expect(screen.getByText("无关小事")).toBeTruthy();
+    fireEvent.click(screen.getByText("金价跳水").closest("li")!);
+    expect(citeStore.get().cites).toEqual([{id: "n1", title: "金价跳水", bucket: "high_impact"}]);
+    expect(screen.getByText("已引用")).toBeTruthy();
+    list = [{id: "n3", title: "美联储讲话", bucket: "watch", source: "cls", collected_at: new Date().toISOString()}, ...items];
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(screen.getByText("美联储讲话").parentElement!.querySelector(".new")?.textContent).toBe("新");
+    expect(calls.every(c => c.method === "GET")).toBe(true);
+  });
+
+  test("says why when the news cannot be read", async () => {
+    serve({"GET /api/news/XAU": () => ({ok: false, reason: "新闻服务没开", items: []})});
+    render(<NewsRail asset="XAU" />);
+    expect(await screen.findByText("新闻服务没开")).toBeTruthy();
+  });
+});
