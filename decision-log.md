@@ -13,10 +13,11 @@
   private key, authorization, cookie, signature, mnemonic) and by text shape
   (Bearer, `tsd_`, `sk-`, `0x`+64 hex, `token=`/`password:`). Wallet addresses
   (`0x`+40 hex) and sha256 digests stay readable on purpose: they are the join keys.
-- **Request id:** a contextvar. An incoming `X-Request-Id` is accepted only as
-  8–40 hex characters; anything else gets a fresh 12-hex id, so a caller cannot
-  write arbitrary text into the log through the header. The desk forwards it on
-  its Dashboard and relay calls.
+- **Request id:** a contextvar. The desk is the public entry point, so it always
+  mints its own 12-hex id and ignores any incoming header. It forwards that id on
+  its Dashboard and relay calls. The Dashboard accepts `X-Request-Id` only as
+  8–40 hex characters and mints one otherwise, so a caller cannot write
+  arbitrary text into the log through the header.
 - An unhandled desk exception returns 500 with `服务器出错，参考编号 <id>`. The
   page never shows the traceback; the log has it under that id.
 - Caught exceptions keep their traceback (`caught_exception`, WARNING). Behaviour
@@ -39,7 +40,16 @@
 
 - Desk suite 191 passed after rebasing on c145af6. Root logging and Dashboard
   log tests 32 passed. The rollover test fails without the fix.
-- Production: see the deploy line in `REGISTRY.md`. Unverified until then.
+- Production, df5bd37: `desk.jsonl` and `dashboard.jsonl` exist with mode 0600.
+  A GET of /trade wrote the same id in both files (`b1192e13067c`). The system
+  page shows 「日志（24 小时）」 with 错误 0 · 警告 0, and the console has no errors.
+  Only GETs were sent.
+- The first text here said the desk accepts an incoming id. Production showed it
+  does not: a request sent with `X-Request-Id: abcdef1234567890` was logged under
+  a new id. The code is right for a public entry point; the record was wrong.
+- Open: the Dashboard logs 5xx at INFO and the desk at WARNING. The 503 from
+  `/api/park-paper/read-model` (804 times in the old stderr log, before this
+  change) is therefore not counted as a warning on the system page.
 
 # 2026-11-06 — 这一笔为什么: one chain per run (#1362, part of #1359)
 
