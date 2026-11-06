@@ -1,5 +1,69 @@
 # Decision Log
 
+# 2026-11-06 — 前端: GridMind top bar and account cards as React islands (#1353)
+
+## Decision
+
+- `#account` carries `data-island="gm-cards"`. GridMind still picks the
+  source (paper ledger or execution account) and computes every value; it
+  publishes `[title, value, sub, class]` per card.
+- The nine top-bar status elements render from `data-island="gm-header"`
+  on a new `#gmStatus` wrapper (`display:contents`, so the flex layout is
+  unchanged). No rule uses `.top >`. gm-desk.js inserts its nav and
+  passcode link outside the wrapper, so it is unaffected. The element ids
+  are unchanged, so gm-desk.css's `#marketBadge{display:none}` still
+  applies.
+- GridMind keeps `headerRuntimeState`, `marketTodayChangePct` and the tick
+  direction. `updateHeaderMarket` now returns values instead of writing
+  the DOM. All writes go through `publishHeader`, which merges into
+  `state.header`: the failed-read path in `load()` updates only the run
+  state, as it always did, and leaves the other fields.
+- **A failed bundle must not look healthy.** The static placeholders stay
+  inside the mount (React replaces them at first render), so without
+  `web.js` the bar stays on 「状态读取中」.
+- `publishTable` is renamed `publishIsland`; it now serves all three.
+
+## Gotchas
+
+- React owns these elements now. A direct `$("#runBadge")` write would
+  vanish on the next render, with no error. A static test forbids it.
+- The first header parity run looked complete and was not: every
+  read-model variant landed in `运行异常`, because the shared fixture's
+  market is not trusted. The healthy states need `_header_model` and
+  `_minute_feed`. The test now fails if the fixture loses `running`, `ok`,
+  `tick-up`, `tick-down` or `warn`.
+- The `已登录 · 可控制` / `公网只读` badges need a non-local hostname, so
+  no parity case reaches them. Their strings moved unchanged; the badge is
+  also hidden on /trade.
+
+## Verification
+
+- Cards: 6 variants (execution account, paper ledger gain and loss, PnL
+  unknown) identical to 3d3aede. `legacy-cards.json`.
+- Top bar, 3d3aede vs this branch: 7 read-model variants, including a
+  failed first read, and a 9-step replay (running, 1m, tick up ×2, tick
+  down, venue switch, risk blocked, untrusted, heartbeat lost). Tag,
+  class, title and innerHTML identical for every element. `legacy-header.json`.
+- `web.js` blocked: the bar stays on 「状态读取中」 after GridMind has
+  published (browser test).
+- Vitest 102 passed; GridMind browser, static, UI and server tests passed;
+  node GridMind 32 passed; desk 146 passed. The header and failure-chain
+  browser tests assert right after `load()`, so they ran 6 times: 6 clean.
+
+# 2026-11-06 — Deploy records: bc12a08 (#1327), 3d3aede (#1328)
+
+- `ops/deploy-paper.sh bc12a08` (desk only): Paper idle, gate pass,
+  restarted, three endpoints 200. Production: all three 今天 steps, the AI
+  card with its sources line, 5 news items, no console errors. Direction,
+  approve, record and refresh were not clicked.
+- `ops/deploy-paper.sh 3d3aede --dashboard`: same checks. The dashboard
+  restart was needed for the GridMind HTML and happened after the idle
+  check. Production: all four tables mount from React with the right
+  columns, no console errors.
+- **Not verified in production:** the tables with rows. Production has no
+  positions, orders or fills, so it showed only 「暂无记录」. Rows are
+  covered by the byte-parity fixture and the mocked browser tests.
+
 # 2026-11-06 — 前端: GridMind 持仓 / 委托 / 成交 tables as a React island (#1328)
 
 ## Decision
