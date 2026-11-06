@@ -2,11 +2,13 @@
 import {createBridge} from "./bridge";
 import {AiSources} from "./islands/AiSources";
 import {BacktestBox} from "./islands/BacktestBox";
+import {NewsRail} from "./islands/NewsRail";
 import {ReviewPanel} from "./islands/ReviewPanel";
+import {TodayPanel} from "./islands/TodayPanel";
 import {WatchPanel} from "./islands/WatchPanel";
 import {Workbench} from "./islands/Workbench";
 
-export const islands = {"watch": WatchPanel, "backtest": BacktestBox, "ai-sources": AiSources, "review": ReviewPanel, "workbench": Workbench};
+export const islands = {"watch": WatchPanel, "backtest": BacktestBox, "ai-sources": AiSources, "review": ReviewPanel, "workbench": Workbench, "today": TodayPanel, "news": NewsRail};
 
 const bridge = createBridge(islands);
 const boot = () => bridge.start(document.body);

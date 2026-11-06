@@ -1,5 +1,7 @@
-// Desk layer injected into the GridMind console (served at /trade): nav + asset switch,
-// one status line, rolling news rail, and today's judgment -> plan -> 执行 panel.
+// Desk layer injected into the GridMind console (served at /trade): nav + asset switch, one status
+// line, and step 3 of 「今天」 (执行, 停止, 暂停补单). Steps 1–2 and the news rail are React islands
+// (apps/web TodayPanel / NewsRail, #1327); this file keeps which asset is selected, because that
+// drives GridMind's own selects, and every order or control request until #1329.
 // GridMind's own cards stay in the page (collapsed); only presentation changes here.
 
 // Pure status model, read from the view GridMind last rendered (window.gridmindView), so the
@@ -93,7 +95,15 @@ if (typeof document !== "undefined") (() => {
     const instrument = (profile?.instruments || []).find(i => i.asset === "XAU");
     return profile && instrument ? [profile.id, instrument.instrument_id] : null;
   };
-  const D = {assets: [], asset: null, news: [], filter: "key", seen: null, fresh: new Set(), newsAt: null, d: null, cites: [], plan: null, desk: null, switching: false};
+  const D = {assets: [], asset: null, desk: null, steps: {}, switching: false};
+  // The React islands get the asset through data-props; an unchanged value is not rewritten, so the
+  // 2-second follow loop never re-renders (or resets) them.
+  const setProps = (el, value) => { const text = JSON.stringify(value); if (el && el.dataset.props !== text) el.dataset.props = text; };
+  function pushProps() {
+    setProps($d('[data-island="today"]'), {asset: D.asset, assets: D.assets.map(a => ({key: a.key, label: a.label, kind: a.kind, instrument_id: a.instrument_id})),
+      gridmind: D.assets.filter(onGridMind).map(a => a.key)});
+    setProps($d('[data-island="news"]'), {asset: D.asset});
+  }
 
   async function call(path, body) {
     const res = await fetch(path, body ? {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)} : {});
@@ -111,33 +121,18 @@ if (typeof document !== "undefined") (() => {
     const wrap = $d(".console-wrap");
     const layout = document.createElement("div"); layout.className = "desk-layout";
     wrap.parentNode.insertBefore(layout, wrap);
-    layout.innerHTML = `<aside class="card desk-news" aria-labelledby="deskNewsTitle">
-      <div class="card-title"><span id="deskNewsTitle">滚动新闻</span><span class="desk-seg" role="group" aria-label="新闻筛选"><button type="button" data-nf="key" aria-pressed="true">重要+关注</button><button type="button" data-nf="all" aria-pressed="false">全部</button></span></div>
-      <div class="desk-meta"><span>点一条，引用到今日判断</span><span id="deskNewsAt">读取中</span></div>
-      <ul id="deskNews"><li class="desk-empty">正在读取新闻…</li></ul></aside>`;
+    // 滚动新闻 is a React island (apps/web NewsRail, #1327).
+    layout.innerHTML = `<aside class="card desk-news" aria-labelledby="deskNewsTitle" data-island="news" data-props="{}"></aside>`;
     layout.appendChild(wrap);
     // 本周三件事 is a React island (apps/web WatchPanel, #1325): it reads /api/watch itself.
     layout.insertAdjacentHTML("afterbegin", `<section class="card desk-watch" aria-labelledby="deskWatchTitle" data-island="watch"></section>`);
     const rail = $d(".control-rail");
+    // Steps 1–2 are a React island (apps/web TodayPanel, #1327); step 3 stays here until #1329.
     rail?.insertAdjacentHTML("afterbegin", `<section class="card desk-judge" id="deskToday" aria-labelledby="deskJudgeTitle">
       <div class="card-title"><span id="deskJudgeTitle">今天</span><span class="desk-meta" style="padding:0" id="deskJudgeDate"></span></div>
       <div class="card-body">
-        <ol class="desk-steps">
-        <li class="desk-step" data-step="1"><span class="desk-n" aria-hidden="true">1</span><div class="desk-step-body">
-          <h3>你的判断</h3>
-          <div class="desk-chips" id="deskChips" role="group" aria-label="判断哪个品种"></div>
-          <div class="desk-reading" id="deskReading"></div>
-          <div class="desk-ai" id="deskAi"></div>
-          <div class="desk-dir" role="group" aria-label="方向"><button type="button" data-d="long" aria-pressed="false">做多</button><button type="button" data-d="flat" aria-pressed="false">观望</button><button type="button" data-d="short" aria-pressed="false">做空</button></div>
-          <label for="deskReason" class="desk-meta" style="padding:0">一句理由</label>
-          <textarea id="deskReason" placeholder="比如：美元走强、ETF 净流出，先不追多"></textarea>
-          <div class="desk-conf"><label for="deskConf">信心</label><input id="deskConf" type="range" min="1" max="5" value="3"><span id="deskConfV">3 / 5</span></div>
-          <div class="desk-cites" id="deskCites">还没有引用新闻</div>
-        </div></li>
-        <li class="desk-step" data-step="2"><span class="desk-n" aria-hidden="true">2</span><div class="desk-step-body">
-          <h3>生成计划</h3>
-          <div class="desk-plan" id="deskPlan"><p class="note">先选方向，系统按它生成计划，先给你看。</p></div>
-        </div></li>
+        <div class="desk-today" data-island="today" data-props="{}"></div>
+        <ol class="desk-steps desk-steps-exec">
         <li class="desk-step" data-step="3"><span class="desk-n" aria-hidden="true">3</span><div class="desk-step-body">
           <h3>你亲手启动</h3>
           <div class="desk-plan" id="deskExecBox"></div>
@@ -150,11 +145,6 @@ if (typeof document !== "undefined") (() => {
     $d(".strategy-card .robot-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
     mountStatus(wrap, rail);
     $d("#deskJudgeDate").textContent = new Date().toLocaleDateString("zh-CN", {month: "long", day: "numeric"});
-    document.querySelectorAll("[data-nf]").forEach(b => b.onclick = () => { D.filter = b.dataset.nf; document.querySelectorAll("[data-nf]").forEach(x => x.setAttribute("aria-pressed", x === b)); renderNews(); });
-    $d("#deskNews").addEventListener("click", e => { const li = e.target.closest("li[data-title]"); if (li) toggleCite(li.dataset.title); });
-    $d("#deskNews").addEventListener("keydown", e => { const li = e.target.closest("li[data-title]"); if (li && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleCite(li.dataset.title); } });
-    document.querySelectorAll(".desk-dir [data-d]").forEach(b => b.onclick = () => { D.d = b.dataset.d; syncDir(); loadPlan(); });
-    $d("#deskConf").oninput = () => { $d("#deskConfV").textContent = `${$d("#deskConf").value} / 5`; };
   }
 
   // ---- status line, retired selection, collapsed GridMind cards --------------------------
@@ -270,126 +260,49 @@ if (typeof document !== "undefined") (() => {
   }
   // BTC and gold follow GridMind; ETH, silver and oil are judged here while GridMind stays on its chart.
   const onGridMind = a => a.kind === "xau_paper" || a.instrument_id === "BTC-USD-PERP";
-  function renderChips() {
-    const signature = `${D.asset}|${D.assets.map(a => a.key).join(",")}`;
-    if (signature === D.chipSignature) return;
-    D.chipSignature = signature;
-    $d("#deskChips").innerHTML = D.assets.map(a => `<button type="button" data-chip="${escD(a.key)}" aria-pressed="${a.key === D.asset}" title="${onGridMind(a) ? "图表和交易在 GridMind" : a.kind === "watch" ? "只记判断和复盘" : "测试盘，下单尚未开通"}">${escD(a.label)}</button>`).join("");
-    document.querySelectorAll("#deskChips [data-chip]").forEach(b => b.onclick = () => {
-      const asset = D.assets.find(a => a.key === b.dataset.chip);
-      if (!asset || asset.key === D.asset) return;
-      if (onGridMind(asset)) { switchAsset(asset.key); return; }
-      D.override = asset.key; focusAsset(asset);
-    });
-  }
+  // A chip in the 「今天」 island was pressed: BTC and gold switch GridMind; the others are judged here.
+  window.addEventListener("desk:pick-asset", event => {
+    const asset = D.assets.find(a => a.key === event.detail?.key);
+    if (!asset || asset.key === D.asset) return;
+    if (onGridMind(asset)) { switchAsset(asset.key); return; }
+    D.override = asset.key; focusAsset(asset);
+  });
   function focusAsset(asset) {
     const changed = asset.key !== D.asset;
     D.asset = asset.key;
-    renderAssets(); renderChips();
+    renderAssets(); pushProps();  // the islands reset themselves for a new asset (keyed by it)
     if (!changed) return;
-    D.d = null; D.cites = []; D.plan = null; D.seen = null;
-    $d("#deskReason").value = ""; $d("#deskConf").value = 3; $d("#deskConfV").textContent = "3 / 5"; syncDir(); renderCites();
-    $d("#deskPlan").innerHTML = `<p class="note">先选方向，系统按它生成计划，先给你看。</p>`;
+    D.desk = null; D.steps = {};
     $d("#deskExecBox").innerHTML = "";
     $d("#deskJudgeTitle").textContent = `今天 · ${asset.label}`;
     $d("#deskStop").innerHTML = "";
     syncSteps();
-    loadNews(); loadDesk();
   }
   function applyAsset() {
     if (D.override) return;  // Park is judging an asset GridMind does not chart
     const asset = selectionAsset();
     if (!asset) return;
     document.body.classList.toggle("desk-gold", asset.kind === "xau_paper");
-    if (asset.key === D.asset) { renderAssets(); renderChips(); return; }
+    if (asset.key === D.asset) { renderAssets(); pushProps(); return; }
     focusAsset(asset);  // sets D.asset and resets the panel
   }
 
-  // ---- news -------------------------------------------------------------------------
-  const LABEL = {high_impact: "重要", watch: "关注", noise: "噪音", unrated: "未分级"}, CLS = {high_impact: "high", watch: "watch", noise: "noise", unrated: "noise"};
-  function ago(stamp) {
-    if (!stamp) return "";
-    const at = new Date(stamp + (/[Z+]/.test(stamp.slice(19)) ? "" : "Z")), minutes = Math.round((Date.now() - at) / 60000);
-    if (minutes < 1) return "刚刚";
-    if (minutes < 60) return `${minutes} 分钟前`;
-    return (at.toDateString() === new Date().toDateString() ? "" : `${at.getMonth() + 1}/${at.getDate()} `) + at.toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"});
-  }
-  async function loadNews(silent) {
-    const key = D.asset; if (!key) return;
-    let data;
-    try { data = await call(`/api/news/${key}`); } catch (e) { data = {ok: false, reason: e.message, items: []}; }
-    if (key !== D.asset) return;
-    if (!data.ok) { if (!silent || !D.news.length) { D.news = []; $d("#deskNews").innerHTML = `<li class="desk-bad">${escD(data.reason)}</li>`; } return; }
-    const seen = D.seen;
-    D.fresh = new Set(seen ? data.items.filter(n => !seen.has(n.id ?? n.title)).map(n => n.id ?? n.title) : []);
-    D.seen = new Set(data.items.map(n => n.id ?? n.title));
-    D.news = data.items; D.newsAt = new Date(); D.stale = data.stale; renderNews();
-  }
-  function renderNews() {
-    const items = D.news.filter(n => D.filter === "all" || n.bucket === "high_impact" || n.bucket === "watch");
-    $d("#deskNewsAt").textContent = D.newsAt ? `每分钟更新 · ${D.newsAt.toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"})}` : "";
-    const stale = D.stale ? `<li class="desk-bad">新闻服务暂时连不上，下面是上一次读到的列表。</li>` : "";
-    if (!items.length) { $d("#deskNews").innerHTML = stale + `<li class="desk-empty">过去 24 小时没有${D.filter === "all" ? "" : "重要或关注级"}相关新闻。</li>`; return; }
-    $d("#deskNews").innerHTML = stale + items.map(n => {
-      const cited = D.cites.some(c => c.title === n.title), fresh = D.fresh.has(n.id ?? n.title);
-      return `<li class="${CLS[n.bucket] || "noise"}${cited ? " cited" : ""}" data-title="${escD(n.title)}" tabindex="0" role="button" aria-pressed="${cited}"><span class="bar"></span><div>
-        <div class="t">${fresh ? '<span class="new">新</span>' : ""}${escD(n.title)}</div>
-        <div class="m"><span>${ago(n.collected_at)}</span><span class="tag ${CLS[n.bucket] || ""}">${LABEL[n.bucket] || ""}</span><span>${escD(n.source)}</span>${cited ? '<span class="cite">已引用</span>' : ""}</div></div></li>`;
-    }).join("");
-  }
-  function toggleCite(title) {
-    const k = D.cites.findIndex(c => c.title === title);
-    if (k >= 0) D.cites.splice(k, 1); else { const n = D.news.find(x => x.title === title); if (n) D.cites.push({id: n.id, title: n.title, bucket: n.bucket}); }
-    renderNews(); renderCites();
-  }
-  function renderCites() { $d("#deskCites").innerHTML = D.cites.length ? D.cites.map(c => `<span title="${escD(c.title)}">${escD(c.title.slice(0, 16))}…</span>`).join("") : "还没有引用新闻"; }
-
-  // ---- desk state: reading, today's call, stop -----------------------------------------
-  const readingDirection = s => /分歧|等待确认/.test(s || "") ? "wait" : /偏多/.test(s || "") ? "long" : /偏空/.test(s || "") ? "short" : "wait";
-  async function loadDesk() {
-    const key = D.asset; if (!key) return;
-    let d;
-    try { d = await call(`/api/desk/${key}`); } catch (e) { $d("#deskReading").textContent = e.message; return; }
-    if (key !== D.asset) return;
-    D.desk = d;
-    const k = d.kline;
-    if (k?.ok) {
-      const dir = readingDirection(k.structure), label = {long: "▲ 偏多", short: "▼ 偏空", wait: "– 观望"}[dir];
-      const one = (k.synthesis || "").split(/(?<=[。；])/)[0];
-      $d("#deskReading").innerHTML = `<b class="d-${dir}">K 线日报 ${label}</b>${escD(one)} <a href="/desk#news-kline" style="color:inherit;opacity:.7">看卡片</a>`;
-    } else $d("#deskReading").textContent = `K 线日报：${k?.reason || "暂无"}`;
-    const tj = d.today_judgment;
-    if (tj && D.d === null) {
-      D.d = tj.direction; $d("#deskReason").value = tj.reason || ""; $d("#deskConf").value = tj.confidence; $d("#deskConfV").textContent = `${tj.confidence} / 5`;
-      D.cites = tj.cited || []; syncDir(); renderCites(); renderNews();
-      const runs = (d.executions || []).filter(e => e.judgment_id === tj.id);
-      const preview = runs.find(e => e.stage === "preview"), done = runs.find(e => ["executed", "execute_started", "execute_failed", "refused"].includes(e.stage));
-      loadPlan().then(() => { if (tj.action === "approved" && preview) renderExec(tj.id, preview.detail, done); });
-    }
-    renderAi(d);
-    renderStop(d.control);
-  }
-  const AI_CALL = {long: "做多", short: "做空", flat: "观望"};
-  function renderAi(d) {
-    const ai = d.ai_today, box = $d("#deskAi");
-    const refresh = `<button type="button" class="desk-link" id="deskAiRefresh" ${d.ai_running ? "disabled" : ""}>${d.ai_running ? "AI 正在看…" : "刷新 AI 建议"}</button>`;
-    if (!ai) { box.innerHTML = `<div class="desk-ai-line"><span class="k">AI 建议</span><span class="muted">每天 08:40 生成</span>${refresh}</div>`; }
-    else {
-      const at = new Date(ai.created_at).toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"});
-      box.innerHTML = `<div class="desk-ai-line"><span class="k">AI 建议</span><b class="d-${ai.direction === "flat" ? "wait" : ai.direction}">${AI_CALL[ai.direction]}</b><span class="muted">信心 ${ai.confidence}/5 · ${at}</span>${refresh}</div>
-        <p>${escD(ai.reason)}</p>${aiSources(ai)}${D.d === null ? `<button type="button" class="desk-link" id="deskAiAdopt">照 AI 的方向判断</button>` : ""}`;
-      const adopt = $d("#deskAiAdopt");
-      if (adopt) adopt.onclick = () => { D.d = ai.direction; syncDir(); loadPlan(); adopt.remove(); };
-    }
-    $d("#deskAiRefresh").onclick = async () => {
-      $d("#deskAiRefresh").disabled = true; $d("#deskAiRefresh").textContent = "AI 正在看…";
-      try { await call("/api/advice/refresh", {}); } catch (e) { $d("#deskAiRefresh").textContent = e.message; return; }
-      const poll = setInterval(async () => { const st = await call("/api/advice").catch(() => null); if (st && !st.running) { clearInterval(poll); loadDesk(); } }, 5000);
-    };
-  }
-
-  // 依据 (#1318) is a React island (apps/web AiSources, #1325); it keeps itself open across this minute refresh.
-  const aiSources = ai => `<div data-island="ai-sources" data-props="${escD(JSON.stringify({judgment: {id: ai.id, cited: ai.cited, evidence: ai.evidence}}))}"></div>`;
+  // ---- what the 「今天」 island reports (#1327) ----------------------------------------
+  window.addEventListener("desk:desk", event => {
+    if (event.detail?.asset !== D.asset) return;
+    D.desk = event.detail.desk; renderStop(D.desk?.control);
+  });
+  window.addEventListener("desk:exec", event => {
+    const detail = event.detail || {};
+    if (detail.asset !== D.asset) return;
+    if (detail.clear) { $d("#deskExecBox").innerHTML = ""; syncSteps(); return; }
+    renderExec(detail.judgmentId, detail.preview, detail.done || null);
+  });
+  window.addEventListener("desk:steps", event => {
+    if (event.detail?.asset !== D.asset) return;
+    D.steps = event.detail; syncSteps();
+  });
+  const reloadToday = () => window.dispatchEvent(new Event("desk:reload"));
 
   function renderStop(c) {
     const box = $d("#deskStop");
@@ -404,52 +317,24 @@ if (typeof document !== "undefined") (() => {
       const text = held ? `恢复 ${D.asset} 测试盘网格补单？\n只补现价下方（做空则上方）的格子。` : `暂停 ${D.asset} 测试盘网格补单？\n现有挂单、止盈、止损都不动；成交止盈后不再补新单，直到你恢复。`;
       if (!confirm(text)) return;
       $d("#deskHoldBtn").disabled = true;
-      try { const r = await call("/api/grid/rearm-hold", {asset: D.asset, paused: !held}); $d("#deskStopToast").textContent = r.message; loadDesk(); }
+      try { const r = await call("/api/grid/rearm-hold", {asset: D.asset, paused: !held}); $d("#deskStopToast").textContent = r.message; reloadToday(); }
       catch (e) { $d("#deskStopToast").textContent = e.message; $d("#deskHoldBtn").disabled = false; }
     };
     $d("#deskStopBtn").onclick = async () => {
       if (!confirm(`确认停止 ${D.asset} 测试盘网格？\n会撤掉全部挂单；如果有持仓，会按市价平掉。`)) return;
       $d("#deskStopBtn").disabled = true;
-      try { const r = await call("/api/grid/stop", {asset: D.asset, confirm_text: "停止"}); $d("#deskStopToast").textContent = r.message; setTimeout(loadDesk, 1500); }
+      try { const r = await call("/api/grid/stop", {asset: D.asset, confirm_text: "停止"}); $d("#deskStopToast").textContent = r.message; setTimeout(reloadToday, 1500); }
       catch (e) { $d("#deskStopToast").textContent = e.message; $d("#deskStopBtn").disabled = false; }
     };
   }
-  // ---- judgment -> plan -> approve -> 执行 (same flow and endpoints as before) --------
-  function syncDir() { document.querySelectorAll(".desk-dir [data-d]").forEach(b => b.setAttribute("aria-pressed", b.dataset.d === D.d)); syncSteps(); }
-  // Step marks only: which step is done and which is next. The flow and its endpoints are unchanged.
+  // ---- step 3: 执行 (same flow, endpoint and body as before; moves to React in #1329) ----------
+  // Steps 1–2 mark themselves in the island; this marks step 3 and its placeholder from desk:steps.
   function syncSteps() {
     const exec = $d("#deskExecBox");
     if (!exec) return;
-    const ready = Boolean(exec.querySelector(".desk-exec"));
-    if (!ready) exec.innerHTML = `<button type="button" class="desk-btn wide" disabled>${D.plan?.kind === "new" ? "先批准第 2 步的计划" : D.plan ? "这份计划不需要新启动" : "先完成前两步"}</button>`;
-    const done = {1: Boolean(D.d), 2: ready, 3: false};
-    const next = [1, 2, 3].find(n => !done[n]);
-    document.querySelectorAll(".desk-step").forEach(li => { const n = +li.dataset.step; li.classList.toggle("done", done[n]); li.classList.toggle("on", n === next); });
-  }
-  async function loadPlan() {
-    if (!D.d || !D.asset) return;
-    const box = $d("#deskPlan"); box.innerHTML = `<p class="note">正在生成计划…</p>`;
-    D.plan = null; $d("#deskExecBox").innerHTML = ""; syncSteps();
-    try { D.plan = await call("/api/plan", {asset: D.asset, direction: D.d}); } catch (e) { box.innerHTML = `<p class="warn">${escD(e.message)}</p>`; return; }
-    const p = D.plan, tag = {keep: "沿用当前网格", new: "需要批准", hold: "不开新单", unavailable: "暂不可用", record_only: "只记录"}[p.kind] || p.kind;
-    const rungs = p.rungs ? `<dt>价位</dt><dd>${p.rungs.map(r => fmtD(r)).join(" / ")}</dd>` : "";
-    box.innerHTML = `<h4><span>${escD(p.title)}</span><span class="pill">${tag}</span></h4>
-      <dl>${p.lines.map(([k, v]) => `<dt>${escD(k)}</dt><dd>${escD(v)}</dd>`).join("")}${rungs}</dl><p class="note">${escD(p.note)}</p>
-      <div class="desk-row"><button type="button" class="desk-btn primary" id="deskApprove" ${p.kind === "unavailable" ? "disabled" : ""}>${p.kind === "new" ? "批准这份计划" : "确认并记录"}</button>${p.kind === "record_only" ? "" : `<button type="button" class="desk-btn" id="deskRecord">只记录判断</button>`}</div>
-      <div class="desk-toast" id="deskToast" role="status"></div>`;
-    $d("#deskApprove").onclick = () => submit(p.kind === "new" ? "approved" : "recorded");
-    if ($d("#deskRecord")) $d("#deskRecord").onclick = () => submit("recorded");
-    syncSteps();
-  }
-  async function submit(action) {
-    if (!D.d) return;
-    const buttons = document.querySelectorAll("#deskPlan .desk-row button"); buttons.forEach(b => b.disabled = true);
-    try {
-      const saved = await call("/api/judgments", {asset: D.asset, direction: D.d, confidence: +$d("#deskConf").value, reason: $d("#deskReason").value, cited: D.cites, action});
-      $d("#deskToast").textContent = saved.handoff;
-      if (saved.preview) renderExec(saved.id, saved.preview, null);
-    } catch (e) { $d("#deskToast").textContent = e.message; }
-    finally { buttons.forEach(b => b.disabled = false); }
+    const ready = Boolean(exec.querySelector(".desk-exec")), kind = D.steps.planKind;
+    if (!ready) exec.innerHTML = `<button type="button" class="desk-btn wide" disabled>${kind === "new" ? "先批准第 2 步的计划" : kind ? "这份计划不需要新启动" : "先完成前两步"}</button>`;
+    $d('.desk-step[data-step="3"]')?.classList.toggle("on", Boolean(D.steps.direction && ready));
   }
   function renderExec(judgmentId, preview, done) {
     const plan = $d("#deskExecBox"); plan.innerHTML = "";
@@ -469,7 +354,7 @@ if (typeof document !== "undefined") (() => {
     $d("#deskExec").onclick = async () => {
       if (!confirm(`确认在${paper ? "黄金纸面盘" : "测试盘"}执行这份计划？\n最多亏 ${fmtD(preview.max_loss)} ${unit}`)) return;
       $d("#deskExec").disabled = true; $d("#deskExecToast").textContent = "正在复核预览并下单，可能需要一两分钟…";
-      try { const r = await call("/api/execute", {judgment_id: judgmentId, shown_max_loss: preview.max_loss, confirm_text: "执行"}); $d("#deskExecToast").textContent = r.message; loadDesk(); }
+      try { const r = await call("/api/execute", {judgment_id: judgmentId, shown_max_loss: preview.max_loss, confirm_text: "执行"}); $d("#deskExecToast").textContent = r.message; reloadToday(); }
       catch (e) { $d("#deskExecToast").textContent = e.message; $d("#deskExec").disabled = false; }
     };
   }
@@ -515,14 +400,12 @@ if (typeof document !== "undefined") (() => {
     setInterval(renderStatus, 1000);  // follows whatever GridMind last rendered
     placeForViewport();
     window.matchMedia("(max-width: 760px)").addEventListener("change", placeForViewport);
-    try { D.assets = (await call("/api/assets")).assets; } catch (e) { $d("#deskNews").innerHTML = `<li class="desk-bad">${escD(e.message)}</li>`; return; }
+    try { D.assets = (await call("/api/assets")).assets; } catch (e) { $d(".desk-news").innerHTML = `<p class="desk-bad">${escD(e.message)}</p>`; return; }
     const ready = await waitFor(() => window.dashboardControlState?.selection, 15000);
     if (!ready || !selectionAsset()) {  // GridMind control rail unavailable: fall back to BTC for news and judgment
-      D.asset = (D.assets.find(a => a.instrument_id === "BTC-USD-PERP") || D.assets[0]).key; renderAssets(); renderChips(); loadNews(); loadDesk();
+      D.asset = (D.assets.find(a => a.instrument_id === "BTC-USD-PERP") || D.assets[0]).key; renderAssets(); pushProps();
     } else applyAsset();
     setInterval(() => { if (!D.switching) applyAsset(); }, 2000);  // follow selection changes made inside GridMind
-    setInterval(() => { if (!document.hidden) { loadNews(true); loadDesk(); } }, 60000);
-    setInterval(() => { if (!document.hidden && D.news.length) renderNews(); }, 30000);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
