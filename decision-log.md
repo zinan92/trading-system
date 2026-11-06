@@ -59,6 +59,20 @@
   a running grid keeps 停止 and 暂停补单 in step 3.
 - Desk suite 146 passed.
 
+# 2026-11-06 — Deploy record: 07d3c89 (#1337)
+
+- `ops/deploy-paper.sh 07d3c89` (desk only): main's head, Paper idle, gate
+  pass at 07d3c89, desk restarted, 200 from `/trade`, `/static/web/web.js`
+  and `/api/watch`. The dashboard was not restarted; #1337 changes only
+  the backtest entry and the desk's launch arguments.
+- Production 回测 tab (127.0.0.1:8790): BTC offers 网格. One BTC grid run
+  from the page (±3% and ±5%, 9 × 500) returned the same numbers as dev:
+  ±3% median +0.14%, worst −0.47%, edge 48%, 14.1 fills; ±5% median
+  +0.21%, worst −0.82%, edge 20%, 11.7 fills. The note reads 「合约精度取自
+  OKX 的合约说明：价格 0.1，数量 0.0001；只用于回测」. No console errors.
+  A backtest writes only its own comparison record; no order, judgment or
+  advice was touched.
+
 # 2026-11-06 — 回测工作台: BTC grid against a backtest contract (#1337)
 
 ## Decision
