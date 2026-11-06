@@ -1,5 +1,71 @@
 # Decision Log
 
+# 2026-11-06 — 前端: GridMind 持仓 / 委托 / 成交 tables as a React island (#1328)
+
+## Decision
+
+- `#positions`, `#orders`, `#fills` and the hidden `#baselineFills` carry
+  `data-island="exec-tables"`. GridMind's `renderTables` keeps its name and
+  its inputs but no longer builds HTML: it publishes per-table props
+  (`publishTable`, written only when the JSON changes) and `ExecTables`
+  lays the cells out.
+- What stays GridMind's: which orders are accepted lifecycles
+  (`displayedAcceptedOrderLifecycle`), the rung protection for an order
+  (`rungProtection`, published as `rung_tp` / `rung_sl`), the DCA target
+  line and whether the viewer may close (`ACCESS_CONTROLLED`). React gets
+  results, not the lifecycle logic.
+- 手动平仓 stays GridMind's. React renders the same `<button
+  data-close data-side>`; GridMind's delegated click listener on
+  `#positions` still sends the order. The table elements stay in the
+  static HTML, because GridMind binds that listener at script load.
+- GridMind's formatters used by the tables (`num`, `signed`,
+  `finiteNumber`, `quantityText`, `timestampDate`, `beijingDateTime`) are
+  ported verbatim to `apps/web/src/gridmind/format.ts`. `side`,
+  `fillAction`, `protectionText`, `plannedProfitText` and `table` are gone
+  from GridMind.
+- Until GridMind's first render the island draws nothing (`loaded`
+  false), as the old empty `<table>` did, rather than 「暂无记录」.
+- Scope narrowed: the header and account cards moved to #1353. The main
+  K-line moved to #1329, because its grid-range drag ends in
+  `executeGridRangeReplacement`, a control action.
+- The raw GridMind page without the desk shell now shows empty tables.
+  Nothing serves it to a person: `/trade` (the desk) is the only live
+  entry, and `com.wendy.goldbot-gateway` (8766) is not running (launchd
+  exit 78). #1330 retires the raw page.
+
+## Gotchas
+
+- The GridMind browser tests load the raw page. The shared
+  `_static_server` (in `test_dashboard_gridmind_order_lifecycle_browser.py`,
+  imported by every GridMind browser test) now serves
+  `/dashboard-gridmind.html` with `web.js` appended, the way the desk shell
+  does. A new harness that serves the file some other way gets empty
+  tables.
+- Four static tests pinned the old source text (`table("#positions",…`,
+  `esc(order.state_label||"未知状态")`, the protection helpers). They now
+  read `ExecTables.tsx` for the layout and the HTML only for what GridMind
+  still decides.
+
+## Verification
+
+- Byte parity: the GridMind page at bc12a08 and this branch, same read
+  model, 5 variants (open trade, orders only, no orders, fills only, DCA
+  target) × 4 tables: all 20 `innerHTML` identical. The legacy HTML and
+  the published props are saved as `apps/web/src/gridmind/legacy-tables.json`;
+  `exec-tables.test.tsx` renders each case and compares (vitest 75 passed).
+- 手动平仓 handoff, mocked `/api/dualtrack/orders` only: clicking the React
+  button on bc12a08's page and on this branch posts the same body
+  (`{"cycle_id":"2026-07-18_DAY","trade_id":"trade-1","side":"sell",
+  "event":"exit","order_type":"market","source":"strategy_production_console"}`).
+  Kept as `test_manual_close_on_the_react_positions_table_still_posts_gridminds_exit`.
+- No GridMind or desk code reads the table rows after `renderTables`
+  (React renders a mutation tick later); only the delegated listener on
+  `#positions` touches the table.
+- React escapes `"` in `data-close`; GridMind's `esc` did not. Only a
+  trade id containing a quote would differ, and React's is the safer output.
+- GridMind browser tests (now on the React tables): 56 passed; node
+  GridMind tests 32 passed; static/UI/server 103 passed; desk 146 passed.
+
 # 2026-11-06 — 前端: 「今天」 steps 1–2 and the news rail as React islands (#1327)
 
 ## Decision

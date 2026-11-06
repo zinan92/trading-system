@@ -17,9 +17,25 @@ from tests.test_trading_system_read_model import _broker, _risk, _source
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# GridMind's 持仓/委托/成交 tables are React islands (#1328). /trade loads web.js through the desk
+# shell; the raw page served here gets the same bundle so these tests see what /trade shows.
+ISLANDS = '<script src="/apps/trading-desk/src/trading_desk/static/web/web.js" defer></script>'
+
+
 class _QuietStaticHandler(SimpleHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         return
+
+    def do_GET(self) -> None:
+        if self.path.split("?", 1)[0] != "/dashboard-gridmind.html":
+            return super().do_GET()
+        html = (ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8").replace("</body>", ISLANDS + "</body>", 1)
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 @contextmanager
@@ -789,3 +805,46 @@ def test_gridmind_ai_reply_shows_what_it_was_based_on() -> None:
         assert "本地规则解析，未调用模型" in second and "无价格" in second and "不可信" in second and "未读取账户" in second
         assert lines.nth(1).locator(".bad").inner_text().endswith("不可信")
         browser.close()
+
+
+def test_manual_close_on_the_react_positions_table_still_posts_gridminds_exit() -> None:
+    """#1328: React draws 手动平仓; GridMind's listener on #positions sends it. Mocked endpoint only."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True, open_trade=True)
+    posts: list[tuple[str, str | None]] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    def fulfill_order(route) -> None:
+        posts.append((route.request.method, route.request.post_data))
+        route.fulfill(status=200, content_type="application/json", body='{"ok": true}')
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.route("**/api/dualtrack/orders", fulfill_order)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator('#tabs [data-tab="positions"]').click()
+        button = page.locator("#positions [data-close]")
+        button.wait_for()
+        trade_id, side = button.get_attribute("data-close"), button.get_attribute("data-side")
+        button.click()
+        page.wait_for_function("() => document.body.innerText.includes('手动平仓已提交')")
+        browser.close()
+
+    assert posts == [("POST", json.dumps({
+        "cycle_id": model["cycle"]["cycle_id"], "trade_id": trade_id, "side": "sell" if side in ("buy", "long") else "buy",
+        "event": "exit", "order_type": "market", "source": "strategy_production_console",
+    }, separators=(",", ":")))]
