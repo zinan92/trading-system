@@ -180,6 +180,52 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-07 — React draws the action buttons and the risk review; ticks belong to a preview (#1397)
+
+## Decision
+
+- Three islands: `control-actions` (preview, confirm), `robot-actions` (start, stop) and `start-risk` (comparison,
+  acknowledgements, blockers, gate, cancel, confirm). GridMind publishes `control.actions`, `state.robot` and
+  `startRiskView()`. The `<dialog>`, its `showModal`/`close` and the × button stay GridMind's. `gm-blockers` is
+  gone: blockers are part of `start-risk`, so the whole review renders in one commit.
+- `state.startRiskAcks` is `{previewId, codes}`. `startRiskAcks(preview)` returns an empty set for any other
+  preview_id, and for none at all. `applyPreview` redraws an open review, so a new preview unticks on screen too.
+- `startRisk.ack` is a `click` intent that toggles state. It was `change` reading `input.checked`.
+- Handlers read state for their gate (`actions.*`, `state.robot.*`, `startRiskConfirmDisabled()`), not the DOM.
+- `confirmStartRisk` starts disabled, in the legacy markup and in React. It was enabled until first drawn, which
+  only a closed dialog hid.
+- `drawIsland(id, props, writeLegacy)` is the one rule for publishing with a fallback; the picker uses it too.
+
+## Gotchas
+
+- For a controlled checkbox, React fires onChange from the click and restores `checked` to the last prop before
+  native `change` fires, so `input.checked` is stale there. Proven: the old handler fails the ticks tests.
+- `.start-risk-review` is `display:contents`: `.receipt-body` is a grid, and a plain wrapper would have collapsed
+  its gaps.
+- The class `dashboard-control-actions` became `gm-control-actions` for the same reason as `gm-pick-step` (#1396).
+  `gm-desk.js` anchors its rail note on that class, and no test or style comparison saw it, because the wire page does
+  not load the shell. Found by grepping `apps/trading-desk/src`; `test_gm_desk_today_browser.py` now covers it.
+- `#confirmStartRisk` text moved from `setStrategyTypeUi` into the view, so it can no longer lag the strategy type.
+
+## Verification
+
+- `gridmind_control_wire.json` unchanged. The journey equals the 7 captured requests with React and with the bundle
+  blocked. Every island holding a control is re-mounted at each step of the replaced-controls test.
+- New browser tests: a new preview unticks and disables confirm, and ticking again builds an acknowledgement for the
+  new preview_id (both modes; no start is sent, because the prepared start still belongs to the old preview, and
+  whether a new preview should also drop it is left open); ticks survive a re-mount; a label click counts once; an element forced
+  enabled opens nothing while state says disabled.
+- Proven red: acks not keyed fails the new-preview test; `change` plus `input.checked` fails the ticks tests;
+  removing the stop gate in state fails the gate test.
+- Same look: all 65 nodes in the two button rows and the open risk dialog, one box ticked, match 94d235d at 1680 and
+  375 px in computed style, box, text, disabled and checked. The only differences are the two new host ids.
+- Control paths were verified with mocks only.
+- Production check of 94d235d (#1396), read-only JS on 127.0.0.1:8790/trade, nothing pressed: `#dashboardPicker` is
+  live and the selects are React's; venue `okx.paper` with 2 options, instrument shows 「选择 Instrument」 with 2
+  options; strategy, preview, confirm and start disabled; the retired-selection status shown; no console errors. The
+  deploy gate reported Paper idle. `/api/dashboard-control/catalog` took 8 s on that load, so the selects read
+  「读取中…」 for that long. Not measured against an earlier version.
+
 # 2026-11-07 — React draws the selects and strategy buttons; GridMind holds the picker (#1396)
 
 ## Decision

@@ -12,6 +12,7 @@ import pytest
 
 from tests.test_dashboard_control_wire_browser import WIRE, _fulfill_control, _open
 from tests.test_dashboard_gridmind_control_track_browser import _catalog
+from tests.test_dashboard_gridmind_profit_controls_browser import _risky_preview
 
 def _browser(runtime):
     try:
@@ -24,12 +25,13 @@ SWAP = """() => {
   // A select keeps its value, as a React select renders the value it was given.
   const swap = el => { const copy = el.cloneNode(true); if (el.tagName === 'SELECT') copy.value = el.value; el.replaceWith(copy); return copy; };
   document.querySelectorAll('[data-gm-intent]').forEach(el => { if (!el.closest('[data-island]')) swap(el); });
-  const host = document.getElementById('dashboardPicker');
-  const fresh = host.cloneNode(true); fresh.removeAttribute('data-island-live'); host.replaceWith(fresh);
+  document.querySelectorAll('[data-island]').forEach(host => { if (host.querySelector('[data-gm-intent]')) {
+    const fresh = host.cloneNode(true); fresh.removeAttribute('data-island-live'); host.replaceWith(fresh); } });
   return document.querySelectorAll('[data-gm-intent]').length;
 }"""
 # The clone's children are copies; only a new root makes a select React's own.
-REMOUNTED = "() => Object.keys(document.getElementById('dashboardVenueSelect') || {}).some(key => key.startsWith('__react'))"
+REMOUNTED = """() => [...document.querySelectorAll('[data-island]')].filter(host => host.querySelector('[data-gm-intent]'))
+  .every(host => Object.keys(host.querySelector('[data-gm-intent]')).some(key => key.startsWith('__react')))"""
 
 
 def test_replaced_controls_send_the_same_requests() -> None:
@@ -46,14 +48,17 @@ def test_replaced_controls_send_the_same_requests() -> None:
         page.locator("#dashboardPreviewButton").click()
         page.locator("#dashboardConfirmButton:not([disabled])").wait_for()  # enabled on the replacement
         page.evaluate(SWAP)
+        page.wait_for_function(REMOUNTED)
         page.locator("#dashboardConfirmButton").click()
         page.locator("#dashboardPreviewSummary", has_text="mock-1").wait_for()
         page.locator("#smartFill").click()
         page.locator("#previewSummary", has_text="预计最大损失").wait_for()
         page.evaluate(SWAP)
+        page.wait_for_function(REMOUNTED)
         page.locator("#startRobot").click()
         page.locator(".trade-toast").filter(has_text="机器人已启动").wait_for()
         page.evaluate(SWAP)
+        page.wait_for_function(REMOUNTED)
         page.locator("#stopRobot").click()
         page.locator("#actionStatus").filter(has_text="机器人已停止").wait_for()
         browser.close()
@@ -176,4 +181,100 @@ def test_a_cached_bundle_without_the_picker_leaves_the_legacy_selects_working() 
         page.locator("#dashboardControlStatus", has_text="BTC-USD-PERP 已选择").wait_for()
         browser.close()
     assert [json.loads(body)["venue_profile_id"] for _method, path, body in wire if path.endswith("/selection")] == ["hyperliquid.testnet", "hyperliquid.testnet"]
+    assert errors == []
+
+
+def _risky_control(route, _model) -> None:
+    body = route.request.post_data_json
+    response = _risky_preview()
+    if body["action"] == "prepare_start":
+        response = {**response, "action": "prepare_start", "prepared_start_id": "prepared-1"}
+    elif body["action"] == "start":
+        response = {"action": "start", "plan": {"version": 3}, "preview": response["preview"], "created_orders": 24, "accepted_orders": 24, "filled_orders": 0}
+    route.fulfill(status=200, content_type="application/json", body=json.dumps(response, ensure_ascii=False))
+
+
+NEW_PREVIEW = "() => { const next = structuredClone(state.preview); next.preview_id = 'second-preview'; applyPreview(next); }"
+CODES = ["grid_count_outside_preferred_band", "maximum_loss_scenario", "specification_change"]
+
+
+def _open_review(page) -> None:
+    page.locator("#smartFill").click()
+    page.locator("#previewSummary", has_text="预计最大损失").wait_for()
+    page.locator("#startRobot").click()
+    page.locator("#startRiskDialog").wait_for(state="visible")
+    assert page.locator("#confirmStartRisk").is_disabled()
+
+
+def _tick_all(page) -> None:
+    boxes = page.locator("[data-start-risk-ack]")
+    assert boxes.count() == 3
+    for index in range(3):
+        boxes.nth(index).check()
+
+
+@pytest.mark.parametrize("bundle_blocked", [False, True], ids=["react", "no-bundle"])
+def test_a_new_preview_clears_the_ticks_and_disables_confirm(bundle_blocked: bool) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as runtime:
+        browser = _browser(runtime)
+        page, wire, _unexpected, errors = _open(browser, _risky_control, bundle_blocked=bundle_blocked)
+        _open_review(page)
+        _tick_all(page)
+        page.locator("#confirmStartRisk:not([disabled])").wait_for()
+        page.evaluate(NEW_PREVIEW)
+        page.locator("#confirmStartRisk[disabled]").wait_for(state="attached")
+        assert page.locator("[data-start-risk-ack]:checked").count() == 0
+        _tick_all(page)
+        page.locator("#confirmStartRisk:not([disabled])").wait_for()
+        payload = page.evaluate("() => startRiskPayload()")  # what a start would carry; nothing is sent here
+        browser.close()
+    assert (payload["preview_id"], payload["codes"]) == ("second-preview", CODES)
+    assert [json.loads(body)["action"] for _method, path, body in wire if path.endswith("/control")] == ["preview", "prepare_start"]
+    assert errors == []
+
+
+def test_ticks_survive_a_re_render_and_a_label_click_counts_once() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as runtime:
+        browser = _browser(runtime)
+        page, _wire, _unexpected, errors = _open(browser, _risky_control)
+        _open_review(page)
+        page.locator(".grid-risk-ack b").first.click()
+        page.wait_for_function("() => document.querySelectorAll('[data-start-risk-ack]:checked').length === 1")
+        page.evaluate(SWAP)
+        page.wait_for_function(REMOUNTED)
+        assert page.locator("[data-start-risk-ack]:checked").count() == 1  # drawn from GridMind's state, not kept by the DOM
+        page.locator(".grid-risk-ack b").first.click()
+        page.wait_for_function("() => document.querySelectorAll('[data-start-risk-ack]:checked').length === 0")
+        assert page.locator("#confirmStartRisk").is_disabled()
+        browser.close()
+    assert errors == []
+
+
+def test_a_gate_held_in_state_stops_a_control_the_dom_shows_enabled() -> None:
+    """GridMind reads its own state (ADR 0008): forcing the element enabled opens nothing."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as runtime:
+        browser = _browser(runtime)
+        page, wire, _unexpected, errors = _open(browser, _risky_control)
+        _open_review(page)
+        before = len(wire)
+        page.evaluate("""() => { const confirm = document.getElementById('confirmStartRisk'); confirm.disabled = false; confirm.click(); }""")
+        page.wait_for_timeout(200)
+        assert wire[before:] == []
+        browser.close()
+    assert errors == []
+
+
+def test_a_stop_gate_held_in_state_stops_an_enabled_looking_button() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as runtime:
+        browser = _browser(runtime)
+        page, wire, _unexpected, errors = _open(browser, _fulfill_control)
+        page.locator('[data-dashboard-strategy="grid"]').wait_for()
+        page.evaluate("""() => { state.robot.stop.disabled = true; const stop = document.getElementById('stopRobot'); stop.disabled = false; stop.click(); }""")
+        page.wait_for_timeout(200)
+        assert [row for row in wire if row[1].endswith("/control")] == []
+        browser.close()
     assert errors == []
