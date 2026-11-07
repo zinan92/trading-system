@@ -366,7 +366,7 @@ class Sources:
         instrument = str(asset["instrument_id"])
         source = f"OKX {instrument} 永续公开行情（datafeed）"
         url = f"{self.config.datafeed_url}/api/candles/commodity/{urllib.parse.quote(instrument)}?" + urllib.parse.urlencode(
-            {"timeframe": timeframe, "limit": limit, "source": self.OKX_SOURCE})
+            {"timeframe": timeframe, "limit": limit, "source": self.OKX_SOURCE, "cache_policy": "bypass"})  # 8100 caches 1h bars up to 3 hours (#1390)
         try:
             payload = self.fetch(url, None) or {}
         except Exception as exc:  # noqa: BLE001
