@@ -154,7 +154,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     @app.get("/api/assets")
     def assets() -> dict[str, Any]:
         rows = [{k: a[k] for k in ("key", "label", "kind", "venue_profile_id", "instrument_id", "news_queries")} for a in store.assets()]
-        return {"assets": [venues.of(row).asset_row(sources, row) for row in rows]}
+        return {"assets": [{**venues.of(row).asset_row(sources, row), "capabilities": sorted(venues.of(row).capabilities)} for row in rows]}
 
     @app.get("/api/catalog")
     def catalog() -> dict[str, Any]:
@@ -218,7 +218,8 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             "review": any(j.get("resolved_at") for j in mine),
         }
         venue = venues.of(asset).venue_text(sources, asset)
-        return {"asset": asset["key"], "meta": {"label": asset["label"], "venue": venue[0], "money": venue[1], "kind": asset["kind"]},
+        return {"asset": asset["key"], "meta": {"label": asset["label"], "venue": venue[0], "money": venue[1], "kind": asset["kind"],
+                                                  "capabilities": sorted(venues.of(asset).capabilities)},
                 "price": state["price"], "grid": grid, "today_judgment": latest, "steps": steps,
                 "notes": store.notes(asset["key"], limit=10), "executions": runs, "kline": sources.kline_view(asset),
                 "news_queries": asset["news_queries"], "control": {**_grid_control(asset, executor.coordinator(), venues.of(asset)), "rearm_paused": _hold_state(config, asset, venues.of(asset))},

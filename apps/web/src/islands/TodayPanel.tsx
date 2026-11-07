@@ -39,7 +39,7 @@ function Chips({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridm
     <div className="desk-chips" id="deskChips" role="group" aria-label="判断哪个品种">
       {assets.map(a => (
         <button key={a.key} type="button" data-chip={a.key} aria-pressed={a.key === asset}
-          title={gridmind.includes(a.key) ? "图表和交易在 GridMind" : a.kind === "watch" ? "只记判断和复盘" : "测试盘，下单尚未开通"}
+          title={gridmind.includes(a.key) ? "图表和交易在 GridMind" : !(a.capabilities ?? []).includes("grid_plan") ? "只记判断和复盘" : "测试盘，下单尚未开通"}
           onClick={() => { if (a.key !== asset) emit("desk:pick-asset", {key: a.key}); }}>
           {a.label}
         </button>
