@@ -16,6 +16,7 @@
 ## Verification
 
 - `tests/test_venue_template.py` 2. Desk suite green.
+- Production 065468e (#1380): `/api/desk/BTC` meta lists `stop` and `rearm_hold`, SILVER lists `bars` and `futures_overview`; served `gm-desk.js` has `can("stop")`; `/trade` loads with no failed requests and a clean console.
 
 # 2026-11-07 — The page reads venue capabilities (#1380)
 
