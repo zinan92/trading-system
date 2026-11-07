@@ -263,4 +263,19 @@ def test_a_paper_silver_selection_focuses_silver_and_gold_stays_the_fallback() -
         assert not page.evaluate("() => document.body.classList.contains('desk-gold')")  # the gold styling is gold's only
         page.evaluate("() => { window.dashboardControlState.selection = {venue_profile_id: 'okx.paper', instrument_id: 'XAU-USDT-SWAP.OKX'}; }")
         page.locator("#deskJudgeTitle", has_text="今天 · 黄金").wait_for()
+
+
+def test_the_environment_badge_stays_visible_on_a_phone() -> None:
+    """#1412: at 375 px Park still sees whether the page acts on Paper or Testnet."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [])
+        page.set_viewport_size({"width": 375, "height": 812})
+        badge = page.locator("#envBadge")
+        badge.wait_for(state="visible")
+        box = badge.bounding_box()
+        assert badge.inner_text().strip() in {"PAPER", "TESTNET"}
+        assert box and box["x"] >= 0 and box["x"] + box["width"] <= 375
+        assert not page.locator(".brand small").is_visible()  # the subtitle still makes room
+        assert page.evaluate("() => document.documentElement.scrollWidth") <= 375  # no sideways scroll
         browser.close()

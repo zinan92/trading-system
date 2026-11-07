@@ -180,6 +180,24 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-07 — The PAPER/TESTNET badge stays visible on a phone (#1412)
+
+## Decision
+
+- At 760 px and below, `dashboard-gridmind.html` hid `.brand small` and `.top .pill.live` together. The second
+  selector is `#envBadge`, so on a phone nothing showed whether the page acts on Paper or Testnet. The rule now hides
+  only the subtitle.
+
+## Gotchas
+
+- The React header (`GmHeader`) renders the badge with the same `pill live` classes, so the old CSS rule hid it too.
+  The fix is in the CSS, not the component.
+
+## Verification
+
+- A new browser test at 375 px asserts the badge is visible, within the viewport, the subtitle hidden and no sideways
+  scroll. It fails on main and passes with the fix. `test_gm_desk_today_browser.py` and the static page tests pass.
+
 # 2026-11-07 — The desk runs silver and crude as Paper grids (#1407)
 
 ## Decision
@@ -243,7 +261,19 @@
   - crude at 90.05: 5 rungs, stop 87.35, cap 50.2. Plan 3.7 a rung (max loss 49.95); requested 3.7, filled 3.7.
   - silver at 52.21: increment 0.01, cap 100. Plan 12.73 (max loss 99.93); requested 12.73, filled 12.73.
   This proves that plan → adapter passes the floored quantity unchanged. It is one rung, not a full grid run to the stop.
-- Production: VERIFY_PROD
+- Production at 5bcfd7f, recorded with #1412. Deployed with `--dashboard`; `desk.db` was backed up first to
+  `desk.db.before-1407`. Every check was a GET or a read-only (`mode=ro`) read.
+  - The gate passed with Paper idle.
+  - The DB moved once: SILVER is `xag_paper` and WTI is `cl_paper`. Each has two `asset_sources` stops (futures
+    04:13:35, OKX public 10:27:36). 250 judgments are kept.
+  - `/api/assets`: BTC, XAU and ETH rows are identical to the baseline. SILVER and WTI gained the Paper kind,
+    capabilities, `venue_profile_id: okx.paper` and their catalog ids.
+  - `/api/desk/SILVER` reads `OKX XAG-USDT-SWAP · 纸面盘`, `纸面模拟 · 手续费未核实` and 「现在没有运行中的白银网格。」. WTI
+    reads the same for crude. XAU and BTC differ from the baseline only in `price`.
+  - `/api/park-paper/read-model` has `strategy.paper_instrument`, which is null while idle.
+  - The catalog lists CL, XAG and XAU under `okx.paper`, all eligible: silver 2/2 decimals, crude 2/1.
+  - `/api/system` shows one OKX row, which is ok. The morning-brief row was already failing in the baseline.
+  - `/trade` renders with no console errors. No silver or crude grid was started; no preview was pressed.
 
 # 2026-11-07 — Paper takes its instrument from the Strategy Session (#1406)
 
