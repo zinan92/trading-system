@@ -191,6 +191,21 @@ def test_both_assets_can_compare_grids() -> None:
     assert check({"asset": "XAU", "strategy": "grid", "variants": [GRID]})["variants"][0]["levels"] == 5
 
 
+@pytest.mark.parametrize(("asset", "instrument"), [("SILVER", "XAG-USDT-SWAP"), ("WTI", "CL-USDT-SWAP")])
+def test_silver_and_wti_read_only_their_own_okx_series(asset: str, instrument: str) -> None:
+    """#1388: the desk's keys, OKX's swap under the commodity source, and grids open too."""
+    from pipelines.backtest_compare import check, compare
+
+    assert check({"asset": asset.lower(), "strategy": "grid", "variants": [GRID]})["asset"] == asset
+    client = History()
+    result = compare({"asset": asset, "strategy": "dca", "variants": [{"amount_usdt": 50, "interval_hours": 24}]},
+                     client=client, config={"paper_fee_model": {"taker_fee_rate": "0.0005"}}, now=client.end)
+    assert result["status"] == "ready" and result["instrument"] == instrument and result["source"] == "okx_swap_public"
+    assert {a.get("source") for a in client.asked} == {"okx_swap_public"}
+    assert {str(v) for a in client.asked for k, v in a.items() if k in {"instrument", "ticker", "symbol"}} == {instrument}
+    assert {a["asset_class"] for a in client.asked if "asset_class" in a} == {"commodity"}
+
+
 def test_grid_compare_replays_each_variant_through_the_grid_engine() -> None:
     from pipelines.backtest_compare import compare
     from services.dualtrack_config import dualtrack_config

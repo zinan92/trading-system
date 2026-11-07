@@ -31,11 +31,14 @@ MAX_VARIANTS = 3
 ASSETS: dict[str, tuple[str, str, str]] = {
     "XAU": ("okx_swap_public", "XAU-USDT-SWAP", "commodity"),
     "BTC": ("okx_swap_crypto_public", "BTC-USDT-SWAP", "crypto"),
+    # #1388: silver and WTI, the desk's keys. OKX listed these swaps in 2026, so their history is short.
+    "SILVER": ("okx_swap_public", "XAG-USDT-SWAP", "commodity"),
+    "WTI": ("okx_swap_public", "CL-USDT-SWAP", "commodity"),
 }
 STRATEGIES = ("dca", "grid")
 # Grids replay through Paper's Nautilus replay against a backtest contract (#1337): the venue's own
 # instrument definition for that exact series, plus Paper's fee model, status backtest_only.
-GRID_ASSETS = ("XAU", "BTC")
+GRID_ASSETS = ("XAU", "BTC", "SILVER", "WTI")
 CONTRACT_SCHEMA = "backtest-contract-v1"
 GRID_WORKERS = 3  # of 10 cores; Paper runs on the same machine
 

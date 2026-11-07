@@ -1,5 +1,34 @@
 # Decision Log
 
+# 2026-11-07 — Backtest workbench: silver and WTI on OKX history (#1388)
+
+## Decision
+
+- `pipelines/backtest_compare.ASSETS` and `GRID_ASSETS` add SILVER (`XAG-USDT-SWAP`) and WTI (`CL-USDT-SWAP`). Both use the commodity source `okx_swap_public` and the desk's own keys. The page lists match.
+- Grids use each swap's own instrument definition from the datafeed (status `backtest_only`): XAG 0.01 / 0.01, CL 0.01 / 0.1.
+- `feeNote`: Paper's assumed fee was set for gold. Every other asset says it borrows that rate and that its own rate is unverified. This changes the BTC wording too.
+
+## Gotchas
+
+- The rebase conflicted on the minified `web.js`. It was rebuilt from the rebased sources, and the bundle was checked for both `desk-reading-note` (#1387) and the SILVER and WTI lists. Never keep one side of a bundle conflict.
+- These swaps listed in 2026 (XAG in January, CL in March). 180 days fits inside both today, but a longer window would reach before the listing.
+- Rollback across #1387 needs the `desk.db.before-1387.bak` backup or reverse SQL. Code before 2dbd79d does not know `okx_public`.
+
+## Verification
+
+- `tests/test_dca_backtest.py`: SILVER and WTI each read only their own OKX series under the commodity source, and their grids pass `check`. vitest covers `feeNote` and the asset lists.
+- Real local runs against 8100, GETs only, default parameters:
+
+  | asset | strategy | result |
+  | --- | --- | --- |
+  | silver | DCA | ready, 25 runs, medians −0.33 / −0.31 |
+  | silver | grid | ready, median +0.15 |
+  | WTI | DCA | +0.35 / +0.15 |
+  | WTI | grid | −0.11 |
+
+- History reports: XAG and CL each 259,200 of 259,200 bars, 0 missing. Funding from 2026-08-06.
+- Production ab7be79 (#1390): `/api/bars` for SILVER and WTI returns the 04:00 candle at 04:30 (52.17 / 89.68).
+
 # 2026-11-07 — OKX desk bars bypass the datafeed cache (#1390)
 
 ## Decision

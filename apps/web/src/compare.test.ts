@@ -1,4 +1,4 @@
-import {check, notes, rows, variantLabel, type CompareResult} from "./compare";
+import {check, feeNote, notes, rows, variantLabel, type CompareResult} from "./compare";
 
 const summary = (median: number) => ({runs: 25, median_return_pct: median, worst_return_pct: -3.2, best_return_pct: 4.1, median_drawdown_pct: -1.5, worst_drawdown_pct: -6.25,
   mean_buys: 7, invested_per_run: 700, funded_runs: 12, histogram: {low: -3.2, width: 0.6, counts: [1, 2, 3]}});
@@ -19,7 +19,7 @@ test("rows put each variant in its own column and mark only the higher median", 
 test("notes say the source, the fee assumption and how much funding is in", () => {
   expect(notes(RESULT)).toEqual([
     "BTC-USDT-SWAP（okx_swap_crypto_public）2026-05-09 到 2026-11-05，每段 7 天，25 段互不重叠",
-    "按每分钟收盘价买入，手续费按 OKX Paper 假设费率 0.04%，尚未用账户核实",
+    "按每分钟收盘价买入，手续费沿用黄金的 OKX Paper 假设费率 0.04%；BTC的实际费率未核实",
     "资金费只计入了 12 / 25 段（OKX 只给最近约 94 天）",
     "只是历史参考，不代表未来",
   ]);
@@ -57,7 +57,7 @@ test("grid notes say the replay, the account size and the fee assumption", () =>
   const lines = gridNotes(GRID_RESULT);
   expect(lines[1]).toBe("用 Paper 自己的 Nautilus 回放和补单规则；收益按 10,000 USDT 账户算，费后");
   expect(lines).toContain("资金费已计入");
-  expect(lines).toContain("手续费是 OKX Paper 的假设费率，尚未用账户核实");
+  expect(lines.some(line => line.startsWith("手续费"))).toBe(true);
   expect(lines.some((line) => line.startsWith("合约精度"))).toBe(false);  // an older result has no contract
   const btc = gridNotes({...GRID_RESULT, contract: {status: "backtest_only", price_increment: "0.1", size_increment: "0.0001"}});
   expect(btc).toContain("合约精度取自 OKX 的合约说明：价格 0.1，数量 0.0001；只用于回测");
@@ -74,5 +74,11 @@ test("grid labels and bounds match the server's", () => {
   expect(checkGrid([{...GRID, direction: "long", stop_pct: 3}])).toMatch(/止损/);
   expect(checkGrid([{...GRID, stop_pct: 1}])).toMatch(/双向/);
   expect(checkGrid([GRID, GRID, GRID, GRID])).toMatch(/1–3/);
-  expect(GRID_ASSETS).toEqual(["XAU", "BTC"]);
+  expect(GRID_ASSETS).toEqual(["XAU", "BTC", "SILVER", "WTI"]);
+});
+
+test("the fee is gold's assumption, and for any other asset it says so and stays unverified (#1388)", () => {
+  expect(feeNote({status: "ready", asset: "XAU", fee_rate: 0.0005})).toBe("手续费按 OKX Paper 假设费率 0.05%，尚未用账户核实");
+  expect(feeNote({status: "ready", asset: "SILVER", fee_rate: 0.0005})).toBe("手续费沿用黄金的 OKX Paper 假设费率 0.05%；白银的实际费率未核实");
+  expect(feeNote({status: "ready", asset: "WTI", fee_rate: 0.0005})).toContain("原油的实际费率未核实");
 });

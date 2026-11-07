@@ -48,7 +48,7 @@ export interface CompareResult {
 }
 
 export type Strategy = "dca" | "grid";
-export const GRID_ASSETS = ["XAU", "BTC"];  // each replays against its own backtest contract (#1337)
+export const GRID_ASSETS = ["XAU", "BTC", "SILVER", "WTI"];  // each replays against its own backtest contract (#1337, #1388)
 export const DEFAULT_GRID_VARIANTS: GridParams[] = [
   {direction: "neutral", below_pct: 3, above_pct: 3, levels: 9, notional_per_level: 500, stop_pct: null},
   {direction: "neutral", below_pct: 5, above_pct: 5, levels: 9, notional_per_level: 500, stop_pct: null},
@@ -95,7 +95,7 @@ export function gridNotes(result: CompareResult): string[] {
     `${result.instrument}（${result.source}）${day(result.history_start)} 到 ${day(result.history_end)}，每段 7 天，${total} 段互不重叠`,
     `用 Paper 自己的 Nautilus 回放和补单规则；收益按 ${equity.toLocaleString("zh-CN")} USDT 账户算，费后`,
     ...(result.contract ? [`合约精度取自 OKX 的合约说明：价格 ${result.contract.price_increment}，数量 ${result.contract.size_increment}；只用于回测`] : []),
-    "手续费是 OKX Paper 的假设费率，尚未用账户核实",
+    feeNote(result),
     funded === total ? "资金费已计入" : funded ? `资金费只计入了 ${funded} / ${total} 段（OKX 只给最近约 94 天）` : "未含资金费",
     "只是历史参考，不代表未来",
   ];
@@ -103,7 +103,15 @@ export function gridNotes(result: CompareResult): string[] {
 
 const day = (ts?: string) => (ts ?? "").slice(0, 10);
 
-export const ASSETS: Array<[string, string]> = [["XAU", "黄金"], ["BTC", "BTC"]];
+export const ASSETS: Array<[string, string]> = [["XAU", "黄金"], ["BTC", "BTC"], ["SILVER", "白银"], ["WTI", "原油"]];
+
+/** The fee is Paper's assumed rate, set for gold; for any other asset it is borrowed, and nothing is checked against an account. */
+export function feeNote(result: CompareResult): string {
+  const rate = `${((result.fee_rate ?? 0) * 100).toFixed(2)}%`;
+  if (result.asset === "XAU") return `手续费按 OKX Paper 假设费率 ${rate}，尚未用账户核实`;
+  const label = ASSETS.find(([id]) => id === result.asset)?.[1] ?? result.asset;
+  return `手续费沿用黄金的 OKX Paper 假设费率 ${rate}；${label}的实际费率未核实`;
+}
 export const DEFAULT_VARIANTS: DcaParams[] = [{amount_usdt: 100, interval_hours: 24}, {amount_usdt: 25, interval_hours: 6}];  // the same 700 USDT a week, spread differently
 export const MAX_VARIANTS = 3;
 
@@ -145,7 +153,7 @@ export function notes(result: CompareResult): string[] {
   const funded = first.funded_runs, total = first.runs;
   return [
     `${result.instrument}（${result.source}）${day(result.history_start)} 到 ${day(result.history_end)}，每段 7 天，${total} 段互不重叠`,
-    `按每分钟收盘价买入，手续费按 OKX Paper 假设费率 ${((result.fee_rate ?? 0) * 100).toFixed(2)}%，尚未用账户核实`,
+    `按每分钟收盘价买入，${feeNote(result)}`,
     funded === total ? "资金费已计入" : funded ? `资金费只计入了 ${funded} / ${total} 段（OKX 只给最近约 94 天）` : "未含资金费",
     "只是历史参考，不代表未来",
   ];
