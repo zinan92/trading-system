@@ -246,14 +246,15 @@ if (typeof document !== "undefined") (() => {
     const ids = asset.kind === "xau_paper" ? paperGoldIds() : ["hyperliquid.testnet", asset.instrument_id];
     // Already there only when the instrument is chosen too (a venue alone is half a selection).
     if (asset.key === selectionAsset()?.key && ids && window.dashboardControlState?.selection?.instrument_id === ids[1]) { applyAsset(); return; }
-    const venue = $d("#dashboardVenueSelect"), instrument = $d("#dashboardInstrumentSelect");
-    if (!venue || !instrument || !ids) return;
+    const picker = window.dashboardControlState?.picker;
+    if (!picker || !ids) return;
     const [venueId, instrumentId] = ids;
     D.switching = true; renderAssets();
     try {
-      if (venue.value !== venueId) { venue.value = venueId; venue.dispatchEvent(new Event("change")); }
-      await waitFor(() => [...instrument.options].some(o => o.value === instrumentId && !o.disabled));
-      instrument.value = instrumentId; instrument.dispatchEvent(new Event("change"));
+      // Intents with an argument (ADR 0008): the selects belong to GridMind's picker, so nothing here writes to them.
+      if (picker.venue !== venueId) window.gmIntent.fire("change", "control.venue", {id: venueId});
+      await waitFor(() => picker.instruments.some(o => o.value === instrumentId && !o.disabled));
+      window.gmIntent.fire("change", "control.instrument", {id: instrumentId});
       await waitFor(() => window.dashboardControlState?.selection?.instrument_id === instrumentId);
     } finally { D.switching = false; }
     applyAsset();

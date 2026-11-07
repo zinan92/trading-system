@@ -686,7 +686,7 @@ def test_gridmind_publishes_the_top_bar_and_cards_instead_of_writing_them() -> N
 
 
 def test_the_control_panel_keeps_every_request_and_approval_in_gridmind() -> None:
-    """#1329: React draws text only. Controls the control script binds at load stay static HTML."""
+    """#1329, ADR 0008: React draws; every request stays in the control script. #1396 moved the selects, not their requests."""
     html = _html()
     script = html.split("<script>", 1)[1]
     for element_id in ("gridSummary", "previewSummary", "startRiskBlockers"):
@@ -694,8 +694,12 @@ def test_the_control_panel_keeps_every_request_and_approval_in_gridmind() -> Non
         assert f'$("#{element_id}").insertAdjacentHTML' not in script
     islands = html.split("data-island=")[1:]
     assert sorted(item.split('"', 2)[1] for item in islands) == sorted([
-        "exec-tables", "exec-tables", "exec-tables", "exec-tables", "gm-blockers", "gm-cards", "gm-grid-summary", "gm-header", "gm-preview",
+        "control-picker", "exec-tables", "exec-tables", "exec-tables", "exec-tables", "gm-blockers", "gm-cards", "gm-grid-summary", "gm-header", "gm-preview",
     ])
     source = (ROOT / "apps" / "web" / "src" / "islands" / "ControlSummaries.tsx").read_text(encoding="utf-8")
     for forbidden in ("<input", "<select", "<button", "onClick", "onChange", "fetch(", "dangerouslySetInnerHTML"):
         assert forbidden not in source
+    picker = (ROOT / "apps" / "web" / "src" / "islands" / "ControlPicker.tsx").read_text(encoding="utf-8")
+    for forbidden in ("onClick", "addEventListener", "useState", "useEffect", "fetch(", "dangerouslySetInnerHTML"):
+        assert forbidden not in picker
+    assert "const published = () => {};" in picker and picker.count("onChange={published}") == picker.count("onChange=") == 2

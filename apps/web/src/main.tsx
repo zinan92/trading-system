@@ -1,4 +1,5 @@
 /* Entry for static/web/web.js, loaded by the /trade shell after the legacy desk scripts. */
+import {ControlPicker} from "./islands/ControlPicker";
 import {createBridge} from "./bridge";
 import {AccountCards} from "./islands/AccountCards";
 import {AiSources} from "./islands/AiSources";
@@ -13,7 +14,7 @@ import {WatchPanel} from "./islands/WatchPanel";
 import {WhyPanel} from "./islands/WhyPanel";
 import {Workbench} from "./islands/Workbench";
 
-export const islands = {"watch": WatchPanel, "backtest": BacktestBox, "ai-sources": AiSources, "review": ReviewPanel, "workbench": Workbench, "today": TodayPanel, "news": NewsRail, "exec-tables": ExecTables, "gm-cards": AccountCards, "gm-header": GmHeader, "gm-grid-summary": GridSummary, "gm-preview": PreviewSummary, "gm-blockers": StartBlockers, "why": WhyPanel};
+export const islands = {"watch": WatchPanel, "backtest": BacktestBox, "ai-sources": AiSources, "review": ReviewPanel, "workbench": Workbench, "today": TodayPanel, "news": NewsRail, "exec-tables": ExecTables, "gm-cards": AccountCards, "gm-header": GmHeader, "control-picker": ControlPicker, "gm-grid-summary": GridSummary, "gm-preview": PreviewSummary, "gm-blockers": StartBlockers, "why": WhyPanel};
 
 const bridge = createBridge(islands);
 const boot = () => bridge.start(document.body);

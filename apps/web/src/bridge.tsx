@@ -25,7 +25,7 @@ export function createBridge(registry: Registry) {
       return;
     }
     let root = roots.get(el);
-    if (!root) { root = createRoot(el); roots.set(el, root); }
+    if (!root) { root = createRoot(el); roots.set(el, root); el.setAttribute("data-island-live", ""); } // from here on the legacy page must not write inside el
     // Synchronously: GridMind enables a button in the same task it publishes the numbers beside it, so
     // the two must never be on screen out of step (#1329). Observer callbacks run outside React's render.
     const mounted = root;

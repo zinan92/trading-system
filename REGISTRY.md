@@ -9,6 +9,13 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-07, 选择框和策略按钮换成 React · #1396)
+
+- 品种、Venue 两个下拉和 Grid/DCA 按钮现在由 React 画，当前选择存在 GridMind 的一个状态对象里，不再从页面元素读回来。外观不变，发出的 7 个请求一个字节没变。
+- 没有 React 包、或者缓存里是旧的 React 包时，页面仍用原来的 HTML 控件，选择和整条控制流程都能走。
+- 切换资产（`gm-desk.js`）不再往下拉里写值，改成带编号发意图。一个没上架或被禁用的品种，选了也什么都不发。
+- 上一版 d7dded8 的生产检查一并记在 `decision-log.md`。网格区间、预览、确认、风险框、启停还是 GridMind 的，留给 #1397。
+
 ## 现在在哪里(2026-11-07, 控制按钮改走「意图」事件 · #1395)
 
 - GridMind 的品种和 Venue 下拉、策略按钮、预览、确认、启动、停止和风险对话框不再绑在具体元素上，改成元素上写明动作、页面统一接收。外观和发出的请求都不变。

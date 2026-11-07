@@ -125,6 +125,26 @@ def test_today_flow_hands_an_approved_preview_to_the_legacy_execute_step() -> No
         browser.close()
 
 
+def test_switching_asset_fires_intents_with_ids() -> None:
+    """ADR 0008, #1396: the selects are React's. gm-desk.js asks GridMind, which stands in here as two spies."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    posts: list = []
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), posts, [], reads_extra={"/api/desk/XAU": _desk()})
+        page.evaluate("""() => {
+          const state = window.dashboardControlState; window.fired = [];
+          state.catalog = {venue_profiles: [{id: 'okx.paper', environment: 'paper', instruments: [{asset: 'XAU', instrument_id: 'XAU-USDT-SWAP'}]}]};
+          state.picker = {venue: 'hyperliquid.testnet', instruments: []};
+          window.gmIntent.on('change', 'control.venue', event => { window.fired.push(['venue', event.args.id]); state.picker.instruments = [{value: 'XAU-USDT-SWAP'}]; });
+          window.gmIntent.on('change', 'control.instrument', event => { window.fired.push(['instrument', event.args.id]);
+            state.selection = {venue_profile_id: 'okx.paper', instrument_id: event.args.id}; });
+        }""")
+        page.locator('#deskAssets [data-asset="XAU"]').click()
+        page.wait_for_function("() => window.fired.length === 2")
+        assert page.evaluate("() => window.fired") == [["venue", "okx.paper"], ["instrument", "XAU-USDT-SWAP"]]
+        browser.close()
+
+
 def test_a_reload_of_an_executed_plan_shows_it_done_and_offers_no_execute_button() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     desk = _desk(
