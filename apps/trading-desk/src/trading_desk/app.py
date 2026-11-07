@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import threading
@@ -27,7 +28,7 @@ from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
 from .sources import SOURCE_LABEL, Sources, http_json
 from .store import Store
 
-from services.structured_log import get_logger, log_path, recent_problems
+from services.structured_log import event, get_logger, log_path, recent_problems
 
 LOG = get_logger("desk.app")
 
@@ -46,6 +47,7 @@ class JudgmentIn(BaseModel):
     reason: str = Field(default="", max_length=2000)
     cited: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     action: Literal["recorded", "approved"] = "recorded"
+    advice_id: int | None = None  # the AI call Park adopted with 「照 AI 的方向判断」 (#1370); recorded, never a gate
 
 
 class PlanIn(BaseModel):
@@ -244,6 +246,17 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         state = asset_state(asset)
         return plans.build_plan(asset["kind"], body.direction, state["price"], state["grid"])
 
+    def adopted_advice(body: JudgmentIn, asset: dict[str, Any]) -> dict[str, Any] | None:
+        """The AI call behind this judgment as it was at this moment, or None. A key that does not fit is dropped and logged."""
+        if body.advice_id is None:
+            return None
+        call = store.judgment(body.advice_id)
+        if call.get("author") == "ai" and call.get("asset") == asset["key"] and call.get("direction") == body.direction:
+            return {"id": call["id"], "direction": call["direction"], "created_at": call["created_at"]}
+        event(LOG, "advice_key_dropped", advice_id=body.advice_id, asset=asset["key"], direction=body.direction,
+              found=bool(call), author=call.get("author"), advice_asset=call.get("asset"), advice_direction=call.get("direction"), level=logging.WARNING)
+        return None
+
     @app.post("/api/judgments")
     def add_judgment(body: JudgmentIn) -> dict[str, Any]:
         asset = asset_or_404(body.asset)
@@ -254,7 +267,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         today = datetime.now(timezone.utc).astimezone().date().isoformat()
         earlier = next((j for j in store.judgments(asset["key"], limit=5) if _local_date(j["created_at"]) == today), None)
         fields = dict(direction=body.direction, confidence=body.confidence, reason=body.reason, cited=body.cited,
-                      price_at=state["price"], plan=built, action=body.action)
+                      price_at=state["price"], plan=built, action=body.action, advice=adopted_advice(body, asset))
         if earlier and earlier.get("action") != "approved" and not earlier.get("resolved_at"):
             saved = store.revise_judgment(earlier["id"], **fields)
         else:
@@ -411,7 +424,9 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             raise HTTPException(422, "run 和 judgment 必须给且只给一个")
         judgments = store.judgments(None, limit=5000, author=None)
         if run is not None:
-            payload = why.explain_run(config.paper_output, run, judgments)
+            by_id = {row["id"]: row for row in judgments}
+            origins = {digest: by_id[ident] for digest, ident in store.started_digests().items() if ident in by_id}
+            payload = why.explain_run(config.paper_output, run, judgments, origins=origins)
             if payload is None:
                 raise HTTPException(404, "没有这一轮的记录")
             return payload

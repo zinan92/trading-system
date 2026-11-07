@@ -67,16 +67,34 @@ def ai_step(judgments: list[dict[str, Any]], asset: Any, start: Any) -> dict[str
     if not calls:
         return step("ai", "AI 建议", NOT_REACHED, "开始前 36 小时内没有这个品种的 AI 建议")
     call = max(calls, key=lambda item: item[0])[1]
-    return _ai_call(call, f"按时间对上的最近一条：{SIDE.get(call.get('direction'), call.get('direction'))}。这只说明时间相近，不代表这一轮照它做的。")
+    return _ai_call(call, f"按时间对上的最近一条：{SIDE.get(call.get('direction'), call.get('direction'))}。这只说明时间相近，不代表这一轮照它做的。",
+                    joined="时间")
 
 
-def _ai_call(call: dict[str, Any], summary: str) -> dict[str, Any]:
+def advice_step(origin: dict[str, Any] | None, judgments: list[dict[str, Any]], asset: Any, start: Any) -> dict[str, Any]:
+    """By key when the judgment behind it recorded the advice it adopted (#1370); otherwise the time match, labelled so."""
+    key = (origin or {}).get("advice")
+    if not key:
+        return ai_step(judgments, asset, start)
+    call = next((row for row in judgments if row.get("id") == key.get("id") and row.get("author") == "ai"), None)
+    then = f"{SIDE.get(key.get('direction'), key.get('direction'))}，{key.get('created_at')}"
+    if call is None:
+        return step("ai", "AI 建议", UNKNOWN, f"判断记下照的是 AI 建议 #{key.get('id')}（{then}），但找不到这条建议", source="judgments",
+                    facts=(("对上方式", "编号"),))
+    if call.get("created_at") != key.get("created_at"):
+        return step("ai", "AI 建议", ATTENTION, f"照的是 AI 建议 #{key.get('id')}，当时是{then}；这条建议后来被刷新过，现在的内容不是当时那条",
+                    at=key.get("created_at"), source="judgments", facts=(("对上方式", "编号"), ("刷新后", SIDE.get(call.get("direction"), call.get("direction")))))
+    return _ai_call(call, f"Park 照 AI 建议 #{call['id']} 做的判断：{SIDE.get(call.get('direction'), call.get('direction'))}", joined="编号")
+
+
+def _ai_call(call: dict[str, Any], summary: str, *, joined: str | None = None) -> dict[str, Any]:
     evidence = call.get("evidence") or {}
     warnings = [text for text, bad in ((f"理由里有 {len(evidence.get('unverified') or [])} 个数字在输入里找不到", evidence.get("unverified")),
                                        ("当时新闻是旧的", evidence.get("news_stale")), ("当时读不到 K 线日报", (evidence.get("kline") or {}).get("missing"))) if bad]
     model = evidence.get("model") or {}
     return step("ai", "AI 建议", ATTENTION if warnings else OK, "；".join([summary, *warnings]), at=call.get("created_at"), source="judgments",
-                facts=(("信心", call.get("confidence")), ("理由", call.get("reason")), ("模型通道", model.get("channel")), ("价格来源", (evidence.get("price") or {}).get("source"))))
+                facts=(("对上方式", joined), ("信心", call.get("confidence")), ("理由", call.get("reason")), ("模型通道", model.get("channel")),
+                       ("价格来源", (evidence.get("price") or {}).get("source"))))
 
 
 def _paper_end(root: Path, session: str, seal: dict[str, Any] | None) -> dict[str, Any]:
@@ -94,7 +112,7 @@ def _paper_end(root: Path, session: str, seal: dict[str, Any] | None) -> dict[st
     return step("end", "结束", NOT_REACHED, "这一轮还没结束")
 
 
-def _paper(root: Path, session: str, judgments: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _paper(root: Path, session: str, judgments: list[dict[str, Any]], origins: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     raw_fills = _json(root / "dualtrack" / "nautilus_authoritative" / "fills" / f"park-{session}.json")
     if raw_fills is None:
         return None
@@ -109,7 +127,7 @@ def _paper(root: Path, session: str, judgments: list[dict[str, Any]]) -> dict[st
     fills = _paper_fills(raw_fills)
     start = (plan or {}).get("created_at") or (fills[0]["ts"] if fills else None)
     steps = [
-        ai_step(judgments, "XAU", start),
+        advice_step(origins.get((plan or confirmation or {}).get("plan_digest")), judgments, "XAU", start),
         step("proposal", "提议", OK, f"来源 {plan.get('source') or '没有记录'}", at=plan.get("created_at"), source="park_strategy/plans.jsonl",
              facts=(("当时价格", market.get("price")), ("行情来源", market.get("source")), ("行情时间", market.get("observed_at")))) if plan
         else _gap("proposal", "提议", "提议记录", "park_strategy/plans.jsonl", plans_found),
@@ -129,7 +147,7 @@ def _paper(root: Path, session: str, judgments: list[dict[str, Any]]) -> dict[st
                    identity={"run_id": f"paper:{session}", "plan_digest": digest, "strategy_session_id": session, "activation_id": None, "release_sha": None, "market_source": market.get("source")})
 
 
-def _testnet(root: Path, plan_id: str, judgments: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _testnet(root: Path, plan_id: str, judgments: list[dict[str, Any]], origins: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     state = _latest(_json(root / "dualtrack" / "grid_testnet_lifecycle" / f"{plan_id}.json"))
     if not state:
         return None
@@ -159,7 +177,7 @@ def _testnet(root: Path, plan_id: str, judgments: list[dict[str, Any]]) -> dict[
     else:
         end = step("end", "结束", NOT_REACHED, f"这一轮还没结束（{status}）")
     steps = [
-        ai_step(judgments, asset, state.get("created_at")),
+        advice_step(origins.get(digest), judgments, asset, state.get("created_at")),
         preview_step,
         step("confirm", "确认", OK, f"{confirmation.get('operator_id') or '操作人没有记录'} 已确认", at=confirmation.get("confirmed_at"), source="dashboard_control_plane/confirmations.json") if confirmation
         else _gap("confirm", "确认", "确认记录", "dashboard_control_plane/confirmations.json", confirmations_raw is not None),
@@ -176,12 +194,14 @@ def _testnet(root: Path, plan_id: str, judgments: list[dict[str, Any]]) -> dict[
                              "release_sha": (preview or {}).get("release_sha"), "market_source": None})
 
 
-def explain_run(paper_output: Path, run_id: str, judgments: list[dict[str, Any]]) -> dict[str, Any] | None:
+def explain_run(paper_output: Path, run_id: str, judgments: list[dict[str, Any]], *, origins: dict[str, dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    """``origins``: plan digest -> the desk judgment that started it. A run started elsewhere, or before #1370, has none."""
     root = Path(paper_output)
     kind, _, key = run_id.partition(":")
     if not key or "/" in key or ".." in key:
         return None
-    return _paper(root, key, judgments) if kind == "paper" else _testnet(root, key, judgments) if kind == "testnet" else None
+    origins = origins or {}
+    return _paper(root, key, judgments, origins) if kind == "paper" else _testnet(root, key, judgments, origins) if kind == "testnet" else None
 
 
 def _run_of(root: Path, digest: Any) -> str | None:
@@ -200,7 +220,7 @@ def explain_judgment(paper_output: Path, judgment: dict[str, Any], executions: l
     last = lambda stage: next((row for row in reversed(rows) if row["stage"] == stage), None)  # noqa: E731
     asset, plan, approved = judgment.get("asset"), judgment.get("plan") or {}, judgment.get("action") == "approved"
     side = SIDE.get(judgment.get("direction"), judgment.get("direction"))
-    ai = (_ai_call(judgment, f"AI 判断：{side}") if judgment.get("author") == "ai" else ai_step(judgments, asset, judgment.get("created_at")))
+    ai = (_ai_call(judgment, f"AI 判断：{side}") if judgment.get("author") == "ai" else advice_step(judgment, judgments, asset, judgment.get("created_at")))
     steps = [ai, step("judgment", "判断", OK, f"{'Park' if judgment.get('author') != 'ai' else 'AI'} {side}，{'已批准' if approved else '只记录'}", at=judgment.get("created_at"), source="judgments",
                       facts=(("信心", judgment.get("confidence")), ("理由", judgment.get("reason")), ("当时价格", judgment.get("price_at"))))]
 

@@ -100,7 +100,10 @@ class Store:
             conn.executescript(SCHEMA)
             # author: 'park' = Park's own call; 'ai' = the model's daily suggestion, scored the same way.
             # evidence: what an AI call was given (AI 透明度 #1318); '{}' for Park's calls and older AI calls.
-            for column, ddl in (("author", "author text not null default 'park'"), ("evidence", "evidence text not null default '{}'")):
+            # advice: the AI call a Park judgment was drafted from, {id, direction, created_at} as it was then (#1370);
+            # null when he did not adopt one, and on every judgment before #1370. Recorded, never a gate.
+            for column, ddl in (("author", "author text not null default 'park'"), ("evidence", "evidence text not null default '{}'"),
+                                ("advice", "advice text")):
                 if column in {row[1] for row in conn.execute("pragma table_info(judgments)")}:
                     continue
                 try:
@@ -144,28 +147,29 @@ class Store:
     def add_judgment(self, *, asset: str, direction: str, confidence: int, reason: str,
                      cited: list[dict[str, Any]], price_at: float | None, plan: dict[str, Any] | None,
                      action: str, created_at: str | None = None, author: str = "park",
-                     evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+                     evidence: dict[str, Any] | None = None, advice: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._conn() as conn:
             cur = conn.execute(
-                "insert into judgments (created_at, asset, direction, confidence, reason, cited, price_at, plan, action, author, evidence)"
-                " values (?,?,?,?,?,?,?,?,?,?,?)",
+                "insert into judgments (created_at, asset, direction, confidence, reason, cited, price_at, plan, action, author, evidence, advice)"
+                " values (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (created_at or now_iso(), asset, direction, int(confidence), reason.strip(),
                  json.dumps(cited, ensure_ascii=False), price_at,
                  json.dumps(plan, ensure_ascii=False) if plan else None, action, author,
-                 json.dumps(evidence or {}, ensure_ascii=False)),
+                 json.dumps(evidence or {}, ensure_ascii=False), json.dumps(advice) if advice else None),
             )
             return self.judgment(cur.lastrowid, conn)
 
     def revise_judgment(self, judgment_id: int, *, direction: str, confidence: int, reason: str,
                         cited: list[dict[str, Any]], price_at: float | None, plan: dict[str, Any] | None,
-                        action: str, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+                        action: str, evidence: dict[str, Any] | None = None, advice: dict[str, Any] | None = None) -> dict[str, Any]:
         """Park changed his mind the same day: one call per asset per day, timed and priced from the latest change."""
         with self._conn() as conn:
             conn.execute(
-                "update judgments set created_at=?, direction=?, confidence=?, reason=?, cited=?, price_at=?, plan=?, action=?, evidence=?"
+                "update judgments set created_at=?, direction=?, confidence=?, reason=?, cited=?, price_at=?, plan=?, action=?, evidence=?, advice=?"
                 " where id=? and resolved_at is null",
                 (now_iso(), direction, int(confidence), reason.strip(), json.dumps(cited, ensure_ascii=False), price_at,
-                 json.dumps(plan, ensure_ascii=False) if plan else None, action, json.dumps(evidence or {}, ensure_ascii=False), judgment_id),
+                 json.dumps(plan, ensure_ascii=False) if plan else None, action, json.dumps(evidence or {}, ensure_ascii=False),
+                 json.dumps(advice) if advice else None, judgment_id),
             )
             return self.judgment(judgment_id, conn)
 
@@ -261,6 +265,13 @@ class Store:
             out.append(item)
         return out
 
+    def started_digests(self) -> dict[str, int]:
+        """preview_digest -> judgment id, for every plan the desk started: how a run finds the judgment behind it (#1370)."""
+        with self._conn() as conn:
+            rows = conn.execute("select preview_digest, judgment_id from executions where stage='executed' and preview_digest is not null"
+                                " and judgment_id is not null order by id").fetchall()
+        return {row["preview_digest"]: row["judgment_id"] for row in rows}
+
     def executions_of(self, judgment_id: int) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute("select * from executions where judgment_id=? order by id", (judgment_id,)).fetchall()
@@ -285,6 +296,7 @@ def _judgment(row: sqlite3.Row) -> dict[str, Any]:
     item["cited"] = json.loads(item.get("cited") or "[]")
     item["evidence"] = json.loads(item.get("evidence") or "{}")
     item["plan"] = json.loads(item["plan"]) if item.get("plan") else None
+    item["advice"] = json.loads(item["advice"]) if item.get("advice") else None
     return item
 
 
