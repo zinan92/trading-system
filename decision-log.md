@@ -180,6 +180,36 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-07 — React frames the main K-line and moves GridMind's own node in (#1398)
+
+## Decision
+
+- `chart-frame` is an island on `.chart-wrap`. `createRoot` clears its host, so GridMind keeps a reference in
+  `window.gmChartHost` at load, and `ChartFrame` moves that same node into a `display:contents` slot from a ref
+  callback. That runs in the commit that cleared it, before paint. React never makes a chart node: a new one would
+  have none of GridMind's bindings, the failure #1329 found.
+- A finished drag is `gmIntent.fire("gesture", "grid.dragEnd", {event, commit})`. `gesture` intents are fired, not
+  routed from DOM events. The pointer listeners and the overlay stay GridMind's, because the overlay sits inside the
+  chart. `executeGridRangeReplacement`, the review dialog and the overlay's confirm and cancel buttons did not move.
+
+## Gotchas
+
+- `state.chart.chartEl` is an inner element made by `StandardKlineChart`, not `#productionChart`.
+
+## Verification
+
+- `gridmind_control_wire.json` unchanged.
+- The existing drag test runs with the bundle, through preview_range and replace_grid, on two frames: the first, and
+  one replaced after the chart exists. It asserts one chart node, GridMind's own, with its canvas.
+- Proven red: without the move into the slot, the drag test fails on both frames.
+- Screenshot of `.chart-wrap` on the same mock bars, this branch against c527654, frozen clock: identical bytes at
+  1680 and 375 px.
+- No-bundle: the node stays in the legacy markup.
+- Production check of c527654 (#1397), read-only JS on 127.0.0.1:8790/trade, nothing pressed: the four control hosts
+  are live and the buttons are React's; `state.robot` equals the DOM on start and stop; risk confirm disabled and the
+  dialog closed; both rail notes present; K-line canvas present; no console errors. The deploy gate reported Paper
+  idle. Control paths were verified with mocks only.
+
 # 2026-11-07 — React draws the action buttons and the risk review; ticks belong to a preview (#1397)
 
 ## Decision

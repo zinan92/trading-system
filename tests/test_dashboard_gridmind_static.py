@@ -694,12 +694,18 @@ def test_the_control_panel_keeps_every_request_and_approval_in_gridmind() -> Non
         assert f'$("#{element_id}").insertAdjacentHTML' not in script
     islands = html.split("data-island=")[1:]
     assert sorted(item.split('"', 2)[1] for item in islands) == sorted([
-        "control-actions", "control-picker", "exec-tables", "exec-tables", "exec-tables", "exec-tables", "gm-cards", "gm-grid-summary", "gm-header", "gm-preview",
+        "chart-frame", "control-actions", "control-picker", "exec-tables", "exec-tables", "exec-tables", "exec-tables", "gm-cards", "gm-grid-summary", "gm-header", "gm-preview",
         "robot-actions", "start-risk",
     ])
     source = (ROOT / "apps" / "web" / "src" / "islands" / "ControlSummaries.tsx").read_text(encoding="utf-8")
     for forbidden in ("<input", "<select", "<button", "onClick", "onChange", "fetch(", "dangerouslySetInnerHTML"):
         assert forbidden not in source
+    assert 'gmIntent.fire("gesture","grid.dragEnd",{event,commit:true})' in html  # ADR 0008: a finished drag is an intent
+    assert 'gmIntent.on("gesture","grid.dragEnd"' in script
+    assert "async function executeGridRangeReplacement" in script
+    frame = (ROOT / "apps" / "web" / "src" / "islands" / "ChartFrame.tsx").read_text(encoding="utf-8")
+    for forbidden in ("<canvas", "createChart", "fetch(", "addEventListener"):
+        assert forbidden not in frame
     for name, changes in (("ControlPicker", 2), ("ControlActions", 1)):
         controls = (ROOT / "apps" / "web" / "src" / "islands" / f"{name}.tsx").read_text(encoding="utf-8")
         for forbidden in ("onClick", "addEventListener", "useState", "useEffect", "fetch(", "dangerouslySetInnerHTML"):

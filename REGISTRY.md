@@ -9,6 +9,12 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-07, 主 K 线外框换成 React，控制面板这批做完 · #1398)
+
+- 主 K 线的外框由 React 接管。K 线本身还是 GridMind 画，图表节点也还是原来那个，所以绑定、拖动、历史加载都不变。
+- 拖动网格区间结束时发一个「意图」，由 GridMind 原来的代码处理。替换网格的请求（`executeGridRangeReplacement`）没有动。
+- 到这一步，#1356 的控制面板 5 步全部完成。下一步是 #1330：把整页换成 React，退掉 `dashboard-gridmind.html`。
+
 ## 现在在哪里(2026-11-07, 预览、确认、风险框、启停换成 React · #1397)
 
 - 预览、确认、启动、停止按钮和启动前的风险确认框现在由 React 画。按钮能不能按、勾了哪些风险，都存在 GridMind 的状态里。发出的 7 个请求一个字节没变。
