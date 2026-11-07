@@ -57,3 +57,16 @@ def test_a_module_that_confirms_without_a_ready_preview_fails(config, tmp_path: 
                 pass
             return {"started": False}
     assert any("confirmation" in p for p in _check(build(Eager()).get("eager"), config, tmp_path))
+
+
+def test_a_confirmation_in_the_body_is_caught_too(config, tmp_path: Path) -> None:
+    """Paper gold confirms with {"action": "confirm"} to a chat URL; a URL-only check would miss that."""
+    class Quiet(FakeVenue):
+        kind = "quiet"
+        def execute(self, executor, asset, plan, *, shown_max_loss, judgment_id):
+            try:
+                executor.fetch("http://fake-venue.test/chat", {"action": "confirm", "draft": "x"})
+            except ConnectionError:
+                pass
+            return {"started": False}
+    assert any("confirmation" in p for p in _check(build(Quiet()).get("quiet"), config, tmp_path))

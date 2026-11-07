@@ -1,5 +1,41 @@
 # Decision Log
 
+# 2026-11-07 — Fake venue acceptance, conformance contract, kinds checked in code (#1379)
+
+## Decision
+
+- `tests/fake_venue.py` is a pretend exchange in one module. It is registered only in a test registry. The shipped desk runs it end to end with no business-code change:
+  - assets, desk, bars and plan;
+  - approve → its own preview;
+  - a refused and a confirmed execute;
+  - the why chain;
+  - stop and rearm refused because they are not declared.
+- `venues/conformance.py` is the fail-closed contract. With every upstream dead, a module must not:
+  - give a price;
+  - return an `ok` grid;
+  - give bars with data;
+  - return a ready preview;
+  - send a confirmation, whether in the URL or the body;
+  - start a driver.
+- `tests/test_venue_conformance.py` runs the contract parametrized over the registry, so a new module is covered without being listed. The gate is CI: a failing module does not merge. There is no runtime downgrade to read-only beyond `build()` dropping a capability the module cannot back (ADR 0007 is worded to match in #1381).
+- `assets.kind` has no CHECK. `Store.add_asset(row, kinds=registry.kinds())` validates in code. `_migrate_asset_kinds` rebuilds the table in one `begin immediate` transaction when the SQL still lists kinds, and re-checks after taking the lock.
+- `create_app` builds its default executor on `sources.venues`, so reads and order routing share one registry.
+
+## Gotchas
+
+- The migration test uses `tests/fixtures/desk_schema_2026-11-07.sql`: production's `.schema`, opened `mode=ro&immutable=1`, with no rows. The internal `sqlite_sequence` line is removed.
+- Confirmations can travel in a body. Paper gold sends `{"action": "confirm"}` to `/api/park-paper/ai-chat`, so the contract records bodies too.
+- **Rollback hazard.** Pre-#1379 code decides whether to migrate by looking for `'watch'` in the table SQL, and after this migration that text is gone. Rolled-back code would rebuild `assets` with `executescript` on every open. That is not transactional, and it only succeeds while every row has one of the original three kinds. Back up `desk.db` before deploying, and restore the backup on rollback.
+
+## Verification
+
+- Store migration tests (5), conformance (8, including the body case), fake venue acceptance (3). Desk suite green.
+- Production 2a07e11 (#1370):
+  - `/trade` loads with no console errors;
+  - all 11 runs keep the AI step as before (`not_reached`);
+  - the served bundle has `advice_id`.
+- Production eeb1d5c (#1378): GET-only baseline diff over `/api/assets`, `/api/desk/*`, `/api/bars/*?tf=1h` and the system checks. Only prices and bars moved. XAU bars were "not ready" at baseline time and ready after, which is upstream state.
+
 # 2026-11-07 — Desk Venue Modules replace the desk's kind branches (#1377, #1378)
 
 ## Decision

@@ -8,6 +8,7 @@ here does not merge.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Mapping
 
 from .base import CAPABILITIES, VenueModule
@@ -22,7 +23,8 @@ class DeadUpstream:
         self.calls: list[str] = []
 
     def __call__(self, url: str, body: Any = None) -> Any:
-        self.calls.append(str(url) + (f" {body.get('type')}" if isinstance(body, dict) and body.get("type") else ""))
+        # The body too: a confirmation can travel as {"action": "confirm"} to a URL that does not say so.
+        self.calls.append(f"{url} {json.dumps(body, default=str, ensure_ascii=False)}")
         raise ConnectionError("conformance: upstream is down")
 
 
