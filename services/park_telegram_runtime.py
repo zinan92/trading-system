@@ -96,8 +96,17 @@ def _default_cycle_id(now: str) -> str:
     return str(recording_window(now)["record_window_id"])
 
 
-def default_market_reader(*, output_root: Path | str | None = None) -> dict[str, Any]:
-    """Read one trusted market envelope without inventing a current price."""
+def default_market_reader(
+    *,
+    output_root: Path | str | None = None,
+    instrument: str | None = None,
+) -> dict[str, Any]:
+    """Read one trusted market envelope without inventing a current price.
+
+    ``instrument`` is a Paper instrument key (ADR 0009). Left out, it is the
+    running session's instrument when ``output_root`` is given, else gold.
+    Silver and crude read their own OKX bars; there is no fallback to gold.
+    """
 
     from services.datafeed_execution_market_client import (
         DatafeedExecutionMarketClient,
@@ -108,9 +117,16 @@ def default_market_reader(*, output_root: Path | str | None = None) -> dict[str,
     )
 
     from services.dualtrack_config import dualtrack_config
-    from services.paper_gold_venue import active_paper_gold_venue
+    from services.paper_gold_venue import PaperGoldVenueError
+    from services.paper_instruments import GOLD, active_instrument_key, market_identity
 
-    venue = active_paper_gold_venue(dualtrack_config())
+    key = instrument or (active_instrument_key(output_root) if output_root is not None else GOLD)
+    try:
+        venue = market_identity(key, dualtrack_config())
+    except PaperGoldVenueError as exc:
+        raise ParkTelegramRuntimeError("market_unavailable", f"{exc.code}: {exc}") from exc
+    # Gold reads the GOLD route exactly as before; silver and crude ask for their own symbol.
+    bars_symbol = None if key == GOLD else venue.instrument_symbol
     mode = market_source_mode()
     if mode in {"dual", "datafeed"}:
         client = DatafeedExecutionMarketClient()
@@ -139,7 +155,10 @@ def default_market_reader(*, output_root: Path | str | None = None) -> dict[str,
     try:
         from pipelines.dashboard_server import build_dualtrack_market_bars_response
 
-        source = dict(build_dualtrack_market_bars_response(timeframe="1m", limit=240))
+        if bars_symbol is None:
+            source = dict(build_dualtrack_market_bars_response(timeframe="1m", limit=240))
+        else:
+            source = dict(build_dualtrack_market_bars_response(symbol=bars_symbol, timeframe="1m", limit=240))
     except Exception as exc:  # noqa: BLE001 - turned into a typed worker blocker.
         raise ParkTelegramRuntimeError("market_unavailable", type(exc).__name__) from exc
     direct = {
@@ -153,6 +172,15 @@ def default_market_reader(*, output_root: Path | str | None = None) -> dict[str,
         "provider": str(source.get("provider") or ""),
         "raw_status": str(source.get("status") or ""),
     }
+    if bars_symbol is not None:
+        # The bars were asked for by symbol; an answer from another source is not this instrument's price.
+        if (
+            str(source.get("source_mode") or "") != venue.market_source
+            or str(source.get("provider_symbol") or "") != bars_symbol
+        ):
+            direct["trusted"] = False
+        direct["instrument_id"] = bars_symbol
+        direct["symbol"] = bars_symbol
     if mode == "dual":
         write_compare_receipt(
             output_root or os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", "outputs"),

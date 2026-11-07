@@ -22,6 +22,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from services.park_confirmation import ParkConfirmationLedger
+from services.paper_gold_venue import PaperGoldVenueError
+from services.paper_instruments import GOLD, require_instrument_key, session_instrument_key
 from services.park_cutover_guard import load_park_config_from_environment
 from services.park_strategy_plan import (
     ParkStrategyPlanError,
@@ -250,7 +252,10 @@ class ParkAiChatService:
         self.output_root = Path(output_root)
         self.park_user_id = _text(park_user_id, "park_user_id")
         self.provider = provider or ParkAiProviderGateway()
+        self._uses_default_market_reader = market_reader is None
         self.market_reader = market_reader or self._default_market_reader
+        # The draft's Paper instrument (ADR 0009); set per turn from the draft.
+        self._instrument = GOLD
         self._uses_default_account_reader = account_reader is None
         self.account_reader = account_reader or self._default_account_reader
         self.now = now or _utc_now
@@ -264,10 +269,31 @@ class ParkAiChatService:
         self._turn: dict[str, Any] = {}
 
     @_serialized
-    def handle_message(self, message: str, *, actor: str | None = None) -> dict[str, Any]:
-        """One chat turn. The reply carries `sources`: what this turn actually read (#1348)."""
+    def handle_message(
+        self,
+        message: str,
+        *,
+        actor: str | None = None,
+        paper_instrument: str | None = None,
+    ) -> dict[str, Any]:
+        """One chat turn. The reply carries `sources`: what this turn actually read (#1348).
+
+        ``paper_instrument`` names the instrument the draft is for (ADR 0009);
+        left out, a new draft is gold and a draft in progress keeps its own.
+        """
 
         self._turn = {}
+        draft = self._load_draft()
+        drafted = str((draft or {}).get("paper_instrument") or GOLD)
+        try:
+            self._instrument = require_instrument_key(paper_instrument or drafted)
+        except PaperGoldVenueError as exc:
+            raise ParkAiChatError(exc.code, str(exc)) from exc
+        if draft and self._instrument != drafted:
+            raise ParkAiChatError(
+                "paper_instrument_changed",
+                f"当前草稿是 {drafted}；先放弃这份草稿，再换成 {self._instrument}。",
+            )
         result = self._handle_message(message, actor=actor)
         if isinstance(result, dict):
             result = {**result, "sources": self._turn_sources()}
@@ -534,6 +560,7 @@ class ParkAiChatService:
     @_serialized
     def confirm(self, draft_id: str, plan_digest: str, *, actor: str | None = None) -> dict[str, Any]:
         draft = self._load_draft()
+        self._instrument = str((draft or {}).get("paper_instrument") or GOLD)
         if not draft or str(draft.get("draft_id")) != str(draft_id):
             existing = next(
                 (
@@ -577,6 +604,12 @@ class ParkAiChatService:
                 "portfolio_reconciliation_required",
                 "已有 orders/positions 尚未完成归属处理；系统不会静默切换执行身份。请先完成处置并重新确认。",
             )
+        if active and reverse_requested and session_instrument_key(active) != self._instrument:
+            # A Reverse keeps the running session's instrument; it cannot switch it.
+            return self._blocked(
+                "paper_instrument_differs_from_active",
+                "反向只能在当前品种上做；换品种要先结束当前这一轮。",
+            )
         if active and not reverse_requested:
             # The existing Paper runtime has one active execution identity.
             # A web draft may record the requested disposition, but it must
@@ -614,6 +647,7 @@ class ParkAiChatService:
                     pending_terminal_actions=bool(facts.get("pending_terminal_actions")),
                     strategy_session_id=session_id,
                     strategy_revision_id=revision_id,
+                    paper_instrument=self._instrument,
                 )
                 session_started = True
             _append_jsonl(self.output_root / "park_strategy" / "plans.jsonl", {"event": "plan_proposed", **plan, "created_at": self.now(), "source": "dashboard_ai"})
@@ -903,6 +937,9 @@ class ParkAiChatService:
             "open_positions": int(account.get("open_positions") or 0),
             "open_or_accepted_orders": int(account.get("open_or_accepted_orders") or 0),
         }
+        if self._instrument != GOLD:
+            # Gold plans keep their pre-#1406 shape and digest.
+            plan["paper_instrument"] = self._instrument
         plan["plan_digest"] = _digest(plan)
         return plan
 
@@ -953,7 +990,12 @@ class ParkAiChatService:
         return bool(positions or orders or active_positions or active_orders)
 
     def _read_context(self, active: Mapping[str, Any] | None) -> dict[str, Any]:
-        market = dict(self.market_reader() or {})
+        if self._uses_default_market_reader:
+            from services.park_telegram_runtime import default_market_reader
+
+            market = dict(default_market_reader(instrument=self._instrument) or {})
+        else:
+            market = dict(self.market_reader() or {})
         cycle = str(recording_window(self.now())["record_window_id"])
         if self._uses_default_account_reader:
             from services.park_telegram_runtime import default_account_reader
@@ -1016,6 +1058,7 @@ class ParkAiChatService:
             "provider": dict(provider),
             "requires_disposition": bool(active),
             "disposition": None,
+            "paper_instrument": self._instrument,
             "created_at": self.now(),
             "expires_at": self._time() + self.draft_ttl_seconds,
             "confirmable": False,

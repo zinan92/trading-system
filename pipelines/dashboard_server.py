@@ -1314,6 +1314,11 @@ def build_park_ai_chat_response(
     )
     actor_email = str((actor or {}).get("email") or "").strip() or None
     if action in {"message", "chat"}:
+        instrument = str(payload.get("paper_instrument") or "").strip()
+        if instrument:  # ADR 0009; a gold request carries no field and is unchanged
+            return service.handle_message(
+                str(payload.get("message") or ""), actor=actor_email, paper_instrument=instrument
+            )
         return service.handle_message(str(payload.get("message") or ""), actor=actor_email)
     if action == "confirm":
         return service.confirm(
