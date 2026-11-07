@@ -1,5 +1,23 @@
 # Decision Log
 
+# 2026-11-07 — How to add a venue: guide and a conforming template (#1381)
+
+## Decision
+
+- `docs/venues/README.md` covers the steps, the capability table, the fail-closed contract, what not to do, and the port direction.
+- `docs/venues/template_venue.py` is a read-only starting module: `live_price`, `bars`, `grid_plan`. Preview and execute refuse.
+  - `tests/test_venue_template.py` loads it from the docs path, builds it, and runs it through the conformance contract, so the template cannot rot.
+- ADR 0007's conformance sentence now matches the code: a static drop at build time, plus a CI gate. There is no runtime read-only downgrade.
+
+## Gotchas
+
+- The template lives in `docs/`, outside any package, so it can never be imported by accident. The test loads it by file path.
+
+## Verification
+
+- `tests/test_venue_template.py` 2. Desk suite green.
+- Production 065468e (#1380): `/api/desk/BTC` meta lists `stop` and `rearm_hold`, SILVER lists `bars` and `futures_overview`; served `gm-desk.js` has `can("stop")`; `/trade` loads with no failed requests and a clean console.
+
 # 2026-11-07 — The page reads venue capabilities (#1380)
 
 ## Decision

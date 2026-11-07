@@ -50,10 +50,18 @@ defaults, but it never owns the user's asset rows.
 `price_alerts`. A module without a capability does not get that flow. Execute
 is off unless declared.
 
-**Conformance is the entry ticket.** A conformance suite runs, parametrized,
-over every registered module. A module that declares `execute` and does not
-pass it is registered read-only. Because the suite is parametrized rather than
-a hand-kept list, a new module is covered automatically.
+**Conformance is the entry ticket.** Two gates, both real:
+- At registry build, a declared capability the module cannot back is dropped
+  and logged. For example, `execute` needs a preview, an execute, a started
+  text and `preview` declared.
+- The fail-closed conformance suite (`venues/conformance.py`) runs in CI,
+  parametrized over every registered module. A module that fails it does not
+  merge.
+
+There is no runtime downgrade to read-only: the suite needs fakes and is not
+run at import. Because the suite is parametrized rather than a hand-kept list,
+a new module is covered automatically. (Corrected in #1381; the first version
+said a failing module "is registered read-only".)
 
 ## Out of scope
 
