@@ -393,17 +393,29 @@ def _drafter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider=None, acc
     return service, asked
 
 
-def test_a_silver_draft_reads_silver_and_starts_a_silver_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    service, asked = _drafter(tmp_path, monkeypatch)
+SILVER_GRID = {"strategy_type": "grid", "upper_price_boundary": 54, "lower_price_boundary": 50, "stop_price": None,
+               "take_profit_price": None, "order_count": 4, "maximum_acceptable_loss": 100, "interpretation": "做空白银网格"}
 
-    draft = service.handle_message("做空白银 DCA，区间 54~50", paper_instrument="silver")
+
+def test_a_silver_draft_reads_silver_and_starts_a_silver_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                                 fetches: list[str]) -> None:
+    service, asked = _drafter(tmp_path, monkeypatch, provider=FakeProvider(_candidate(**SILVER_GRID)))
+
+    draft = service.handle_message("做空白银网格，区间 54~50，最多亏 100", paper_instrument="silver")
     assert draft["confirmable"] is True and set(asked) == {"silver"}
+    assert draft["draft"]["plan"]["risk"]["quantity_increment"] == "0.01"  # sized on silver's own increment (#1407)
     confirmed = service.confirm(draft["draft"]["draft_id"], draft["draft"]["plan_digest"])
 
     assert confirmed["status"] == "confirmed"
     assert service.identity.active_session()["paper_instrument"] == "silver"
     plan = json.loads((tmp_path / "outputs" / "park_strategy" / "plans.jsonl").read_text().splitlines()[-1])
     assert plan["paper_instrument"] == "silver"
+
+
+def test_silver_and_crude_draft_grid_plans_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fetches: list[str]) -> None:
+    service, _ = _drafter(tmp_path, monkeypatch)  # the default candidate is a DCA
+    refused = service.handle_message("做空白银 DCA，区间 54~50", paper_instrument="silver")
+    assert refused["confirmable"] is False and "paper_instrument_grid_only" in json.dumps(refused, ensure_ascii=False)
 
 
 def test_a_gold_draft_keeps_its_plan_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -426,11 +438,10 @@ def test_a_draft_cannot_change_instrument_halfway(tmp_path: Path, monkeypatch: p
     assert unknown.value.code == "paper_instrument_unknown"
 
 
-def test_a_reverse_cannot_switch_instrument(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_reverse_cannot_switch_instrument(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fetches: list[str]) -> None:
     service, _ = _drafter(
         tmp_path, monkeypatch,
-        provider=FakeProvider(_candidate(direction="long", upper_price_boundary=54, lower_price_boundary=50, stop_price=50,
-                                         take_profit_price=54)),
+        provider=FakeProvider(_candidate(**{**SILVER_GRID, "direction": "long"})),
         account=_account(positions=[{"position_id": "p", "trade_id": "t", "status": "open", "side": "short",
                                      "remaining_units": 1.0, "entry_price": 4250.0, "notional": 4250.0}]),
     )
@@ -440,7 +451,7 @@ def test_a_reverse_cannot_switch_instrument(tmp_path: Path, monkeypatch: pytest.
     plans = tmp_path / "outputs" / "park_strategy" / "plans.jsonl"
     plans.write_text(json.dumps({"event": "plan_proposed", "plan_digest": "sha256:" + "1" * 64,
                                  "normalized_input": {"direction": "short", "strategy_type": "dca"}}) + "\n")
-    service.handle_message("反转做多白银 DCA，区间 50~54，止损50，止盈54", paper_instrument="silver")
+    service.handle_message("反转做多白银网格，区间 50~54，最多亏 100", paper_instrument="silver")
     ready = service.handle_message("旧仓全部平仓，撤掉未成交挂单，保留止盈止损")
     assert ready["confirmable"] is True
 

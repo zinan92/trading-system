@@ -67,7 +67,7 @@ async function loadSystem() {
   $("#restore").textContent = `恢复方法：告诉执行员要恢复哪一项，或在终端运行 ${s.restore}`;
   $("#exec-log").innerHTML = s.executions.map(e => `<tr><td class="num">${new Date(e.created_at).toLocaleString("zh-CN", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"})}</td><td>${esc(e.asset)}</td><td>${STAGE[e.stage] || esc(e.stage)}</td><td>${esc(e.detail?.reason || e.detail?.message || (e.detail?.blockers || []).join("；") || (e.detail?.execution_ready ? `预览通过，最多亏 ${fmt(e.detail.max_loss)}` : e.detail?.status || ""))}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">还没有执行记录</td></tr>`;
   const assets = await loadAssets();
-  $("#asset-admin").innerHTML = assets.map(a => `<div class="admin-row" data-key="${esc(a.key)}"><b>${esc(a.label)} <span class="meta" style="font-weight:400;color:var(--ink-3)">${a.kind === "xau_paper" ? "纸面盘" : "测试盘"}</span></b>
+  $("#asset-admin").innerHTML = assets.map(a => `<div class="admin-row" data-key="${esc(a.key)}"><b>${esc(a.label)} <span class="meta" style="font-weight:400;color:var(--ink-3)">${["xau_paper", "xag_paper", "cl_paper"].includes(a.kind) ? "纸面盘" : "测试盘"}</span></b>
     <input value="${esc(a.news_queries.join(", "))}" aria-label="${esc(a.label)} 新闻关键词">
     <span class="acts"><button type="button" data-act="save">保存关键词</button><button type="button" class="danger" data-act="del">移除</button></span></div>`).join("");
   $("#asset-admin").querySelectorAll(".admin-row").forEach(row => {

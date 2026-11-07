@@ -608,9 +608,11 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         first = store.assets()[0]
         check("新闻（Intel 8001）", lambda: (lambda r: (r.get("ok", False), r.get("reason") or f"{len(r.get('items', []))} 条"))(sources.news(first)))
         check("交易后台（Dashboard 8765）", lambda: (lambda r: (bool(r.get("schema_version")), paper_status_text(r)))(http_json(f"{config.dashboard_url}/api/park-paper/read-model", None, timeout=10)))
+        seen_feeds: set[str] = set()  # silver and crude Paper share one OKX feed: one row, not two
         for kind in venues.having("bars_health"):
             feed = next((a for a in store.assets() if a["kind"] == kind), None)
-            if feed:
+            if feed and venues.get(kind).bars_health_label not in seen_feeds:
+                seen_feeds.add(venues.get(kind).bars_health_label)
                 check(venues.get(kind).bars_health_label, lambda feed=feed: (lambda r: (r["ok"], r.get("reason") or r.get("latest_timestamp")))(sources.bars(feed, "1h", 2)))
         coordinator = executor.coordinator()
         scheduler = _json_last(config.paper_output / "testnet_automation" / "scheduler" / "current.json")

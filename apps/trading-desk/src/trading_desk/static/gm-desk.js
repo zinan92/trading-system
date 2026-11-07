@@ -95,6 +95,8 @@ if (typeof document !== "undefined") (() => {
     const instrument = (profile?.instruments || []).find(i => i.asset === "XAU");
     return profile && instrument ? [profile.id, instrument.instrument_id] : null;
   };
+  // Paper grids (ADR 0009): gold, silver and crude; one runs at a time. All settle in USDT.
+  const PAPER_KINDS = new Set(["xau_paper", "xag_paper", "cl_paper"]);
   const D = {assets: [], asset: null, desk: null, steps: {}, switching: false};
   // The React islands get the asset through data-props; an unchanged value is not rewritten, so the
   // 2-second follow loop never re-renders (or resets) them.
@@ -226,7 +228,11 @@ if (typeof document !== "undefined") (() => {
   function selectionAsset() {
     const sel = window.dashboardControlState?.selection;
     if (!sel || !D.assets.length) return null;
-    if (String(sel.venue_profile_id || "").endsWith(".paper")) return D.assets.find(a => a.kind === "xau_paper") || null;
+    if (String(sel.venue_profile_id || "").endsWith(".paper")) {
+      // A Paper selection names its instrument (#1407): silver or crude by GridMind's catalog id, else gold.
+      return D.assets.find(a => a.paper_instrument_id && a.paper_instrument_id === sel.instrument_id)
+        || D.assets.find(a => a.kind === "xau_paper") || null;
+    }
     return D.assets.find(a => a.kind === "hl_testnet" && a.instrument_id === sel.instrument_id) || null;
   }
   function renderAssets() {
@@ -344,7 +350,7 @@ if (typeof document !== "undefined") (() => {
   function renderExec(judgmentId, preview, done) {
     const plan = $d("#deskExecBox"); plan.innerHTML = "";
     const box = document.createElement("div"); box.className = "desk-exec"; box.style.display = "grid"; box.style.gap = "7px";
-    const paper = D.desk?.meta?.kind === "xau_paper", unit = paper ? "USDT" : "USDC";
+    const paper = PAPER_KINDS.has(D.desk?.meta?.kind), unit = paper ? "USDT" : "USDC";
     if (done) {
       const txt = {executed: paper ? "已执行：计划已确认，纸面盘约 1 分钟内挂单。" : "已执行：网格已挂上测试盘。", execute_started: "执行中或上次中断，请到系统页查看记录。", execute_failed: "上次执行没有完成，请到系统页查看记录。", refused: `上次执行被拒绝：${done.detail?.reason || ""}`}[done.stage];
       box.innerHTML = `<p class="note">${escD(txt)}</p>${done.stage === "executed" ? "" : whyIsland(judgmentId)}`; plan.appendChild(box); syncSteps(); return;

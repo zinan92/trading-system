@@ -214,17 +214,26 @@ def test_nautilus_builds_an_okx_instrument_without_min_notional_or_max_price() -
 # ---- Dashboard venue profile -------------------------------------------------
 
 
-def test_dashboard_offers_the_configured_paper_venue_only(tmp_path) -> None:
+def test_dashboard_offers_the_configured_paper_venue_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import services.dashboard_control_plane as plane
     from services.dashboard_control_plane import DashboardControlPlane
 
+    def no_datafeed(**_kwargs) -> dict:
+        raise RuntimeError("tests never read a real datafeed")
+
+    monkeypatch.setattr(plane, "_paper_swap_fetch", no_datafeed)
+    monkeypatch.setattr(plane, "_paper_swap_cache", {})
     catalog = DashboardControlPlane(tmp_path).catalog()
     paper = [row for row in catalog["venue_profiles"] if row["environment"] == "paper"]
     assert [row["id"] for row in paper] == ["okx.paper"]
     assert paper[0]["label"] == "OKX Paper"
-    assert [row["instrument_id"] for row in paper[0]["instruments"]] == ["XAU-USDT-SWAP.OKX"]
+    # Silver and crude (#1407) list as blocked when their definition cannot be read.
+    rows = {row["instrument_id"]: row for row in paper[0]["instruments"]}
+    assert set(rows) == {"XAU-USDT-SWAP.OKX", "XAG-USDT-SWAP.OKX", "CL-USDT-SWAP.OKX"}
+    assert rows["XAG-USDT-SWAP.OKX"]["eligibility"] == rows["CL-USDT-SWAP.OKX"]["eligibility"] == "blocked"
     # Previews for okx.paper must be built on OKX's tick, not Binance's.
-    assert paper[0]["instruments"][0]["price_decimals"] == 1
-    assert paper[0]["instruments"][0]["size_decimals"] == 3
+    assert rows["XAU-USDT-SWAP.OKX"]["price_decimals"] == 1
+    assert rows["XAU-USDT-SWAP.OKX"]["size_decimals"] == 3
     assert paper[0]["paper_gold_venue"]["fee_verified"] is False
 
 

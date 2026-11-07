@@ -501,102 +501,85 @@
    "grid": {
     "none": true,
     "ok": false,
-    "reason": "白银只有 OKX 公开行情，还没有纸面盘，只记判断和复盘。"
+    "price": null,
+    "reason": "纸面盘正在跑黄金网格，一次只跑一个；白银现在没有网格。"
    },
    "meta": {
     "capabilities": [
      "bars",
-     "bars_health"
+     "bars_health",
+     "execute",
+     "grid_plan",
+     "live_price",
+     "preview"
     ],
-    "kind": "okx_public",
+    "kind": "xag_paper",
     "label": "白银",
-    "money": "只记判断",
+    "money": "纸面模拟 · 手续费未核实",
     "reading_note": "K 线日报看的是期货合约；这里的价格和 K 线是 OKX 永续，两者有价差。",
-    "venue": "OKX XAG-USDT-SWAP 公开行情"
+    "venue": "OKX XAG-USDT-SWAP · 纸面盘"
    },
    "price": null
   },
   "driver_calls": 0,
   "execute": {
    "detail": {},
-   "refused": "这个品种暂不支持从交易台执行，只能记录判断。"
+   "refused": "纸面盘已经有黄金网格在跑，一次只跑一个。"
   },
   "execute_idle": {
    "detail": {},
-   "refused": "这个品种暂不支持从交易台执行，只能记录判断。"
+   "refused": "纸面盘已经有黄金网格在跑，一次只跑一个。"
   },
-  "kind": "okx_public",
+  "kind": "xag_paper",
   "plan": {
    "flat": {
     "direction": "flat",
-    "kind": "record_only",
+    "kind": "hold",
     "lines": [
      [
-      "现价",
-      "读不到"
+      "现有网格",
+      "当前没有运行中的网格"
      ],
      [
-      "下单",
-      "这个品种还没有可以下单的交易所"
+      "挂单",
+      "无"
      ]
     ],
-    "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。",
-    "title": "观望 · 只记判断"
+    "note": "想更保守，可以在批准时写明「撤掉现有网格」，由执行员按流程停止。",
+    "title": "观望 · 不开新单"
    },
    "long": {
     "direction": "long",
-    "kind": "record_only",
-    "lines": [
-     [
-      "现价",
-      "读不到"
-     ],
-     [
-      "下单",
-      "这个品种还没有可以下单的交易所"
-     ]
-    ],
-    "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。",
-    "title": "做多 · 只记判断"
+    "kind": "unavailable",
+    "lines": [],
+    "note": "行情恢复后重新点一次方向。",
+    "title": "现价读不到，暂时生成不了计划"
    },
    "short": {
     "direction": "short",
-    "kind": "record_only",
-    "lines": [
-     [
-      "现价",
-      "读不到"
-     ],
-     [
-      "下单",
-      "这个品种还没有可以下单的交易所"
-     ]
-    ],
-    "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。",
-    "title": "做空 · 只记判断"
+    "kind": "unavailable",
+    "lines": [],
+    "note": "行情恢复后重新点一次方向。",
+    "title": "现价读不到，暂时生成不了计划"
    }
   },
   "plan_without_price": {
    "direction": "long",
-   "kind": "record_only",
-   "lines": [
-    [
-     "现价",
-     "读不到"
-    ],
-    [
-     "下单",
-     "这个品种还没有可以下单的交易所"
-    ]
-   ],
-   "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。",
-   "title": "做多 · 只记判断"
+   "kind": "unavailable",
+   "lines": [],
+   "note": "行情恢复后重新点一次方向。",
+   "title": "现价读不到，暂时生成不了计划"
   },
   "preview": {
    "detail": {},
-   "refused": "这个品种暂不支持从交易台执行，只能记录判断。"
+   "refused": "纸面盘已经有黄金网格在跑，一次只跑一个。"
   },
-  "preview_calls": [],
+  "preview_calls": [
+   [
+    "<dash>/api/park-paper/read-model",
+    null
+   ]
+  ],
   "rearm": [
    409,
    "暂停补单目前只支持测试盘网格"
@@ -605,7 +588,8 @@
    "grid": {
     "none": true,
     "ok": false,
-    "reason": "白银只有 OKX 公开行情，还没有纸面盘，只记判断和复盘。"
+    "price": null,
+    "reason": "纸面盘正在跑黄金网格，一次只跑一个；白银现在没有网格。"
    },
    "price": null,
    "price_source": "none"
@@ -616,7 +600,7 @@
     "detail": "这个品种现在没有在测试盘跑网格"
    }
   ],
-  "template": false
+  "template": true
  },
  "XAU": {
   "bars": {
@@ -1114,11 +1098,15 @@
    {
     "capabilities": [
      "bars",
-     "bars_health"
+     "bars_health",
+     "execute",
+     "grid_plan",
+     "live_price",
+     "preview"
     ],
     "instrument_id": "XAG-USDT-SWAP",
     "key": "SILVER",
-    "kind": "okx_public",
+    "kind": "xag_paper",
     "label": "白银",
     "news_queries": [
      "白银",
@@ -1127,16 +1115,21 @@
      "美联储",
      "美元"
     ],
+    "paper_instrument_id": "",
     "venue_profile_id": ""
    },
    {
     "capabilities": [
      "bars",
-     "bars_health"
+     "bars_health",
+     "execute",
+     "grid_plan",
+     "live_price",
+     "preview"
     ],
     "instrument_id": "CL-USDT-SWAP",
     "key": "WTI",
-    "kind": "okx_public",
+    "kind": "cl_paper",
     "label": "原油",
     "news_queries": [
      "原油",
@@ -1145,6 +1138,7 @@
      "霍尔木兹",
      "中东"
     ],
+    "paper_instrument_id": "",
     "venue_profile_id": ""
    }
   ]

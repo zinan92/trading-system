@@ -635,12 +635,12 @@ def test_v4_assets_are_seeded_once_and_old_databases_accept_judgment_only_assets
     fetch.routes["/api/candles/commodity/XAG-USDT-SWAP"] = okx_candles("XAG-USDT-SWAP", [41.0, 41.2])
     sources = Sources(config, fetch=fetch)
     silver = store.asset("SILVER")
-    assert silver["kind"] == "okx_public" and silver["instrument_id"] == "XAG-USDT-SWAP"  # seeded on OKX since #1387
+    assert silver["kind"] == "xag_paper" and silver["instrument_id"] == "XAG-USDT-SWAP"  # seeded on OKX since #1387, Paper since #1407
     assert sources.bars(silver, "1h")["bars"][-1][4] == 41.2
     from tests.test_desk import client_for
     client, _ = client_for(config, sources, Store(config.db_path), fetch)
     plan = client.post("/api/plan", json={"asset": "SILVER", "direction": "short"}).json()
-    assert plan["kind"] == "record_only" and "只记判断" in plan["title"]
+    assert plan["kind"] == "new" and plan["lines"][1] == ["卖单", "10 张 × 15 盎司"]  # a Paper grid plan since #1407; preview still gates it
     saved = client.post("/api/judgments", json={"asset": "SILVER", "direction": "short", "confidence": 3, "action": "recorded"}).json()
     assert saved["price_at"] == 41.2
     assert client.get("/api/desk/SILVER").json()["grid"]["ok"] is False

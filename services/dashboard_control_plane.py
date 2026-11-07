@@ -238,6 +238,67 @@ def _normalise_instrument(row: Mapping[str, Any], *, profile_id: str) -> dict[st
     }
 
 
+_PAPER_SWAP_TTL_SECONDS = 300.0
+_PAPER_SWAP_BLOCKED_TTL_SECONDS = 30.0  # a down datafeed is asked again soon, not on every catalog read
+_paper_swap_cache: dict[str, tuple[float, float, dict[str, Any]]] = {}
+
+
+def _paper_swap_definition(**kwargs: Any) -> Mapping[str, Any]:
+    """The datafeed definition with a short timeout: a hung datafeed costs the catalog seconds, not 16."""
+    from services.dualtrack_instrument_source import fetch_execution_instrument_definition
+
+    return fetch_execution_instrument_definition(**kwargs, timeout_seconds=2.0)
+
+
+# The definition reader. Tests set a fake so the catalog never calls a real 8100.
+_paper_swap_fetch: Any = _paper_swap_definition
+
+
+def _paper_swap_rows(profile_id: str) -> list[dict[str, Any]]:
+    """Silver and crude on Paper (ADR 0009), listed under the OKX Paper profile only.
+
+    Their specs come from the datafeed's definition, cached for five minutes so
+    the catalog stays fast. An unreadable definition lists the instrument as
+    blocked, never with guessed specs; a blocked row is asked again after 30 s.
+    """
+
+    import time
+
+    from services.dualtrack_config import dualtrack_config
+    from services.paper_gold_venue import PROFILES, PaperGoldVenueError
+    from services.paper_instruments import OKX_SWAPS, resolve_paper_instrument
+
+    if profile_id != PROFILES["okx"].venue_profile_id:
+        return []
+    rows: list[dict[str, Any]] = []
+    for key, (asset, symbol) in OKX_SWAPS.items():
+        cached = _paper_swap_cache.get(key)
+        if cached and time.monotonic() - cached[0] < cached[1]:
+            rows.append(dict(cached[2]))
+            continue
+        try:
+            venue = resolve_paper_instrument(key, dualtrack_config(), fetch=_paper_swap_fetch)
+        except Exception as exc:  # noqa: BLE001 - any failure lists the instrument as blocked; the catalog still loads
+            code = exc.code if isinstance(exc, PaperGoldVenueError) else "paper_instrument_unavailable"
+            blocked = {"instrument_id": f"{symbol}.OKX", "asset": asset, "eligibility": "blocked", "blockers": [code],
+                       "market_fresh": None}
+            _paper_swap_cache[key] = (time.monotonic(), _PAPER_SWAP_BLOCKED_TTL_SECONDS, blocked)
+            rows.append(dict(blocked))
+            continue
+        row = {
+            "instrument_id": venue.execution_market_instrument_id,
+            "asset": asset,
+            "price_decimals": int(venue.contract["price_precision"]),
+            "size_decimals": int(venue.contract["quantity_precision"]),
+            "price_increment": str(venue.contract["price_increment"]),
+            "eligibility": "eligible",
+            "market_fresh": None,
+        }
+        _paper_swap_cache[key] = (time.monotonic(), _PAPER_SWAP_TTL_SECONDS, row)
+        rows.append(dict(row))
+    return rows
+
+
 def _default_catalog_loader(profile_id: str) -> Iterable[Mapping[str, Any]]:
     from services.dualtrack_config import dualtrack_config
     from services.paper_gold_venue import active_paper_gold_venue
@@ -254,6 +315,7 @@ def _default_catalog_loader(profile_id: str) -> Iterable[Mapping[str, Any]]:
                 "eligibility": "eligible",
                 "market_fresh": None,
             },
+            *_paper_swap_rows(profile_id),
         )
     if profile_id == "hyperliquid.testnet":
         # The public reader can replace this seed with the complete meta

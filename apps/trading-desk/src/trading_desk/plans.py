@@ -51,7 +51,7 @@ def build_plan(venue: VenueModule | str, direction: str, price: float | None, gr
             "lines": [["区间", f"{_fmt(grid.get('lower'))} – {_fmt(grid.get('upper'))}"], ["硬止损", _fmt(stop)], ["最多亏", f"{float(loss):,.2f} {tpl['unit']}"]],
             "note": "方向和正在跑的网格一致，不需要改动。" + ("现价在区间上方，买单挂着等回落。" if direction == "long" and grid.get("upper") and price > float(grid["upper"]) else ""),
         }
-    tick = _tick_for(price)
+    tick = tpl.get("tick") or _tick_for(price)
     width = price * tpl["range_pct"]
     above = tpl.get("beyond_price", 0.0)  # share of the range on the far side of the price (the paper engine needs some)
     if direction == "long":
@@ -64,7 +64,7 @@ def build_plan(venue: VenueModule | str, direction: str, price: float | None, gr
     rungs = sorted(_tick(lower + step * i if direction == "long" else upper - step * i, tick) for i in range(tpl["rungs"]))
     stop = _tick(stop, tick)
     loss = max_loss(kind, rungs, stop, notional=tpl.get("notional"), units=tpl.get("units"))
-    size = f"{tpl['notional']:.0f} USDC" if "notional" in tpl else f"{tpl['units']} 盎司"
+    size = f"{tpl['notional']:.0f} USDC" if "notional" in tpl else f"{tpl['units']} {tpl.get('size_unit', '盎司')}"
     replace_note = "会先停掉正在跑的反方向网格，两个方向不同时开。" if running else ""
     return {
         "kind": "new", "title": f"{'做多' if direction == 'long' else '做空'}网格 · 新参数，需要你批准", "direction": direction,
