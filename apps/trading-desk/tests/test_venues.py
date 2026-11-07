@@ -11,7 +11,8 @@ class Bare(VenueModule):
 
 
 def test_the_default_registry_declares_what_each_kind_did_before() -> None:
-    assert DEFAULT.kinds() == ("hl_testnet", "xau_paper", "watch")
+    assert DEFAULT.kinds() == ("hl_testnet", "xau_paper", "watch", "okx_public")
+    assert DEFAULT.having("bars_health") == ("hl_testnet", "okx_public")
     assert DEFAULT.having("execute") == ("hl_testnet", "xau_paper")
     assert DEFAULT.having("stop") == DEFAULT.having("rearm_hold") == DEFAULT.having("price_alerts") == ("hl_testnet",)
     assert DEFAULT.having("grid_plan") == ("hl_testnet", "xau_paper")

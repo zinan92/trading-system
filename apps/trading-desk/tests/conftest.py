@@ -103,3 +103,12 @@ def btc(store: Store) -> dict:
 @pytest.fixture
 def xau(store: Store) -> dict:
     return store.asset("XAU")
+
+
+def okx_candles(instrument: str, closes: list[float], *, hours_old: float = 0.0, step_hours: int = 1) -> dict:
+    """A datafeed 8100 reply for an OKX swap (#1387), the newest candle opening ``hours_old`` before this hour."""
+    from datetime import datetime, timedelta, timezone
+    newest = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) - timedelta(hours=hours_old)
+    stamps = [newest - timedelta(hours=step_hours * i) for i in reversed(range(len(closes)))]
+    return {"selected_source": "okx_swap_public", "provider_symbol": instrument, "is_synthetic": False,
+            "candles": [{"timestamp": s.isoformat(), "open": c, "high": c, "low": c, "close": c} for s, c in zip(stamps, closes)]}

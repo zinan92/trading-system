@@ -219,7 +219,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         }
         venue = venues.of(asset).venue_text(sources, asset)
         return {"asset": asset["key"], "meta": {"label": asset["label"], "venue": venue[0], "money": venue[1], "kind": asset["kind"],
-                                                  "capabilities": sorted(venues.of(asset).capabilities)},
+                                                  "capabilities": sorted(venues.of(asset).capabilities), "reading_note": venues.of(asset).reading_note},
                 "price": state["price"], "grid": grid, "today_judgment": latest, "steps": steps,
                 "notes": store.notes(asset["key"], limit=10), "executions": runs, "kline": sources.kline_view(asset),
                 "news_queries": asset["news_queries"], "control": {**_grid_control(asset, executor.coordinator(), venues.of(asset)), "rearm_paused": _hold_state(config, asset, venues.of(asset))},

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from .base import CAPABILITIES, Registry, VenueModule, build
 from .hyperliquid_testnet import HyperliquidTestnet
+from .okx_public import OkxPublic
 from .paper_gold import PaperGold
 from .watch_only import WatchOnly
 
-DEFAULT = build(HyperliquidTestnet(), PaperGold(), WatchOnly())
+DEFAULT = build(HyperliquidTestnet(), PaperGold(), WatchOnly(), OkxPublic())
 
 __all__ = ["CAPABILITIES", "DEFAULT", "Registry", "VenueModule", "build"]

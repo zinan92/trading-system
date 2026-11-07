@@ -1,5 +1,40 @@
 # Decision Log
 
+# 2026-11-07 — Silver and WTI read OKX public swaps (#1387)
+
+## Decision
+
+- New Desk Venue Module `okx_public`. It declares `bars` and `bars_health` only. No `live_price`, `grid_plan`, `preview` or `execute`, so plans stay record-only.
+  - `current_state` labels the price `bars_1h`: the newest 1-hour close, which is the forming hour.
+- `Sources.okx_bars` reads datafeed 8100 `/api/candles/commodity/{instrument}?source=okx_swap_public`. It fails closed in each of these cases:
+  - the reply names another source or symbol, or is synthetic;
+  - the newest candle is older than two periods;
+  - no fallback to futures candles.
+- `watch` is unchanged. Changing it would have moved every watch asset to a different instrument without saying so.
+- The store moves SILVER and WTI to `okx_public` with the OKX instrument. It moves only a row that is still exactly as seeded (`kind='watch'` and instrument `SIL`/`CL`). One transaction, idempotent.
+- `asset_sources` keeps the kind and instrument an asset had, with the moment it stopped. `review.resolve_due` scores a call on the feed its price was read from (`Store.source_at`).
+- Module attribute `reading_note`, shown under the K-line daily, says the daily reads futures while the price is the OKX swap.
+
+## Gotchas
+
+- Production had 12 open AI calls each on SILVER and WTI, recorded at futures prices. Without `asset_sources` they would have been scored against OKX closes. CL futures and the CL swap differ by more than the hit band on some days.
+- Calls recorded before the move still read futures candles. The 20-minute job no longer refreshes the futures overview for these assets: `futures_overview` is not declared. Old calls therefore resolve after the morning brief refreshes it, up to a day late. They are not mis-scored.
+- 8100 answers from its cache under `cache_policy=allow`. Freshness is judged on the newest candle time, not on the reply's own `fresh` flag.
+- The characterization snapshot changed only on the SILVER and WTI rows, the new system check and `reading_note`.
+
+## Verification
+
+- `tests/test_okx_public.py` (7 tests):
+  - the source and URL;
+  - stale refused;
+  - another source, symbol or synthetic refused;
+  - the desk shows the OKX price and stays record-only with no driver call;
+  - an older database moves once and remembers the futures feed;
+  - a changed row is not moved;
+  - a pre-move call is scored on futures and a post-move one on OKX. This test fails without the `review.py` change.
+- Conformance covers `okx_public` automatically: the seeded SILVER row is used with a dead upstream.
+- Desk 249, vitest 145, tsc clean, browser 7.
+
 # 2026-11-07 — How to add a venue: guide and a conforming template (#1381)
 
 ## Decision
@@ -17,6 +52,7 @@
 
 - `tests/test_venue_template.py` 2. Desk suite green.
 - Production 065468e (#1380): `/api/desk/BTC` meta lists `stop` and `rearm_hold`, SILVER lists `bars` and `futures_overview`; served `gm-desk.js` has `can("stop")`; `/trade` loads with no failed requests and a clean console.
+
 
 # 2026-11-07 — The page reads venue capabilities (#1380)
 

@@ -260,6 +260,7 @@
     "kind": "hl_testnet",
     "label": "BTC",
     "money": "测试盘（假钱）",
+    "reading_note": "",
     "venue": "Hyperliquid Testnet"
    },
    "price": 77862.5
@@ -480,13 +481,13 @@
     "bars": [],
     "ok": false,
     "reason": "K 线读取失败：ConnectionError",
-    "source": "期货 K 线（K 线日报同一数据源，可能延迟）"
+    "source": "OKX XAG-USDT-SWAP 永续公开行情（datafeed）"
    },
    "4h": {
     "bars": [],
     "ok": false,
     "reason": "K 线读取失败：ConnectionError",
-    "source": "期货 K 线（K 线日报同一数据源，可能延迟）"
+    "source": "OKX XAG-USDT-SWAP 永续公开行情（datafeed）"
    }
   },
   "desk": {
@@ -500,17 +501,18 @@
    "grid": {
     "none": true,
     "ok": false,
-    "reason": "白银只记判断和复盘，还没有可以下单的交易所。"
+    "reason": "白银只有 OKX 公开行情，还没有纸面盘，只记判断和复盘。"
    },
    "meta": {
     "capabilities": [
      "bars",
-     "futures_overview"
+     "bars_health"
     ],
-    "kind": "watch",
+    "kind": "okx_public",
     "label": "白银",
     "money": "只记判断",
-    "venue": "期货行情"
+    "reading_note": "K 线日报看的是期货合约；这里的价格和 K 线是 OKX 永续，两者有价差。",
+    "venue": "OKX XAG-USDT-SWAP 公开行情"
    },
    "price": null
   },
@@ -523,7 +525,7 @@
    "detail": {},
    "refused": "这个品种暂不支持从交易台执行，只能记录判断。"
   },
-  "kind": "watch",
+  "kind": "okx_public",
   "plan": {
    "flat": {
     "direction": "flat",
@@ -603,7 +605,7 @@
    "grid": {
     "none": true,
     "ok": false,
-    "reason": "白银只记判断和复盘，还没有可以下单的交易所。"
+    "reason": "白银只有 OKX 公开行情，还没有纸面盘，只记判断和复盘。"
    },
    "price": null,
    "price_source": "none"
@@ -869,6 +871,7 @@
     "kind": "xau_paper",
     "label": "黄金",
     "money": "纸面模拟",
+    "reading_note": "",
     "venue": "OKX Paper · 纸面盘"
    },
    "price": 4322.16
@@ -1111,11 +1114,11 @@
    {
     "capabilities": [
      "bars",
-     "futures_overview"
+     "bars_health"
     ],
-    "instrument_id": "SIL",
+    "instrument_id": "XAG-USDT-SWAP",
     "key": "SILVER",
-    "kind": "watch",
+    "kind": "okx_public",
     "label": "白银",
     "news_queries": [
      "白银",
@@ -1129,11 +1132,11 @@
    {
     "capabilities": [
      "bars",
-     "futures_overview"
+     "bars_health"
     ],
-    "instrument_id": "CL",
+    "instrument_id": "CL-USDT-SWAP",
     "key": "WTI",
-    "kind": "watch",
+    "kind": "okx_public",
     "label": "原油",
     "news_queries": [
      "原油",
@@ -1158,6 +1161,10 @@
   [
    "测试盘 K 线（Hyperliquid）",
    true
+  ],
+  [
+   "OKX 公开行情（白银、原油 · datafeed 8100）",
+   false
   ],
   [
    "测试盘调度器",
