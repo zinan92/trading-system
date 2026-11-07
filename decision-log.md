@@ -221,6 +221,9 @@
 - The desk's own plan estimate (for example silver 10 × 15 oz) is a display. The bound is the drafter's floored plan.
 - GridMind's own Paper picker still cannot start silver or crude: it has no market facts (`market_facts_required`).
   The desk is the entry.
+- Rung prices are not on the tick (silver 51.1633…); the adapter rounds each price. That can move the full-depth
+  loss by up to half a tick times the quantity per rung, so the floor's margin is not a guarantee against price
+  rounding. Gold has had the same behaviour since before this change.
 - Rollback needs the desk.db backup too: code from before #1407 has no `xag_paper` / `cl_paper` module and refuses
   those kinds, so rolling back the code alone breaks the SILVER and WTI rows.
 - The catalog's definition read times out after 2 s (the reader's default is 8 s), so a hung datafeed costs a catalog
@@ -234,6 +237,12 @@
   drafter tests now use Grid candidates). A probe that fails any real datafeed definition read logged nothing.
 - GridMind browser set: 176 passed; node tests pass (1 new: a Paper silver selection focuses silver; gold is
   the fallback). `tests/fixtures/gridmind_control_wire.json` is unchanged.
+- Real Nautilus replay on dev (isolated output root, live dev datafeed read only, commit 9076b2c). Each plan was built
+  by `build_deterministic_risk_plan` with the instrument's increment; one rung order was then sent at the plan's
+  quantity:
+  - crude at 90.05: 5 rungs, stop 87.35, cap 50.2. Plan 3.7 a rung (max loss 49.95); requested 3.7, filled 3.7.
+  - silver at 52.21: increment 0.01, cap 100. Plan 12.73 (max loss 99.93); requested 12.73, filled 12.73.
+  This proves that plan → adapter passes the floored quantity unchanged. It is one rung, not a full grid run to the stop.
 - Production: VERIFY_PROD
 
 # 2026-11-07 — Paper takes its instrument from the Strategy Session (#1406)
