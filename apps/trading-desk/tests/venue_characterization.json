@@ -246,6 +246,17 @@
     "upper": 76816.5
    },
    "meta": {
+    "capabilities": [
+     "bars",
+     "bars_health",
+     "execute",
+     "grid_plan",
+     "live_price",
+     "preview",
+     "price_alerts",
+     "rearm_hold",
+     "stop"
+    ],
     "kind": "hl_testnet",
     "label": "BTC",
     "money": "测试盘（假钱）",
@@ -492,6 +503,10 @@
     "reason": "白银只记判断和复盘，还没有可以下单的交易所。"
    },
    "meta": {
+    "capabilities": [
+     "bars",
+     "futures_overview"
+    ],
     "kind": "watch",
     "label": "白银",
     "money": "只记判断",
@@ -844,6 +859,13 @@
     "upper": 4500.0
    },
    "meta": {
+    "capabilities": [
+     "bars",
+     "execute",
+     "grid_plan",
+     "live_price",
+     "preview"
+    ],
     "kind": "xau_paper",
     "label": "黄金",
     "money": "纸面模拟",
@@ -1008,6 +1030,17 @@
  "assets": {
   "assets": [
    {
+    "capabilities": [
+     "bars",
+     "bars_health",
+     "execute",
+     "grid_plan",
+     "live_price",
+     "preview",
+     "price_alerts",
+     "rearm_hold",
+     "stop"
+    ],
     "instrument_id": "BTC-USD-PERP",
     "key": "BTC",
     "kind": "hl_testnet",
@@ -1025,6 +1058,13 @@
     "venue_profile_id": "hyperliquid.testnet"
    },
    {
+    "capabilities": [
+     "bars",
+     "execute",
+     "grid_plan",
+     "live_price",
+     "preview"
+    ],
     "instrument_id": "XAU-USDT-SWAP.OKX",
     "key": "XAU",
     "kind": "xau_paper",
@@ -1043,6 +1083,17 @@
     "venue_profile_id": "okx.paper"
    },
    {
+    "capabilities": [
+     "bars",
+     "bars_health",
+     "execute",
+     "grid_plan",
+     "live_price",
+     "preview",
+     "price_alerts",
+     "rearm_hold",
+     "stop"
+    ],
     "instrument_id": "ETH-USD-PERP",
     "key": "ETH",
     "kind": "hl_testnet",
@@ -1058,6 +1109,10 @@
     "venue_profile_id": "hyperliquid.testnet"
    },
    {
+    "capabilities": [
+     "bars",
+     "futures_overview"
+    ],
     "instrument_id": "SIL",
     "key": "SILVER",
     "kind": "watch",
@@ -1072,6 +1127,10 @@
     "venue_profile_id": ""
    },
    {
+    "capabilities": [
+     "bars",
+     "futures_overview"
+    ],
     "instrument_id": "CL",
     "key": "WTI",
     "kind": "watch",

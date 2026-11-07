@@ -3,7 +3,7 @@
 
 export type Direction = "long" | "flat" | "short";
 export interface Cite {id?: string | number | null; title: string; bucket?: string}
-export interface Asset {key: string; label: string; kind?: string; instrument_id?: string}
+export interface Asset {key: string; label: string; kind?: string; instrument_id?: string; capabilities?: string[]}
 
 export interface Plan {
   kind: "keep" | "new" | "hold" | "unavailable" | "record_only" | string;

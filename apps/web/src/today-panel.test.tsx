@@ -221,3 +221,12 @@ test("a reload keeps the adopted id of today's judgment", async () => {
   render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
   expect(await screen.findByText("这次判断照的是这条 AI 建议")).toBeTruthy();
 });
+
+// #1380: a chip's hint follows the venue's declared capabilities.
+test("a chip's hint reads the capabilities, not the kind", () => {
+  serve({"GET /api/desk/XAU": () => ({kline: null, executions: []})});
+  const assets = [{key: "XAU", label: "黄金"}, {key: "NEW", label: "新", kind: "anything", capabilities: ["grid_plan"]}, {key: "OLD", label: "旧", kind: "hl_testnet", capabilities: []}];
+  render(<TodayPanel asset="XAU" assets={assets} gridmind={["XAU"]} />);
+  expect(screen.getByRole("button", {name: "新"}).title).toBe("测试盘，下单尚未开通");
+  expect(screen.getByRole("button", {name: "旧"}).title).toBe("只记判断和复盘");
+});

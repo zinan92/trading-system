@@ -91,7 +91,7 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers:
 
 def _desk(**overrides) -> dict:
     desk = {"kline": {"ok": True, "structure": "日线偏多", "synthesis": "比特币修复。"}, "today_judgment": None, "executions": [],
-            "ai_today": None, "ai_running": False, "control": {"can_stop": False}, "meta": {"kind": "hl_testnet"}}
+            "ai_today": None, "ai_running": False, "control": {"can_stop": False}, "meta": {"kind": "hl_testnet", "capabilities": ["bars", "bars_health", "execute", "grid_plan", "live_price", "preview", "price_alerts", "rearm_hold", "stop"]}}
     desk.update(overrides)
     return desk
 
@@ -147,6 +147,28 @@ def test_a_running_grid_keeps_its_stop_button_in_step_three() -> None:
         browser, page = _page(runtime, origin, _desk(control={"can_stop": True, "rearm_paused": False}), [], [])
         page.locator("#deskStopBtn").wait_for()
         assert page.locator("#deskHoldBtn").inner_text() == "暂停补单"
+        browser.close()
+
+
+# ---- #1380: the stop and hold buttons follow the venue's declared capabilities, not its kind ------
+def test_without_the_stop_capability_there_is_no_stop_button() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        desk = _desk(control={"can_stop": True, "rearm_paused": False}, meta={"kind": "hl_testnet", "capabilities": ["bars", "grid_plan", "preview"]})
+        browser, page = _page(runtime, origin, desk, [], [])
+        page.locator("#deskJudgeTitle", has_text="今天 · BTC").wait_for()
+        page.wait_for_timeout(300)
+        assert page.locator("#deskStopBtn").count() == 0 and page.locator("#deskHoldBtn").count() == 0
+        browser.close()
+
+
+def test_stop_without_rearm_hold_shows_only_stop() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        desk = _desk(control={"can_stop": True, "rearm_paused": False}, meta={"kind": "anything", "capabilities": ["stop"]})
+        browser, page = _page(runtime, origin, desk, [], [])
+        page.locator("#deskStopBtn").wait_for()
+        assert page.locator("#deskHoldBtn").count() == 0
         browser.close()
 
 

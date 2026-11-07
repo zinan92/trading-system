@@ -203,7 +203,7 @@ if (typeof document !== "undefined") (() => {
       if (banner.action.kind === "start") reveal($d(".desk-dir [data-d]"));
       else if (banner.action.kind === "details") reveal($d("#deskSystem summary"), $d("#deskSystem"));
       // Stop is never pressed for Park: this only takes him to the existing stop button.
-      else if (D.desk?.meta?.kind === "hl_testnet" && $d("#deskStopBtn")) reveal($d("#deskStopBtn"));
+      else if (can("stop") && $d("#deskStopBtn")) reveal($d("#deskStopBtn"));
       else reveal($d("#stopRobot"), $d("#deskManual"));
     };
     const note = $d("#deskRetired");
@@ -303,17 +303,19 @@ if (typeof document !== "undefined") (() => {
     D.steps = event.detail; syncSteps();
   });
   const reloadToday = () => window.dispatchEvent(new Event("desk:reload"));
+  // What this asset's venue module declared it can do (ADR 0007); the page never decides by the kind's name.
+  function can(capability) { return (D.desk?.meta?.capabilities || []).includes(capability); }
 
   function renderStop(c) {
     const box = $d("#deskStop");
-    if (!c || D.desk?.meta?.kind !== "hl_testnet") { box.innerHTML = ""; return; }
+    if (!c || !can("stop")) { box.innerHTML = ""; return; }
     if (c.stopping) { box.innerHTML = `<p class="desk-toast" style="color:var(--gm-warn)">正在停止：撤单、平仓中，约 1–2 分钟</p>`; return; }
     if (!c.can_stop) { box.innerHTML = ""; return; }
     const held = c.rearm_paused === true;
     box.innerHTML = `${held ? `<p class="desk-hold">⏸ 补单已暂停：现有挂单、止盈、止损不动，止盈后不补新单。</p>` : ""}
-      <div class="desk-row"><button type="button" class="desk-btn hold" id="deskHoldBtn">${held ? "恢复补单" : "暂停补单"}</button>
+      <div class="desk-row">${can("rearm_hold") ? `<button type="button" class="desk-btn hold" id="deskHoldBtn">${held ? "恢复补单" : "暂停补单"}</button>` : ""}
       <button type="button" class="desk-btn stop" id="deskStopBtn">停止网格（撤单、平仓）</button></div><div class="desk-toast" id="deskStopToast" role="status"></div>`;
-    $d("#deskHoldBtn").onclick = async () => {
+    if ($d("#deskHoldBtn")) $d("#deskHoldBtn").onclick = async () => {
       const text = held ? `恢复 ${D.asset} 测试盘网格补单？\n只补现价下方（做空则上方）的格子。` : `暂停 ${D.asset} 测试盘网格补单？\n现有挂单、止盈、止损都不动；成交止盈后不再补新单，直到你恢复。`;
       if (!confirm(text)) return;
       $d("#deskHoldBtn").disabled = true;
