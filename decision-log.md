@@ -1,5 +1,41 @@
 # Decision Log
 
+# 2026-11-07 — Key from AI advice to the judgment and run it led to (#1370)
+
+## Decision
+
+- The key comes from the 「照 AI 的方向判断」 press, the only place a plan is
+  drafted from AI advice: AI rows are `action='recorded'` and never executed. The
+  page sends `advice_id` (last key, only when Park adopted and kept that direction);
+  every other `/api/judgments` body is byte-identical to before.
+- Stored on the judgment as a new nullable `advice` column, `{id, direction,
+  created_at}` as the AI row was at that moment. Not inside `plan`: that dict goes
+  to the Dashboard preview, and an extra key there could change its digest.
+- `adopted_advice` keeps the key only when that row exists, is `author='ai'`, the
+  same asset and the same direction. Otherwise it is dropped with an
+  `advice_key_dropped` warning. Never a 409/422: the key is not a gate.
+- Why chain: `advice_step` joins by key when present ("对上方式：编号"), else the
+  old time match ("对上方式：时间"). Runs find their desk judgment through
+  `executions(stage='executed').preview_digest == plan_digest`
+  (`Store.started_digests`), passed to `why.explain_run(..., origins=)`, which stays a pure read.
+
+## Gotchas
+
+- AI advice is revised in place when refreshed (same id, new direction and time).
+  So the key stores `created_at`; a mismatch means the advice was refreshed after
+  Park adopted it, shown as attention with the direction it had then.
+- A key whose AI row is gone is `unknown` (a record that should exist and does not).
+- A Park judgment with no key cannot tell "did not adopt" from "before #1370", so
+  it keeps the time match, labelled as such, rather than claiming either.
+
+## Verification
+
+- `tests/test_advice_key.py` (12) red before the change, including: the Dashboard
+  preview call is identical with and without the key. Desk suite 215, vitest 142
+  (4 new), tsc clean, browser tests 5.
+- Production 0bd1c04 (#1374): `/trade` loads, every request to 8790 is 200,
+  `/static/gm-desk.js` carries the why island, `/api/why?judgment=1` 200.
+
 # 2026-11-07 — #1359 acceptance: three induced failures, found from the page (#1374)
 
 ## Decision

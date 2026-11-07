@@ -181,3 +181,43 @@ describe("NewsRail", () => {
     expect(await screen.findByText("新闻服务没开")).toBeTruthy();
   });
 });
+
+// #1370: the adopted AI call's id goes with the judgment, last and only when kept.
+test("the advice id goes last, and only when there is one", () => {
+  expect(judgmentBody("XAU", "short", 3, "", [], "approved", 7))
+    .toBe('{"asset":"XAU","direction":"short","confidence":3,"reason":"","cited":[],"action":"approved","advice_id":7}');
+  expect(judgmentBody("XAU", "short", 3, "", [], "approved", null)).toBe(judgmentBody("XAU", "short", 3, "", [], "approved"));
+});
+
+const deskWithAi = () => ({kline: {ok: true, structure: "日线偏空", synthesis: "x"}, today_judgment: null, executions: [], ai_today: AI, meta: {kind: "xau_paper"}});
+
+test("adopting the AI call sends its id with the judgment", async () => {
+  serve({"GET /api/desk/XAU": deskWithAi, "POST /api/plan": () => PLAN_NEW, "POST /api/judgments": () => ({id: 99, handoff: "已记录"})});
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  fireEvent.click(await screen.findByRole("button", {name: "照 AI 的方向判断"}));
+  expect(await screen.findByText("这次判断照的是这条 AI 建议")).toBeTruthy();
+  fireEvent.click(await screen.findByRole("button", {name: "批准这份计划"}));
+  await screen.findByText("已记录");
+  const body = JSON.parse(calls.find(c => c.url === "/api/judgments")!.body!);
+  expect(body.direction).toBe("short");
+  expect(body.advice_id).toBe(7);
+});
+
+test("picking another direction after adopting drops the id", async () => {
+  serve({"GET /api/desk/XAU": deskWithAi, "POST /api/plan": () => PLAN_NEW, "POST /api/judgments": () => ({id: 99, handoff: "已记录"})});
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  fireEvent.click(await screen.findByRole("button", {name: "照 AI 的方向判断"}));
+  fireEvent.click(screen.getByRole("button", {name: "做多"}));
+  expect(screen.queryByText("这次判断照的是这条 AI 建议")).toBeNull();
+  fireEvent.click(await screen.findByRole("button", {name: "批准这份计划"}));
+  await screen.findByText("已记录");
+  expect(calls.find(c => c.url === "/api/judgments")!.body).not.toContain("advice_id");
+});
+
+test("a reload keeps the adopted id of today's judgment", async () => {
+  const desk = {...deskWithAi(), today_judgment: {id: 5, direction: "short", reason: "", confidence: 3, cited: [], action: "recorded",
+    advice: {id: 7, direction: "short", created_at: AI.created_at}}};
+  serve({"GET /api/desk/XAU": () => desk, "POST /api/plan": () => PLAN_NEW});
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  expect(await screen.findByText("这次判断照的是这条 AI 建议")).toBeTruthy();
+});

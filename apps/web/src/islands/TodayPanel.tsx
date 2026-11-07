@@ -62,7 +62,8 @@ function Reading({desk, error}: {desk: Desk | null; error: string}) {
   );
 }
 
-function Ai({desk, direction, onAdopt, onRefreshed}: {desk: Desk; direction: Direction | null; onAdopt: (d: Direction) => void; onRefreshed: () => void}) {
+function Ai({desk, direction, adopted, onAdopt, onRefreshed}: {desk: Desk; direction: Direction | null; adopted: number | string | null;
+  onAdopt: (d: Direction, id: number | string) => void; onRefreshed: () => void}) {
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -94,7 +95,8 @@ function Ai({desk, direction, onAdopt, onRefreshed}: {desk: Desk; direction: Dir
       </div>
       <p>{ai.reason}</p>
       <AiSources judgment={{id: ai.id, cited: ai.cited, evidence: ai.evidence as never}} />
-      {direction === null ? <button type="button" className="desk-link" id="deskAiAdopt" onClick={() => onAdopt(ai.direction)}>照 AI 的方向判断</button> : null}
+      {direction === null ? <button type="button" className="desk-link" id="deskAiAdopt" onClick={() => onAdopt(ai.direction, ai.id)}>照 AI 的方向判断</button>
+        : adopted != null && String(adopted) === String(ai.id) ? <span className="muted" id="deskAiAdopted">这次判断照的是这条 AI 建议</span> : null}
     </div>
   );
 }
@@ -103,6 +105,8 @@ function Today({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridm
   const [desk, setDesk] = useState<Desk | null>(null);
   const [deskError, setDeskError] = useState("");
   const [direction, setDirection] = useState<Direction | null>(null);
+  // The AI call Park adopted (#1370): set by 「照 AI 的方向判断」, cleared by picking a direction himself.
+  const [adopted, setAdopted] = useState<number | string | null>(null);
   const [reason, setReason] = useState("");
   const [confidence, setConfidence] = useState(3);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -146,7 +150,7 @@ function Today({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridm
     // Only while Park has not picked a direction: a later refresh never overwrites what he is typing.
     if (tj && live.current.direction === null) {
       live.current.direction = tj.direction;
-      setDirection(tj.direction); setReason(tj.reason || ""); setConfidence(tj.confidence);
+      setDirection(tj.direction); setAdopted(tj.advice?.id ?? null); setReason(tj.reason || ""); setConfidence(tj.confidence);
       citeStore.set(asset, tj.cited || []);
       const restore = execRestore(d);
       const ok = await loadPlan(tj.direction);
@@ -164,14 +168,14 @@ function Today({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridm
 
   useEffect(() => { emit("desk:steps", {asset, direction: Boolean(direction), planKind: plan?.kind ?? null, handed}); }, [asset, direction, plan, handed]);
 
-  const pick = (d: Direction) => { live.current.direction = d; setDirection(d); void loadPlan(d); };
+  const pick = (d: Direction, advice: number | string | null = null) => { live.current.direction = d; setDirection(d); setAdopted(advice); void loadPlan(d); };
 
   const submit = async (action: "approved" | "recorded") => {
     if (!direction) return;
     setBusy(true);
     try {
       const saved = await postJson<{id: number | string; handoff?: string; preview?: Record<string, unknown>}>(
-        "/api/judgments", judgmentBody(asset, direction, confidence, reason, citeStore.get().asset === asset ? citeStore.get().cites : [], action));
+        "/api/judgments", judgmentBody(asset, direction, confidence, reason, citeStore.get().asset === asset ? citeStore.get().cites : [], action, adopted));
       if (!live.current.alive) return;
       setToast(saved.handoff ?? "");
       if (saved.preview) handOff(saved.id, saved.preview, null);
@@ -189,7 +193,7 @@ function Today({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridm
           <h3>你的判断</h3>
           <Chips asset={asset} assets={assets} gridmind={gridmind} />
           <Reading desk={desk} error={deskError} />
-          {desk ? <Ai desk={desk} direction={direction} onAdopt={pick} onRefreshed={() => void loadDesk()} /> : <div className="desk-ai" id="deskAi" />}
+          {desk ? <Ai desk={desk} direction={direction} adopted={adopted} onAdopt={pick} onRefreshed={() => void loadDesk()} /> : <div className="desk-ai" id="deskAi" />}
           <div className="desk-dir" role="group" aria-label="方向">
             {DIRECTIONS.map(([d, label]) => (
               <button key={d} type="button" data-d={d} aria-pressed={direction === d} onClick={() => pick(d)}>{label}</button>

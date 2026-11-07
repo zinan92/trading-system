@@ -16,6 +16,8 @@ export interface Plan {
 export interface Execution {judgment_id?: number | string; stage: string; detail?: Record<string, unknown> | null}
 export interface TodayJudgment {
   id: number | string; direction: Direction; reason?: string; confidence: number; cited?: Cite[]; action?: string;
+  /** The AI call this judgment was drafted from (#1370), as it was then; null when Park did not adopt one. */
+  advice?: {id: number | string; direction: Direction; created_at: string} | null;
 }
 export interface AiCall {
   id: number | string; direction: Direction; confidence: number; reason: string; created_at: string;
@@ -51,9 +53,11 @@ export const firstSentence = (s?: string) => (s || "").split(/(?<=[。；])/)[0]
 /** The /api/plan body, byte for byte the legacy one. */
 export const planBody = (asset: string, direction: Direction) => JSON.stringify({asset, direction});
 
-/** The /api/judgments body, byte for byte the legacy one (key order included). */
-export const judgmentBody = (asset: string, direction: Direction, confidence: number, reason: string, cited: Cite[], action: "approved" | "recorded") =>
-  JSON.stringify({asset, direction, confidence: +confidence, reason, cited, action});
+/** The /api/judgments body, byte for byte the legacy one (key order included). The adopted AI call's id (#1370)
+ * goes last and only when Park pressed 「照 AI 的方向判断」 and kept that direction, so every other body is unchanged. */
+export const judgmentBody = (asset: string, direction: Direction, confidence: number, reason: string, cited: Cite[], action: "approved" | "recorded",
+                             adviceId?: number | string | null) =>
+  JSON.stringify({asset, direction, confidence: +confidence, reason, cited, action, ...(adviceId != null ? {advice_id: Number(adviceId)} : {})});
 
 export const DONE_STAGES = ["executed", "execute_started", "execute_failed", "refused"];
 
