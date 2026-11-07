@@ -208,6 +208,21 @@ control intents. It observes and composes domain contracts; it does not own
 strategy, risk, or Broker wire semantics.
 _Avoid_: Dashboard strategy engine, browser-owned scheduler
 
+**Desk Venue Module**:
+The one code module that holds the trading desk's behaviour for a desk kind:
+labels, plan template, how price, grid and bars are read, and its declared
+Venue Capabilities. Modules sit in a frozen, code-defined registry (ADR 0007).
+A module carries no venue identity; that comes from the Dashboard catalog.
+_Avoid_: venue catalog, plugin install, kind branch
+
+**Venue Capability**:
+A desk flow a Desk Venue Module declares it supports, such as `live_price`,
+`bars`, `grid_plan`, `preview`, `execute`, `stop` or `price_alerts`. It is
+declared, never inferred from methods. `execute` also requires passing the
+conformance suite. A capability switches a desk flow on; it never authorizes
+an order.
+_Avoid_: trading permission, inferred capability
+
 **Strategy Configuration**:
 The operator-facing fields used to describe one Strategy Position Plan through
 the canonical Grid or DCA vocabulary. It is a form-level representation, not a
