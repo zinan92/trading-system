@@ -63,8 +63,6 @@ blocks the instrument until it is handled.
   one crude plan.
 - Moving silver and crude off `okx_public` is a desk migration, so calls recorded
   earlier keep scoring on their recorded feed.
-- The datafeed labels `CL-USDT-SWAP` `asset_class: crypto`. Nothing may branch on
-  that field for this instrument until it is corrected.
 - Verification uses mocks and dev. No silver or crude grid is started in production
   as part of this work.
 

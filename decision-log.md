@@ -180,6 +180,33 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-07 — The Paper instrument table reads specs from the datafeed (#1405)
+
+## Decision
+
+- `services/paper_instruments.py`: `resolve_paper_instrument(key, dualtrack)` returns a `PaperGoldVenue`-shaped
+  profile, so `describe` and `require_instrument_matches` apply as they are. Gold returns its active profile and reads
+  nothing. Nothing calls it yet; #1406 does.
+- `validate_instrument_definition` accepts commodity only. That check stays. The fix for crude was in the datafeed.
+
+## Gotchas
+
+- The datafeed labelled CL `crypto`, and the validator refused it. Only reading the real datafeed showed that; the
+  fixture-based tests all passed. Fixed in zinan92/datafeed#190, and ADR 0009's note on it is removed.
+- `ops/release.sh` failed on 9094ac0: `bootout` returns before a slow job exits, so mvp-worker failed to load three
+  times and the script exited. The worker stayed unloaded, later jobs were not restarted and no receipt was written.
+  The earlier note that "Bootstrap failed lines are noise if launchctl shows jobs up" still holds only if you do
+  check. Worker restored by hand, script fixed in zinan92/datafeed#192.
+
+## Verification
+
+- `resolve_paper_instrument` against the real datafeed on 8100: gold 0.1 / 0.001, silver 0.01 / 0.01, crude
+  0.01 / 0.1 (price / quantity increment), both silver and crude from `okx_swap_public`.
+- Twelve unit tests cover: specs follow the definition; status, multiplier, symbol, venue, source and an unreadable
+  definition each block.
+- Datafeed: red test before the fix, 454 passed. Release 27a2619 finished with exit 0 and wrote a receipt; all seven
+  jobs are loaded.
+
 # 2026-11-07 — Paper runs one instrument at a time, per Strategy Session (#1404)
 
 ## Decision
