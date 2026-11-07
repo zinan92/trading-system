@@ -37,7 +37,7 @@ def _model() -> dict:
     return model
 
 
-def _open(browser, fulfill_control, *, bundle_blocked: bool = False):
+def _open(browser, fulfill_control, *, bundle_blocked: bool = False, catalog: dict | None = None):
     model = _model()
     wire: list[list] = []
     unexpected: list[tuple[str, str]] = []
@@ -46,7 +46,7 @@ def _open(browser, fulfill_control, *, bundle_blocked: bool = False):
     answers = {
         "/api/trading-system/read-model": model,
         "/api/auth/session": {"authenticated": True, "can_control": True, "email": None, "session_duration": "mock"},
-        "/api/dashboard-control/catalog": _catalog(),
+        "/api/dashboard-control/catalog": catalog or _catalog(),
         "/api/dashboard-control/selection": {"selection": {"venue_profile_id": "binance.paper", "instrument_id": "XAUUSDT.BINANCE", "strategy_family": "grid"}},
         "/api/dashboard-control/runtime-status": {"runtime": {}, "relevance": {}, "notification": None},
         "/api/dashboard-control/preview": DASHBOARD_PREVIEW,

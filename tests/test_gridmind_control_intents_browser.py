@@ -5,9 +5,12 @@ with no error. Every control in the journey is swapped for a listener-free clone
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tests.test_dashboard_control_wire_browser import WIRE, _fulfill_control, _open
+from tests.test_dashboard_gridmind_control_track_browser import _catalog
 
 SWAP = """() => {
   // A select keeps its value, as a React select renders the value it was given.
@@ -63,18 +66,35 @@ def test_a_disabled_control_runs_nothing() -> None:
     assert errors == []
 
 
-def test_the_desk_asset_switch_still_reaches_the_selects() -> None:
-    """gm-desk.js switches BTC and gold with a change event that does not bubble (`new Event("change")`)."""
+SWITCH = """async () => {
+  const venue = document.getElementById('dashboardVenueSelect'), instrument = document.getElementById('dashboardInstrumentSelect');
+  venue.value = 'hyperliquid.testnet'; venue.dispatchEvent(new Event('change'));
+  while (![...instrument.options].some(o => o.value === 'BTC-USD-PERP' && !o.disabled)) await new Promise(r => setTimeout(r, 20));
+  if (DISABLE) instrument.disabled = true;
+  instrument.value = 'BTC-USD-PERP'; instrument.dispatchEvent(new Event('change'));
+}"""
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_the_desk_asset_switch_still_reaches_the_selects(disabled: bool) -> None:
+    """gm-desk.js switchAsset, step for step: a change that does not bubble on each select, enabled or not.
+
+    The old listeners sat on the selects, so both reached them; a disabled select must not swallow the switch."""
     playwright = pytest.importorskip("playwright.sync_api")
+    catalog = _catalog()
+    catalog["venue_profiles"].append({"id": "hyperliquid.testnet", "label": "Hyperliquid Testnet", "instruments": [
+        {"instrument_id": "BTC-USD-PERP", "asset": "BTC", "eligibility": "eligible", "blockers": []}]})
     with playwright.sync_playwright() as runtime:
         try:
             browser = runtime.chromium.launch(headless=True, channel="chrome")
         except Exception as exc:  # pragma: no cover - depends on local browser install
             pytest.skip(f"Playwright Chromium unavailable: {exc}")
-        page, wire, _unexpected, errors = _open(browser, _fulfill_control)
-        page.evaluate("() => document.getElementById('dashboardInstrumentSelect').dispatchEvent(new Event('change'))")
-        page.wait_for_function("() => /请选择 Strategy|Instrument 选择未保存/.test(document.getElementById('dashboardControlStatus').textContent)")
+        page, wire, _unexpected, errors = _open(browser, _fulfill_control, catalog=catalog)
+        page.evaluate(SWITCH.replace("DISABLE", "true" if disabled else "false"))
+        page.locator("#dashboardControlStatus", has_text="BTC-USD-PERP 已选择").wait_for()
         browser.close()
-    assert [row[:2] for row in wire] == [["POST", "/api/dashboard-control/selection"]]
-    assert "instrument_id" in wire[0][2]
+    assert [(method, path, json.loads(body)) for method, path, body in wire if path.endswith("/selection")] == [
+        ("POST", "/api/dashboard-control/selection", {"venue_profile_id": "hyperliquid.testnet"}),
+        ("POST", "/api/dashboard-control/selection", {"venue_profile_id": "hyperliquid.testnet", "instrument_id": "BTC-USD-PERP"}),
+    ]
     assert errors == []
