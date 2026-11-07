@@ -460,7 +460,7 @@ def test_gridmind_explains_every_hard_solver_or_candidate_blocker(
         page.add_init_script("window.setInterval = () => 0")
         page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
         page.evaluate(
-            """code => renderStartBlockers({
+            """code => { state.preview = {preview_id: "blocked", manual_confirmation: {
                 non_overridable_blocker_codes: [code],
                 non_overridable_blockers: [{
                     code,
@@ -468,7 +468,7 @@ def test_gridmind_explains_every_hard_solver_or_candidate_blocker(
                     message: "test hard blocker",
                     evidence: {requested: 201, minimum: 2, maximum: 200}
                 }]
-            })""",
+            }}; renderStartRiskReview() }""",
             code,
         )
         text = page.locator("#startRiskBlockers").inner_text()

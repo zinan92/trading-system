@@ -9,6 +9,13 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-07, 预览、确认、风险框、启停换成 React · #1397)
+
+- 预览、确认、启动、停止按钮和启动前的风险确认框现在由 React 画。按钮能不能按、勾了哪些风险，都存在 GridMind 的状态里。发出的 7 个请求一个字节没变。
+- 风险勾选现在跟着预览编号走：换了新预览，之前的勾选作废，确认按钮变灰，要按新预览重新勾。
+- 没有 React 包时页面仍能走完整条控制流程，风险框里的阻断原因改成纯文字显示（以前没有 React 包时根本不显示）。
+- 主 K 线的容器和拖动留给 #1398。网格区间替换确认框还是 GridMind 的。
+
 ## 现在在哪里(2026-11-07, 选择框和策略按钮换成 React · #1396)
 
 - 品种、Venue 两个下拉和 Grid/DCA 按钮现在由 React 画，当前选择存在 GridMind 的一个状态对象里，不再从页面元素读回来。外观不变，发出的 7 个请求一个字节没变。

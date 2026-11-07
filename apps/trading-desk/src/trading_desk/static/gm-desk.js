@@ -141,7 +141,7 @@ if (typeof document !== "undefined") (() => {
         </ol>
       </div></section>`);
     const note = "日常从「今天」面板开始：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。";
-    $d(".dashboard-control-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
+    $d(".gm-control-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
     $d(".strategy-card .robot-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
     mountStatus(wrap, rail);
     $d("#deskJudgeDate").textContent = new Date().toLocaleDateString("zh-CN", {month: "long", day: "numeric"});

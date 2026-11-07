@@ -153,7 +153,7 @@ def test_gridmind_invalid_manual_draft_is_visible_and_cannot_start() -> None:
     assert "function renderParameterValidity()" in html
     assert 'input.classList.toggle("is-invalid",invalid)' in html
     assert 'box.className="preview-summary invalid"' in html
-    assert 'start.textContent=!controlled?"登录后可启动机器人":invalidDraft?"请先修复参数"' in html
+    assert 'text:!controlled?"登录后可启动机器人":invalidDraft?"请先修复参数"' in html
     assert "!invalidDraft&&fresh" in html
     assert "state.preview=null;const inputProblem=invalidStrategyDraft()" in html
 
@@ -694,12 +694,14 @@ def test_the_control_panel_keeps_every_request_and_approval_in_gridmind() -> Non
         assert f'$("#{element_id}").insertAdjacentHTML' not in script
     islands = html.split("data-island=")[1:]
     assert sorted(item.split('"', 2)[1] for item in islands) == sorted([
-        "control-picker", "exec-tables", "exec-tables", "exec-tables", "exec-tables", "gm-blockers", "gm-cards", "gm-grid-summary", "gm-header", "gm-preview",
+        "control-actions", "control-picker", "exec-tables", "exec-tables", "exec-tables", "exec-tables", "gm-cards", "gm-grid-summary", "gm-header", "gm-preview",
+        "robot-actions", "start-risk",
     ])
     source = (ROOT / "apps" / "web" / "src" / "islands" / "ControlSummaries.tsx").read_text(encoding="utf-8")
     for forbidden in ("<input", "<select", "<button", "onClick", "onChange", "fetch(", "dangerouslySetInnerHTML"):
         assert forbidden not in source
-    picker = (ROOT / "apps" / "web" / "src" / "islands" / "ControlPicker.tsx").read_text(encoding="utf-8")
-    for forbidden in ("onClick", "addEventListener", "useState", "useEffect", "fetch(", "dangerouslySetInnerHTML"):
-        assert forbidden not in picker
-    assert "const published = () => {};" in picker and picker.count("onChange={published}") == picker.count("onChange=") == 2
+    for name, changes in (("ControlPicker", 2), ("ControlActions", 1)):
+        controls = (ROOT / "apps" / "web" / "src" / "islands" / f"{name}.tsx").read_text(encoding="utf-8")
+        for forbidden in ("onClick", "addEventListener", "useState", "useEffect", "fetch(", "dangerouslySetInnerHTML"):
+            assert forbidden not in controls
+        assert "const published = () => {};" in controls and controls.count("onChange={published}") == controls.count("onChange=") == changes

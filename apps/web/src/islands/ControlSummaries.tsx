@@ -1,6 +1,6 @@
 /* Text-only parts of GridMind's control panel (#1329): the grid line above the chart, the preview
- * numbers and why a start is blocked. Display only. Everything the operator acts on stays GridMind's:
- * selects, buttons, risk checkboxes and every request. Nothing here is read back as an approval. */
+ * numbers and why a start is blocked. Display only: nothing here is pressed, and nothing here is read
+ * back as an approval. */
 type Item = [kind: "dot" | "b" | "s", cls: string, text: string];
 
 export function GridSummary({items, loaded}: {items?: Item[]; loaded?: boolean}) {
@@ -34,7 +34,7 @@ export function PreviewSummary({problem, rows, risks, loaded}: PreviewProps) {
   );
 }
 
-interface Blocker {code: string; title: string; explanation: string; action: string; lines: string[]}
+export interface Blocker {code: string; title: string; explanation: string; action: string; lines: string[]}
 
 export function StartBlockers({rows}: {rows?: Blocker[]}) {
   return (

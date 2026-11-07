@@ -125,6 +125,16 @@ def test_today_flow_hands_an_approved_preview_to_the_legacy_execute_step() -> No
         browser.close()
 
 
+def test_the_rail_notes_sit_after_both_button_rows() -> None:
+    """gm-desk.js anchors these on GridMind's markup, which React islands now host (#1397)."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [])
+        assert page.locator(".gm-control-actions + .desk-rail-note").count() == 1
+        assert page.locator(".strategy-card .robot-actions + .desk-rail-note").count() == 1
+        browser.close()
+
+
 def test_switching_asset_fires_intents_with_ids() -> None:
     """ADR 0008, #1396: the selects are React's. gm-desk.js asks GridMind, which stands in here as two spies."""
     playwright = pytest.importorskip("playwright.sync_api")
