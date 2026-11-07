@@ -19,7 +19,9 @@ from services.park_paper_runtime import (
     ParkPaperRuntime,
     ParkPaperRuntimeError,
     build_park_authoritative_adapter,
+    prepare_park_paper_config,
 )
+from services.paper_instruments import active_instrument_key
 
 
 def _load_config(path: str) -> dict[str, Any]:
@@ -45,6 +47,12 @@ def main(argv: list[str] | None = None) -> int:
     output_root = Path(args.output_root)
     try:
         config = _load_config(args.park_config)
+        # Prepare once for the running session's instrument so the runtime and
+        # the adapter check the same contract (ADR 0009).
+        try:
+            config = prepare_park_paper_config(config, instrument=active_instrument_key(output_root))
+        except Exception:  # noqa: BLE001 - the adapter build below reports the typed blocker.
+            pass
         binding = build_park_authoritative_adapter(output_root, config=config)
         evidence = _latest(output_root / "park_strategy" / "safety_evidence.json")
         runtime = ParkPaperRuntime(

@@ -183,8 +183,14 @@ def prepare_park_paper_config(
     config: Mapping[str, Any],
     *,
     environ: Mapping[str, str] | None = None,
+    instrument: str = "gold",
 ) -> dict[str, Any]:
     """Resolve the explicit Park instrument/fee contract once per control pass.
+
+    ``instrument`` is the Strategy Session's recorded instrument (ADR 0009);
+    callers read it with ``paper_instruments.active_instrument_key``. Gold keeps
+    the path below unchanged; silver and crude go through
+    ``_prepare_okx_swap_config``.
 
     Park's checked-in track contract intentionally does not copy exchange
     metadata by hand.  When a deployment has not yet persisted
@@ -196,6 +202,9 @@ def prepare_park_paper_config(
     """
 
     settings = dict(config)
+    settings["paper_execution"] = _without_other_instrument(settings.get("paper_execution"), instrument)
+    if instrument != "gold":
+        return _prepare_okx_swap_config(settings, instrument)
     paper_execution = settings.get("paper_execution")
     paper_execution = dict(paper_execution) if isinstance(paper_execution, Mapping) else {}
     dualtrack_settings: dict[str, Any] | None = None
@@ -248,6 +257,85 @@ def prepare_park_paper_config(
         raise ParkPaperRuntimeError(exc.code, str(exc)) from exc
     settings["paper_execution"] = paper_execution
     return settings
+
+
+def _without_other_instrument(paper_execution: Any, instrument: str) -> Any:
+    """Drop a contract this process prepared for another instrument.
+
+    A session can start between two prepares in one pass (a Dashboard confirm
+    in the other process). The second prepare then sees the first one's
+    contract; it is refetched for the session's instrument rather than reused.
+    """
+
+    if not isinstance(paper_execution, Mapping):
+        return paper_execution
+    prepared_for = str(paper_execution.get("paper_instrument") or "gold")
+    if prepared_for == instrument:
+        return dict(paper_execution)
+    dropped = {"instrument", "execution_contract", "paper_instrument"}
+    if prepared_for != "gold":
+        dropped.add("paper_fee_model")  # marked unverified for that instrument; gold rebuilds its own
+    return {key: value for key, value in paper_execution.items() if key not in dropped}
+
+
+def _prepare_okx_swap_config(settings: dict[str, Any], key: str) -> dict[str, Any]:
+    """Silver or crude: definition, contract and fees from the session's instrument.
+
+    The definition comes from the datafeed and must match the OKX profile; an
+    unreadable or mismatched one fails closed. Fees reuse the Paper rates and
+    are marked unverified. The order-rounding contract is the instrument's own,
+    so a silver order is never rounded to gold's increments.
+    """
+
+    from services.dualtrack_config import dualtrack_config
+    from services.paper_gold_venue import PaperGoldVenueError
+    from services.paper_instruments import (
+        execution_contract,
+        profile_for_definition,
+        resolve_paper_instrument_definition,
+    )
+
+    dualtrack_settings = dualtrack_config()
+    paper_execution = settings.get("paper_execution")
+    paper_execution = dict(paper_execution) if isinstance(paper_execution, Mapping) else {}
+    try:
+        pinned = paper_execution.get("instrument")
+        if isinstance(pinned, Mapping):
+            # Already resolved this pass for the same session; check, never refetch.
+            venue = profile_for_definition(key, pinned)
+        else:
+            venue, definition = resolve_paper_instrument_definition(key, dualtrack_settings)
+            paper_execution["instrument"] = definition
+    except (PaperGoldVenueError, KeyError, TypeError, ValueError) as exc:
+        code = getattr(exc, "code", "paper_instrument_unavailable")
+        raise ParkPaperRuntimeError(code, str(exc)) from exc
+    fee_model = paper_execution.get("paper_fee_model")
+    if not isinstance(fee_model, Mapping):
+        observed = dict(dualtrack_settings.get("paper_fee_model") or {})
+        fee_model = {
+            "mode": "paper_contract",
+            "maker_fee_rate": observed.get("maker_fee_rate", "0"),
+            "taker_fee_rate": observed.get("taker_fee_rate", "0.000400"),
+            "funding_rate": "0",
+            "source": "park_paper_config",
+            "environment": "paper",
+            "real_money_eligible": False,
+        }
+    # ADR 0009: no OKX account observed these rates for this instrument.
+    paper_execution["paper_fee_model"] = {**dict(fee_model), "verified": False}
+    paper_execution["paper_instrument"] = key
+    paper_execution["execution_contract"] = execution_contract(venue)
+    settings["paper_execution"] = paper_execution
+    return settings
+
+
+GOLD_INSTRUMENT = "gold"
+
+
+def session_instrument_key(session: Mapping[str, Any] | None) -> str:
+    from services.paper_instruments import session_instrument_key as key
+
+    return key(session)
 
 
 class ParkPaperRuntime:
@@ -1409,6 +1497,18 @@ class ParkPaperRuntime:
         old_confirmation = self._confirmed_for(old_digest, old_session, old_revision)
         if not old_confirmation:
             return self._reverse_blocked(request, "reverse_old_confirmation_missing", "旧策略确认回执缺失；未执行切换。", observed_at=observed_at)
+        # The new session keeps the old one's instrument, read from the old
+        # session's own start record, never from a default (ADR 0009).
+        old_started = next(
+            (
+                row for row in reversed(self.identity.rows())
+                if row.get("event") == "session_started" and str(row.get("strategy_session_id") or "") == old_session
+            ),
+            None,
+        )
+        if old_started is None:
+            return self._reverse_blocked(request, "reverse_old_session_unknown", "找不到旧策略这一轮的开始记录；未执行切换。", observed_at=observed_at)
+        reverse_instrument = session_instrument_key(old_started)
         gate = self._admission(
             market=market,
             snapshot=snapshot,
@@ -1549,6 +1649,8 @@ class ParkPaperRuntime:
                 pending_terminal_actions=False,
                 strategy_session_id=new_session,
                 strategy_revision_id=new_revision,
+                # A Reverse keeps the instrument: same market, same contract.
+                paper_instrument=reverse_instrument,
             )
             record_strategy_snapshot_terminal(
                 self.output_root,
@@ -2237,6 +2339,9 @@ class ParkPaperRuntime:
     def _paper_gold_venue_blocker(self, active: Mapping[str, Any], *, observed_at: str) -> dict[str, Any] | None:
         """A session runs to its end on the venue it started on; a switch mid-session blocks."""
 
+        instrument_blocker = self._paper_instrument_blocker(active, observed_at=observed_at)
+        if instrument_blocker is not None or session_instrument_key(active) != GOLD_INSTRUMENT:
+            return instrument_blocker
         from services.dualtrack_config import dualtrack_config
         from services.paper_gold_venue import PaperGoldVenueError, active_paper_gold_venue, session_venue_key
 
@@ -2256,6 +2361,36 @@ class ParkPaperRuntime:
             strategy_revision_id=active.get("strategy_revision_id"),
             session_venue=started_on,
             configured_venue=configured,
+        )
+
+    def _paper_instrument_blocker(self, active: Mapping[str, Any], *, observed_at: str) -> dict[str, Any] | None:
+        """The contract this pass prepared must be for the session's recorded instrument."""
+
+        from services.paper_gold_venue import PaperGoldVenueError
+        from services.paper_instruments import OKX_SWAPS, require_instrument_key
+
+        context = {
+            "strategy_session_id": active.get("strategy_session_id"),
+            "strategy_revision_id": active.get("strategy_revision_id"),
+        }
+        try:
+            key = require_instrument_key(session_instrument_key(active))
+        except PaperGoldVenueError as exc:
+            return self._blocked(exc.code, str(exc), observed_at=observed_at, **context)
+        paper_execution = self.config.get("paper_execution")
+        paper_execution = paper_execution if isinstance(paper_execution, Mapping) else {}
+        prepared = str(paper_execution.get("paper_instrument") or GOLD_INSTRUMENT)
+        symbol = str((paper_execution.get("instrument") or {}).get("symbol") or "")
+        expected = OKX_SWAPS[key][1] if key in OKX_SWAPS else None
+        if prepared == key and (expected is None or symbol == expected):
+            return None
+        return self._blocked(
+            "paper_instrument_mismatch",
+            f"session runs {key}, this pass prepared {prepared} ({symbol or 'no instrument'}); no order is sent",
+            observed_at=observed_at,
+            session_instrument=key,
+            prepared_instrument=prepared,
+            **context,
         )
 
     def _blocked(self, code: str, detail: str, **context: Any) -> dict[str, Any]:
@@ -2395,11 +2530,11 @@ class ParkPaperRuntime:
             **payload,
         }
 
-    @staticmethod
-    def _default_market_reader() -> Mapping[str, Any]:
+    def _default_market_reader(self) -> Mapping[str, Any]:
         from services.park_telegram_runtime import default_market_reader
 
-        return default_market_reader()
+        # The running session's instrument, never a process-wide default (ADR 0009).
+        return default_market_reader(instrument=session_instrument_key(self.identity.active_session()))
 
 
 def build_park_authoritative_adapter(
@@ -2408,15 +2543,27 @@ def build_park_authoritative_adapter(
     config: Mapping[str, Any] | None = None,
     environ: Mapping[str, str] | None = None,
     allow_disabled_read: bool = False,
+    instrument: str | None = None,
 ) -> ParkPaperAdapterBinding:
-    """Build only the direct attended Nautilus Paper adapter; never a wrapper."""
+    """Build only the direct attended Nautilus Paper adapter; never a wrapper.
+
+    The adapter is built for the running session's instrument (gold when idle),
+    so changing instrument needs no restart (ADR 0009).
+    """
 
     settings = dict(config or load_default_config())
     environment = dict(os.environ if environ is None else environ)
     if settings.get("feature_enabled") is not True and not allow_disabled_read:
         raise ParkPaperRuntimeError("park_track_disabled", "Park Strategy Track is disabled")
+    from services.paper_instruments import active_instrument_key
+
     try:
-        settings = prepare_park_paper_config(settings, environ=environment)
+        key = instrument or active_instrument_key(output_root)
+        settings = prepare_park_paper_config(settings, environ=environment, instrument=key)
+    except ParkPaperRuntimeError as exc:
+        if exc.code.startswith("paper_instrument"):
+            raise  # keep the instrument's own reason for Park
+        raise ParkPaperRuntimeError("paper_contract_unavailable", type(exc).__name__) from exc
     except Exception as exc:  # noqa: BLE001 - instrument/fee uncertainty blocks adapter construction.
         raise ParkPaperRuntimeError("paper_contract_unavailable", type(exc).__name__) from exc
     if settings.get("runtime_mode") != "paper_only" or settings.get("control_plane") != "telegram":

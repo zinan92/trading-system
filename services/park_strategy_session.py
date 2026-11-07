@@ -181,9 +181,17 @@ class ParkStrategyIdentityJournal:
         strategy_session_id: str | None = None,
         strategy_revision_id: str | None = None,
         paper_gold_venue: str | None = None,
+        paper_instrument: str | None = None,
     ) -> dict[str, Any]:
         if self.active_session() is not None:
             raise ParkStrategyIdentityError("an active Park strategy session already exists")
+        from services.paper_gold_venue import PaperGoldVenueError
+        from services.paper_instruments import GOLD, require_instrument_key
+
+        try:
+            instrument = require_instrument_key(paper_instrument or GOLD)
+        except PaperGoldVenueError as exc:
+            raise ParkStrategyIdentityError(str(exc)) from exc
         if paper_gold_venue is None:
             from services.dualtrack_config import dualtrack_config
             from services.paper_gold_venue import active_paper_gold_venue
@@ -215,6 +223,9 @@ class ParkStrategyIdentityJournal:
             "recording_authority": "facts_package_review_only",
             # The session is bound to the venue it started on; see paper_gold_venue.
             "paper_gold_venue": _required_text(paper_gold_venue, "paper_gold_venue"),
+            # ADR 0009: the session's one instrument. Market, contract, fees and
+            # fills come from this record until the session closes.
+            "paper_instrument": instrument,
         }
         _atomic_append(self.path, row)
         return dict(row)

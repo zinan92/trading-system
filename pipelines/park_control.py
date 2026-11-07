@@ -29,6 +29,7 @@ from services.park_paper_runtime import (
 )
 from services.park_safety_evidence import build_park_safety_evidence
 from services.broker_port import BrokerOrderRequest
+from services.paper_instruments import active_instrument_key
 from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketError, HyperliquidTestnetMarketReader
 from services.hyperliquid_testnet_runtime import (
     HyperliquidTestnetRuntimeConfig,
@@ -659,7 +660,8 @@ def main(argv: list[str] | None = None) -> int:
         config = json.loads(Path(args.park_config).read_text(encoding="utf-8"))
         config = load_effective_park_config(output_root, config)
         try:
-            config = prepare_park_paper_config(config)
+            # The running session's instrument (ADR 0009); gold when Paper is idle.
+            config = prepare_park_paper_config(config, instrument=active_instrument_key(output_root))
         except Exception:
             # The read-only router will persist the typed contract blocker;
             # never invent an instrument or fee model at the process boundary.

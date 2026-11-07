@@ -7,7 +7,8 @@ cannot be read or does not match blocks the instrument. There is no fallback.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping
+from pathlib import Path
+from typing import Any, Callable, Mapping, NamedTuple
 
 from services.dualtrack_instrument_source import fetch_execution_instrument_definition
 from services.paper_gold_venue import (
@@ -23,6 +24,13 @@ OKX_SWAPS = {"silver": ("XAG", "XAG-USDT-SWAP"), "crude": ("CL", "CL-USDT-SWAP")
 SOURCE = "okx_swap_public"
 
 Fetch = Callable[..., dict[str, Any]]
+
+
+class MarketIdentity(NamedTuple):
+    market_source: str
+    execution_market_venue: str
+    execution_market_instrument_id: str
+    instrument_symbol: str
 
 
 def instrument_keys() -> tuple[str, ...]:
@@ -62,21 +70,75 @@ def _profile(key: str, asset: str, symbol: str, definition: Mapping[str, Any]) -
     )
 
 
+def require_instrument_key(key: Any) -> str:
+    """A known instrument key; anything else fails closed."""
+
+    text = str(key or "").strip().lower()
+    if text not in instrument_keys():
+        raise PaperGoldVenueError("paper_instrument_unknown", f"{key!r} is not one of {list(instrument_keys())}")
+    return text
+
+
+def session_instrument_key(session: Mapping[str, Any] | None) -> str:
+    """Sessions started before #1406 recorded no instrument; they were gold."""
+
+    return str((session or {}).get("paper_instrument") or GOLD)
+
+
+def active_instrument_key(output_root: Path | str) -> str:
+    """The running session's instrument; gold when Paper is idle."""
+
+    from services.park_strategy_session import ParkStrategyIdentityJournal
+
+    return session_instrument_key(ParkStrategyIdentityJournal(Path(output_root)).active_session())
+
+
+def instrument_symbol(key: str, dualtrack: Mapping[str, Any]) -> str:
+    """The execution symbol for a key, without reading the datafeed."""
+
+    if key == GOLD:
+        return active_paper_gold_venue(dualtrack).instrument_symbol
+    return OKX_SWAPS[require_instrument_key(key)][1]
+
+
+def market_identity(key: str, dualtrack: Mapping[str, Any]) -> PaperGoldVenue | MarketIdentity:
+    """Where one instrument's price is read, without reading its definition."""
+
+    if key == GOLD:
+        return active_paper_gold_venue(dualtrack)
+    symbol = OKX_SWAPS[require_instrument_key(key)][1]
+    return MarketIdentity(SOURCE, "okx", f"{symbol}.OKX", symbol)
+
+
 def resolve_paper_instrument(
     key: str,
     dualtrack: Mapping[str, Any],
     *,
-    fetch: Fetch = fetch_execution_instrument_definition,
+    fetch: Fetch | None = None,
 ) -> PaperGoldVenue:
     """The trusted profile for one instrument, or a fail-closed error."""
 
+    return resolve_paper_instrument_definition(key, dualtrack, fetch=fetch)[0]
+
+
+def resolve_paper_instrument_definition(
+    key: str,
+    dualtrack: Mapping[str, Any],
+    *,
+    fetch: Fetch | None = None,
+) -> tuple[PaperGoldVenue, dict[str, Any] | None]:
+    """The profile and, for silver and crude, the definition it was built from.
+
+    Gold returns no definition: its contract is the venue profile, and the
+    runtime keeps fetching gold's definition the way it did before #1406.
+    """
+
     if key == GOLD:
-        return active_paper_gold_venue(dualtrack)
-    if key not in OKX_SWAPS:
-        raise PaperGoldVenueError("paper_instrument_unknown", f"{key!r} is not one of {list(instrument_keys())}")
+        return active_paper_gold_venue(dualtrack), None
+    require_instrument_key(key)
     asset, symbol = OKX_SWAPS[key]
     try:
-        definition = fetch(endpoint=_endpoint(dualtrack, symbol), source=SOURCE)
+        definition = (fetch or fetch_execution_instrument_definition)(endpoint=_endpoint(dualtrack, symbol), source=SOURCE)
     except (RuntimeError, ValueError) as exc:
         raise PaperGoldVenueError("paper_instrument_unavailable", f"{symbol}: {exc}") from exc
     if str(definition.get("status")) != "TRADING":
@@ -86,4 +148,23 @@ def resolve_paper_instrument(
         raise PaperGoldVenueError("paper_instrument_multiplier", f"{symbol} multiplier is {definition.get('contract_multiplier')!r}")
     profile = _profile(key, asset, symbol, definition)
     require_instrument_matches(definition, profile)
+    return profile, dict(definition)
+
+
+def profile_for_definition(key: str, definition: Mapping[str, Any]) -> PaperGoldVenue:
+    """Silver or crude's profile from a definition already read this pass."""
+
+    asset, symbol = OKX_SWAPS[require_instrument_key(key)]
+    profile = _profile(key, asset, symbol, definition)
+    require_instrument_matches(definition, profile)
     return profile
+
+
+def execution_contract(venue: PaperGoldVenue) -> dict[str, Any]:
+    """The order-rounding contract for one instrument, in dualtrack's shape."""
+
+    return {
+        "schema_version": "dualtrack-execution-contract-v1",
+        **dict(venue.contract),
+        "execution_instrument_id": venue.execution_instrument_id,
+    }
