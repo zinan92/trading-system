@@ -1,5 +1,27 @@
 # Decision Log
 
+# 2026-11-07 — GridMind controls listen for intents (#1395)
+
+## Decision
+
+- `window.gmIntent` is one document listener. A control names its action in `data-gm-intent`, and handlers register with `gmIntent.on(type, name, handler)`. The handlers are the existing ones, moved unchanged.
+- Converted: venue and instrument selects, dashboard strategy buttons, preview, confirm, strategy type, start, stop, the start-risk dialog buttons and its acknowledgements.
+- The control script looks its elements up on every use (`live`), so a replaced element is the one read and disabled.
+- Not converted: the grid-range review and drag (#1398), the grid-range acknowledgements (#1397), read-only panels.
+
+## Gotchas
+
+- `gm-desk.js` switches BTC and gold with `new Event("change")`, which does not bubble. A bubbling document listener never saw it, so the switch would have failed silently while every wire and GridMind test still passed. The router listens to `change` in the capture phase. `test_the_desk_asset_switch_still_reaches_the_selects` failed before that fix.
+- The router skips a disabled control, because a dispatched click reaches listeners even though a user's click on a disabled button does not.
+- A cloned `<select>` loses its value. The swap helper keeps it, as a React select renders the value it was given.
+
+## Verification
+
+- `tests/test_dashboard_control_wire_browser.py` passes with zero edits to its expected bytes.
+- `tests/test_gridmind_control_intents_browser.py` (3 tests): every control replaced repeatedly during the journey gives the same 7 requests (fails without this change); a disabled control sends nothing; the non-bubbling switch reaches the selects.
+- GridMind and dashboard-control suite: 150 passed and 4 mjs tests ok before the capture fix. After it: wire, intents, today, profit controls, DCA, control track, journey and range drag pass.
+- Mocks only. No production control was pressed.
+
 # 2026-11-07 — ADR 0008: React draws controls, GridMind keeps every control request (#1394)
 
 ## Decision
