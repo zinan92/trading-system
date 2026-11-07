@@ -24,7 +24,7 @@
   - `switchAsset`'s real sequence, with an enabled and with a disabled instrument select, sends both selection requests (each case failed before its fix).
 - CI runs these browser tests: the root suite reported 4067 passed and no skips on run 42339049000.
 - `gm-desk.js` binds nothing to the converted controls.
-- At a6477d7: GridMind, dashboard-control and today browser suites 159 passed, desk 251 passed, 4 mjs tests ok. `gridmind_control_wire.json` has no diff.
+- At the final code (branch commit a6477d7, before rebasing onto docs-only #1394): GridMind, dashboard-control and today browser suites 159 passed, desk 251 passed, 4 mjs tests ok. `gridmind_control_wire.json` has no diff.
 - Mocks only. No production control was pressed.
 
 # 2026-11-07 — ADR 0008: React draws controls, GridMind keeps every control request (#1394)
