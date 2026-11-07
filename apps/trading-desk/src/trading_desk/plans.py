@@ -1,14 +1,13 @@
 """Indicative plans from Park's direction. The desk never submits orders; approval is handed to the operator."""
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 
-TEMPLATE = {
-    # BTC matches Park's approved f107 shape: 5 rungs x 19 USDC, range ~4.5% under price, stop ~2.7% beyond.
-    "hl_testnet": {"rungs": 5, "notional": 19.0, "range_pct": 0.045, "stop_pct": 0.027, "unit": "USDC"},
-    # XAU matches the running paper grid: 10 rungs x 0.2 oz, 200-point range, stop 50 beyond.
-    "xau_paper": {"rungs": 10, "units": 0.2, "range_pct": 0.046, "stop_pct": 0.0116, "unit": "USDT"},
-}
+from .venues import DEFAULT as DEFAULT_VENUES, VenueModule
+
+# Each venue module owns its plan template (ADR 0007); this read-only view is for callers that only look.
+TEMPLATE = MappingProxyType({kind: DEFAULT_VENUES.get(kind).plan_template for kind in DEFAULT_VENUES.having("grid_plan")})
 
 
 def max_loss(asset: str, rungs: list[float], stop: float, *, notional: float | None = None, units: float | None = None) -> float:
@@ -19,11 +18,14 @@ def max_loss(asset: str, rungs: list[float], stop: float, *, notional: float | N
     return round(total, 2)
 
 
-def build_plan(kind: str, direction: str, price: float | None, grid: dict[str, Any] | None) -> dict[str, Any]:
+def build_plan(venue: VenueModule | str, direction: str, price: float | None, grid: dict[str, Any] | None) -> dict[str, Any]:
+    """``venue``: the asset's venue module (a kind name is looked up in the default registry)."""
     if direction not in {"long", "short", "flat"}:
         raise ValueError("direction_invalid")
+    venue = DEFAULT_VENUES.get(venue) if isinstance(venue, str) else venue
+    kind, tpl = venue.kind, venue.plan_template or {}
     grid = grid or {}
-    if kind == "watch":
+    if not venue.can("grid_plan"):
         return {"kind": "record_only", "title": f"{'做多' if direction == 'long' else '做空' if direction == 'short' else '观望'} · 只记判断", "direction": direction,
                 "lines": [["现价", _fmt(price) if price is not None else "读不到"], ["下单", "这个品种还没有可以下单的交易所"]],
                 "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。"}
@@ -42,19 +44,16 @@ def build_plan(kind: str, direction: str, price: float | None, grid: dict[str, A
     if running and grid.get("direction") == direction and grid.get("rungs"):
         rungs = [float(r) for r in grid["rungs"]]
         stop = float(grid["hard_stop"])
-        tpl = TEMPLATE[kind]
-        loss = grid.get("max_loss") or max_loss(kind, rungs, stop, notional=grid.get("notional_per_rung") or tpl.get("notional"), units=grid.get("units_per_rung") if kind == "xau_paper" else None)
+        loss = grid.get("max_loss") or max_loss(kind, rungs, stop, notional=grid.get("notional_per_rung") or tpl.get("notional"), units=grid.get("units_per_rung") if "units" in tpl else None)
         return {
             "kind": "keep", "title": f"{'做多' if direction == 'long' else '做空'}网格 · 沿用正在跑的这一套", "direction": direction,
             "range": [grid.get("lower"), grid.get("upper")], "rungs": rungs, "hard_stop": stop, "max_loss": round(float(loss), 2),
             "lines": [["区间", f"{_fmt(grid.get('lower'))} – {_fmt(grid.get('upper'))}"], ["硬止损", _fmt(stop)], ["最多亏", f"{float(loss):,.2f} {tpl['unit']}"]],
             "note": "方向和正在跑的网格一致，不需要改动。" + ("现价在区间上方，买单挂着等回落。" if direction == "long" and grid.get("upper") and price > float(grid["upper"]) else ""),
         }
-    tpl = TEMPLATE[kind]
     tick = _tick_for(price)
     width = price * tpl["range_pct"]
-    # The paper engine only accepts a grid whose range contains the current price.
-    above = 0.1 if kind == "xau_paper" else 0.0
+    above = tpl.get("beyond_price", 0.0)  # share of the range on the far side of the price (the paper engine needs some)
     if direction == "long":
         lower, upper = price - width * (1 - above), price + width * above
         stop = lower * (1 - tpl["stop_pct"])

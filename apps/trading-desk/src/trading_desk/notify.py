@@ -200,7 +200,7 @@ class Notifier:
     # ---- 4. price near the grid ------------------------------------------------------
     def _prices(self, state: dict[str, Any], now: datetime) -> str | None:
         for asset in self.store.assets():
-            if asset["kind"] != "hl_testnet":
+            if not self.sources.venues.of(asset).can("price_alerts"):
                 continue
             grid = self.sources.hl_grid(asset)
             price, upper, stop = grid.get("price"), grid.get("upper"), grid.get("hard_stop")

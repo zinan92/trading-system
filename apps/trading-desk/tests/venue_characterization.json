@@ -501,10 +501,8 @@
   },
   "driver_calls": 0,
   "execute": {
-   "detail": {
-    "coordinator_status": "grid_running"
-   },
-   "refused": "测试盘上已经有网格在跑。先按「停止网格」，撤完单后再执行新计划。"
+   "detail": {},
+   "refused": "这个品种暂不支持从交易台执行，只能记录判断。"
   },
   "execute_idle": {
    "detail": {},

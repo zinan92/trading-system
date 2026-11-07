@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import Config
+from .venues import DEFAULT as DEFAULT_VENUES, Registry
 
 from services.structured_log import get_logger
 
@@ -39,6 +40,9 @@ BLOCKER_TEXT = {
 RETRYABLE = ("market_price_mismatch", "market_fact_unavailable", "market_observation_mismatch", "market_bbo_inconsistent", "mid_outside_bbo")
 
 
+NOT_EXECUTABLE = "这个品种暂不支持从交易台执行，只能记录判断。"
+
+
 class ExecutionRefused(Exception):
     def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
         super().__init__(message)
@@ -59,8 +63,9 @@ def strategy_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
 
 class Executor:
     def __init__(self, config: Config, fetch: Callable[[str, dict[str, Any] | None], Any],
-                 run: Callable[..., subprocess.CompletedProcess] | None = None) -> None:
+                 run: Callable[..., subprocess.CompletedProcess] | None = None, venues: Registry | None = None) -> None:
         self.config = config
+        self.venues = venues or DEFAULT_VENUES
         self.fetch = fetch
         self.run = run or subprocess.run
 
@@ -76,10 +81,12 @@ class Executor:
 
     # ---- preview (no orders) ---------------------------------------------------
     def preview(self, asset: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
-        if asset["kind"] == "xau_paper":
-            return self.preview_gold(plan)
-        if asset["kind"] != "hl_testnet":
-            raise ExecutionRefused("这个品种暂不支持从交易台执行，只能记录判断。")
+        venue = self.venues.of(asset)
+        if not venue.can("preview"):
+            raise ExecutionRefused(NOT_EXECUTABLE)
+        return venue.preview(self, asset, plan)
+
+    def preview_testnet(self, asset: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
         strategy = strategy_from_plan(plan)
         body = {"venue_profile_id": asset["venue_profile_id"], "instrument_id": asset["instrument_id"], "strategy_family": "grid", "strategy": strategy}
         response = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/preview", body)
@@ -128,8 +135,12 @@ class Executor:
 
     # ---- execute (only from the human-pressed button) --------------------------
     def execute(self, asset: dict[str, Any], plan: dict[str, Any], *, shown_max_loss: float | None, judgment_id: int) -> dict[str, Any]:
-        if asset["kind"] == "xau_paper":
-            return self.execute_gold(plan, shown_max_loss=shown_max_loss)
+        venue = self.venues.of(asset)
+        if not venue.can("execute"):
+            raise ExecutionRefused(NOT_EXECUTABLE)
+        return venue.execute(self, asset, plan, shown_max_loss=shown_max_loss, judgment_id=judgment_id)
+
+    def execute_testnet(self, asset: dict[str, Any], plan: dict[str, Any], *, shown_max_loss: float | None, judgment_id: int) -> dict[str, Any]:
         coordinator = self.coordinator()
         if coordinator.get("status") in LIVE_COORDINATOR_STATES:
             raise ExecutionRefused("测试盘上已经有网格在跑。先按「停止网格」，撤完单后再执行新计划。",

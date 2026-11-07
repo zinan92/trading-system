@@ -39,7 +39,7 @@ def main() -> None:
         report = {key: result.get(key) for key in ("generated_at", "provider", "replaced")}
         if args.command == "tick":  # the 20-minute job: refresh the three things, then send what is due
             sources, store = Sources(config), Store(config.db_path)
-            futures = [a["kline_key"] for a in store.assets() if a["kind"] == "watch" and a.get("kline_key")]
+            futures = [a["kline_key"] for a in store.assets() if sources.venues.of(a).can("futures_overview") and a.get("kline_key")]
             report["futures"] = sources.refresh_futures(futures) if futures else None
             advisor = Advisor(store, sources, watch, asset_state=lambda asset: current_state(sources, asset))
             report["pushed"] = Notifier(config, store, sources, watch, advisor, queue=park_outbox(config)).run()

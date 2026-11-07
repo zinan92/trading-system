@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from .config import Config
 from .digest import latest_kline_file
+from .venues import DEFAULT as DEFAULT_VENUES, Registry
 
 from services.structured_log import get_logger, request_id
 
@@ -46,8 +47,9 @@ def http_json(url: str, body: dict[str, Any] | None = None, timeout: float = 12.
 
 
 class Sources:
-    def __init__(self, config: Config, fetch: Fetch | None = None) -> None:
+    def __init__(self, config: Config, fetch: Fetch | None = None, venues: Registry | None = None) -> None:
         self.config = config
+        self.venues = venues or DEFAULT_VENUES
         self.fetch = fetch or http_json
         self.slow_fetch = fetch or (lambda url, body: http_json(url, body, timeout=120))
         self._news_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -189,22 +191,26 @@ class Sources:
     def bars(self, asset: dict[str, Any], timeframe: str, limit: int = 60) -> dict[str, Any]:
         if timeframe not in self.HL_INTERVAL_MS:
             return {"ok": False, "reason": "不支持的周期", "bars": []}
-        if asset["kind"] == "hl_testnet":
-            source = f"Hyperliquid Testnet {asset['coin']}（网格下单的同一个价格）"
-            end = int(time.time() * 1000)
-            start = end - self.HL_INTERVAL_MS[timeframe] * (limit + 1)
-            try:
-                rows = self.fetch(self.config.hyperliquid_info_url, {"type": "candleSnapshot", "req": {"coin": asset["coin"], "interval": timeframe, "startTime": start, "endTime": end}})
-            except Exception as exc:  # noqa: BLE001
-                LOG.warning("caught_exception", exc_info=True)
-                return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
-            bars = [[datetime.fromtimestamp(int(r["t"]) / 1000, timezone.utc).isoformat(), float(r["o"]), float(r["h"]), float(r["l"]), float(r["c"])]
-                    for r in rows or [] if isinstance(r, dict) and all(k in r for k in ("t", "o", "h", "l", "c"))][-limit:]
-            if not bars:
-                return {"ok": False, "reason": "K 线暂时没有数据", "bars": [], "source": source}
-            return {"ok": True, "bars": bars, "source": source, "fresh": True, "latest_timestamp": bars[-1][0]}
-        if asset["kind"] == "watch":
-            return self._overview_bars(asset, timeframe, limit)
+        return self.venues.of(asset).bars(self, asset, timeframe, limit)
+
+    def hl_bars(self, asset: dict[str, Any], timeframe: str, limit: int) -> dict[str, Any]:
+        """Hyperliquid Testnet candles for the asset's coin: the same price its grid trades on."""
+        source = f"Hyperliquid Testnet {asset['coin']}（网格下单的同一个价格）"
+        end = int(time.time() * 1000)
+        start = end - self.HL_INTERVAL_MS[timeframe] * (limit + 1)
+        try:
+            rows = self.fetch(self.config.hyperliquid_info_url, {"type": "candleSnapshot", "req": {"coin": asset["coin"], "interval": timeframe, "startTime": start, "endTime": end}})
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
+            return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
+        bars = [[datetime.fromtimestamp(int(r["t"]) / 1000, timezone.utc).isoformat(), float(r["o"]), float(r["h"]), float(r["l"]), float(r["c"])]
+                for r in rows or [] if isinstance(r, dict) and all(k in r for k in ("t", "o", "h", "l", "c"))][-limit:]
+        if not bars:
+            return {"ok": False, "reason": "K 线暂时没有数据", "bars": [], "source": source}
+        return {"ok": True, "bars": bars, "source": source, "fresh": True, "latest_timestamp": bars[-1][0]}
+
+    def paper_gold_bars(self, timeframe: str, limit: int) -> dict[str, Any]:
+        """The Paper gold grid's own market bars, from the Dashboard."""
         url = f"{self.config.dashboard_url}/api/dualtrack/market/bars?" + urllib.parse.urlencode({"symbol": "GOLD", "timeframe": timeframe, "limit": limit})
         paper = self.paper_gold()
         source = f"{paper['market_label']}（纸面网格用的同一个价格）" if paper else "纸面黄金（来源读不到：GridMind 目录不可用）"
@@ -322,7 +328,7 @@ class Sources:
         self._news_cache.pop("__overview__", None)
         return {"ok": True, "refreshed": True}
 
-    def _overview_bars(self, asset: dict[str, Any], timeframe: str, limit: int) -> dict[str, Any]:
+    def overview_bars(self, asset: dict[str, Any], timeframe: str, limit: int) -> dict[str, Any]:
         """Futures candles from Human K-line Review (8932), the same data the K-line daily reads.
         1h requests get 30-minute candles: finer, and enough for the 72-hour review. The service refreshes
         its intraday cache when the morning brief asks, so the latest candle can be hours old."""

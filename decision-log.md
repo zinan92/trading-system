@@ -1,5 +1,33 @@
 # Decision Log
 
+# 2026-11-07 — Desk Venue Modules replace the desk's kind branches (#1377, #1378)
+
+## Decision
+
+- ADR 0007 (#1377):
+  - Standard Broker canonical ports are the one port direction.
+  - `services/broker_port` is a compatibility layer: not extended, and wrapped when touched.
+  - Desk behaviour per kind lives in one module per kind; venue identity stays with the Dashboard catalog.
+- `trading_desk/venues/` (#1378): a frozen registry (`MappingProxyType`) of `HyperliquidTestnet`, `PaperGold` and `WatchOnly`.
+  - Each module declares capabilities from a closed set (`CAPABILITIES`) and owns its plan template, labels, price/grid read, bars, and preview/execute routing.
+  - The kind values stay as registry keys, so asset rows are unchanged.
+- One registry instance is injected through `Sources(venues=)` and `Executor(venues=)`. The app uses `sources.venues`.
+  - `Sources.bars`, `Executor.preview` and `Executor.execute` dispatch to the module.
+  - Venue mechanics stay where they were, renamed `hl_bars`, `paper_gold_bars`, `overview_bars`, `preview_testnet` and `execute_testnet`.
+- `plans.build_plan` takes the module. A kind string still resolves through the default registry. `plans.TEMPLATE` is a read-only view.
+- `build()` drops a declared capability the module cannot back and logs `venue_capability_dropped`. For example, execute needs preview, execute, a started text and the preview capability. An unknown capability or a repeated kind is an error.
+
+## Gotchas
+
+- Behaviour was locked first by `tests/venue_characterization.json`, committed on the pre-refactor code. It covers, per kind: assets, desk meta/price/grid/control, current state, bars 1h/4h, plans long/short/flat, the preview, the Dashboard calls it made, execute (live and idle coordinator), stop, rearm, and the system checks.
+- One intended change. A watch asset's execute used to fall into the Testnet path and refuse with the Testnet coordinator's message. Without `execute` it now refuses first with the not-executable message.
+- `kind` in why, review_timeline, watch, digest and provenance names records and events, not venues; left alone.
+- The store's `CHECK (kind in ...)` still lists the three kinds; #1379 moves it into code.
+
+## Verification
+
+- Snapshot byte-equal apart from the one intended line; `tests/test_venues.py` 8; desk suite 225; browser tests 5.
+
 # 2026-11-07 — Key from AI advice to the judgment and run it led to (#1370)
 
 ## Decision
