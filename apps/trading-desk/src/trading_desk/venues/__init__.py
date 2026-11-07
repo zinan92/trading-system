@@ -11,8 +11,11 @@ from .base import CAPABILITIES, Registry, VenueModule, build
 from .hyperliquid_testnet import HyperliquidTestnet
 from .okx_public import OkxPublic
 from .paper_gold import PaperGold
+from .paper_okx_swap import PaperCrude, PaperSilver
 from .watch_only import WatchOnly
 
-DEFAULT = build(HyperliquidTestnet(), PaperGold(), WatchOnly(), OkxPublic())
+# OkxPublic stays registered with no asset on it: calls recorded while silver and crude were judgment-only
+# still score on its bars (store.source_at, #1407).
+DEFAULT = build(HyperliquidTestnet(), PaperGold(), WatchOnly(), OkxPublic(), PaperSilver(), PaperCrude())
 
 __all__ = ["CAPABILITIES", "DEFAULT", "Registry", "VenueModule", "build"]

@@ -473,6 +473,17 @@ def build_park_public_read_model(
     session_id = str(active.get("strategy_session_id") or "")
     revision_id = str(active.get("strategy_revision_id") or "")
     terminal = _latest_terminal(root, active_pair=(session_id, revision_id))
+    if terminal:
+        # ADR 0009: which instrument the ended session ran, so the desk shows the ending under that instrument only.
+        from services.paper_instruments import session_instrument_key
+
+        ended_id = str(terminal.get("strategy_session_id") or "")
+        try:
+            started = next((row for row in reversed(ParkStrategyIdentityJournal(root).rows())
+                            if row.get("event") == "session_started" and str(row.get("strategy_session_id") or "") == ended_id), None)
+        except (OSError, ValueError, json.JSONDecodeError):
+            started = None
+        terminal = {**terminal, "paper_instrument": session_instrument_key(started) if started else None}
     reverse = _latest_reverse_request(root)
     if terminal and session_id and (
         str(terminal.get("strategy_session_id") or "") != session_id
@@ -667,8 +678,12 @@ def build_park_public_read_model(
                 round(lower + grid_spacing * (index + 1), 8)
                 for index in range(grid_count)
             ]
+    from services.paper_instruments import session_instrument_key
+
     strategy = {
         "active": bool(session_id and lifecycle),
+        # ADR 0009: which instrument this session runs; the desk shows a grid only under that instrument.
+        "paper_instrument": session_instrument_key(active) if session_id else None,
         "state": lifecycle.get("state") or "IDLE_CLEAN",
         "strategy_session_id": session_id or None,
         "strategy_revision_id": revision_id or None,

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from datetime import datetime
+from decimal import ROUND_FLOOR, Decimal
 from typing import Any, Mapping
 
 from services.natural_language_numbers import (
@@ -337,8 +338,14 @@ def _build_grid_risk_plan(
     equity: float,
     lower: float,
     upper: float,
+    quantity_increment: str | None = None,
 ) -> dict[str, Any]:
-    """Build full-depth Grid geometry and hard-loss sizing."""
+    """Build full-depth Grid geometry and hard-loss sizing.
+
+    ``quantity_increment`` (silver and crude, #1407) floors each rung's
+    quantity to what the venue accepts, then recomputes notional and loss from
+    the floored quantity. Without it (gold) sizing is unchanged.
+    """
 
     direction = str(normalized.get("direction") or "")
     spacing_value = normalized.get("grid_spacing")
@@ -435,6 +442,15 @@ def _build_grid_risk_plan(
     selected_constraint = "maximum_leverage" if loss_cap is None or (leverage_cap is not None and leverage_cap <= loss_cap) else "maximum_acceptable_loss"
     per_order_notional = round(maximum_notional / order_count, 12)
     per_order_quantity = round(per_order_notional / quantity_price_basis, 12)
+    if quantity_increment is not None:
+        # The adapter rounds to the nearest increment; rounding up could lose more than Park was shown.
+        increment = Decimal(str(quantity_increment))
+        floored = (Decimal(str(per_order_quantity)) / increment).to_integral_value(rounding=ROUND_FLOOR) * increment
+        if floored <= 0:
+            raise ParkStrategyPlanError("grid_quantity_below_increment", "each rung is smaller than the venue's quantity increment")
+        per_order_quantity = float(floored)
+        per_order_notional = round(per_order_quantity * quantity_price_basis, 12)
+        maximum_notional = round(per_order_notional * order_count, 12)
     theoretical_max_loss = round(sum(abs(rung["price"] - rung["hard_stop"]) * per_order_quantity for rung in rungs), 12)
     if maximum_loss is not None:
         theoretical_max_loss = min(theoretical_max_loss, round(float(maximum_loss), 12))
@@ -468,6 +484,8 @@ def _build_grid_risk_plan(
         "local_stop_authorized": bool(normalized.get("local_stop_authorized")),
         "grid_loss_model": "full_depth_all_rungs_to_hard_stop",
     }
+    if quantity_increment is not None:
+        risk["quantity_increment"] = str(quantity_increment)
     if direction == "neutral":
         risk["legs"] = {
             "long": {"boundary": lower, "hard_stop": lower},
@@ -497,8 +515,12 @@ def build_deterministic_risk_plan(
     *,
     market: Mapping[str, Any],
     account_equity: float | None,
+    quantity_increment: str | None = None,
 ) -> dict[str, Any]:
-    """Build one immutable risk plan; no provider or execution side effects."""
+    """Build one immutable risk plan; no provider or execution side effects.
+
+    ``quantity_increment`` is given for silver and crude, which are Grid only.
+    """
 
     direction = str(normalized.get("direction") or "")
     strategy_type = str(normalized.get("strategy_type") or "")
@@ -523,7 +545,10 @@ def build_deterministic_risk_plan(
             equity=equity,
             lower=lower,
             upper=upper,
+            quantity_increment=quantity_increment,
         )
+    if quantity_increment is not None:
+        raise ParkStrategyPlanError("paper_instrument_grid_only", "silver and crude run Grid plans only")
     explicit_stop = normalized.get("stop_price")
     explicit_take_profit = normalized.get("take_profit_price")
     if direction == "neutral" and (explicit_stop not in (None, "") or explicit_take_profit not in (None, "")):

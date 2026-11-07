@@ -180,6 +180,71 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-07 — The desk runs silver and crude as Paper grids (#1407)
+
+## Decision
+
+- Desk Venue Modules `xag_paper` (silver) and `cl_paper` (crude), in `venues/paper_okx_swap.py`:
+  - capabilities `live_price`, `bars`, `bars_health`, `grid_plan`, `preview` and `execute`, with no `stop`;
+  - bars and the price for a new plan come from OKX's own swap candles (`okx_bars`, fresh or nothing);
+  - preview and execute go through `Executor.preview_paper` / `execute_paper` (the Park drafter). Gold's
+    `preview_gold` / `execute_gold` now delegate to these, with the same message text and body.
+- One instrument at a time (ADR 0009). `Sources.paper_grid(instrument)` shows the running grid only under the
+  instrument its session recorded. Every other instrument sees 「纸面盘正在跑{X}网格」, with no price and no positions.
+  Preview is refused before any draft. A draft whose plan names another instrument is never treated as ready.
+- The ai-chat body adds `paper_instrument` for silver and crude only, so the gold body is byte-identical.
+- Silver and crude are Grid only (`paper_instrument_grid_only`).
+  - `build_deterministic_risk_plan(quantity_increment=...)` floors each rung's quantity to the venue increment, then
+    recomputes notional and the max loss from the floored quantity. A rung below one increment is refused
+    (`grid_quantity_below_increment`).
+  - The drafter reads the increment from the instrument's definition; an unreadable definition blocks the plan.
+  - Gold passes no increment and is sized exactly as before.
+- The desk DB migration `_move_to_paper` runs after `_move_to_okx_public`. It moves `okx_public` → `xag_paper` /
+  `cl_paper` and records the old kind in `asset_sources`. A call is scored on the feed its price was read from:
+  futures, then OKX public, then Paper. If both moves land in the same second, the second stop is pushed 1 s later.
+  `okx_public` stays registered so old calls still score.
+- The read model gains `strategy.paper_instrument` and `terminal.paper_instrument` (from the ended session's start
+  row), so an ended grid shows under its own instrument only.
+- GridMind catalog: `okx.paper` lists `XAG-USDT-SWAP.OKX` and `CL-USDT-SWAP.OKX` with specs from the datafeed
+  definition, cached for 5 minutes. A failed read is listed as `blocked` (no guessed specs) and retried after 30 s.
+- `gm-desk.js` maps a Paper selection to silver or crude by `paper_instrument_id`, falling back to gold. Only gold and
+  BTC switch GridMind; the `desk-gold` styling stays gold-only. USDT units apply to all three Paper kinds.
+
+## Gotchas
+
+- The adapter rounds quantity HALF_UP. Unfloored, crude at 8.3667 units would go to 8.4 and could lose more than the
+  shown cap. Gold keeps the same exposure at 0.001. It was left unchanged on purpose, because changing gold's sizing
+  changes its plan digests.
+- The default catalog now reads the datafeed. Control-plane tests stub `_paper_swap_fetch`. Without the stub, eight
+  tests had called the real 127.0.0.1:8100.
+- Silver and crude share one OKX feed, so `/api/system` shows one health row for it, not two.
+- The desk's own plan estimate (for example silver 10 × 15 oz) is a display. The bound is the drafter's floored plan.
+- GridMind's own Paper picker still cannot start silver or crude: it has no market facts (`market_facts_required`).
+  The desk is the entry.
+- Rung prices are not on the tick (silver 51.1633…); the adapter rounds each price. That can move the full-depth
+  loss by up to half a tick times the quantity per rung, so the floor's margin is not a guarantee against price
+  rounding. Gold has had the same behaviour since before this change.
+- Rollback needs the desk.db backup too: code from before #1407 has no `xag_paper` / `cl_paper` module and refuses
+  those kinds, so rolling back the code alone breaks the SILVER and WTI rows.
+- The catalog's definition read times out after 2 s (the reader's default is 8 s), so a hung datafeed costs a catalog
+  read about 4 s, once every 30 s.
+
+## Verification
+
+- Desk suite: 259 passed (6 new in `test_paper_silver_crude.py`; OKX, store and venue tests updated; chained migration
+  test; snapshot regenerated, with only SILVER and the asset rows changed).
+- Root focused set: 881 passed (10 new in `tests/test_paper_silver_crude_grid.py`, with hand-worked loss figures; the #1406
+  drafter tests now use Grid candidates). A probe that fails any real datafeed definition read logged nothing.
+- GridMind browser set: 176 passed; node tests pass (1 new: a Paper silver selection focuses silver; gold is
+  the fallback). `tests/fixtures/gridmind_control_wire.json` is unchanged.
+- Real Nautilus replay on dev (isolated output root, live dev datafeed read only, commit 9076b2c). Each plan was built
+  by `build_deterministic_risk_plan` with the instrument's increment; one rung order was then sent at the plan's
+  quantity:
+  - crude at 90.05: 5 rungs, stop 87.35, cap 50.2. Plan 3.7 a rung (max loss 49.95); requested 3.7, filled 3.7.
+  - silver at 52.21: increment 0.01, cap 100. Plan 12.73 (max loss 99.93); requested 12.73, filled 12.73.
+  This proves that plan → adapter passes the floored quantity unchanged. It is one rung, not a full grid run to the stop.
+- Production: VERIFY_PROD
+
 # 2026-11-07 — Paper takes its instrument from the Strategy Session (#1406)
 
 ## Decision
@@ -234,6 +299,11 @@
 - Production at eee0272 (#1405 deploy, recorded here): the deploy gate passed with Paper idle and `/trade` returned 200.
   `/api/desk/SILVER` shows `OKX XAG-USDT-SWAP 公开行情`, `只记判断`, capabilities `bars`, `bars_health`. The rendered
   silver view was not checked.
+- Production at b54356b (this change):
+  - the gate passed with Paper idle, and `/trade`, `web.js` and `/api/watch` returned 200;
+  - the running code reads gold exactly as before;
+  - the silver and crude reads come back fresh with their own swap ids;
+  - no silver or crude grid was started.
 
 # 2026-11-07 — The Paper instrument table reads specs from the datafeed (#1405)
 

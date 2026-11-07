@@ -919,10 +919,21 @@ class ParkAiChatService:
         if normalized.get("strategy_type") == "dca" and (normalized.get("stop_price") in (None, "") or normalized.get("take_profit_price") in (None, "")):
             raise ParkStrategyPlanError("dca_exit_fields_required", "DCA requires explicit stop_price and take_profit_price")
         account = dict(context.get("account") or {})
+        increment = None
+        if self._instrument != GOLD:
+            # Silver and crude size on their own increment, floored (#1407); an unreadable definition blocks.
+            from services.dualtrack_config import dualtrack_config
+            from services.paper_instruments import resolve_paper_instrument
+
+            try:
+                increment = str(resolve_paper_instrument(self._instrument, dualtrack_config()).contract["quantity_increment"])
+            except PaperGoldVenueError as exc:
+                raise ParkStrategyPlanError(exc.code, str(exc)) from exc
         plan = build_deterministic_risk_plan(
             normalized,
             market=dict(context.get("market") or {}),
             account_equity=account.get("equity"),
+            **({"quantity_increment": increment} if increment is not None else {}),
         )
         disposition = dict(draft.get("disposition") or {})
         existing_notional = self._existing_notional(account)

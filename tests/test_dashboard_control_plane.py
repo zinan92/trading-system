@@ -12,6 +12,18 @@ from services.dashboard_control_plane import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_datafeed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The catalog's silver and crude specs never come from a real 8100 here (#1407): they list as blocked."""
+    import services.dashboard_control_plane as plane
+
+    def refuse(**_kwargs: object) -> dict:
+        raise RuntimeError("tests never read a real datafeed")
+
+    monkeypatch.setattr(plane, "_paper_swap_fetch", refuse)
+    monkeypatch.setattr(plane, "_paper_swap_cache", {})
+
+
 def _market() -> dict:
     bars = [
         {"open": 100, "high": 102, "low": 98, "close": 100, "timestamp": f"2026-08-29T00:{index:02d}:00+00:00"}

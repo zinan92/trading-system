@@ -261,6 +261,30 @@ class Sources:
         self._paper_gold_cache = (time.monotonic(), result)
         return result
 
+    def paper_instrument(self, instrument: str) -> dict[str, Any] | None:
+        """A Paper instrument's ids in GridMind's catalog (silver and crude, #1407); None when not listed or unreachable."""
+        if instrument == "gold":
+            return self.paper_gold()
+        cached = getattr(self, "_paper_instrument_cache", {}).get(instrument)
+        if cached and time.monotonic() - cached[0] < self.PAPER_GOLD_TTL_SECONDS:
+            return cached[1]
+        try:
+            payload = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
+        except Exception:  # noqa: BLE001 - the caller shows the ids as unknown
+            LOG.warning("caught_exception", exc_info=True)
+            return None
+        result = None
+        for profile in (payload or {}).get("venue_profiles") or []:
+            if profile.get("environment") != "paper":
+                continue
+            row = next((i for i in profile.get("instruments") or [] if i.get("asset") == PAPER_ASSETS[instrument]), None)
+            if row:
+                result = {"venue_profile_id": profile.get("id"), "instrument_id": row.get("instrument_id"),
+                          "eligibility": row.get("eligibility")}
+                break
+        self._paper_instrument_cache = {**getattr(self, "_paper_instrument_cache", {}), instrument: (time.monotonic(), result)}
+        return result
+
     def catalog(self) -> dict[str, Any]:
         try:
             payload = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
@@ -479,26 +503,51 @@ class Sources:
                 "realized": pnl.get("realized"), "unrealized": pnl.get("unrealized"), "positions": positions}
 
     def xau_paper(self) -> dict[str, Any]:
+        return self.paper_grid("gold")
+
+    def paper_grid(self, instrument: str = "gold") -> dict[str, Any]:
+        """One instrument's view of the Paper grid (ADR 0009: one instrument at a time).
+
+        The running grid shows only under the instrument its session recorded; every other instrument sees
+        "not running" and no price, never another instrument's grid or mark.
+        """
+        label = PAPER_LABELS[instrument]
         try:
             model = self.fetch(f"{self.config.dashboard_url}/api/park-paper/read-model", None)
         except Exception as exc:  # noqa: BLE001
             LOG.warning("caught_exception", exc_info=True)
-            return {"ok": False, "reason": f"黄金纸面盘读不到：{type(exc).__name__}"}
+            return {"ok": False, "reason": f"{label}纸面盘读不到：{type(exc).__name__}"}
         strategy = model.get("strategy") or {}
         execution = model.get("execution") or {}
+        running = str(strategy.get("paper_instrument") or "gold")  # a read model from before #1407 ran gold only
+        if strategy.get("active") is True and running != instrument:
+            other = PAPER_LABELS.get(running, running)
+            ledger = self._paper_ledger()
+            grid = {"ok": False, "none": True, "reason": f"纸面盘正在跑{other}网格，一次只跑一个；{label}现在没有网格。", "price": None}
+            account_view = {"ok": True, "venue": f"纸面盘 · {other}网格在跑", "money": "纸面模拟",
+                            "equity": ledger.get("equity"), "starting_cash": ledger.get("starting_cash"),
+                            "realized": ledger.get("realized"), "unrealized": ledger.get("unrealized"),
+                            "positions": ledger.get("positions") or [], "trades": None, "reconciliation": "unknown",
+                            "note": f"纸面盘正在跑{other}网格"}
+            return {"ok": True, "grid": grid, "account": account_view, "price": None}
         if strategy.get("active") is not True:
             terminal = model.get("terminal") or {}
+            if terminal and str(terminal.get("paper_instrument") or "gold") != instrument:
+                terminal = {}  # the last ended grid was another instrument's
             closed = terminal.get("closed_count")
             ended = terminal.get("ended_at")
             reason = {"lower_boundary_invalidated": "跌破区间下沿", "upper_boundary_invalidated": "涨破区间上沿", "hard_stop": "触发硬止损"}.get(terminal.get("reason"), terminal.get("reason") or "")
-            price = (model.get("market") or {}).get("price")
+            # Idle, the mark is whatever ran last; only gold (the pre-#1407 view) keeps showing it.
+            price = (model.get("market") or {}).get("price") if instrument == "gold" else None
             ended_text = (f"：{reason}，{closed} 笔已平仓" if closed is not None else f"：{reason}") if terminal else ""
             reconciliation = (terminal.get("reconciliation") or {}).get("status") if terminal.get("ended_flat") is True else None
-            grid = {"ok": False, "none": True, "ended": True, "reason": f"黄金网格已结束{ended_text}。现在没有运行中的黄金网格。",
+            grid = {"ok": False, "none": True, "ended": True, "reason": f"{label}网格已结束{ended_text}。现在没有运行中的{label}网格。",
                     "ended_at": ended, "status": "TERMINAL", "price": price}
+            if instrument != "gold" and not terminal:
+                grid = {"ok": False, "none": True, "reason": f"现在没有运行中的{label}网格。", "price": None}
             ledger = self._paper_ledger()
             open_positions = ledger.get("positions") or []
-            account_view = {"ok": True, "venue": "Binance 纸面盘 · 黄金网格", "money": "纸面模拟",
+            account_view = {"ok": True, "venue": PAPER_ACCOUNT_LABELS[instrument], "money": "纸面模拟",
                             "equity": ledger.get("equity"), "starting_cash": ledger.get("starting_cash"),
                             "realized": ledger.get("realized"), "unrealized": ledger.get("unrealized"),
                             "positions": open_positions, "trades": None, "reconciliation": reconciliation or "unknown",
@@ -523,17 +572,17 @@ class Sources:
             "price": price,
             "updated_at": model.get("generated_at"),
             "max_loss": strategy.get("theoretical_max_loss"),
-            "units_per_rung": positions[0].get("remaining_units") if positions else 0.2,
+            "units_per_rung": positions[0].get("remaining_units") if positions else (0.2 if instrument == "gold" else None),
         }
         account_view = {
             "ok": True,
-            "venue": "Binance 纸面盘 · 黄金网格",
+            "venue": PAPER_ACCOUNT_LABELS[instrument],
             "money": "纸面模拟",
             "equity": account.get("equity"),
             "starting_cash": account.get("starting_cash"),
             "realized": pnl.get("realized"),
             "unrealized": pnl.get("unrealized"),
-            "positions": [{"asset": "XAU", "side": p.get("side"), "size": p.get("remaining_units"),
+            "positions": [{"asset": PAPER_ASSETS[instrument], "side": p.get("side"), "size": p.get("remaining_units"),
                            "entry": p.get("entry_price"), "tp": p.get("tp"), "sl": p.get("sl")} for p in positions],
             "trades": (execution.get("counts") or {}).get("closed_positions"),
             "reconciliation": (execution.get("reconciliation") or {}).get("status") or "unknown",
@@ -547,6 +596,10 @@ GRID_STATUS = {
     "stopped_by_operator": "已手动停止",
 }
 PAPER_STATE = {"ACTIVE_LOCKED": "运行中", "PAUSED": "暂停", "TERMINAL": "已结束"}
+# ADR 0009: the Paper instruments, by the key a Strategy Session records.
+PAPER_LABELS = {"gold": "黄金", "silver": "白银", "crude": "原油"}
+PAPER_ASSETS = {"gold": "XAU", "silver": "XAG", "crude": "CL"}
+PAPER_ACCOUNT_LABELS = {"gold": "Binance 纸面盘 · 黄金网格", "silver": "OKX 纸面盘 · 白银网格", "crude": "OKX 纸面盘 · 原油网格"}
 
 
 def _same_day_window(collected_at: Any, hours: int = 30) -> bool:

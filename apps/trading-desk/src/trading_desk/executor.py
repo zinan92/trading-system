@@ -167,39 +167,64 @@ class Executor:
         return {"preview": fresh, "activation_id": confirmed["activation_id"], "attempts": receipts,
                 "status": final.get("status"), "started": final.get("status") == "grid_running"}
 
-    # ---- gold paper grid (Dashboard AI draft -> Park-pressed confirm) ------------
-    def _gold_active(self) -> bool:
+    # ---- Paper grids (Dashboard AI draft -> Park-pressed confirm) ----------------
+    # ADR 0009: one Paper instrument at a time. Gold's requests are unchanged; silver and crude add
+    # ``paper_instrument`` to the draft message so the drafter reads their market and contract.
+    PAPER_LABELS = {"gold": "黄金", "silver": "白银", "crude": "原油"}
+
+    def _paper_running(self) -> str | None:
+        """The instrument the Paper session runs, or None when idle."""
         try:
             model = self.fetch(f"{self.config.dashboard_url}/api/park-paper/read-model", None) or {}
         except Exception as exc:  # noqa: BLE001
             LOG.warning("caught_exception", exc_info=True)
-            raise ExecutionRefused("读不到黄金纸面盘状态，为安全起见不执行。") from exc
-        return (model.get("strategy") or {}).get("active") is True
+            raise ExecutionRefused("读不到纸面盘状态，为安全起见不执行。") from exc
+        strategy = model.get("strategy") or {}
+        return str(strategy.get("paper_instrument") or "gold") if strategy.get("active") is True else None
+
+    def _gold_active(self) -> bool:
+        return self._paper_running() is not None
 
     @staticmethod
-    def gold_message(plan: dict[str, Any]) -> str:
+    def paper_message(plan: dict[str, Any], label: str) -> str:
         lower, upper = plan["range"]
         side = "做多" if plan["direction"] == "long" else "做空"
-        return (f"{side}网格 Grid，纸面黄金 Paper，区间 {lower}~{upper}，{len(plan['rungs'])}格，最大3倍杠杆，"
+        return (f"{side}网格 Grid，纸面{label} Paper，区间 {lower}~{upper}，{len(plan['rungs'])}格，最大3倍杠杆，"
                 f"硬止损 {plan['hard_stop']}，最大可接受亏损 {math.ceil(float(plan['max_loss']))} USDT，没有旧仓。")
 
+    @classmethod
+    def gold_message(cls, plan: dict[str, Any]) -> str:
+        return cls.paper_message(plan, "黄金")
+
     def preview_gold(self, plan: dict[str, Any]) -> dict[str, Any]:
-        if self._gold_active():
-            raise ExecutionRefused("黄金纸面盘已经有网格在跑，一次只跑一个。")
+        return self.preview_paper(plan, instrument="gold", label="黄金")
+
+    def preview_paper(self, plan: dict[str, Any], *, instrument: str, label: str) -> dict[str, Any]:
+        running = self._paper_running()
+        if running is not None:
+            if running == instrument == "gold":
+                raise ExecutionRefused("黄金纸面盘已经有网格在跑，一次只跑一个。")
+            raise ExecutionRefused(f"纸面盘已经有{self.PAPER_LABELS.get(running, running)}网格在跑，一次只跑一个。")
         chat = f"{self.config.dashboard_url}/api/park-paper/ai-chat"
         pending = (self.fetch(chat, None) or {}).get("pending_draft") or {}
         if pending.get("draft_id"):
             # One draft at a time: a stale draft would swallow this message as a follow-up.
             self.fetch(chat, {"action": "reject", "draft_id": pending["draft_id"]})
-        reply = self.fetch(chat, {"action": "message", "message": self.gold_message(plan)}) or {}
+        message = self.paper_message(plan, label)
+        body: dict[str, Any] = {"action": "message", "message": message}
+        if instrument != "gold":
+            body["paper_instrument"] = instrument
+        reply = self.fetch(chat, body) or {}
         draft = reply.get("draft") or {}
         risk = (draft.get("plan") or {}).get("risk") or {}
         ready = reply.get("confirmable") is True and bool(draft.get("plan_digest"))
+        if ready and instrument != "gold" and (draft.get("plan") or {}).get("paper_instrument") != instrument:
+            ready = False  # a draft for another instrument is never this instrument's preview
         entry = risk.get("grid_entry_range") or {}
         rungs = risk.get("grid_rung_prices") or []
         notional = float(risk.get("maximum_notional") or 0) / len(rungs) if rungs else None
         return {
-            "strategy": {"venue": "paper", "message": self.gold_message(plan)},
+            "strategy": {"venue": "paper", "message": message},
             "execution_ready": ready,
             "blockers": [] if ready else [str(reply.get("message") or reply.get("code") or "预览没有通过")],
             "preview_digest": draft.get("plan_digest") if ready else None,
@@ -211,7 +236,10 @@ class Executor:
         }
 
     def execute_gold(self, plan: dict[str, Any], *, shown_max_loss: float | None) -> dict[str, Any]:
-        fresh = self.preview_gold(plan)
+        return self.execute_paper(plan, instrument="gold", label="黄金", shown_max_loss=shown_max_loss)
+
+    def execute_paper(self, plan: dict[str, Any], *, instrument: str, label: str, shown_max_loss: float | None) -> dict[str, Any]:
+        fresh = self.preview_paper(plan, instrument=instrument, label=label)
         fresh.pop("plan", None)
         if not fresh["execution_ready"]:
             raise ExecutionRefused("预览没有通过风险检查，没有下单。", {"blockers": fresh["blockers"]})

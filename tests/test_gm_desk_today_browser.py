@@ -246,3 +246,21 @@ def test_a_refused_order_shows_its_chain_after_the_press() -> None:
         page.locator("#deskExecBox .desk-why-verdict", has_text="断在「下单结果」：确认没有通过，没有下单。").wait_for()
         assert [path for path, _ in posts] == ["/api/plan", "/api/judgments", "/api/execute"]  # one press, one request
         browser.close()
+
+
+def test_a_paper_silver_selection_focuses_silver_and_gold_stays_the_fallback() -> None:
+    """#1407: a Paper selection names its instrument; silver and crude match by GridMind's catalog id."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    assets = {"assets": [*ASSETS["assets"],
+                         {"key": "SILVER", "label": "白银", "kind": "xag_paper", "instrument_id": "XAG-USDT-SWAP",
+                          "venue_profile_id": "okx.paper", "paper_instrument_id": "XAG-USDT-SWAP.OKX"}]}
+    silver_desk = _desk(meta={"kind": "xag_paper", "capabilities": ["bars", "bars_health", "execute", "grid_plan", "live_price", "preview"]})
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [], reads_extra={
+            "/api/assets": assets, "/api/desk/SILVER": silver_desk, "/api/desk/XAU": _desk()})
+        page.evaluate("() => { window.dashboardControlState.selection = {venue_profile_id: 'okx.paper', instrument_id: 'XAG-USDT-SWAP.OKX'}; }")
+        page.locator("#deskJudgeTitle", has_text="今天 · 白银").wait_for()
+        assert not page.evaluate("() => document.body.classList.contains('desk-gold')")  # the gold styling is gold's only
+        page.evaluate("() => { window.dashboardControlState.selection = {venue_profile_id: 'okx.paper', instrument_id: 'XAU-USDT-SWAP.OKX'}; }")
+        page.locator("#deskJudgeTitle", has_text="今天 · 黄金").wait_for()
+        browser.close()

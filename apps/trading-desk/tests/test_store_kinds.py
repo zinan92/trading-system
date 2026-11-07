@@ -66,7 +66,7 @@ def test_a_database_from_before_watch_assets_migrates_too(tmp_path: Path) -> Non
         conn.execute("insert into assets (key,label,kind,venue_profile_id,instrument_id,coin,created_at) values ('BTC','BTC','hl_testnet','v','i','BTC','t')")
     store = Store(path)
     assert "check (kind in" not in _table_sql(path)
-    assert store.asset("BTC")["kind"] == "hl_testnet" and store.asset("SILVER")["kind"] == "okx_public"  # the v4 seed still lands, on OKX since #1387
+    assert store.asset("BTC")["kind"] == "hl_testnet" and store.asset("SILVER")["kind"] == "xag_paper"  # the v4 seed still lands, on OKX since #1387, Paper since #1407
 
 
 def test_a_kind_the_registry_does_not_know_is_refused_in_code(tmp_path: Path) -> None:

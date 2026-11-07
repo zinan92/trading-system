@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections.abc import Collection, Mapping
 from typing import Any
@@ -88,15 +88,17 @@ V4_ASSETS = [
     {"key": "ETH", "label": "ETH", "kind": "hl_testnet", "venue_profile_id": "hyperliquid.testnet", "instrument_id": "ETH-USD-PERP", "coin": "ETH",
      "news_queries": ["以太坊", "ETH", "加密", "美联储", "ETF", "稳定币"],
      "primary": ["以太坊", "ETH", "加密", "稳定币", "链", "巨鲸"], "kline_key": "ethereum", "position": 3},
-    {"key": "SILVER", "label": "白银", "kind": "okx_public", "venue_profile_id": "", "instrument_id": "XAG-USDT-SWAP", "coin": "SILVER",
+    {"key": "SILVER", "label": "白银", "kind": "xag_paper", "venue_profile_id": "", "instrument_id": "XAG-USDT-SWAP", "coin": "SILVER",
      "news_queries": ["白银", "银价", "贵金属", "美联储", "美元"],
      "primary": ["白银", "银价", "贵金属", "工业金属"], "kline_key": "silver", "position": 4},
-    {"key": "WTI", "label": "原油", "kind": "okx_public", "venue_profile_id": "", "instrument_id": "CL-USDT-SWAP", "coin": "WTI",
+    {"key": "WTI", "label": "原油", "kind": "cl_paper", "venue_profile_id": "", "instrument_id": "CL-USDT-SWAP", "coin": "WTI",
      "news_queries": ["原油", "油价", "OPEC", "霍尔木兹", "中东"],
      "primary": ["原油", "油价", "OPEC", "欧佩克", "霍尔木兹", "布伦特", "WTI"], "kline_key": "wti", "position": 5},
 ]
 # key -> (instrument while it was a futures-overview `watch` asset, its OKX swap). Only a row still exactly as seeded moves.
 MOVED_TO_OKX = {"SILVER": ("SIL", "XAG-USDT-SWAP"), "WTI": ("CL", "CL-USDT-SWAP")}
+# 2026-11-07 #1407: silver / WTI move from judgment-only OKX data to Paper grids on the same OKX swaps.
+MOVED_TO_PAPER = {"SILVER": ("XAG-USDT-SWAP", "xag_paper"), "WTI": ("CL-USDT-SWAP", "cl_paper")}
 KLINE_KEYS = {"BTC": "bitcoin", "ETH": "ethereum", "HYPE": "hype", "XAU": "gold", "PAXG": "gold", "SILVER": "silver"}
 
 
@@ -143,6 +145,7 @@ class Store:
 
         with self._conn() as conn:
             self._move_to_okx_public(conn)
+            self._move_to_paper(conn)
 
     @staticmethod
     def _move_to_okx_public(conn: sqlite3.Connection) -> None:
@@ -155,6 +158,25 @@ class Store:
             conn.execute(f"insert or ignore into asset_sources (asset, kind, instrument_id, until) select key, kind, instrument_id, ? from assets {moved}",
                          (until, key, old))
             conn.execute(f"update assets set kind='okx_public', instrument_id=? {moved}", (new, key, old))
+
+    @staticmethod
+    def _move_to_paper(conn: sqlite3.Connection) -> None:
+        """#1407: silver and WTI become Paper grids. The judgment-only kind they had is kept in ``asset_sources``,
+        like the futures move, so calls recorded before stay attributed to it. Same swaps, same candles. Runs after
+        ``_move_to_okx_public``, so an older database moves twice and keeps both stops. Idempotent; a row Park changed
+        (another instrument) is left alone."""
+        until = now_iso()
+        for key, (instrument, kind) in MOVED_TO_PAPER.items():
+            moved = "where key=? and kind='okx_public' and instrument_id=?"
+            if not conn.execute(f"select 1 from assets {moved}", (key, instrument)).fetchone():
+                continue
+            # The futures stop may share this second; never let the second stop overwrite or hide the first.
+            existing = conn.execute("select max(until) from asset_sources where asset=?", (key,)).fetchone()[0]
+            if existing and existing >= until:
+                until = (datetime.fromisoformat(existing) + timedelta(seconds=1)).isoformat()
+            conn.execute(f"insert or ignore into asset_sources (asset, kind, instrument_id, until) select key, kind, instrument_id, ? from assets {moved}",
+                         (until, key, instrument))
+            conn.execute(f"update assets set kind=? {moved}", (kind, key, instrument))
 
     def source_at(self, asset: str, created_at: str) -> dict[str, str] | None:
         """The kind and instrument an asset had when a call was recorded, if it has moved since (#1387); else None."""
