@@ -278,3 +278,14 @@ def test_a_stop_gate_held_in_state_stops_an_enabled_looking_button() -> None:
         assert [row for row in wire if row[1].endswith("/control")] == []
         browser.close()
     assert errors == []
+
+
+def test_without_the_bundle_the_chart_stays_in_the_legacy_markup() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as runtime:
+        browser = _browser(runtime)
+        page, _wire, _unexpected, errors = _open(browser, _fulfill_control, bundle_blocked=True)
+        assert page.evaluate("""() => { const frame = document.getElementById('chartFrame');
+          return !frame.hasAttribute('data-island-live') && window.gmChartHost.parentElement === frame; }""")
+        browser.close()
+    assert errors == []

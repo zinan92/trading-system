@@ -358,7 +358,16 @@ def test_gridmind_legacy_single_side_card_explicitly_migrates_39_to_20() -> None
         browser.close()
 
 
-def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
+# A new frame replaces the old one; the clone's children are copies. The chart must end up being GridMind's own node.
+REMOUNT_CHART = """() => { const frame = document.getElementById('chartFrame'), fresh = frame.cloneNode(true);
+  fresh.removeAttribute('data-island-live'); frame.replaceWith(fresh); }"""
+CHART_IS_ADOPTED = """() => { const host = document.getElementById('chartFrame'), chart = window.gmChartHost;
+  return host.hasAttribute('data-island-live') && host.querySelectorAll('#productionChart').length === 1
+    && host.contains(chart) && chart.parentElement.className === 'chart-slot' && chart.contains(state.chart.chartEl) && !!chart.querySelector('canvas'); }"""
+
+
+@pytest.mark.parametrize("remount", [False, True], ids=["first-frame", "new-frame"])
+def test_gridmind_drag_release_keeps_draft_until_explicit_confirm(remount: bool) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     model = _header_model(4000.0)
     control_requests: list[dict] = []
@@ -412,6 +421,9 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
             "1m",
             48,
         ]
+        if remount:
+            page.evaluate(REMOUNT_CHART)
+        page.wait_for_function(CHART_IS_ADOPTED)
         page.locator("#gridAdjustToggle").click()
         overlay = page.locator(".grid-adjust-overlay.on")
         overlay.wait_for(state="visible")
