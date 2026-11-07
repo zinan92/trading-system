@@ -1,5 +1,28 @@
 # Decision Log
 
+# 2026-11-07 — OKX desk bars bypass the datafeed cache (#1390)
+
+## Decision
+
+- `Sources.okx_bars` asks 8100 for `cache_policy=bypass`. Each read is OKX's current data. An OKX failure is `ok=false` and is never filled from the cache.
+
+## Gotchas
+
+- Under `cache_policy=allow`, 8100 serves cached 1h bars up to 3 hours old (`max_age_seconds` 10800). At 04:14 UTC the desk showed the 03:00 candle while OKX had 04:00.
+- The desk's own staleness gate is two periods (2 hours for 1h bars). Between 2 and 3 hours of cache age the two gates disagreed, so the feed would have flickered between ok and stale.
+
+## Verification
+
+- `test_bars_come_from_the_okx_source_on_the_datafeed` checks the URL carries `cache_policy=bypass`.
+- Production check before the fix, read-only: with `cache_policy=bypass`, 8100 returned 04:00 52.15, identical to OKX `/market/candles`.
+- Production 2dbd79d (#1387):
+  - `desk.db` backed up first;
+  - SILVER and WTI are `okx_public` with their OKX instruments;
+  - two `asset_sources` rows (`until` 2026-11-07T04:13:35Z);
+  - 250 judgments, 12 open each on SILVER and WTI;
+  - `/api/desk` meta and `reading_note` correct;
+  - the system check is ok.
+
 # 2026-11-07 — Silver and WTI read OKX public swaps (#1387)
 
 ## Decision

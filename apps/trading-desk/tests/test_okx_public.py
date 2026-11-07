@@ -19,6 +19,7 @@ def test_bars_come_from_the_okx_source_on_the_datafeed(config, fetch, store) -> 
     assert got["ok"] and got["bars"][-1][4] == 52.14 and "OKX XAG-USDT-SWAP" in got["source"]
     url = fetch.calls[-1][0]
     assert url.startswith(config.datafeed_url) and "source=okx_swap_public" in url and "timeframe=1h" in url
+    assert "cache_policy=bypass" in url  # OKX's current candle, never 8100's cached copy (#1390)
 
 
 def test_a_stale_feed_is_not_a_price(config, fetch, store) -> None:
