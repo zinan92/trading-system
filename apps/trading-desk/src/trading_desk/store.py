@@ -5,6 +5,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from services.structured_log import event, get_logger
@@ -31,7 +32,7 @@ create table if not exists judgments (
 create table if not exists assets (
   key text primary key,
   label text not null,
-  kind text not null check (kind in ('hl_testnet','xau_paper','watch')),
+  kind text not null,
   venue_profile_id text not null,
   instrument_id text not null,
   coin text not null,
@@ -62,6 +63,9 @@ create table if not exists notes (
 );
 """
 
+
+_ASSETS_AT = SCHEMA.index("create table if not exists assets (")
+ASSETS_DDL = SCHEMA[_ASSETS_AT:SCHEMA.index(");", _ASSETS_AT) + 1]
 
 DEFAULT_ASSETS = [
     {"key": "BTC", "label": "BTC", "kind": "hl_testnet", "venue_profile_id": "hyperliquid.testnet", "instrument_id": "BTC-USD-PERP", "coin": "BTC",
@@ -129,14 +133,24 @@ class Store:
 
     @staticmethod
     def _migrate_asset_kinds(conn: sqlite3.Connection) -> None:
-        """Widen the assets.kind check to allow 'watch' (judgment-only assets) on databases created before it."""
-        row = conn.execute("select sql from sqlite_master where type='table' and name='assets'").fetchone()
-        if not row or "'watch'" in row[0]:
+        """Drop the old check that listed the allowed kinds (#1379): the venue registry decides which kinds exist,
+        in code (ADR 0007), so a new venue module needs no schema edit. One transaction; rows and order kept."""
+        def listed() -> bool:
+            row = conn.execute("select sql from sqlite_master where type='table' and name='assets'").fetchone()
+            return bool(row) and "check (kind in" in " ".join(row[0].lower().split())
+        if not listed():
             return
-        conn.execute("alter table assets rename to assets_before_watch")
-        conn.executescript(SCHEMA)
-        conn.execute("insert into assets select * from assets_before_watch")
-        conn.execute("drop table assets_before_watch")
+        conn.execute("begin immediate")
+        try:
+            if listed():  # another process may have migrated while this one waited for the lock
+                conn.execute("alter table assets rename to assets_with_kind_check")
+                conn.execute(ASSETS_DDL)
+                conn.execute("insert into assets select * from assets_with_kind_check")
+                conn.execute("drop table assets_with_kind_check")
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
 
     def _conn(self) -> sqlite3.Connection:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +226,24 @@ class Store:
         with self._conn() as conn:
             row = conn.execute("select * from assets where key=?", (key,)).fetchone()
         return _asset(row) if row else None
+
+    def add_asset(self, row: Mapping[str, Any], *, kinds: Collection[str]) -> dict[str, Any]:
+        """Add an asset of any kind the venue registry knows (``kinds``: ``registry.kinds()``)."""
+        if row["kind"] not in kinds:
+            raise ValueError("unknown_kind")
+        key = str(row["key"]).upper()
+        if self.asset(key):
+            raise ValueError("asset_exists")
+        with self._conn() as conn:
+            position = (conn.execute("select coalesce(max(position),0) from assets").fetchone()[0] or 0) + 1
+            conn.execute(
+                "insert into assets (key,label,kind,venue_profile_id,instrument_id,coin,news_queries,primary_words,kline_key,position,created_at)"
+                " values (?,?,?,?,?,?,?,?,?,?,?)",
+                (key, row.get("label") or key, row["kind"], row.get("venue_profile_id") or "", row.get("instrument_id") or "", row.get("coin") or key,
+                 json.dumps(row.get("news_queries") or [key], ensure_ascii=False), json.dumps(row.get("primary") or [key], ensure_ascii=False),
+                 row.get("kline_key"), position, now_iso()),
+            )
+        return self.asset(key)
 
     def add_hl_asset(self, *, coin: str, instrument_id: str, label: str | None = None, news_queries: list[str] | None = None) -> dict[str, Any]:
         key = coin.upper()

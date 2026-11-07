@@ -12,8 +12,8 @@ from trading_desk.executor import ExecutionRefused, Executor
 
 
 class FakeExecutor(Executor):
-    def __init__(self, config, fetch):
-        super().__init__(config, fetch, run=self._run)
+    def __init__(self, config, fetch, venues=None):
+        super().__init__(config, fetch, run=self._run, venues=venues)
         self.driver_calls = []
         self.close_calls = []
 
