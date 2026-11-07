@@ -60,7 +60,8 @@ class Advisor:
                 state = states[asset["key"]]
                 evidence = {**inputs["assets"][asset["key"]]["evidence"], "three": inputs["three"], "model": inputs["model"]}
                 evidence["unverified"] = provenance.unverified(call["reason"], _content(evidence))
-                plan = plans.build_plan(asset["kind"], call["direction"], state.get("price"), state.get("grid")) if asset["kind"] in plans.TEMPLATE else None
+                venue = self.sources.venues.of(asset)
+                plan = plans.build_plan(venue, call["direction"], state.get("price"), state.get("grid")) if venue.can("grid_plan") else None
                 existing = self.today(asset["key"])
                 fields = dict(direction=call["direction"], confidence=call["confidence"], reason=call["reason"], cited=call["cited"],
                               price_at=state.get("price"), plan=plan, action="recorded", evidence=evidence)

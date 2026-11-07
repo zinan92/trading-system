@@ -1,0 +1,1132 @@
+{
+ "BTC": {
+  "bars": {
+   "1h": {
+    "bars": [
+     [
+      "<time>",
+      100.0,
+      102.0,
+      99.0,
+      101.0
+     ],
+     [
+      "<time>",
+      101.0,
+      103.0,
+      100.0,
+      102.0
+     ],
+     [
+      "<time>",
+      102.0,
+      104.0,
+      101.0,
+      103.0
+     ],
+     [
+      "<time>",
+      103.0,
+      105.0,
+      102.0,
+      104.0
+     ],
+     [
+      "<time>",
+      104.0,
+      106.0,
+      103.0,
+      105.0
+     ],
+     [
+      "<time>",
+      105.0,
+      107.0,
+      104.0,
+      106.0
+     ],
+     [
+      "<time>",
+      106.0,
+      108.0,
+      105.0,
+      107.0
+     ],
+     [
+      "<time>",
+      107.0,
+      109.0,
+      106.0,
+      108.0
+     ],
+     [
+      "<time>",
+      108.0,
+      110.0,
+      107.0,
+      109.0
+     ],
+     [
+      "<time>",
+      109.0,
+      111.0,
+      108.0,
+      110.0
+     ],
+     [
+      "<time>",
+      110.0,
+      112.0,
+      109.0,
+      111.0
+     ],
+     [
+      "<time>",
+      111.0,
+      113.0,
+      110.0,
+      112.0
+     ],
+     [
+      "<time>",
+      112.0,
+      114.0,
+      111.0,
+      113.0
+     ],
+     [
+      "<time>",
+      113.0,
+      115.0,
+      112.0,
+      114.0
+     ]
+    ],
+    "fresh": true,
+    "latest_timestamp": "<time>",
+    "ok": true,
+    "source": "Hyperliquid Testnet BTC（网格下单的同一个价格）"
+   },
+   "4h": {
+    "bars": [
+     [
+      "<time>",
+      100.0,
+      102.0,
+      99.0,
+      101.0
+     ],
+     [
+      "<time>",
+      101.0,
+      103.0,
+      100.0,
+      102.0
+     ],
+     [
+      "<time>",
+      102.0,
+      104.0,
+      101.0,
+      103.0
+     ],
+     [
+      "<time>",
+      103.0,
+      105.0,
+      102.0,
+      104.0
+     ],
+     [
+      "<time>",
+      104.0,
+      106.0,
+      103.0,
+      105.0
+     ],
+     [
+      "<time>",
+      105.0,
+      107.0,
+      104.0,
+      106.0
+     ],
+     [
+      "<time>",
+      106.0,
+      108.0,
+      105.0,
+      107.0
+     ],
+     [
+      "<time>",
+      107.0,
+      109.0,
+      106.0,
+      108.0
+     ],
+     [
+      "<time>",
+      108.0,
+      110.0,
+      107.0,
+      109.0
+     ],
+     [
+      "<time>",
+      109.0,
+      111.0,
+      108.0,
+      110.0
+     ],
+     [
+      "<time>",
+      110.0,
+      112.0,
+      109.0,
+      111.0
+     ],
+     [
+      "<time>",
+      111.0,
+      113.0,
+      110.0,
+      112.0
+     ],
+     [
+      "<time>",
+      112.0,
+      114.0,
+      111.0,
+      113.0
+     ],
+     [
+      "<time>",
+      113.0,
+      115.0,
+      112.0,
+      114.0
+     ]
+    ],
+    "fresh": true,
+    "latest_timestamp": "<time>",
+    "ok": true,
+    "source": "Hyperliquid Testnet BTC（网格下单的同一个价格）"
+   }
+  },
+  "desk": {
+   "control": {
+    "can_stop": true,
+    "coordinator_status": "grid_running",
+    "ended": false,
+    "rearm_paused": false,
+    "stopping": false
+   },
+   "grid": {
+    "blocker": null,
+    "direction": "long",
+    "fills": 0,
+    "hard_stop": 72000.0,
+    "lower": 74000.0,
+    "notional_per_rung": 18.5,
+    "ok": true,
+    "open_orders": 5,
+    "price": 77862.5,
+    "rungs": [
+     74000.0,
+     74563.0,
+     75127.0,
+     75690.0,
+     76253.0
+    ],
+    "sealed": false,
+    "status": "paused_above_range",
+    "status_label": "价格高于区间 · 暂停挂新单",
+    "updated_at": "<time>",
+    "upper": 76816.5
+   },
+   "meta": {
+    "kind": "hl_testnet",
+    "label": "BTC",
+    "money": "测试盘（假钱）",
+    "venue": "Hyperliquid Testnet"
+   },
+   "price": 77862.5
+  },
+  "driver_calls": 0,
+  "execute": {
+   "detail": {
+    "coordinator_status": "grid_running"
+   },
+   "refused": "测试盘上已经有网格在跑。先按「停止网格」，撤完单后再执行新计划。"
+  },
+  "execute_idle": {
+   "detail": {
+    "confirmation": {
+     "blockers": [
+      "fixture"
+     ],
+     "status": "rejected"
+    }
+   },
+   "refused": "确认没有通过，没有下单。"
+  },
+  "kind": "hl_testnet",
+  "plan": {
+   "flat": {
+    "direction": "flat",
+    "kind": "hold",
+    "lines": [
+     [
+      "现有网格",
+      "保持不动"
+     ],
+     [
+      "挂单",
+      "5 张继续挂着"
+     ]
+    ],
+    "note": "想更保守，可以在批准时写明「撤掉现有网格」，由执行员按流程停止。",
+    "title": "观望 · 不开新单"
+   },
+   "long": {
+    "direction": "long",
+    "hard_stop": 72000.0,
+    "kind": "keep",
+    "lines": [
+     [
+      "区间",
+      "74,000 – 76,816.5"
+     ],
+     [
+      "硬止损",
+      "72,000"
+     ],
+     [
+      "最多亏",
+      "3.84 USDC"
+     ]
+    ],
+    "max_loss": 3.84,
+    "note": "方向和正在跑的网格一致，不需要改动。现价在区间上方，买单挂着等回落。",
+    "range": [
+     74000.0,
+     76816.5
+    ],
+    "rungs": [
+     74000.0,
+     74563.0,
+     75127.0,
+     75690.0,
+     76253.0
+    ],
+    "title": "做多网格 · 沿用正在跑的这一套"
+   },
+   "short": {
+    "direction": "short",
+    "executable": true,
+    "hard_stop": 83563.0,
+    "kind": "new",
+    "lines": [
+     [
+      "区间",
+      "77,862.5 – 81,366.31"
+     ],
+     [
+      "卖单",
+      "5 张 × 19 USDC"
+     ],
+     [
+      "硬止损",
+      "83,563"
+     ],
+     [
+      "最多亏",
+      "4.29 USDC"
+     ]
+    ],
+    "max_loss": 4.29,
+    "note": "会先停掉正在跑的反方向网格，两个方向不同时开。批准后先做预览（不下单），预览通过后需要你亲自按「执行」。",
+    "notional_per_rung": 19.0,
+    "range": [
+     77862.0,
+     81366.0
+    ],
+    "rungs": [
+     78563.0,
+     79264.0,
+     79965.0,
+     80666.0,
+     81366.0
+    ],
+    "title": "做空网格 · 新参数，需要你批准"
+   }
+  },
+  "plan_without_price": {
+   "direction": "long",
+   "kind": "unavailable",
+   "lines": [],
+   "note": "行情恢复后重新点一次方向。",
+   "title": "现价读不到，暂时生成不了计划"
+  },
+  "preview": {
+   "ok": {
+    "blockers": [],
+    "execution_ready": true,
+    "max_loss": 4.2,
+    "orders": [
+     {
+      "notional": 19,
+      "price": 78563
+     }
+    ],
+    "preview_digest": "sha256:abc",
+    "range": {
+     "high": 2,
+     "low": 1
+    },
+    "strategy": {
+     "direction": "short",
+     "grid": {
+      "count": 5,
+      "notional_mode": "manual",
+      "notional_per_grid": 19.0
+     },
+     "hard_stop": 83563.0,
+     "range": {
+      "high": 81366.0,
+      "low": 77862.0
+     }
+    }
+   }
+  },
+  "preview_calls": [
+   [
+    "<dash>/api/dashboard-control/preview",
+    {
+     "instrument_id": "BTC-USD-PERP",
+     "strategy": {
+      "direction": "short",
+      "grid": {
+       "count": 5,
+       "notional_mode": "manual",
+       "notional_per_grid": 19.0
+      },
+      "hard_stop": 83563.0,
+      "range": {
+       "high": 81366.0,
+       "low": 77862.0
+      }
+     },
+     "strategy_family": "grid",
+     "venue_profile_id": "hyperliquid.testnet"
+    }
+   ]
+  ],
+  "rearm": [
+   200,
+   true
+  ],
+  "state": {
+   "grid": {
+    "blocker": null,
+    "direction": "long",
+    "fills": 0,
+    "hard_stop": 72000.0,
+    "lower": 74000.0,
+    "notional_per_rung": 18.5,
+    "ok": true,
+    "open_orders": 5,
+    "price": 77862.5,
+    "rungs": [
+     74000.0,
+     74563.0,
+     75127.0,
+     75690.0,
+     76253.0
+    ],
+    "sealed": false,
+    "status": "paused_above_range",
+    "status_label": "价格高于区间 · 暂停挂新单",
+    "updated_at": "<time>",
+    "upper": 76816.5
+   },
+   "price": 77862.5,
+   "price_source": "venue"
+  },
+  "stop": [
+   200,
+   {
+    "message": "已下达停止：约 1 分钟内撤掉全部挂单，有持仓会市价平掉。",
+    "status": "stop_requested"
+   }
+  ],
+  "template": true
+ },
+ "SILVER": {
+  "bars": {
+   "1h": {
+    "bars": [],
+    "ok": false,
+    "reason": "K 线读取失败：ConnectionError",
+    "source": "期货 K 线（K 线日报同一数据源，可能延迟）"
+   },
+   "4h": {
+    "bars": [],
+    "ok": false,
+    "reason": "K 线读取失败：ConnectionError",
+    "source": "期货 K 线（K 线日报同一数据源，可能延迟）"
+   }
+  },
+  "desk": {
+   "control": {
+    "can_stop": false,
+    "coordinator_status": "grid_running",
+    "ended": false,
+    "rearm_paused": null,
+    "stopping": false
+   },
+   "grid": {
+    "none": true,
+    "ok": false,
+    "reason": "白银只记判断和复盘，还没有可以下单的交易所。"
+   },
+   "meta": {
+    "kind": "watch",
+    "label": "白银",
+    "money": "只记判断",
+    "venue": "期货行情"
+   },
+   "price": null
+  },
+  "driver_calls": 0,
+  "execute": {
+   "detail": {},
+   "refused": "这个品种暂不支持从交易台执行，只能记录判断。"
+  },
+  "execute_idle": {
+   "detail": {},
+   "refused": "这个品种暂不支持从交易台执行，只能记录判断。"
+  },
+  "kind": "watch",
+  "plan": {
+   "flat": {
+    "direction": "flat",
+    "kind": "record_only",
+    "lines": [
+     [
+      "现价",
+      "读不到"
+     ],
+     [
+      "下单",
+      "这个品种还没有可以下单的交易所"
+     ]
+    ],
+    "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。",
+    "title": "观望 · 只记判断"
+   },
+   "long": {
+    "direction": "long",
+    "kind": "record_only",
+    "lines": [
+     [
+      "现价",
+      "读不到"
+     ],
+     [
+      "下单",
+      "这个品种还没有可以下单的交易所"
+     ]
+    ],
+    "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。",
+    "title": "做多 · 只记判断"
+   },
+   "short": {
+    "direction": "short",
+    "kind": "record_only",
+    "lines": [
+     [
+      "现价",
+      "读不到"
+     ],
+     [
+      "下单",
+      "这个品种还没有可以下单的交易所"
+     ]
+    ],
+    "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。",
+    "title": "做空 · 只记判断"
+   }
+  },
+  "plan_without_price": {
+   "direction": "long",
+   "kind": "record_only",
+   "lines": [
+    [
+     "现价",
+     "读不到"
+    ],
+    [
+     "下单",
+     "这个品种还没有可以下单的交易所"
+    ]
+   ],
+   "note": "记下后 72 小时按收盘价核对对错，和 AI 的建议一起算命中率。",
+   "title": "做多 · 只记判断"
+  },
+  "preview": {
+   "detail": {},
+   "refused": "这个品种暂不支持从交易台执行，只能记录判断。"
+  },
+  "preview_calls": [],
+  "rearm": [
+   409,
+   "暂停补单目前只支持测试盘网格"
+  ],
+  "state": {
+   "grid": {
+    "none": true,
+    "ok": false,
+    "reason": "白银只记判断和复盘，还没有可以下单的交易所。"
+   },
+   "price": null,
+   "price_source": "none"
+  },
+  "stop": [
+   409,
+   {
+    "detail": "这个品种现在没有在测试盘跑网格"
+   }
+  ],
+  "template": false
+ },
+ "XAU": {
+  "bars": {
+   "1h": {
+    "bars": [
+     [
+      "<time>",
+      101.0,
+      103.0,
+      100.0,
+      102.0
+     ],
+     [
+      "<time>",
+      102.0,
+      104.0,
+      101.0,
+      103.0
+     ],
+     [
+      "<time>",
+      103.0,
+      105.0,
+      102.0,
+      104.0
+     ],
+     [
+      "<time>",
+      104.0,
+      106.0,
+      103.0,
+      105.0
+     ],
+     [
+      "<time>",
+      105.0,
+      107.0,
+      104.0,
+      106.0
+     ],
+     [
+      "<time>",
+      106.0,
+      108.0,
+      105.0,
+      107.0
+     ],
+     [
+      "<time>",
+      107.0,
+      109.0,
+      106.0,
+      108.0
+     ],
+     [
+      "<time>",
+      108.0,
+      110.0,
+      107.0,
+      109.0
+     ],
+     [
+      "<time>",
+      109.0,
+      111.0,
+      108.0,
+      110.0
+     ],
+     [
+      "<time>",
+      110.0,
+      112.0,
+      109.0,
+      111.0
+     ],
+     [
+      "<time>",
+      111.0,
+      113.0,
+      110.0,
+      112.0
+     ],
+     [
+      "<time>",
+      112.0,
+      114.0,
+      111.0,
+      113.0
+     ],
+     [
+      "<time>",
+      113.0,
+      115.0,
+      112.0,
+      114.0
+     ],
+     [
+      "<time>",
+      114.0,
+      116.0,
+      113.0,
+      115.0
+     ]
+    ],
+    "fresh": true,
+    "latest_timestamp": null,
+    "ok": true,
+    "source": "OKX XAU-USDT-SWAP 永续（纸面网格用的同一个价格）"
+   },
+   "4h": {
+    "bars": [
+     [
+      "<time>",
+      101.0,
+      103.0,
+      100.0,
+      102.0
+     ],
+     [
+      "<time>",
+      102.0,
+      104.0,
+      101.0,
+      103.0
+     ],
+     [
+      "<time>",
+      103.0,
+      105.0,
+      102.0,
+      104.0
+     ],
+     [
+      "<time>",
+      104.0,
+      106.0,
+      103.0,
+      105.0
+     ],
+     [
+      "<time>",
+      105.0,
+      107.0,
+      104.0,
+      106.0
+     ],
+     [
+      "<time>",
+      106.0,
+      108.0,
+      105.0,
+      107.0
+     ],
+     [
+      "<time>",
+      107.0,
+      109.0,
+      106.0,
+      108.0
+     ],
+     [
+      "<time>",
+      108.0,
+      110.0,
+      107.0,
+      109.0
+     ],
+     [
+      "<time>",
+      109.0,
+      111.0,
+      108.0,
+      110.0
+     ],
+     [
+      "<time>",
+      110.0,
+      112.0,
+      109.0,
+      111.0
+     ],
+     [
+      "<time>",
+      111.0,
+      113.0,
+      110.0,
+      112.0
+     ],
+     [
+      "<time>",
+      112.0,
+      114.0,
+      111.0,
+      113.0
+     ],
+     [
+      "<time>",
+      113.0,
+      115.0,
+      112.0,
+      114.0
+     ],
+     [
+      "<time>",
+      114.0,
+      116.0,
+      113.0,
+      115.0
+     ]
+    ],
+    "fresh": true,
+    "latest_timestamp": null,
+    "ok": true,
+    "source": "OKX XAU-USDT-SWAP 永续（纸面网格用的同一个价格）"
+   }
+  },
+  "desk": {
+   "control": {
+    "can_stop": false,
+    "coordinator_status": "grid_running",
+    "ended": false,
+    "rearm_paused": null,
+    "stopping": false
+   },
+   "grid": {
+    "direction": "long",
+    "fills": 45,
+    "hard_stop": 4250.0,
+    "lower": 4300.0,
+    "max_loss": 300.0,
+    "ok": true,
+    "open_orders": 1,
+    "price": 4322.16,
+    "rungs": [
+     4318.18,
+     4336.36
+    ],
+    "status": "ACTIVE_LOCKED",
+    "status_label": "运行中",
+    "units_per_rung": 0.2,
+    "updated_at": "<time>",
+    "upper": 4500.0
+   },
+   "meta": {
+    "kind": "xau_paper",
+    "label": "黄金",
+    "money": "纸面模拟",
+    "venue": "OKX Paper · 纸面盘"
+   },
+   "price": 4322.16
+  },
+  "driver_calls": 0,
+  "execute": {
+   "detail": {},
+   "refused": "黄金纸面盘已经有网格在跑，一次只跑一个。"
+  },
+  "execute_idle": {
+   "detail": {},
+   "refused": "黄金纸面盘已经有网格在跑，一次只跑一个。"
+  },
+  "kind": "xau_paper",
+  "plan": {
+   "flat": {
+    "direction": "flat",
+    "kind": "hold",
+    "lines": [
+     [
+      "现有网格",
+      "保持不动"
+     ],
+     [
+      "挂单",
+      "1 张继续挂着"
+     ]
+    ],
+    "note": "想更保守，可以在批准时写明「撤掉现有网格」，由执行员按流程停止。",
+    "title": "观望 · 不开新单"
+   },
+   "long": {
+    "direction": "long",
+    "hard_stop": 4250.0,
+    "kind": "keep",
+    "lines": [
+     [
+      "区间",
+      "4,300 – 4,500"
+     ],
+     [
+      "硬止损",
+      "4,250"
+     ],
+     [
+      "最多亏",
+      "300.00 USDT"
+     ]
+    ],
+    "max_loss": 300.0,
+    "note": "方向和正在跑的网格一致，不需要改动。",
+    "range": [
+     4300.0,
+     4500.0
+    ],
+    "rungs": [
+     4318.18,
+     4336.36
+    ],
+    "title": "做多网格 · 沿用正在跑的这一套"
+   },
+   "short": {
+    "direction": "short",
+    "executable": true,
+    "hard_stop": 4553.3,
+    "kind": "new",
+    "lines": [
+     [
+      "区间",
+      "4,302.28 – 4,501.1"
+     ],
+     [
+      "卖单",
+      "10 张 × 0.2 盎司"
+     ],
+     [
+      "硬止损",
+      "4,553.3"
+     ],
+     [
+      "最多亏",
+      "283.34 USDT"
+     ]
+    ],
+    "max_loss": 283.34,
+    "note": "会先停掉正在跑的反方向网格，两个方向不同时开。批准后先做预览（不下单），预览通过后需要你亲自按「执行」。",
+    "notional_per_rung": null,
+    "range": [
+     4302.3,
+     4501.1
+    ],
+    "rungs": [
+     4322.2,
+     4342.0,
+     4361.9,
+     4381.8,
+     4401.7,
+     4421.6,
+     4441.5,
+     4461.3,
+     4481.2,
+     4501.1
+    ],
+    "title": "做空网格 · 新参数，需要你批准"
+   }
+  },
+  "plan_without_price": {
+   "direction": "long",
+   "kind": "unavailable",
+   "lines": [],
+   "note": "行情恢复后重新点一次方向。",
+   "title": "现价读不到，暂时生成不了计划"
+  },
+  "preview": {
+   "detail": {},
+   "refused": "黄金纸面盘已经有网格在跑，一次只跑一个。"
+  },
+  "preview_calls": [
+   [
+    "<dash>/api/park-paper/read-model",
+    null
+   ]
+  ],
+  "rearm": [
+   409,
+   "暂停补单目前只支持测试盘网格"
+  ],
+  "state": {
+   "grid": {
+    "direction": "long",
+    "fills": 45,
+    "hard_stop": 4250.0,
+    "lower": 4300.0,
+    "max_loss": 300.0,
+    "ok": true,
+    "open_orders": 1,
+    "price": 4322.16,
+    "rungs": [
+     4318.18,
+     4336.36
+    ],
+    "status": "ACTIVE_LOCKED",
+    "status_label": "运行中",
+    "units_per_rung": 0.2,
+    "updated_at": "<time>",
+    "upper": 4500.0
+   },
+   "price": 4322.16,
+   "price_source": "venue"
+  },
+  "stop": [
+   409,
+   {
+    "detail": "这个品种现在没有在测试盘跑网格"
+   }
+  ],
+  "template": true
+ },
+ "assets": {
+  "assets": [
+   {
+    "instrument_id": "BTC-USD-PERP",
+    "key": "BTC",
+    "kind": "hl_testnet",
+    "label": "BTC",
+    "news_queries": [
+     "比特币",
+     "BTC",
+     "加密",
+     "以太坊",
+     "美联储",
+     "ETF",
+     "稳定币",
+     "美元"
+    ],
+    "venue_profile_id": "hyperliquid.testnet"
+   },
+   {
+    "instrument_id": "XAU-USDT-SWAP.OKX",
+    "key": "XAU",
+    "kind": "xau_paper",
+    "label": "黄金",
+    "news_queries": [
+     "黄金",
+     "金价",
+     "美联储",
+     "加息",
+     "降息",
+     "美元",
+     "原油",
+     "避险",
+     "地缘"
+    ],
+    "venue_profile_id": "okx.paper"
+   },
+   {
+    "instrument_id": "ETH-USD-PERP",
+    "key": "ETH",
+    "kind": "hl_testnet",
+    "label": "ETH",
+    "news_queries": [
+     "以太坊",
+     "ETH",
+     "加密",
+     "美联储",
+     "ETF",
+     "稳定币"
+    ],
+    "venue_profile_id": "hyperliquid.testnet"
+   },
+   {
+    "instrument_id": "SIL",
+    "key": "SILVER",
+    "kind": "watch",
+    "label": "白银",
+    "news_queries": [
+     "白银",
+     "银价",
+     "贵金属",
+     "美联储",
+     "美元"
+    ],
+    "venue_profile_id": ""
+   },
+   {
+    "instrument_id": "CL",
+    "key": "WTI",
+    "kind": "watch",
+    "label": "原油",
+    "news_queries": [
+     "原油",
+     "油价",
+     "OPEC",
+     "霍尔木兹",
+     "中东"
+    ],
+    "venue_profile_id": ""
+   }
+  ]
+ },
+ "system": [
+  [
+   "新闻（Intel 8001）",
+   true
+  ],
+  [
+   "交易后台（Dashboard 8765）",
+   false
+  ],
+  [
+   "测试盘 K 线（Hyperliquid）",
+   true
+  ],
+  [
+   "测试盘调度器",
+   false
+  ],
+  [
+   "测试盘网格协调器",
+   true
+  ],
+  [
+   "今日晨报",
+   false
+  ],
+  [
+   "K 线日报",
+   false
+  ],
+  [
+   "宏观周报",
+   false
+  ],
+  [
+   "本周三件事",
+   false
+  ],
+  [
+   "日志（24 小时）",
+   true
+  ]
+ ]
+}

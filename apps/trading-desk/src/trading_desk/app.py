@@ -27,6 +27,7 @@ from .watch import Watch, codex_complete
 from .executor import STOPPABLE_COORDINATOR_STATES, ExecutionRefused, Executor
 from .sources import SOURCE_LABEL, Sources, http_json
 from .store import Store
+from .venues import VenueModule
 
 from services.structured_log import event, get_logger, log_path, recent_problems
 
@@ -113,6 +114,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     sources = sources or Sources(config)
     store = store or Store(config.db_path, release=release_of(config.trading_system_checkout))
     executor = executor or Executor(config, lambda url, body: http_json(url, body, timeout=150))
+    venues = sources.venues  # Desk Venue Modules (ADR 0007): flows switch on declared capabilities, never on a kind's name
     watch = watch or Watch(config.watch_folder, config.intel_url)
     backtests = backtests or Backtests(config)
     comparisons = comparisons or Comparisons(config)
@@ -151,14 +153,8 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     # ---- assets ----------------------------------------------------------------
     @app.get("/api/assets")
     def assets() -> dict[str, Any]:
-        paper = sources.paper_gold()
         rows = [{k: a[k] for k in ("key", "label", "kind", "venue_profile_id", "instrument_id", "news_queries")} for a in store.assets()]
-        for row in rows:
-            if row["kind"] == "xau_paper":
-                # The seeded ids are a placeholder; GridMind's catalog decides the venue.
-                row["venue_profile_id"] = (paper or {}).get("venue_profile_id") or ""
-                row["instrument_id"] = (paper or {}).get("instrument_id") or ""
-        return {"assets": rows}
+        return {"assets": [venues.of(row).asset_row(sources, row) for row in rows]}
 
     @app.get("/api/catalog")
     def catalog() -> dict[str, Any]:
@@ -221,15 +217,11 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             "watch": bool(grid.get("ok") and grid.get("status") not in {"terminal", "TERMINAL", "stopped_by_operator"} and not grid.get("sealed")),
             "review": any(j.get("resolved_at") for j in mine),
         }
-        if asset["kind"] == "xau_paper":
-            known = (sources.paper_gold() or {}).get("venue_label")
-            venue = (f"{known} · 纸面盘" if known else "纸面盘（场所读不到）", "纸面模拟")
-        else:
-            venue = {"hl_testnet": ("Hyperliquid Testnet", "测试盘（假钱）"), "watch": ("期货行情", "只记判断")}[asset["kind"]]
+        venue = venues.of(asset).venue_text(sources, asset)
         return {"asset": asset["key"], "meta": {"label": asset["label"], "venue": venue[0], "money": venue[1], "kind": asset["kind"]},
                 "price": state["price"], "grid": grid, "today_judgment": latest, "steps": steps,
                 "notes": store.notes(asset["key"], limit=10), "executions": runs, "kline": sources.kline_view(asset),
-                "news_queries": asset["news_queries"], "control": {**_grid_control(asset, executor.coordinator()), "rearm_paused": _hold_state(config, asset)},
+                "news_queries": asset["news_queries"], "control": {**_grid_control(asset, executor.coordinator(), venues.of(asset)), "rearm_paused": _hold_state(config, asset, venues.of(asset))},
                 "ai_today": advisor.today(asset["key"]), "ai_running": advisor_running.is_set()}
 
     @app.get("/api/news/{key}")
@@ -244,7 +236,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     def plan(body: PlanIn) -> dict[str, Any]:
         asset = asset_or_404(body.asset)
         state = asset_state(asset)
-        return plans.build_plan(asset["kind"], body.direction, state["price"], state["grid"])
+        return plans.build_plan(venues.of(asset), body.direction, state["price"], state["grid"])
 
     def adopted_advice(body: JudgmentIn, asset: dict[str, Any]) -> dict[str, Any] | None:
         """The AI call behind this judgment as it was at this moment, or None. A key that does not fit is dropped and logged."""
@@ -261,7 +253,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     def add_judgment(body: JudgmentIn) -> dict[str, Any]:
         asset = asset_or_404(body.asset)
         state = asset_state(asset)
-        built = plans.build_plan(asset["kind"], body.direction, state["price"], state["grid"])
+        built = plans.build_plan(venues.of(asset), body.direction, state["price"], state["grid"])
         if body.action == "approved" and built.get("kind") == "unavailable":
             raise HTTPException(409, "现价读不到，计划不完整，暂时不能批准。可以先只记录判断。")
         today = datetime.now(timezone.utc).astimezone().date().isoformat()
@@ -313,14 +305,14 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
             raise HTTPException(409, str(exc)) from None
         store.log_execution(asset=asset["key"], stage="executed" if result.get("started") else "execute_failed", judgment_id=judgment["id"],
                             preview_digest=(result.get("preview") or {}).get("preview_digest"), detail=result)
-        started_text = "计划已确认，黄金纸面盘约 1 分钟内挂单，系统接管盯盘。" if asset["kind"] == "xau_paper" else "网格已经挂上测试盘，系统接管盯盘。"
+        started_text = venues.of(asset).started_text
         return {**result, "message": started_text if result.get("started") else f"下单没有完成（{result.get('status')}），请看系统页记录。"}
 
     @app.post("/api/grid/stop")
     def stop_grid(body: StopIn) -> dict[str, Any]:
         asset = asset_or_404(body.asset)
         coordinator = executor.coordinator()
-        if asset["kind"] != "hl_testnet" or coordinator.get("selected_instrument_id") != asset["instrument_id"]:
+        if not venues.of(asset).can("stop") or coordinator.get("selected_instrument_id") != asset["instrument_id"]:
             raise HTTPException(409, "这个品种现在没有在测试盘跑网格")
         try:
             result = executor.stop_grid()
@@ -334,7 +326,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     def rearm_hold(body: HoldIn) -> dict[str, Any]:
         """Park's 暂停补单 / 恢复补单: the grid stops (or resumes) placing new entries; resting orders and protection stay."""
         asset = asset_or_404(body.asset)
-        if asset["kind"] != "hl_testnet":
+        if not venues.of(asset).can("rearm_hold"):
             raise HTTPException(409, "暂停补单目前只支持测试盘网格")
         holds = read_holds(config)
         holds[asset["instrument_id"]] = {"rearm_paused": body.paused, "by": "park", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -615,7 +607,10 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         first = store.assets()[0]
         check("新闻（Intel 8001）", lambda: (lambda r: (r.get("ok", False), r.get("reason") or f"{len(r.get('items', []))} 条"))(sources.news(first)))
         check("交易后台（Dashboard 8765）", lambda: (lambda r: (bool(r.get("schema_version")), paper_status_text(r)))(http_json(f"{config.dashboard_url}/api/park-paper/read-model", None, timeout=10)))
-        check("测试盘 K 线（Hyperliquid）", lambda: (lambda r: (r["ok"], r.get("reason") or r.get("latest_timestamp")))(sources.bars(next((a for a in store.assets() if a["kind"] == "hl_testnet"), first), "1h", 2)))
+        for kind in venues.having("bars_health"):
+            feed = next((a for a in store.assets() if a["kind"] == kind), None)
+            if feed:
+                check(venues.get(kind).bars_health_label, lambda feed=feed: (lambda r: (r["ok"], r.get("reason") or r.get("latest_timestamp")))(sources.bars(feed, "1h", 2)))
         coordinator = executor.coordinator()
         scheduler = _json_last(config.paper_output / "testnet_automation" / "scheduler" / "current.json")
         checks.append({"name": "测试盘调度器", "ok": scheduler.get("status") in {"active", "idle", "awaiting_operator"},
@@ -655,16 +650,7 @@ def current_state(sources: Sources, asset: dict[str, Any]) -> dict[str, Any]:
     when the venue gives none) or 'none'. AI advice records it so the page can say which (#1318).
     A Testnet grid record's last price is what that grid saw, not the price now: it is never used (#1372)."""
     source = "none"
-    if asset["kind"] == "watch":
-        grid: dict[str, Any] = {"ok": False, "none": True, "reason": f"{asset['label']}只记判断和复盘，还没有可以下单的交易所。"}
-        price = None
-    elif asset["kind"] == "xau_paper":
-        paper = sources.xau_paper()
-        grid = paper["grid"] if paper.get("ok") else {"ok": False, "reason": paper.get("reason")}
-        price = paper.get("price") if paper.get("ok") else None
-    else:
-        grid = sources.hl_grid(asset)
-        price = sources.hl_mid(asset)
+    grid, price = sources.venues.of(asset).grid_and_price(sources, asset)
     if price is not None:
         source = "venue"
     else:
@@ -705,8 +691,8 @@ def read_holds(config: Config) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _hold_state(config: Config, asset: dict[str, Any]) -> bool | None:
-    if asset["kind"] != "hl_testnet":
+def _hold_state(config: Config, asset: dict[str, Any], venue: VenueModule) -> bool | None:
+    if not venue.can("rearm_hold"):
         return None
     try:
         return bool((read_holds(config).get(asset["instrument_id"]) or {}).get("rearm_paused"))
@@ -723,10 +709,10 @@ def write_holds(config: Config, holds: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _grid_control(asset: dict[str, Any], coordinator: dict[str, Any]) -> dict[str, Any]:
+def _grid_control(asset: dict[str, Any], coordinator: dict[str, Any], venue: VenueModule) -> dict[str, Any]:
     """What the stop button may do for this asset right now."""
     status = str(coordinator.get("status") or "unknown")
-    mine = asset["kind"] == "hl_testnet" and coordinator.get("selected_instrument_id") == asset["instrument_id"]
+    mine = venue.can("stop") and coordinator.get("selected_instrument_id") == asset["instrument_id"]
     lifecycle = str((coordinator.get("grid_lifecycle") or {}).get("status") or "")
     stopping = mine and (status == "stop_requested" or lifecycle == "hard_stop_triggered")
     return {"coordinator_status": status, "can_stop": mine and not stopping and status in STOPPABLE_COORDINATOR_STATES,
