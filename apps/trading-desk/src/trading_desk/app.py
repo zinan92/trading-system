@@ -113,7 +113,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
     config = config or Config()
     sources = sources or Sources(config)
     store = store or Store(config.db_path, release=release_of(config.trading_system_checkout))
-    executor = executor or Executor(config, lambda url, body: http_json(url, body, timeout=150))
+    executor = executor or Executor(config, lambda url, body: http_json(url, body, timeout=150), venues=sources.venues)
     venues = sources.venues  # Desk Venue Modules (ADR 0007): flows switch on declared capabilities, never on a kind's name
     watch = watch or Watch(config.watch_folder, config.intel_url)
     backtests = backtests or Backtests(config)
