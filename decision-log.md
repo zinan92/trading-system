@@ -180,6 +180,30 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-07 — Paper runs one instrument at a time, per Strategy Session (#1404)
+
+## Decision
+
+- ADR 0009. One instrument per session, recorded at start, one session at a time. Concurrent instruments stay behind
+  ADR 0005's Portfolio Coordinator.
+- #1393 is split into #1404 to #1407.
+
+## Gotchas
+
+- Gold's `apply_to_dualtrack` derives five settings but not `instrument_endpoint` or `source_symbol`, so those stay
+  on gold when the venue changes.
+- The datafeed serves `XAG-USDT-SWAP` and `CL-USDT-SWAP` with `contract_multiplier` 1, but labels CL `crypto`.
+
+## Verification
+
+- Specs read from the datafeed on 8100: XAU 0.1 / 0.001, XAG 0.01 / 0.01, CL 0.01 / 0.1 (price / size increment).
+- GET-only baseline saved outside the repo before any change: `/api/assets`, `/api/desk/SILVER`, `/api/desk/WTI` and
+  the control catalog.
+- Production check of 75f532d (#1398), read-only JS on 127.0.0.1:8790/trade, nothing pressed: `#chartFrame` is live,
+  one `#productionChart`, the same node as `window.gmChartHost`, inside `chart-slot`, 7 canvases, 240 bars, 962 × 320;
+  no grid-adjust mode, no drag, no open dialog; start disabled; no console errors. The deploy gate reported Paper idle.
+  Drag and replacement were verified with mocks only.
+
 # 2026-11-07 — React frames the main K-line and moves GridMind's own node in (#1398)
 
 ## Decision

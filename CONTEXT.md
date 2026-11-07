@@ -23,6 +23,11 @@ strategy type, range, leverage, TP, or SL creates a new immutable revision; the
 previous revision is never edited.
 _Avoid_: automatic rollover plan
 
+**Paper Instrument**:
+The one instrument a Paper Strategy Session runs, recorded when the session
+starts and fixed until it ends. Paper runs one at a time (ADR 0009).
+_Avoid_: active gold venue (for anything but gold's venue choice)
+
 **Portfolio Session**:
 The account-scoped execution identity created by one Strategy Session. It may
 allocate across multiple assets at the same time; the Strategy and Portfolio
