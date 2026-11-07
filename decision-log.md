@@ -180,6 +180,52 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-07 — React draws the selects and strategy buttons; GridMind holds the picker (#1396)
+
+## Decision
+
+- The selection is one GridMind object, `picker`. All reads moved to it: preview uses `picker.strategy` rather than
+  the buttons' `on` class, labels come from `picker.venues` rather than `venue.options`. It is published to the
+  `control-picker` island. Scope is the rail's `data-dashboard-strategy` buttons only; `#strategyTypeChoices` and
+  `syncPersistedStrategyFamily` stay GridMind's.
+- Value flow: a controlled select, with GridMind updating state first. The router runs in capture on `document`, so
+  the handler publishes the new value before React's root listener restores the select to its last prop. The
+  island's `onChange` is an intentional no-op.
+- `gmIntent.fire(type, name, {id})` is the only way `gm-desk.js` switches assets. It used to write `.value` and
+  dispatch a non-bubbling change, which would fight React. Handlers accept the id only if `onOffer` finds it listed
+  and not disabled; otherwise the selection is empty and no request goes out.
+- The legacy page writes its own markup unless the host carries `data-island-live`, set by the bridge when a root
+  exists. `window.DeskWeb` is not enough: a cached bundle from before this island sets it too, and then nothing
+  would draw the selects.
+- The step classes became `gm-pick-step(s)`. The `islands.test.tsx` ban matches the string `dashboard-control`, and
+  ADR 0008 says the ban stays as it is, so the class was renamed rather than the ban narrowed.
+
+## Gotchas
+
+- React restores a controlled select in the same dispatch whoever fired the event. The choice survives because the
+  capture handler publishes first, so the re-render carries a changed prop.
+- The swap test no longer works for React controls: a clone inside an island is not React's. The test now
+  replaces the island's host, which builds the controls again from what GridMind published.
+
+## Verification
+
+- `gridmind_control_wire.json` unchanged. The full journey now runs twice, with React and with the bundle blocked,
+  and both equal the 7 captured requests.
+- New browser tests: re-mount mid-journey; re-render while the selection POST is held; retired selection with and
+  without React; an id that is not on offer; a cached bundle without the island. The real `gm-desk.js` switch is
+  covered with GridMind's handlers as spies.
+- Same look: on the same mock journey, all 17 picker nodes on this branch match d7dded8 at 1680 and 375 px, with
+  zero differences in computed style, box or text. React and no-bundle also match each other in computed style and
+  size; only the vertical position differs, because the islands above are absent without the bundle.
+- Proven red: moving the router to bubble phase fails the re-render test; going back to `window.DeskWeb` fails the
+  stale-bundle test; stopping the bridge scanning added nodes fails the re-mount test.
+- Control paths were verified with mocks only. Production gets GET and page-load checks.
+- Production check of d7dded8 (#1395), which had no record of its own: served `/trade` on 8790 carries the router
+  with the capture and click-only fixes, 15 `data-gm-intent`, no console errors, K-line has data. Read-only JS showed
+  venue `okx.paper` with 2 options, instrument empty, selection null, preview, confirm and start disabled, and the
+  retired-selection status. Paper stopped, 0 orders, 0 positions. 8765 returned 302 and was not followed.
+- Not verified: the silver view as rendered in production.
+
 # 2026-11-07 — Fake venue acceptance, conformance contract, kinds checked in code (#1379)
 
 ## Decision

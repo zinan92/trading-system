@@ -16,5 +16,6 @@ export default defineConfig(({command}) => ({
     sourcemap: false,
     lib: {entry: "src/main.tsx", formats: ["iife"], name: "DeskWeb", fileName: () => "web.js"},
   },
+  server: {fs: {allow: ["../.."]}}, // a test compares the picker with the markup in dashboard-gridmind.html
   test: {environment: "jsdom", globals: true, include: ["src/**/*.test.{ts,tsx}"]},
 }));

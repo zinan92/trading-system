@@ -37,7 +37,7 @@ def _model() -> dict:
     return model
 
 
-def _open(browser, fulfill_control, *, bundle_blocked: bool = False, catalog: dict | None = None):
+def _open(browser, fulfill_control, *, bundle_blocked: bool = False, catalog: dict | None = None, selection: dict | None = None, hold_selection=None, bundle_without: str | None = None):
     model = _model()
     wire: list[list] = []
     unexpected: list[tuple[str, str]] = []
@@ -47,7 +47,7 @@ def _open(browser, fulfill_control, *, bundle_blocked: bool = False, catalog: di
         "/api/trading-system/read-model": model,
         "/api/auth/session": {"authenticated": True, "can_control": True, "email": None, "session_duration": "mock"},
         "/api/dashboard-control/catalog": catalog or _catalog(),
-        "/api/dashboard-control/selection": {"selection": {"venue_profile_id": "binance.paper", "instrument_id": "XAUUSDT.BINANCE", "strategy_family": "grid"}},
+        "/api/dashboard-control/selection": {"selection": selection or {"venue_profile_id": "binance.paper", "instrument_id": "XAUUSDT.BINANCE", "strategy_family": "grid"}},
         "/api/dashboard-control/runtime-status": {"runtime": {}, "relevance": {}, "notification": None},
         "/api/dashboard-control/preview": DASHBOARD_PREVIEW,
         "/api/dashboard-control/confirm": CONFIRMED,
@@ -62,6 +62,8 @@ def _open(browser, fulfill_control, *, bundle_blocked: bool = False, catalog: di
             return route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
         if path == "/api/strategy-console/control":
             return fulfill_control(route, model)
+        if hold_selection is not None and request.method == "POST" and path.endswith("/selection"):
+            return hold_selection(route)
         if path in answers:
             return route.fulfill(status=200, content_type="application/json", body=json.dumps(answers[path], ensure_ascii=False))
         if path.startswith("/api/dualtrack/market/bars"):
@@ -71,6 +73,10 @@ def _open(browser, fulfill_control, *, bundle_blocked: bool = False, catalog: di
             return route.fulfill(status=404, content_type="application/json", body="{}")
         if bundle_blocked and path.endswith("web.js"):
             return route.abort()
+        if bundle_without and path.endswith("web.js"):
+            source = (ROOT / path.lstrip("/")).read_text(encoding="utf-8")
+            assert f'"{bundle_without}"' in source
+            return route.fulfill(status=200, content_type="text/javascript", body=source.replace(f'"{bundle_without}"', '"retired-island"'))
         local = ROOT / path.lstrip("/")
         return route.fulfill(status=200, path=str(local)) if local.is_file() else route.fulfill(status=404, body="")
 
@@ -90,14 +96,15 @@ def _fulfill_control(route, model: dict) -> None:
     route.fulfill(status=200, content_type="application/json", body=json.dumps(body, ensure_ascii=False))
 
 
-def test_the_control_journey_sends_the_same_requests_as_before() -> None:
+@pytest.mark.parametrize("bundle_blocked", [False, True], ids=["react", "no-bundle"])
+def test_the_control_journey_sends_the_same_requests_as_before(bundle_blocked: bool) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as runtime:
         try:
             browser = runtime.chromium.launch(headless=True, channel="chrome")
         except Exception as exc:  # pragma: no cover - depends on local browser install
             pytest.skip(f"Playwright Chromium unavailable: {exc}")
-        page, wire, unexpected, errors = _open(browser, _fulfill_control)
+        page, wire, unexpected, errors = _open(browser, _fulfill_control, bundle_blocked=bundle_blocked)
         page.locator('[data-dashboard-strategy="grid"]').click()
         page.locator("#dashboardPreviewButton").click()
         page.locator("#dashboardConfirmButton:not([disabled])").wait_for()
