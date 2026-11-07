@@ -1,5 +1,25 @@
 # Decision Log
 
+# 2026-11-07 — ADR 0008: React draws controls, GridMind keeps every control request (#1394)
+
+## Decision
+
+- `apps/web` never sends a control or order request. The `islands.test.tsx` ban is not widened.
+- Controls fire Control Intents (a new CONTEXT term). GridMind's control script handles them with its existing handlers, so the request bytes do not change.
+- Gates come from GridMind's published state. The risk acknowledgements are GridMind state keyed by preview id, never read back from the DOM.
+- The main K-line canvas stays with GridMind until #1330. React hosts the container, and a drag sends an intent.
+- #1356 is split into #1394 to #1398.
+
+## Gotchas
+
+- #1329 found the control script binds elements by reference at load. A React re-render drops the listener with no error. Intents remove that failure mode, because the listener sits on the document.
+- On localhost the control script returns early unless the port is 8765, 8766 or 8790. The wire test serves from `gridmind.test` for that reason. Keep it that way.
+
+## Verification
+
+- Docs only: the ADR, the CONTEXT term and five sub-issues.
+- Acceptance bars for the code steps: the wire test passes with zero byte edits; a replaced or re-rendered control still sends its request; a new preview clears acknowledgements.
+
 # 2026-11-07 — Backtest workbench: silver and WTI on OKX history (#1388)
 
 ## Decision
@@ -28,6 +48,10 @@
 
 - History reports: XAG and CL each 259,200 of 259,200 bars, 0 missing. Funding from 2026-08-06.
 - Production ab7be79 (#1390): `/api/bars` for SILVER and WTI returns the 04:00 candle at 04:30 (52.17 / 89.68).
+- Production 64da644 (#1388): `/trade` loads with no console errors and the workbench list has silver and WTI. 开始回测 was not pressed in production.
+- Correction to the #1387 records: `/api/desk` and the bundle were checked, not the rendered silver view. Switching to silver in production was not done. `reading_note` rendering is covered by vitest only.
+- 8100 vs OKX, 2026-11-07: XAG, CL and BZ each match on 99 of 99 confirmed 1-hour candles.
+
 
 # 2026-11-07 — OKX desk bars bypass the datafeed cache (#1390)
 
@@ -69,7 +93,7 @@
 
 ## Gotchas
 
-- Production had 12 open AI calls each on SILVER and WTI, recorded at futures prices. Without `asset_sources` they would have been scored against OKX closes. CL futures and the CL swap differ by more than the hit band on some days.
+- Production had 12 open AI calls each on SILVER and WTI, recorded at futures prices. Without `asset_sources` they would have been scored against OKX closes. How far futures and the swap differ was not measured.
 - Calls recorded before the move still read futures candles. The 20-minute job no longer refreshes the futures overview for these assets: `futures_overview` is not declared. Old calls therefore resolve after the morning brief refreshes it, up to a day late. They are not mis-scored.
 - 8100 answers from its cache under `cache_policy=allow`. Freshness is judged on the newest candle time, not on the reply's own `fresh` flag.
 - The characterization snapshot changed only on the SILVER and WTI rows, the new system check and `reading_note`.

@@ -208,6 +208,13 @@ control intents. It observes and composes domain contracts; it does not own
 strategy, risk, or Broker wire semantics.
 _Avoid_: Dashboard strategy engine, browser-owned scheduler
 
+**Control Intent**:
+A page event that names a control action and its arguments, such as preview,
+confirm, start or stop. GridMind's control script handles it and sends the
+request. A React control fires intents and never sends a control request
+itself (ADR 0008).
+_Avoid_: React order call, button binding
+
 **Desk Venue Module**:
 The one code module that holds the trading desk's behaviour for a desk kind:
 labels, plan template, how price, grid and bars are read, and its declared
