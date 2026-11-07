@@ -180,6 +180,61 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-07 — Paper takes its instrument from the Strategy Session (#1406)
+
+## Decision
+
+- `start_clean_session(paper_instrument=...)` writes `paper_instrument` on the `session_started` row: `gold`,
+  `silver` or `crude`, default `gold`, anything else refused. `session_instrument_key` reads a missing field as gold,
+  like `session_venue_key` does for the venue.
+- Every reader takes the instrument from that row, not from config:
+  - `prepare_park_paper_config(config, instrument=...)`. Gold keeps its old path untouched. Silver and crude fetch
+    their definition through `resolve_paper_instrument_definition`, and also get their own `execution_contract`, so
+    orders round to their increments. Fees are the Paper rates plus `verified: false`.
+  - `build_park_authoritative_adapter`, `park_control` and `park_live_tick` read the active session's instrument,
+    or gold when Paper is idle.
+  - `default_market_reader(instrument=...)`. Gold calls the bars builder with the same arguments as before. Silver
+    and crude ask for their own symbol. The read is untrusted unless `source_mode` is `okx_swap_public` and
+    `provider_symbol` is the requested swap.
+- `ParkPaperRuntime._paper_instrument_blocker` blocks a tick whose prepared contract is for another instrument, with
+  `paper_instrument_mismatch`. Gold sessions then still go through the venue blocker.
+- A Reverse keeps the old session's instrument, read from that session's own start row. The drafter refuses a Reverse
+  to another instrument, with `paper_instrument_differs_from_active`.
+- The drafter takes an optional `paper_instrument` on a message. A draft keeps its instrument, and changing it
+  halfway is refused. The HTTP body field is passed on only when present, so a gold request is unchanged. A gold plan
+  keeps its shape and digest; silver and crude plans carry `paper_instrument`.
+
+## Gotchas
+
+- The datafeed's `/api/execution-market` returns `unsupported_instrument` for XAG and CL, and its schema is now
+  `execution-market-v2`, while the client expects v1. Production runs `direct` mode (no
+  `TRADING_ORCHESTRATOR_MARKET_SOURCE` set), so the bars path is used. `datafeed` mode would block silver, and a
+  test pins that. Gold in `datafeed` mode would also fail on the schema; that predates this change.
+- The bars response labels silver `symbol: SILVER`. The swap id is in `provider_symbol`, which is the field checked.
+- `park_control` prepares the config once before the router runs. A Dashboard confirm in between can start a session
+  on another instrument. `_without_other_instrument` drops a contract prepared for another instrument and refetches,
+  instead of reusing it.
+- A Nautilus fill row has no instrument field. The instrument is enforced earlier: `run_replay` refuses any event
+  whose `instrument_id` differs from the preflight's symbol. A gold event in a silver cycle was refused with
+  `shadow input instrument identity mismatch`.
+- The Park preflight needs a clean tracked tree, so the dev replay ran after the commit.
+- Reading an old session's cycle needs a preflight for that session's instrument. Otherwise the replay refuses it;
+  it does not return wrong numbers.
+
+## Verification
+
+- 26 new tests in `tests/test_paper_session_instrument.py`; the existing Paper, drafter, dashboard-server and
+  Nautilus tests pass.
+- Gold against main (eee0272), the same mocked flow on both: definition URL, bars arguments, preflight config digest,
+  market envelope, draft plan digest, plan row and all 31 runtime orders are identical. The one difference is
+  `"paper_instrument": "gold"` on the identity row, which is a record, not a request.
+- Real Nautilus replay on the dev instance, isolated output root, live dev datafeed (read only):
+  - silver: XAG-USDT-SWAP at 52.2; 0.123 requested, 0.12 filled; fee 0.0025056 (taker 0.04%);
+  - crude: CL-USDT-SWAP at 89.84; 1.27 requested, 1.3 filled; fee 0.0467168.
+- Production at eee0272 (#1405 deploy, recorded here): the deploy gate passed with Paper idle and `/trade` returned 200.
+  `/api/desk/SILVER` shows `OKX XAG-USDT-SWAP 公开行情`, `只记判断`, capabilities `bars`, `bars_health`. The rendered
+  silver view was not checked.
+
 # 2026-11-07 — The Paper instrument table reads specs from the datafeed (#1405)
 
 ## Decision
