@@ -1,5 +1,28 @@
 # Decision Log
 
+# 2026-11-07 — The page reads venue capabilities (#1380)
+
+## Decision
+
+- `/api/assets` rows and `/api/desk` meta carry the module's declared `capabilities`, sorted.
+- In `gm-desk.js`, a hoisted `can()` decides the stop button and the status action's stop jump. The 暂停补单 button needs `rearm_hold` on top of that.
+- TodayPanel's chip hint follows `grid_plan`.
+- GridMind gold presentation (`paperGoldIds`, `onGridMind`, the retired-selection banner, the gold body class) stays, per ADR 0007.
+
+## Gotchas
+
+- `can` is a function declaration, not a `const`. `renderStatus` can run before the line that defines it, and a `const` would throw there (temporal dead zone).
+- No grid is running in production, so the stop button is hidden either way. Verify through `meta.capabilities` and the served `gm-desk.js`, not by looking for the button.
+
+## Verification
+
+- Snapshot change is additive only: `capabilities` on assets and meta.
+- vitest 143, tsc clean, browser tests 7 (2 new: no `stop` means no buttons; `stop` without `rearm_hold` shows only stop). Desk suite green.
+- Production 4a67dfa (#1379):
+  - `desk.db` backed up first with `.backup`;
+  - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
+  - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
+
 # 2026-11-07 — Fake venue acceptance, conformance contract, kinds checked in code (#1379)
 
 ## Decision
