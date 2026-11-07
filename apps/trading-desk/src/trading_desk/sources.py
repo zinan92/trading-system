@@ -357,6 +357,32 @@ class Sources:
             return {"ok": False, "reason": "K 线暂时没有数据", "bars": [], "source": source}
         return {"ok": True, "bars": bars, "source": source, "fresh": False, "latest_timestamp": bars[-1][0]}
 
+    # ---- OKX public swaps through the datafeed (silver, crude; #1387) -------
+    OKX_SOURCE = "okx_swap_public"
+
+    def okx_bars(self, asset: dict[str, Any], timeframe: str, limit: int, now: datetime | None = None) -> dict[str, Any]:
+        """OKX's own candles for the asset's swap, from datafeed 8100. Fail closed: a reply from any other source or
+        symbol, or a newest candle older than two periods, is ``ok=false``. Nothing falls back to futures candles."""
+        instrument = str(asset["instrument_id"])
+        source = f"OKX {instrument} 永续公开行情（datafeed）"
+        url = f"{self.config.datafeed_url}/api/candles/commodity/{urllib.parse.quote(instrument)}?" + urllib.parse.urlencode(
+            {"timeframe": timeframe, "limit": limit, "source": self.OKX_SOURCE})
+        try:
+            payload = self.fetch(url, None) or {}
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("caught_exception", exc_info=True)
+            return {"ok": False, "reason": f"K 线读取失败：{type(exc).__name__}", "bars": [], "source": source}
+        if payload.get("selected_source") != self.OKX_SOURCE or payload.get("provider_symbol") != instrument or payload.get("is_synthetic"):
+            return {"ok": False, "reason": "K 线来源不是 OKX 这个合约，不用", "bars": [], "source": source}
+        bars = [[c["timestamp"], float(c["open"]), float(c["high"]), float(c["low"]), float(c["close"])]
+                for c in payload.get("candles") or [] if all(c.get(k) is not None for k in ("timestamp", "open", "high", "low", "close"))][-limit:]
+        if not bars:
+            return {"ok": False, "reason": "K 线暂时没有数据", "bars": [], "source": source}
+        latest = datetime.fromisoformat(str(bars[-1][0]).replace("Z", "+00:00"))
+        if (now or datetime.now(timezone.utc)) - latest > timedelta(milliseconds=2 * self.HL_INTERVAL_MS[timeframe]):
+            return {"ok": False, "reason": f"K 线过期（最新一根 {bars[-1][0][:16]}）", "bars": [], "source": source}
+        return {"ok": True, "bars": bars, "source": source, "fresh": True, "latest_timestamp": bars[-1][0]}
+
     # ---- BTC: Hyperliquid Testnet grid + account ---------------------------
     def hl_mid(self, asset: dict[str, Any]) -> float | None:
         """The venue's live mid for this coin (public, no account), or None. Never a recorded price (#1372)."""

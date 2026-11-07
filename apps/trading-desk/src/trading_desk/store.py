@@ -55,6 +55,13 @@ create table if not exists meta (
   key text primary key,
   value text not null
 );
+create table if not exists asset_sources (
+  asset text not null,
+  kind text not null,
+  instrument_id text not null,
+  until text not null,
+  primary key (asset, until)
+);
 create table if not exists notes (
   id integer primary key autoincrement,
   created_at text not null,
@@ -76,17 +83,20 @@ DEFAULT_ASSETS = [
      "primary": ["黄金", "金价", "贵金属", "白银", "避险", "央行购金", "XAU"], "kline_key": "gold", "position": 2},
 ]
 # 2026-09-15 Park: add ETH (Hyperliquid Testnet) and silver / WTI (judgment and review only, no venue yet).
+# 2026-11-07 #1387: silver / WTI read OKX public swap data (still judgment only); MOVED_TO_OKX moves older databases.
 V4_ASSETS = [
     {"key": "ETH", "label": "ETH", "kind": "hl_testnet", "venue_profile_id": "hyperliquid.testnet", "instrument_id": "ETH-USD-PERP", "coin": "ETH",
      "news_queries": ["以太坊", "ETH", "加密", "美联储", "ETF", "稳定币"],
      "primary": ["以太坊", "ETH", "加密", "稳定币", "链", "巨鲸"], "kline_key": "ethereum", "position": 3},
-    {"key": "SILVER", "label": "白银", "kind": "watch", "venue_profile_id": "", "instrument_id": "SIL", "coin": "SILVER",
+    {"key": "SILVER", "label": "白银", "kind": "okx_public", "venue_profile_id": "", "instrument_id": "XAG-USDT-SWAP", "coin": "SILVER",
      "news_queries": ["白银", "银价", "贵金属", "美联储", "美元"],
      "primary": ["白银", "银价", "贵金属", "工业金属"], "kline_key": "silver", "position": 4},
-    {"key": "WTI", "label": "原油", "kind": "watch", "venue_profile_id": "", "instrument_id": "CL", "coin": "WTI",
+    {"key": "WTI", "label": "原油", "kind": "okx_public", "venue_profile_id": "", "instrument_id": "CL-USDT-SWAP", "coin": "WTI",
      "news_queries": ["原油", "油价", "OPEC", "霍尔木兹", "中东"],
      "primary": ["原油", "油价", "OPEC", "欧佩克", "霍尔木兹", "布伦特", "WTI"], "kline_key": "wti", "position": 5},
 ]
+# key -> (instrument while it was a futures-overview `watch` asset, its OKX swap). Only a row still exactly as seeded moves.
+MOVED_TO_OKX = {"SILVER": ("SIL", "XAG-USDT-SWAP"), "WTI": ("CL", "CL-USDT-SWAP")}
 KLINE_KEYS = {"BTC": "bitcoin", "ETH": "ethereum", "HYPE": "hype", "XAU": "gold", "PAXG": "gold", "SILVER": "silver"}
 
 
@@ -130,6 +140,28 @@ class Store:
                          json.dumps(row["news_queries"], ensure_ascii=False), json.dumps(row["primary"], ensure_ascii=False),
                          row["kline_key"], row["position"], now_iso()),
                     )
+
+        with self._conn() as conn:
+            self._move_to_okx_public(conn)
+
+    @staticmethod
+    def _move_to_okx_public(conn: sqlite3.Connection) -> None:
+        """#1387: silver and WTI move from futures-overview candles to OKX public swaps. The kind and instrument they had
+        are kept in ``asset_sources`` with the moment they stopped, so a call recorded at a futures price is still
+        scored against futures candles. Idempotent; one transaction, so two processes cannot both record the move."""
+        until = now_iso()
+        for key, (old, new) in MOVED_TO_OKX.items():
+            moved = "where key=? and kind='watch' and instrument_id=?"
+            conn.execute(f"insert or ignore into asset_sources (asset, kind, instrument_id, until) select key, kind, instrument_id, ? from assets {moved}",
+                         (until, key, old))
+            conn.execute(f"update assets set kind='okx_public', instrument_id=? {moved}", (new, key, old))
+
+    def source_at(self, asset: str, created_at: str) -> dict[str, str] | None:
+        """The kind and instrument an asset had when a call was recorded, if it has moved since (#1387); else None."""
+        with self._conn() as conn:
+            row = conn.execute("select kind, instrument_id from asset_sources where asset=? and until > ? order by until limit 1",
+                               (asset, str(created_at))).fetchone()
+        return {"kind": row["kind"], "instrument_id": row["instrument_id"]} if row else None
 
     @staticmethod
     def _migrate_asset_kinds(conn: sqlite3.Connection) -> None:

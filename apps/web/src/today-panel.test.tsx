@@ -230,3 +230,18 @@ test("a chip's hint reads the capabilities, not the kind", () => {
   expect(screen.getByRole("button", {name: "新"}).title).toBe("测试盘，下单尚未开通");
   expect(screen.getByRole("button", {name: "旧"}).title).toBe("只记判断和复盘");
 });
+
+test("an OKX-priced asset says the K-line daily reads futures (#1387)", async () => {
+  const note = "K 线日报看的是期货合约；这里的价格和 K 线是 OKX 永续，两者有价差。";
+  serve({"GET /api/desk/XAU": () => ({kline: {ok: true, structure: "日线偏多", synthesis: "银价修复。"}, today_judgment: null, executions: [], ai_today: null,
+    meta: {kind: "okx_public", reading_note: note}})});
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={[]} />);
+  expect(await screen.findByText(note)).toBeTruthy();
+});
+
+test("no note when the reading and the price share a feed", async () => {
+  serve({"GET /api/desk/XAU": () => ({kline: {ok: true, structure: "日线偏多", synthesis: "x"}, today_judgment: null, executions: [], ai_today: null, meta: {kind: "xau_paper", reading_note: ""}})});
+  render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+  await screen.findByText("K 线日报 ▲ 偏多");
+  expect(document.querySelector(".desk-reading-note")).toBeNull();
+});

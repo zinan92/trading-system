@@ -631,13 +631,12 @@ def test_v4_assets_are_seeded_once_and_old_databases_accept_judgment_only_assets
     assert [a["key"] for a in store.assets()] == ["BTC", "ETH", "SILVER", "WTI"]
     store.remove_asset("WTI")
     assert "WTI" not in [a["key"] for a in Store(old).assets()]  # not re-added once seeded
-    fetch.routes["/api/overview"] = {"assets": [{"asset_key": "silver", "timeframes": [
-        {"timeframe": "thirty_minute", "candles": [{"timestamp": "2026-09-15T00:00:00+00:00", "open": 41.0, "high": 41.5, "low": 40.8, "close": 41.2}]},
-        {"timeframe": "daily", "candles": [{"timestamp": "2026-09-14", "open": 40.0, "high": 41.0, "low": 39.5, "close": 40.9}]}]}]}
+    from tests.conftest import okx_candles
+    fetch.routes["/api/candles/commodity/XAG-USDT-SWAP"] = okx_candles("XAG-USDT-SWAP", [41.0, 41.2])
     sources = Sources(config, fetch=fetch)
     silver = store.asset("SILVER")
+    assert silver["kind"] == "okx_public" and silver["instrument_id"] == "XAG-USDT-SWAP"  # seeded on OKX since #1387
     assert sources.bars(silver, "1h")["bars"][-1][4] == 41.2
-    assert sources.bars(silver, "1d")["bars"][-1][0] == "2026-09-14T00:00:00+00:00"
     from tests.test_desk import client_for
     client, _ = client_for(config, sources, Store(config.db_path), fetch)
     plan = client.post("/api/plan", json={"asset": "SILVER", "direction": "short"}).json()

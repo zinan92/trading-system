@@ -30,7 +30,8 @@ export interface Desk {
   ai_today?: AiCall | null;
   ai_running?: boolean;
   control?: Record<string, unknown> | null;
-  meta?: {kind?: string} | null;
+  /** reading_note (#1387): the K-line daily reads other data than this venue's price; say so next to it. */
+  meta?: {kind?: string; reading_note?: string} | null;
 }
 
 export const PLAN_TAG: Record<string, string> = {keep: "沿用当前网格", new: "需要批准", hold: "不开新单", unavailable: "暂不可用", record_only: "只记录"};

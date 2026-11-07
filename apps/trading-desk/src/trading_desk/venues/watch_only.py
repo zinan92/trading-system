@@ -1,4 +1,4 @@
-"""Assets Park judges and reviews with no venue to trade on yet (silver, crude): futures overview bars only."""
+"""Assets Park judges and reviews with no venue at all: futures overview bars only (silver and crude until #1387)."""
 from __future__ import annotations
 
 from typing import Any, Mapping

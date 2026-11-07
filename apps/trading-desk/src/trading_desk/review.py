@@ -58,11 +58,17 @@ def resolve_due(store: Any, sources: Any, hours: int, *, asset: str | None = Non
         meta = store.asset(row["asset"])
         if meta is None:
             continue
-        if row["asset"] not in bars_cache:
-            bars_cache[row["asset"]] = sources.bars(meta, "1h", limit=300).get("bars") or []
-        after = price_at(bars_cache[row["asset"]], target)
+        # A call is scored on the candles its price was read from: an asset that moved venue since (#1387) uses its old one.
+        before = store.source_at(row["asset"], row["created_at"])
+        if before:
+            meta = {**meta, **before}
+        feed = (row["asset"], meta["kind"], meta["instrument_id"])
+        if feed not in bars_cache:
+            bars_cache[feed] = sources.bars(meta, "1h", limit=300).get("bars") or []
+        bars = bars_cache[feed]
+        after = price_at(bars, target)
         if after is None:
-            if out_of_window(bars_cache[row["asset"]], target):
+            if out_of_window(bars, target):
                 store.resolve(row["id"], price_after=None, move_pct=None, outcome="unverifiable")
                 resolved += 1
             continue

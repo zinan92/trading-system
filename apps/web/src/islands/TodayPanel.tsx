@@ -52,12 +52,14 @@ function Reading({desk, error}: {desk: Desk | null; error: string}) {
   if (error) return <div className="desk-reading" id="deskReading">{error}</div>;
   const k = desk?.kline;
   if (!desk) return <div className="desk-reading" id="deskReading" />;
-  if (!k?.ok) return <div className="desk-reading" id="deskReading">K 线日报：{k?.reason || "暂无"}</div>;
+  const note = desk.meta?.reading_note ? <small className="desk-reading-note" style={{display: "block", opacity: 0.7}}>{desk.meta.reading_note}</small> : null;
+  if (!k?.ok) return <div className="desk-reading" id="deskReading">K 线日报：{k?.reason || "暂无"}{note}</div>;
   const dir = readingDirection(k.structure);
   return (
     <div className="desk-reading" id="deskReading">
       <b className={`d-${dir}`}>K 线日报 {READING_LABEL[dir]}</b>{firstSentence(k.synthesis)}{" "}
       <a href="/desk#news-kline" style={{color: "inherit", opacity: 0.7}}>看卡片</a>
+      {note}
     </div>
   );
 }

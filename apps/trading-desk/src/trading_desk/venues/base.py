@@ -34,6 +34,7 @@ class VenueModule:
     plan_template: Mapping[str, Any] | None = None
     started_text: str = ""
     bars_health_label: str = ""
+    reading_note: str = ""  # said next to the K-line daily when its data is not this venue's price (#1387)
 
     def venue_text(self, sources: Any, asset: Mapping[str, Any]) -> tuple[str, str]:
         """(venue, money) shown under the asset name."""
