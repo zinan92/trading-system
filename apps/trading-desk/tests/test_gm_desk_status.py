@@ -72,6 +72,15 @@ def test_the_read_model_feed_counts_for_the_same_asset_and_names_itself() -> Non
     assert run("health", btc)["text"] == "行情可信"
 
 
+def test_a_feed_with_no_provider_says_so_in_plain_words() -> None:
+    """Production, weekend: provider "unavailable", label "Unavailable", no timestamp."""
+    view = with_gate(with_run(idle_view(symbol="GOLD")), symbol="GOLD", trusted=False,
+                     provider="unavailable", provider_label="Unavailable", latest_timestamp="")
+    body = run("banner", view, {"asset": "黄金"})["body"]
+    assert body.startswith("行情源现在没有返回可用数据（还没有可信数据）。")
+    assert "Unavailable" not in body
+
+
 def running_view() -> dict:
     view = idle_view()
     view["data"]["current_strategy"] = {

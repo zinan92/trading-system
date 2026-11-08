@@ -59,7 +59,7 @@ const DeskStatus = (() => {
     if (!feed.trusted) {
       const last = market.latest_timestamp ? `最后可信数据 ${bjTime(market.latest_timestamp)}` : "还没有可信数据";
       return {tone: "bad", title: `${asset}行情中断，已停止开新仓`,
-        body: `${market.provider_label || "行情源"}的数据没有通过可信检查（${last}）。恢复之前不会开新仓，也不会改用别的数据源顶替。页面会自动重试。`,
+        body: `${String(market.provider || "").toLowerCase() === "unavailable" || !market.provider_label ? "行情源现在没有返回可用数据" : `${market.provider_label}的数据没有通过可信检查`}（${last}）。恢复之前不会开新仓，也不会改用别的数据源顶替。页面会自动重试。`,
         action: {kind: "details", label: "查看原因"}};
     }
     if (isActive(view)) {
