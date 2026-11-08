@@ -180,6 +180,37 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — 「今天」 starts on the chart's asset instead of waiting for GridMind's selection (#1436)
+
+## Decision
+
+- `boot()` in gm-desk.js waited for `dashboardControlState.selection` before choosing 「今天」's asset. The selection
+  waits on 8765's catalog (8–13 s in production). It now waits for whichever comes first: the selection, or
+  `gridmindView.market.symbol` from GridMind's first read (about 1.5 s). With a usable selection it applies it;
+  otherwise it focuses `chartAsset()` (#1433). The 2-second follow loop moves 「今天」 to the selection's asset if it
+  arrives naming another one. With neither, the 15 s ceiling and the fallback are unchanged.
+- Nothing selects a venue for Park; starting still needs his own pick.
+
+## Gotchas
+
+- The first version of the new browser test passed on the old code too: the old boot fell back to the chart's
+  asset after 15 s, inside Playwright's 30 s wait. The test now asserts the title appears before 8 s
+  (`performance.now()`); on the old code it failed at 15.5 s.
+- `_page` takes `selection=None` to leave `dashboardControlState` unpublished (a selection that has not arrived).
+
+## Verification
+
+- `test_today_starts_on_the_chart_before_gridmind_s_selection_arrives`: with no selection, 「今天 · 黄金」 (the chart
+  shows GOLD) before 8 s with 黄金 pressed; publishing the BTC selection moves it to 「今天 · BTC」 within 5 s. Failed on
+  the old code (15.5 s), passes on the new. Today file 19 and tree shape pass (no re-record: the boot order does
+  not change the booted shape).
+- Desk DESK_COUNT, root ROOT_COUNT, mjs 29. Mocks only.
+- Production record for #1435 at 41389f7 (no `--dashboard`), read-only: the three static files byte-identical;
+  step 1 read 「今天的依据：3 件大事 · 4 条新闻」 with 「突发：霍尔木兹油轮遇袭升级」 (a `kind: "breaking"` event); 3 cards and 4
+  news items inside, nothing outside `#deskBasis`; one column, no overflow at 1024 px. The line appeared at 15.0 s
+  (this wait, on the first load after the restart). The banner showed 「黄金行情中断，已停止开新仓」: the OKX feed's own
+  state at the time, blocking as designed.
+
 # 2026-11-08 — The news and the week's three events are one line in step 1 (#1435)
 
 ## Decision
