@@ -180,6 +180,37 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — The chart opens on 4h; 1h / 4h / 日 shown, the rest behind 「更多」 (#1445)
+
+## Decision
+
+- Block 3a of the redesign (#1427). gridmind.js `state.timeframe` starts at `"4h"` (was `"30m"`); when the read
+  model's `ui_capabilities.market_timeframes` lacks it, `renderTimeframes` falls back to 4h if offered, else the first.
+- `renderTimeframes` shows `TF_PRIMARY = ["1h","4h","1d"]` (in the server's order, `1d` labelled 「日」) and a
+  `[data-tf-more]` toggle (「更多」/「收起」, `state.timeframesOpen`) for the rest. While the selected timeframe is one
+  of the rest, they stay shown and the toggle is hidden.
+- `pipelines/dashboard_server.py` declares `"1d"` in both `market_timeframes` lists; the manual `#timeframe` select
+  (Skeleton + reference HTML) gains `<option value="1d">日</option>`. The bars endpoint already served 1d.
+- Presentation only: start, trend and the strip read the 1m feed (#1443). Control requests unchanged.
+
+## Gotchas
+
+- `test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars` serves 30m pages for any timeframe. On a 4h chart
+  `loadOlderMarketBars` rightly refuses a snapshot whose timeframe is not the chart's, so the test now picks 30m
+  through 「更多」 first.
+- Production 1d bars carry date-only timestamps (`2026-11-08`); the new test uses that shape and the chart draws it.
+- `tests/fixtures/trade_tree_shape.json` re-recorded: the only difference is the new 「日」 option.
+- Needs `--dashboard` (8765) and Paper idle.
+
+## Verification
+
+- Browser `test_the_chart_opens_on_4h_with_1h_4h_day_and_the_rest_behind_more` at 1680 and 375: first chart read is
+  4h; buttons 1h/4h/日/更多; 更多 → 收起 + 1m 5m 15m 30m, and back; 日 requests `timeframe=1d`, `#chartMeta`
+  starts 「GOLD · 1d」, the select reads 1d, `marketTrusted` still true from 1m; a 「更多」 timeframe keeps the rest
+  shown without a toggle; no overflow.
+- Web 2263; gridmind browser + static + today + tree + crosshair + control wire + dashboard server + read model 236
+  (after fixes); desk 276.
+
 # 2026-11-09 — Start, trend, header price and the desk strip read the selected symbol's 1m feed (#1443)
 
 ## Decision
