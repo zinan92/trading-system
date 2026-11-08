@@ -12,6 +12,7 @@ import pytest
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
 from tests.test_dashboard_gridmind_profit_controls_browser import _preview
+from tests.trade_page import open_manual, press, text
 
 
 def _recommendation() -> dict:
@@ -128,7 +129,8 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
             lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "bars": []})),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
         page.locator("#refreshTrend").click()
         page.locator("#trendBox").filter(has_text="做多 · 稳健").wait_for()
@@ -148,7 +150,7 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
         page.locator("#gridAdjustToggle").click()
         assert page.locator(".grid-adjust-overlay.on").count() == 0
 
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         page.locator(".trade-toast").filter(has_text="机器人已启动").wait_for()
         assert [row["action"] for row in requests[-2:]] == ["prepare_start", "start"]
         assert requests[-1]["prepared_start_id"] == "operator-journey-prepared"
@@ -164,13 +166,14 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
         assert "止盈" in page.locator("#orders").inner_text()
         assert "止损" in page.locator("#orders").inner_text()
 
-        page.locator("#stopRobot").click()
+        press(page, "#stopRobot")
         page.locator("#actionStatus").filter(has_text="机器人已停止").wait_for()
         assert requests[-1] == {"action": "stop", "cycle_id": "2026-07-18_DAY"}
         assert "撤销 30 笔挂单" in page.locator("#actionStatus").inner_text()
         assert page.locator("#ordersCount").inner_text() == "(0)"
 
-        for tab, panel in (("review", "#review"), ("shadows", "#shadows"), ("history", "#history")):
+        for tab, panel in (("review", "#deskReview"),  # /trade: the desk's 交易回看 island (#1419)
+                           ("shadows", "#shadows"), ("history", "#history")):
             page.locator(f'[data-tab="{tab}"]').click()
             assert page.locator(panel).evaluate("element => element.parentElement.classList.contains('on') || element.classList.contains('on')")
 

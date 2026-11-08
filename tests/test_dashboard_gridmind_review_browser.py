@@ -8,6 +8,7 @@ import pytest
 
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
+from tests.trade_page import open_manual, press, text
 
 
 def _review_model() -> dict:
@@ -71,11 +72,15 @@ def test_gridmind_12_hour_review_is_readable_and_never_invents_a_counterfactual_
             "**/api/dualtrack/market/bars?*",
             lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "bars": []})),
         )
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator('[data-tab="review"]').click()
+        # /trade shows the desk's own 交易回看 island in this tab; GridMind's 12-hour panel still renders,
+        # renamed review-legacy and hidden, until the phase-2 redesign retires it (#1419).
         review = page.locator("#review")
-        review.wait_for()
-        text = review.inner_text()
+        review.wait_for(state="attached")
+        page.wait_for_function("() => document.getElementById('review').textContent.includes('反事实')")
+        text = review.text_content()
 
         for label in ("当时计划", "判断", "结果与分析", "方向", "网格规格", "执行", "PnL", "关键位", "TP / SL", "反事实"):
             assert label in text

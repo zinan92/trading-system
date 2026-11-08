@@ -355,8 +355,8 @@ def test_gridmind_preserves_traceability_and_safe_control_copy() -> None:
     assert "计划版本" in html
     assert "登录会话已过期" in html
     assert "行情" in html and "禁止新开仓" in html
-    assert "Strategy Shadows" in html
-    assert "12小时复盘" in html
+    assert 'data-tab="shadows"' in html and "影子策略" in html  # /trade labels the tab in Chinese (gm-desk.js, #1415)
+    assert 'data-tab="review"' in html and "交易回看" in html
 
 
 def test_gridmind_always_shows_the_locked_production_strategy_summary() -> None:
@@ -649,11 +649,12 @@ def test_gridmind_order_state_is_always_escaped_as_text() -> None:
     assert "order.state_label || order.state" not in _tables()
 
 
-def test_v5_route_serves_gridmind_without_removing_legacy_console() -> None:
+def test_v5_route_redirects_to_trade_without_removing_legacy_console() -> None:
     server = (ROOT / "pipelines" / "dashboard_server.py").read_text(encoding="utf-8")
 
-    assert 'if parsed.path == "/dashboard-v5.html":' in server
-    assert 'self._serve_static_alias("/dashboard-gridmind.html")' in server
+    # #1419: the old page is gone; 8765 sends both of its addresses to the desk's /trade.
+    assert '_RETIRED_TRADE_PAGES = frozenset({"/dashboard-v5.html", "/dashboard-gridmind.html"})' in server
+    assert "_serve_static_alias" not in server
     assert (ROOT / "dashboard-dualtrack-split.html").exists()
 
 
@@ -729,6 +730,7 @@ def test_the_control_panel_keeps_every_request_and_approval_in_gridmind() -> Non
     assert sorted(item.split('"', 2)[1] for item in islands) == sorted([
         "chart-frame", "control-actions", "control-picker", "exec-tables", "exec-tables", "exec-tables", "exec-tables", "gm-cards", "gm-grid-summary", "gm-header", "gm-preview",
         "robot-actions", "start-risk",
+        "news", "review", "today", "watch", "workbench",  # the desk's own islands, on the same /trade tree since #1415
     ])
     source = (ROOT / "apps" / "web" / "src" / "islands" / "ControlSummaries.tsx").read_text(encoding="utf-8")
     for forbidden in ("<input", "<select", "<button", "onClick", "onChange", "fetch(", "dangerouslySetInnerHTML"):

@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _read_model, _static_server
+from tests.trade_page import open_manual, open_system, press, text
 
 
 @pytest.mark.parametrize(
@@ -34,9 +35,10 @@ def test_gridmind_read_model_failure_names_the_gateway_chain(
             "**/api/trading-system/read-model",
             lambda route: route.fulfill(**response),
         )
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
-        page.locator("#runBadge").filter(has_text=expected).wait_for()
-        text = page.locator("#runBadge").inner_text()
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
+        page.locator("#runBadge").filter(has_text=expected).wait_for(state="attached")
+        text = page.locator("#runBadge").text_content()
         assert expected in text
         assert "下一步：" in text
         browser.close()
@@ -48,7 +50,8 @@ def test_gridmind_names_binance_upstream_and_unreached_backend() -> None:
         browser = runtime.chromium.launch(headless=True, channel="chrome")
         page = browser.new_page(viewport={"width": 1680, "height": 1050})
         page.add_init_script("window.setInterval = () => 0")
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         failures = page.evaluate(
             """() => ({
                 binance: tradingFailure(marketFailure({
@@ -74,7 +77,8 @@ def test_gridmind_names_complete_grid_rollback_as_execution_failure() -> None:
         browser = runtime.chromium.launch(headless=True, channel="chrome")
         page = browser.new_page()
         page.add_init_script("window.setInterval = () => 0")
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         failure = page.evaluate(
             "() => tradingFailure(apiFailure('paper start did not accept the complete grid', 502, 'execution_incomplete')).text"
         )
@@ -89,7 +93,8 @@ def test_gridmind_failure_copy_matrix_is_canonical_across_api_dialog_and_runtime
         browser = runtime.chromium.launch(headless=True, channel="chrome")
         page = browser.new_page()
         page.add_init_script("window.setInterval = () => 0")
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         failures = page.evaluate(
             """() => {
                 const matrix = Object.entries(OPERATOR_FAILURE_COPY).map(([code, canonical]) => {
@@ -185,7 +190,8 @@ def test_gridmind_reconciles_lost_replacement_response_from_audit_without_contro
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         use_confirmed = True
 
         result = page.evaluate(
@@ -198,6 +204,7 @@ def test_gridmind_reconciles_lost_replacement_response_from_audit_without_contro
 
         assert result == {"reconciled": True, "accepted": 17, "receipt": "replace_grid"}
         assert control_requests == []
+        open_system(page)  # /trade folds #live into 「系统详情」; read it as Park sees it unfolded (#1419)
         assert "控制回执" in page.locator("#live").inner_text()
         assert "替换网格 · 已接受" in page.locator("#live").inner_text()
         browser.close()
@@ -273,10 +280,11 @@ def test_gridmind_reconciles_a_lost_stop_response_without_retrying_the_stop() ->
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         serve_confirmed = True
 
-        page.locator("#stopRobot").click()
+        press(page, "#stopRobot")
         page.locator("#actionStatus").filter(
             has_text="连接中断后已核对：机器人已停止"
         ).wait_for()

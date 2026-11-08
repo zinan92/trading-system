@@ -66,9 +66,6 @@ WRITE_PATHS = frozenset({
     "/api/dashboard-control/control",
     "/api/dashboard-control/acceptance",
 })
-SHELL = ('<link rel="stylesheet" href="/static/gm-desk.css?v={v}">'
-         '<script src="/static/gm-desk.js?v={v}" defer></script>'
-         '<script src="/static/web/web.js?v={v}" defer></script>')  # React islands, built from apps/web (#1325)
 ASSET_FILES = ("gm-desk.js", "gm-desk.css", "web/web.js")
 
 
@@ -110,16 +107,6 @@ def render_trade_page() -> str:
     new page with the old ?v= in between, and a browser could then reuse a cached old web.js.
     """
     return TEMPLATE.read_text(encoding="utf-8").replace("__DESK_ASSET_VERSION__", _asset_version())
-
-
-def inject_shell(html: str) -> str:
-    """The shell the desk added to 8765's dashboard-gridmind.html before #1415: that page plus this shell is
-    the reference the React tree is checked against (tests/test_trade_tree_browser.py) until #1419."""
-    tag = SHELL.format(v=ASSET_VERSION)
-    head = html.replace("<title>Extended 网格交易机器人 · GridMind 视觉版</title>", "<title>Park 交易台 · 交易</title>", 1)
-    if "</body>" not in head:
-        return head + tag
-    return head.replace("</body>", tag + "</body>", 1)
 
 
 def same_origin(request: Request) -> bool:

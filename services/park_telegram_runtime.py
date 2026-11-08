@@ -70,7 +70,7 @@ from services.testnet_soak_readiness import TestnetSoakReadiness
 from services.live_activation_gate import LiveActivationGate
 
 PARK_TELEGRAM_RUNTIME_SCHEMA = "park-telegram-runtime-v1"
-PARK_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v5.html"
+PARK_DASHBOARD_URL = "https://trade.park-ai-intel.com/trade"  # #1419: the trade page is the desk's /trade
 
 
 class ParkTelegramRuntimeError(RuntimeError):

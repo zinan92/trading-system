@@ -1,9 +1,11 @@
 """#1415: /trade is one React tree. Booted with the same mocked APIs, it must be the page it replaced.
 
-The reference is the pre-#1415 /trade: 8765's dashboard-gridmind.html plus the desk shell
-(`inject_shell`), with the same gm-desk.js and web.js. Both pages are served from a `.test` host, so
-GridMind's control and assistant scripts run (they stay off on other localhost ports). Every endpoint is
-mocked; no request leaves the page. The control journey here only presses mocked buttons.
+The reference is the pre-#1415 /trade: 8765's dashboard-gridmind.html plus the desk shell. #1419 retired that
+file; its booted shape (DOM, reads, islands, width) was recorded from 1b7b20b into
+tests/fixtures/trade_tree_shape.json, and the tree is checked against that record. The page is served from a
+`.test` host, so GridMind's control and assistant scripts run (they stay off on other localhost ports). Every
+endpoint is mocked; no request leaves the page. The control journey here only presses mocked buttons. The redesign
+changes the page on purpose: re-record the shape in the same PR that does, and say so in its records.
 """
 from __future__ import annotations
 
@@ -71,10 +73,13 @@ def _first_difference(a, b, path="root"):
     return None if len(a) == len(b) else (f"{path} (child count)", [str(x)[:120] for x in a[len(b):]], [str(y)[:120] for y in b[len(a):]])
 
 
-def _pages() -> dict[str, str]:
-    from trading_desk.gridmind import inject_shell, render_trade_page
+REFERENCE = json.loads((ROOT / "tests" / "fixtures" / "trade_tree_shape.json").read_text(encoding="utf-8"))
 
-    return {"reference": inject_shell((ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8")), "tree": render_trade_page()}
+
+def _tree() -> str:
+    from trading_desk.gridmind import render_trade_page
+
+    return render_trade_page()
 
 
 def _open(browser, html: str, *, width: int = 1680, height: int = 1050):
@@ -120,7 +125,9 @@ def _open(browser, html: str, *, width: int = 1680, height: int = 1050):
             local = ROOT / path.lstrip("/")
         return route.fulfill(status=200, path=str(local)) if local.is_file() else route.fulfill(status=404, body="")
 
-    page = browser.new_page(viewport={"width": width, "height": height})
+    # The frozen reference was recorded in Beijing time (desk times such as 「每分钟更新 · 12:00」 are local);
+    # CI runs in UTC, so the browser is pinned to the zone the reference was recorded in.
+    page = browser.new_page(viewport={"width": width, "height": height}, timezone_id="Asia/Shanghai")
     page.set_default_timeout(10000)
     page.clock.set_fixed_time(NOW)
     page.add_init_script("window.setInterval = () => 0")  # one boot, no refresh loop: both pages settle the same way
@@ -146,23 +153,19 @@ def _launch(runtime):
 @pytest.mark.parametrize("width,height", [(1680, 1050), (375, 812)], ids=["desktop", "phone"])
 def test_the_booted_tree_is_the_page_it_replaced(width: int, height: int) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
-    pages = _pages()
-    seen = {}
     with playwright.sync_playwright() as runtime:
         browser = _launch(runtime)
-        for name, html in pages.items():
-            page, wire, reads, errors = _open(browser, html, width=width, height=height)
-            root = "document.getElementById('trade-app')" if name == "tree" else "document.body"
-            seen[name] = {
-                "dom": page.evaluate(f"({SHAPE})({root})"),
-                "body_class": page.evaluate("() => document.body.className"),
-                "wire": wire, "reads": sorted(reads), "errors": errors,
-                "scroll_width": page.evaluate("() => document.documentElement.scrollWidth"),
-                "islands": page.evaluate("() => [...document.querySelectorAll('[data-island]')].map(el => el.dataset.island)"),
-            }
-            page.close()
+        page, wire, reads, errors = _open(browser, _tree(), width=width, height=height)
+        tree = {
+            "dom": page.evaluate(f"({SHAPE})(document.getElementById('trade-app'))"),
+            "body_class": page.evaluate("() => document.body.className"),
+            "wire": wire, "reads": sorted(reads), "errors": errors,
+            "scroll_width": page.evaluate("() => document.documentElement.scrollWidth"),
+            "islands": page.evaluate("() => [...document.querySelectorAll('[data-island]')].map(el => el.dataset.island)"),
+        }
+        page.close()
         browser.close()
-    reference, tree = seen["reference"], seen["tree"]
+    reference = REFERENCE["desktop" if width > 600 else "phone"]
     assert tree["errors"] == [] and reference["errors"] == []
     assert tree["islands"] == reference["islands"] and len(tree["islands"]) >= 15
     assert _first_difference(tree["dom"], reference["dom"]) is None
@@ -178,7 +181,7 @@ def test_the_control_journey_on_the_tree_sends_the_recorded_requests() -> None:
     wires = {}
     with playwright.sync_playwright() as runtime:
         browser = _launch(runtime)
-        for name, html in _pages().items():
+        for name, html in {"tree": _tree()}.items():
             page, wire, _reads, errors = _open(browser, html)
             # On /trade gm-desk.css hides GridMind's own buttons behind the desk flow, on both pages alike. The
             # journey presses them the way the intent router sees a press: a bubbling click on the control.
@@ -200,5 +203,4 @@ def test_the_control_journey_on_the_tree_sends_the_recorded_requests() -> None:
             wires[name] = (wire, errors)
             page.close()
         browser.close()
-    assert wires["tree"] == wires["reference"]
     assert wires["tree"][0] == WIRE and wires["tree"][1] == []

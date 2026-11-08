@@ -2,7 +2,7 @@ import {act} from "@testing-library/react";
 import type {ComponentType} from "react";
 import {createRoot} from "react-dom/client";
 import {ControlActions, RobotActions, StartRisk} from "./islands/ControlActions";
-import gridmind from "../../../dashboard-gridmind.html?raw";
+import gridmind from "./trade/skeleton.reference.html?raw";  // /trade's markup; the old page is gone (#1419)
 
 function draw(Component: ComponentType<any>, props: Record<string, unknown> = {}): HTMLElement {
   const host = document.createElement("div");

@@ -10,6 +10,7 @@ import pytest
 
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
+from tests.trade_page import open_manual, press, text
 
 
 def _market_page(*, count: int, start: datetime, historical: bool) -> dict:
@@ -125,14 +126,16 @@ def test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars(
             ),
         )
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{base_url}/dashboard-gridmind.html", wait_until="networkidle")
+        page.goto(f"{base_url}/trade", wait_until="networkidle")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
         source = page.locator(".standard-kline-source")
         assert "240 bars" in source.inner_text()
-        for _ in range(12):
+        for _ in range(40):  # /trade's chart column is narrower, so more bars are left to pan past (#1419)
             page.locator('[data-action="pan-left"]').click()
 
         chart = page.locator("#productionChart")
+        chart.scroll_into_view_if_needed()  # /trade lays the chart out lower than the old page (#1419)
         box = chart.bounding_box()
         assert box is not None
         page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)

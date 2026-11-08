@@ -180,6 +180,82 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — The old single-file trading page is gone; /trade is the only page (#1419, phase 1)
+
+## Decision
+
+- Last step of #1330, cut in two. This first phase changes no behaviour on /trade. It removes the second page and
+  moves its tests:
+  - `dashboard-gridmind.html` is deleted. 8765's `/dashboard-v5.html` and `/dashboard-gridmind.html` now answer
+    302 to the desk: `http://127.0.0.1:8790/trade` for a local Host, `https://trade.park-ai-intel.com/trade`
+    otherwise (`PARK_LOCAL_DESK_TRADE_URL` / `PARK_DESK_TRADE_URL`). `_serve_static_alias` is removed.
+  - The desk's `inject_shell` and `SHELL` are removed; `render_trade_page()` is the one page.
+  - Telegram's dashboard link is the desk's `/trade`.
+  - Every browser test that opened the old page now opens `/trade` as the desk renders it. `tests/trade_page.py`
+    serves it (page, `/static/*`, the desk's own reads) and holds the helpers that act on the page as it is
+    built: `open_manual` and `open_system` unfold 「手动配置与 AI 助手」 and 「系统详情」; `press` clicks a
+    control the desk hides (raw start/stop, confirm) the way the intent router sees a press; `text` waits for
+    hidden text.
+  - `tests/gridmind_page.py` and `.mjs` build GridMind's source from `trade.html` plus the skeleton markup.
+  - The tree-shape test compares /trade with `tests/fixtures/trade_tree_shape.json`, the old page's booted shape
+    at 1b7b20b (desktop and phone), recorded before the file was deleted.
+- Scope change, recorded on the issue: the bridges (`gmIntent`, `dashboardControlState`, the `desk:*` events)
+  and the UI parts still in gridmind.js are not retired here. They go block by block in phase 2, the page
+  redesign Park approved, because each block is redrawn there anyway and retiring them twice is wasted work.
+- Tests that only made sense on the old page are rewritten for /trade, not dropped:
+  - "no web.js keeps the top bar on its loading placeholders" became "no web.js leaves the mount's failure
+    notice and no state at all", since /trade draws its whole skeleton with web.js.
+  - "the strategy card is above the AI chat" became "the strategy card is in 「系统详情」", where /trade already
+    put it before this change (the frozen shape agrees).
+  - The 交易回看 tab shows the desk's review island; GridMind's 12-hour panel still renders, renamed
+    `review-legacy` and hidden, and its test reads it there until phase 2 retires it.
+
+## Gotchas
+
+- `page.route("**/web.js")` does not match `/static/web/web.js?v=…`: the glob does not cover a query string. The
+  no-bundle test first passed nothing; it uses `**/static/web/web.js*`.
+- On /trade the chart column is 700 px wide at a 1450 px viewport, so the history test pans 40 times, not 12, to
+  reach the oldest bar before the wheel.
+- The smart-fill test cleared its request log 400 ms after typing a range. Under parallel load the typed range's
+  debounced preview landed after the clear (two previews seen). It now waits for that preview first; the
+  assertion (exactly one preview from smart fill) is unchanged.
+- The goldbot public-health feature summary (`_deployment_feature_summary`) fetches
+  `https://goldbot.park-ai-intel.com/dashboard-v5.html` and looks for page markers. That page now redirects, so
+  those checks would report missing features. The gateway is not running (exit 78), so nothing reads them today;
+  retire or repoint them with the gateway.
+- The gateway (`services/cloud_access_gateway.py`) still sends `/` to `/dashboard-v5.html` and rewrites `Host` to
+  `127.0.0.1:8765` upstream. Through it, 8765's redirect would send a remote visitor to their own
+  `127.0.0.1:8790/trade`. Whoever revives the gateway must point it at the desk's public `/trade` first.
+- Hidden is not shown. Tests that asserted GridMind's header pills (`#runBadge`, `#marketBadge`) or the start
+  button's label now read them as hidden text, because /trade hides them (since #1294). What Park sees instead:
+  - an untrusted feed: the red banner 「…行情中断，已停止开新仓」 (new browser test, timers running);
+  - a failed read: the cause on the chart's notice, and the banner stays 「正在读取交易状态」 with no start offered
+    (same test);
+  - 系统详情 text (`#live`): the tests unfold it and read it as shown;
+  - invalid start parameters: `#previewSummary` in the open form (already asserted).
+- Known gaps, found here, not caused here, first in #1427 block 1: a risk block (pill 运行异常) and a stale
+  execution heartbeat (运行降级) never reach the banner, which shows the calm idle state with 「开始今天的计划」;
+  a failed read names its cause only on the chart, while the banner and 系统详情 line say 「读取中」. Starting
+  stays refused by the backend gates in all three; only the display is missing.
+- The frozen shape holds desk times in local time (「每分钟更新 · 12:00」, recorded in Beijing). CI runs in UTC and
+  saw 04:00: the first CI run failed both shape cases. The test pins the browser to `Asia/Shanghai`; under `TZ=UTC`
+  it fails without the pin and passes with it.
+- `tests/fixtures/trade_tree_shape.json` is the frozen reference. Phase 2 changes the layout on purpose, so each
+  block re-records it on purpose and says so in its record.
+
+## Verification
+
+- Root suite, local, uncommitted tree: 4112 passed, 2 skipped, 25 failed. All 25 (live activation gate and protocol,
+  live DCA canary, schedule installer, testnet soak readiness) read `current_source_attestation`, which blocks a
+  dirty `git status`; the same 5 files pass on a clean 1b7b20b checkout and on this branch once committed (59 passed each).
+- Every browser file that opened the old page now opens /trade and passes: order lifecycle 14, profit controls 16,
+  failure chains 7, range drag 5, dca 4, history 2, header, supervisor, operator journey, review, control track 2;
+  control wire, intents, crosshair, tree shape and today 28. `gridmind_control_wire.json` unchanged.
+- Web: typecheck clean, vitest 2259 passed, the build leaves web.js, read.js, chart.js and control.js unchanged.
+  Desk 263 passed. K-line 21 passed. mjs 29 passed.
+- New: `test_trade_shows_park_the_failure_the_hidden_header_pills_carry` (2 cases) passes.
+- Mocks only; no production control was pressed.
+
 # 2026-11-08 — GridMind's control layer is TypeScript; the one sender stays in gridmind.js (#1418)
 
 ## Decision

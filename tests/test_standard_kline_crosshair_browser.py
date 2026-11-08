@@ -11,6 +11,7 @@ import pytest
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dashboard_gridmind_history_browser import _market_page
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
+from tests.trade_page import open_manual, press, text
 
 
 def test_crosshair_datetime_is_rendered_on_the_bottom_time_axis() -> None:
@@ -46,7 +47,8 @@ def test_crosshair_datetime_is_rendered_on_the_bottom_time_axis() -> None:
             ),
         )
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{base_url}/dashboard-gridmind.html", wait_until="networkidle")
+        page.goto(f"{base_url}/trade", wait_until="networkidle")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
         chart = page.locator(".standard-kline-canvas")
         bounds = chart.bounding_box()

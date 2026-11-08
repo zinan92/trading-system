@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_dashboard_gridmind_header_browser import _header_model
+from tests.trade_page import desk_answer, open_manual, static_file, trade_html
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGIN = "http://gridmind.test"
@@ -83,7 +84,7 @@ def _open_page(runtime, runtime_status: dict):
     errors: list[str] = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.add_init_script("window.setInterval = () => 0")
-    html = (ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8")
+    html = trade_html()  # #1419: the old page is gone; /trade is what runs GridMind
 
     def handle(route) -> None:
         url = route.request.url
@@ -97,17 +98,21 @@ def _open_page(runtime, runtime_status: dict):
             return _json(route, _selection())
         if url.startswith(f"{ORIGIN}/api/dashboard-control/runtime-status"):
             return _json(route, runtime_status)
+        path = url.removeprefix(ORIGIN).split("?")[0]
+        if desk_answer(path) is not None:
+            return _json(route, desk_answer(path))
         if url.startswith(f"{ORIGIN}/api/"):
             return _json(route, {"error": "not_in_fixture"}, status=404)
-        if url.startswith(f"{ORIGIN}/dashboard-gridmind.html"):
+        if path == "/trade":
             return route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
-        local = ROOT / url.removeprefix(f"{ORIGIN}/").split("?")[0]
+        local = static_file(path) or ROOT / path.lstrip("/")
         if local.is_file():
             return route.fulfill(status=200, path=str(local))
         return route.fulfill(status=404, body="")
 
     page.route(f"{ORIGIN}/**", handle)
-    page.goto(f"{ORIGIN}/dashboard-gridmind.html", wait_until="load")
+    page.goto(f"{ORIGIN}/trade", wait_until="load")
+    open_manual(page)  # /trade keeps the control rail inside 「手动配置与 AI 助手」
     return page, errors
 
 

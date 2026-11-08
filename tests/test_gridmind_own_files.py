@@ -1,8 +1,7 @@
-"""#1420: dashboard-gridmind.html keeps only its structure; its styles and scripts are files.
+"""#1420: GridMind's styles and scripts are files; since #1419 /trade is the only page that loads them.
 
-Every file the page loads must exist and be forwarded by each server that carries the page:
-8765 (never cached), the desk (which serves them itself since #1414) and the cloud gateway. A path missing from one of
-them leaves that page without its controls, and no test that reads files from disk would notice.
+Every file the page loads must exist and be served by the desk, which reads them from disk (#1414). 8765 and the
+cloud gateway still list them (never cached / allowed) until those paths are retired with the redesign.
 """
 from __future__ import annotations
 
@@ -16,22 +15,25 @@ sys.path.insert(0, str(ROOT / "apps" / "trading-desk" / "src"))
 
 def test_the_page_has_no_inline_style_or_script_left() -> None:
     shell = PAGE.read_text(encoding="utf-8")
-    shell = re.sub(r"<!--.*?-->", "", shell, flags=re.S)  # the GridMind comment mentions <script>
+    shell = re.sub(r"<!--.*?-->", "", shell, flags=re.S)
     assert re.findall(r"<style[^>]*>", shell) == []
     assert [tag for tag in re.findall(r"<script[^>]*>", shell) if "src=" not in tag] == []
-    assert len(PAGE.read_bytes()) < 25_000
+    assert len(PAGE.read_bytes()) < 5_000
 
 
-def test_the_page_loads_its_files_in_the_old_order_as_plain_blocking_tags() -> None:
+def test_the_page_loads_its_files_in_the_old_order() -> None:
     assert gridmind_files() == [
         "assets/gridmind/base.css", "assets/gridmind/skin.css",
         "assets/gridmind/control-intents.js", "assets/gridmind/read.js", "assets/gridmind/chart.js", "assets/gridmind/control.js", "assets/gridmind/gridmind.js",
         "assets/gridmind/park-ai-chat.js", "assets/gridmind/dashboard-control.js",
     ]
-    tags = re.findall(r'<script src="assets/gridmind/[^"]+"[^>]*>', PAGE.read_text(encoding="utf-8"))
-    assert len(tags) == 7 and not [t for t in tags if re.search(r"\b(defer|async|type=)", t)]  # run in place, before the desk's deferred scripts
     for path in gridmind_files():
         assert (ROOT / path).is_file() and (ROOT / path).stat().st_size > 0
+
+
+def test_the_old_single_file_page_is_gone() -> None:
+    """#1419: /trade replaced dashboard-gridmind.html; 8765's old addresses send the browser to /trade."""
+    assert not (ROOT / "dashboard-gridmind.html").exists()
 
 
 def test_every_server_that_carries_the_page_forwards_its_files() -> None:

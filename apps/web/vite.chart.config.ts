@@ -1,5 +1,5 @@
 /* #1417: GridMind's chart layer builds into assets/gridmind/chart.js, a plain script that
- * dashboard-gridmind.html and the desk's /trade both load before gridmind.js. Committed with the
+ * the desk's /trade loads before gridmind.js (8765's dashboard-gridmind.html did too until #1419). Committed with the
  * source; CI rebuilds it and fails when the committed file differs (make test-web).
  * Vite's IIFE library build takes one entry, so each GridMind layer has its own config. */
 import {defineConfig} from "vite";

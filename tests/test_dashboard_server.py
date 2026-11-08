@@ -1691,13 +1691,24 @@ def test_dashboard_exposes_the_dedicated_park_paper_observer_route():
     assert "build_park_public_read_model(_dualtrack_output_root())" in source
 
 
-def test_dashboard_v5_is_a_stable_alias_for_the_production_strategy_console():
-    source = Path(dashboard_server.__file__).read_text(encoding="utf-8")
-
-    assert 'if parsed.path == "/dashboard-v5.html":' in source
-    assert 'self._serve_static_alias("/dashboard-gridmind.html")' in source
-    assert 'https://goldbot.park-ai-intel.com/dashboard-v5.html' in source
-    assert 'http://127.0.0.1:8766/dashboard-v5.html' in source
+def test_the_old_trade_page_addresses_send_the_browser_to_the_desk():
+    """#1419: dashboard-gridmind.html is gone; /dashboard-v5.html and its old file name redirect to /trade."""
+    handler = object.__new__(dashboard_server.DashboardHandler)
+    sent: list = []
+    handler.send_response = lambda code: sent.append(("status", code))
+    handler.send_header = lambda name, value: sent.append((name, value))
+    handler.end_headers = lambda: None
+    for path, host, target in [
+        ("/dashboard-v5.html", "127.0.0.1:8765", "http://127.0.0.1:8790/trade"),
+        ("/dashboard-gridmind.html?v=1", "localhost:8765", "http://127.0.0.1:8790/trade"),
+        ("/dashboard-v5.html", "goldbot.park-ai-intel.com", "https://trade.park-ai-intel.com/trade"),
+    ]:
+        sent.clear()
+        handler.path = path
+        handler.headers = {"Host": host}
+        handler.do_GET()
+        assert sent == [("status", 302), ("Location", target), ("Cache-Control", "no-store")]
+    assert not (Path(dashboard_server.__file__).resolve().parents[1] / "dashboard-gridmind.html").exists()
 
 
 def test_dashboard_ai_chat_dispatch_is_proposal_only_and_action_explicit(tmp_path: Path) -> None:

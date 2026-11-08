@@ -148,6 +148,19 @@ _PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v5.html"
 _LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v5.html"
 
 
+# #1419: the trade page is the desk's /trade. 8765's old addresses for it send the browser there: the local desk for
+# a local visitor, the public desk otherwise (which asks for Park's passcode).
+_DESK_TRADE_URL = os.environ.get("PARK_DESK_TRADE_URL", "https://trade.park-ai-intel.com/trade")
+_LOCAL_DESK_TRADE_URL = os.environ.get("PARK_LOCAL_DESK_TRADE_URL", "http://127.0.0.1:8790/trade")
+_RETIRED_TRADE_PAGES = frozenset({"/dashboard-v5.html", "/dashboard-gridmind.html"})
+
+
+def _desk_trade_url(host: str) -> str:
+    name = host.lower()
+    name = name[1:].split("]", 1)[0] if name.startswith("[") else name.split(":", 1)[0]
+    return _LOCAL_DESK_TRADE_URL if name in {"127.0.0.1", "localhost", "::1"} else _DESK_TRADE_URL
+
+
 _CLOUDFLARED_LOG = ROOT / "outputs" / "cloudflared.log"
 
 
@@ -170,7 +183,8 @@ STRATEGY_MUTATION_ENDPOINT_ALLOWLIST = frozenset(
 )
 
 
-# #1420: dashboard-gridmind.html loads these; the desk (/trade) and the cloud gateway forward the same paths.
+# #1420: GridMind's own files. Since #1419 only the desk's /trade loads them (the desk serves them itself);
+# 8765 keeps serving them uncached and the cloud gateway keeps allowing them until the redesign retires those paths.
 GRIDMIND_OWN_FILES = (
     "/assets/gridmind/base.css",
     "/assets/gridmind/skin.css",
@@ -370,8 +384,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/":
             self._redirect("command-center.html")
             return
-        if parsed.path == "/dashboard-v5.html":
-            self._serve_static_alias("/dashboard-gridmind.html")
+        if parsed.path in _RETIRED_TRADE_PAGES:
+            self._redirect(_desk_trade_url(self.headers.get("Host") or ""))
             return
         if parsed.path == "/api/command-center-state":
             self._handle_command_center_state_api()
@@ -485,14 +499,6 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._handle_connector_price_feed_refresh_runbook_get()
             return
         super().do_GET()
-
-    def _serve_static_alias(self, path: str) -> None:
-        original_path = self.path
-        try:
-            self.path = path
-            super().do_GET()
-        finally:
-            self.path = original_path
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
