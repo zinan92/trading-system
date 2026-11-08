@@ -210,7 +210,7 @@
   shows GOLD) before 8 s with 黄金 pressed; publishing the BTC selection moves it to 「今天 · BTC」 within 5 s. Failed on
   the old code (15.5 s), passes on the new. Today file 20 and tree shape pass (no re-record: the boot order does
   not change the booted shape).
-- Desk DESK_COUNT, root ROOT_COUNT, mjs 29. Mocks only.
+- Desk 273, root 4150 passed, 2 skipped (after the retired-selection fix), mjs 29. Mocks only.
 - Production record for #1435 at 41389f7 (no `--dashboard`), read-only: the three static files byte-identical;
   step 1 read 「今天的依据：3 件大事 · 4 条新闻」 with 「突发：霍尔木兹油轮遇袭升级」 (a `kind: "breaking"` event); 3 cards and 4
   news items inside, nothing outside `#deskBasis`; one column, no overflow at 1024 px. The line appeared at 15.0 s
