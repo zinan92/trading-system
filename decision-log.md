@@ -210,6 +210,11 @@
   shown without a toggle; no overflow.
 - Web 2263; gridmind browser + static + today + tree + crosshair + control wire + dashboard server + read model 236
   (after fixes); desk 276.
+- Root 4159 passed, 2 skipped.
+- Production record for #1443 at f0fa5dc (no `--dashboard`), read-only: the four static files byte-identical; with
+  the chart still on 30m the extra `symbol=GOLD&timeframe=1m&limit=2` read runs; `execMarket` GOLD 1m provider
+  `unavailable`, untrusted (Sunday); trend box 「行情不可用 · 1 分钟行情未满足可信门控…」, 「刷新趋势」 disabled, header
+  price `--`, red banner. Not seen in production: a non-1m chart with a trusted 1m enabling start; tests only.
 
 # 2026-11-09 — Start, trend, header price and the desk strip read the selected symbol's 1m feed (#1443)
 
