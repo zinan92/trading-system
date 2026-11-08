@@ -180,6 +180,46 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — Start, trend, header price and the desk strip read the selected symbol's 1m feed (#1443)
+
+## Decision
+
+- The backend's start path reads the fixed 1m execution tape (`pipelines/dashboard_server.py` control entry:
+  `build_dualtrack_market_bars_response(timeframe="1m", limit=240)`; "the chart selector is display-only"). The page
+  judged from the chart's feed: `fresh = isFresh(state.market)` (`#gate`, `gridmindView.marketTrusted`) and
+  `headerFresh = isTrustedHeaderMarket(state.market)` (trend box, 「刷新趋势」, start controls, header price). On a 4h
+  chart the start controls greyed out, the trend box asked for 1m, and a different-symbol strip judged from 4h.
+- gridmind.js now keeps the selected symbol's 1m feed (`executionMarket()`):
+  - chart on 1m: the chart's own snapshot (`keepExecutionMarket`), so a 1m chart behaves exactly as before;
+  - otherwise `refreshExecutionMarket(symbol)` reads `dashboardMarketBarsUrl({symbol, timeframe:"1m", limit:2})`
+    in parallel with the chart, through the same binding;
+  - keyed by `marketDatasetKey(symbol, "1m")` (venue profile + symbol), so a gold snapshot never survives a switch
+    to BTC; a request sequence drops late answers;
+  - failed → `{status:"error", trusted:false}`; a symbol or timeframe mismatch → `trusted:false,
+    status:"identity_mismatch"`; before any snapshot, only the read model's market counts, and only with no
+    venue binding and the same symbol at 1m. Never the chart's feed.
+- `headerMarket = executionMarket() || {}`; `fresh = isTrustedHeaderMarket(headerMarket)`, `headerFresh = fresh`.
+  `#gate` text names that feed. The trend box's 「切到 1m 后可评估」 branch is gone (it could no longer be true).
+- `gridmindView.execMarket` carries it; `DeskStatus.feedTrust` names it when it fails. #1441's rule (the read
+  model's feed must also pass for the same symbol) is unchanged.
+- This supersedes #1441's "don't touch `fresh`": that premise was the chart being on 1m.
+
+## Gotchas
+
+- `renderTimeframes` resets `state.timeframe` to the first option when the read model's
+  `ui_capabilities.market_timeframes` lacks it; the new browser test sets the list.
+- The browser test must not stub `setInterval`: the desk strip redraws on its own interval.
+- One extra small request per refresh while the chart is not on 1m.
+
+## Verification
+
+- Browser `test_a_4h_chart_starts_and_judges_from_the_selected_symbol_s_1m_feed` × 4 (1m trusted, untrusted,
+  503, other symbol): chart stays 4h; the 1m request has `symbol=GOLD&limit=2`; trusted → header 4,010 (the 1m
+  price), 「刷新趋势」 enabled, no 「切到 1m」; otherwise `marketTrusted` false, 「刷新趋势」 disabled, 「行情不可用」,
+  red strip without start. All four fail on the previous code.
+- `test_a_failed_1m_feed_is_named_even_when_the_chart_shows_a_trusted_4h`; static assertions updated.
+- gridmind browser + static + today 131, control wire 1 (`gridmind_control_wire.json` unchanged), desk 276, mjs 29.
+
 # 2026-11-09 — The banner's "market trusted" reads the same feed the start gate does (#1441)
 
 ## Decision
