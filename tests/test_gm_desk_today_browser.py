@@ -28,7 +28,11 @@ PLAN = {"kind": "new", "title": "做多网格", "lines": [["区间", "70,000 –
 PREVIEW = {"execution_ready": True, "orders": [{"price": 72000}, {"price": 74000}], "max_loss": 12.5, "preview_digest": "sha256:x"}
 
 
-def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers: dict | None = None, reads_extra: dict | None = None):
+BTC_SELECTION = "{venue_profile_id: 'hyperliquid.testnet', instrument_id: 'BTC-USD-PERP'}"
+
+
+def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers: dict | None = None, reads_extra: dict | None = None,
+          selection: str = BTC_SELECTION, title: str = "今天 · BTC", width: int = 1680, assets: dict | None = None):
     from trading_desk.gridmind import render_trade_page
 
     html = render_trade_page()  # exactly what the desk's /trade sends (#1414)
@@ -37,7 +41,7 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers:
         browser = runtime.chromium.launch(headless=True, channel="chrome")
     except Exception as exc:  # pragma: no cover - depends on local browser install
         pytest.skip(f"Playwright Chromium unavailable: {exc}")
-    page = browser.new_page(viewport={"width": 1680, "height": 1050})
+    page = browser.new_page(viewport={"width": width, "height": 1050 if width > 600 else 812})
     page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.accept()))
 
     def fulfill(route, body, status=200):
@@ -58,7 +62,7 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers:
             body, status = answered.get(path, ({"detail": "not mocked"}, 500))
             return fulfill(route, body, status)
         reads = {
-            "/api/assets": ASSETS,
+            "/api/assets": assets or ASSETS,
             "/api/desk/BTC": desk,
             "/api/news/BTC": {"ok": True, "items": [{"id": "n1", "title": "比特币 ETF 净流入", "bucket": "high_impact", "source": "cls",
                                                      "collected_at": "2026-11-06T02:00:00Z"}]},
@@ -82,10 +86,9 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers:
         page.route(f"**/static/{name}?*", static(name))
     page.goto(f"{origin}/trade", wait_until="load")
     # GridMind's control script only runs on its own ports, so publish the selection it would:
-    # the console is on BTC (Hyperliquid Testnet).
-    page.evaluate("() => { window.dashboardControlState = {catalog: {venue_profiles: []}, preview: null,"
-                  " selection: {venue_profile_id: 'hyperliquid.testnet', instrument_id: 'BTC-USD-PERP'}}; }")
-    page.locator("#deskJudgeTitle", has_text="今天 · BTC").wait_for()
+    # the console is on BTC (Hyperliquid Testnet) unless a test says otherwise.
+    page.evaluate(f"() => {{ window.dashboardControlState = {{catalog: {{venue_profiles: []}}, preview: null, selection: {selection}}}; }}")
+    page.locator("#deskJudgeTitle", has_text=title).wait_for()
     return browser, page
 
 
@@ -312,3 +315,59 @@ def test_with_8765_gone_the_page_says_so_and_sends_nothing() -> None:
             assert posts == [] and dialogs == []  # no control request goes out on its own
         finally:
             browser.close()
+
+
+def test_the_top_bar_is_the_one_asset_picker() -> None:
+    """#1433: every asset is chosen in the top bar; 「今天」 has no buttons of its own. An asset GridMind does not
+    chart switches 「今天」 only: no intent reaches GridMind's selects."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [], reads_extra={"/api/desk/ETH": _desk(), "/api/news/ETH": {"ok": True, "items": []}})
+        page.evaluate("""() => { window.fired = [];
+          window.gmIntent.on('change', 'control.venue', event => window.fired.push(['venue', event.args.id]));
+          window.gmIntent.on('change', 'control.instrument', event => window.fired.push(['instrument', event.args.id])); }""")
+        buttons = page.locator("#deskAssets [data-asset]")
+        assert buttons.all_inner_texts() == ["BTC", "黄金", "ETH"]
+        assert page.locator('#deskAssets [data-asset="BTC"]').get_attribute("aria-pressed") == "true"
+        assert page.locator("#deskAssets [data-desk-only]").all_inner_texts() == ["ETH"]
+        assert page.locator("#deskChips").count() == 0
+        assert page.locator("#deskAssetNote").count() == 0  # BTC is on GridMind
+
+        page.locator('#deskAssets [data-asset="ETH"]').click()
+        page.locator("#deskJudgeTitle", has_text="今天 · ETH").wait_for()
+        assert page.locator('#deskAssets [data-asset="ETH"]').get_attribute("aria-pressed") == "true"
+        assert page.locator("#deskAssetNote").inner_text() == "ETH只记判断和复盘。图表和下方表格仍是 GridMind 上的品种。"
+        page.wait_for_timeout(2500)  # past the 2-second follow loop: GridMind's selection does not pull it back
+        assert page.locator("#deskJudgeTitle").inner_text().startswith("今天 · ETH")
+        assert page.evaluate("() => window.fired") == []
+        browser.close()
+
+
+def test_a_retired_selection_judges_what_the_chart_shows() -> None:
+    """#1433: with no usable GridMind selection, 「今天」 follows the chart (gold), not BTC, and nothing is selected
+    for Park: starting still needs their own 「改选 OKX Paper 黄金」."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    retired = "{venue_profile_id: null, instrument_id: null, retired_selection: {venue_profile_id: 'binance.paper', instrument_id: 'XAUUSDT.BINANCE'}}"
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [], selection=retired, title="今天 · 黄金",
+                              reads_extra={"/api/desk/XAU": _desk(), "/api/news/XAU": {"ok": True, "items": []}})
+        assert page.evaluate("() => window.gridmindView.market.symbol") == "GOLD"
+        assert page.locator('#deskAssets [data-asset="XAU"]').get_attribute("aria-pressed") == "true"
+        assert page.locator("#deskAssetNote").count() == 0
+        assert page.evaluate("() => window.dashboardControlState.selection.venue_profile_id") is None
+        browser.close()
+
+
+def test_five_assets_fit_a_phone_top_bar_without_widening_the_page() -> None:
+    """#1433: production lists five assets; on a phone their row scrolls inside the top bar."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    five = {"assets": [*ASSETS["assets"],
+                       {"key": "SILVER", "label": "白银", "kind": "xag_paper", "instrument_id": "XAG-USDT-SWAP", "capabilities": ["grid_plan"]},
+                       {"key": "WTI", "label": "原油", "kind": "cl_paper", "instrument_id": "CL-USDT-SWAP", "capabilities": ["grid_plan"]}]}
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [], width=375, assets=five)
+        assert page.locator("#deskAssets [data-asset]").all_inner_texts() == ["BTC", "黄金", "ETH", "白银", "原油"]
+        assert page.evaluate("() => document.documentElement.scrollWidth") <= 375
+        box = page.locator("#deskAssets").bounding_box()
+        assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= 375
+        browser.close()

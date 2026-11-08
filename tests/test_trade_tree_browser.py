@@ -1,8 +1,9 @@
 """#1415: /trade is one React tree. Booted with the same mocked APIs, it must be the page it replaced.
 
-The reference is the pre-#1415 /trade: 8765's dashboard-gridmind.html plus the desk shell. #1419 retired that
-file; its booted shape (DOM, reads, islands, width) was recorded from 1b7b20b into
-tests/fixtures/trade_tree_shape.json, and the tree is checked against that record. The page is served from a
+The first reference was the pre-#1415 /trade: 8765's dashboard-gridmind.html plus the desk shell, recorded from
+1b7b20b into tests/fixtures/trade_tree_shape.json when #1419 retired that file. The redesign re-records it on
+purpose, from /trade itself (#1433: 「今天」 lost its asset buttons and its props carry capabilities); the record's
+"source" says which. The page is served from a
 `.test` host, so GridMind's control and assistant scripts run (they stay off on other localhost ports). Every
 endpoint is mocked; no request leaves the page. The control journey here only presses mocked buttons. The redesign
 changes the page on purpose: re-record the shape in the same PR that does, and say so in its records.

@@ -1,13 +1,13 @@
 /* 「今天」 steps 1–2 (#1327): your judgment → the plan → approve or record. Moved from gm-desk.js
  * with the same requests, wording and button rules.
  *
- * The legacy page still owns which asset is selected (it drives GridMind's selects) and all of
+ * The legacy page still owns which asset is selected (its top-bar buttons are the one picker, #1433; it drives
+ * GridMind's selects) and all of
  * step 3: 执行 with its confirm, 停止 and 暂停补单. This panel talks to it through window events:
  *   out  desk:desk   {asset, desk}                       every /api/desk read (step 3 needs control/meta)
  *   out  desk:exec   {asset, judgmentId, preview, done}  hand an approved preview to step 3
  *        desk:exec   {asset, clear: true}                 a new plan clears step 3
  *   out  desk:steps  {asset, direction, planKind, handed} so step 3 shows the right placeholder
- *   out  desk:pick-asset {key}                           a chip was pressed; the legacy page switches
  *   in   desk:reload                                     step 3 acted; read /api/desk again
  */
 import {useCallback, useEffect, useRef, useState} from "react";
@@ -34,18 +34,17 @@ export function TodayPanel({asset, assets = [], gridmind = []}: TodayProps) {
   return <Today key={asset} asset={asset} assets={assets} gridmind={gridmind} />;
 }
 
-function Chips({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridmind: string[]}) {
-  return (
-    <div className="desk-chips" id="deskChips" role="group" aria-label="判断哪个品种">
-      {assets.map(a => (
-        <button key={a.key} type="button" data-chip={a.key} aria-pressed={a.key === asset}
-          title={gridmind.includes(a.key) ? "图表和交易在 GridMind" : !(a.capabilities ?? []).includes("grid_plan") ? "只记判断和复盘" : "测试盘，下单尚未开通"}
-          onClick={() => { if (a.key !== asset) emit("desk:pick-asset", {key: a.key}); }}>
-          {a.label}
-        </button>
-      ))}
-    </div>
-  );
+/** The asset is chosen in the top bar only (#1433). For one GridMind does not chart, say what this panel can do. */
+export function AssetNote({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridmind: string[]}) {
+  if (gridmind.includes(asset)) return null;
+  const a = assets.find(x => x.key === asset);
+  if (!a) return null;
+  // The plan decides what can be done (record_only when the venue cannot plan a grid); this only says the chart
+  // and the tables below stay on GridMind's asset.
+  const text = !(a.capabilities ?? []).includes("grid_plan")
+    ? `${a.label}只记判断和复盘。图表和下方表格仍是 GridMind 上的品种。`
+    : `${a.label}的判断和计划在这里；图表和下方表格仍是 GridMind 上的品种。`;
+  return <p className="desk-asset-note" id="deskAssetNote">{text}</p>;
 }
 
 function Reading({desk, error}: {desk: Desk | null; error: string}) {
@@ -193,7 +192,7 @@ function Today({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridm
         <span className="desk-n" aria-hidden="true">1</span>
         <div className="desk-step-body">
           <h3>你的判断</h3>
-          <Chips asset={asset} assets={assets} gridmind={gridmind} />
+          <AssetNote asset={asset} assets={assets} gridmind={gridmind} />
           <Reading desk={desk} error={deskError} />
           {desk ? <Ai desk={desk} direction={direction} adopted={adopted} onAdopt={pick} onRefreshed={() => void loadDesk()} /> : <div className="desk-ai" id="deskAi" />}
           <div className="desk-dir" role="group" aria-label="方向">

@@ -1,6 +1,6 @@
 import {act, fireEvent, render, screen} from "@testing-library/react";
 import {NewsRail} from "./islands/NewsRail";
-import {ADVICE_POLL_MS, REFRESH_MS, TodayPanel} from "./islands/TodayPanel";
+import {ADVICE_POLL_MS, AssetNote, REFRESH_MS, TodayPanel} from "./islands/TodayPanel";
 import {execRestore, judgmentBody, planBody} from "./today";
 import {citeStore} from "./todayStore";
 
@@ -29,7 +29,7 @@ function serve(routes: Record<string, (body?: string) => unknown>) {
 
 beforeEach(() => {
   calls = []; events = []; citeStore.reset();
-  unlisten = ["desk:desk", "desk:exec", "desk:steps", "desk:pick-asset"].map(listen);
+  unlisten = ["desk:desk", "desk:exec", "desk:steps"].map(listen);
 });
 afterEach(() => { unlisten.forEach(fn => fn()); vi.restoreAllMocks(); vi.useRealTimers(); document.body.innerHTML = ""; });
 
@@ -128,13 +128,13 @@ test("照 AI 的方向判断 shows only before a direction is picked; refresh as
   expect(calls.filter(c => c.url === "/api/desk/XAU").length).toBeGreaterThanOrEqual(2);
 });
 
-test("a chip asks the legacy page to switch; a plan that cannot be approved stays disabled", async () => {
+test("the asset is chosen in the top bar only; a plan that cannot be approved stays disabled", async () => {
   serve({"GET /api/desk/XAU": () => ({kline: null, executions: []}), "POST /api/plan": () => ({kind: "unavailable", title: "读不到现价", lines: [], note: "稍后"})});
   render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
-  fireEvent.click(screen.getByRole("button", {name: "ETH"}));
-  expect(events.find(e => e.name === "desk:pick-asset")!.detail).toEqual({key: "ETH"});
-  expect(screen.getByRole("button", {name: "黄金"}).title).toBe("图表和交易在 GridMind");
-  expect(screen.getByRole("button", {name: "ETH"}).title).toBe("只记判断和复盘");
+  // #1433: no asset buttons in the panel, and no note for an asset GridMind charts.
+  expect(screen.queryByRole("group", {name: "判断哪个品种"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "ETH"})).toBeNull();
+  expect(document.getElementById("deskAssetNote")).toBeNull();
   fireEvent.click(screen.getByRole("button", {name: "观望"}));
   expect((await screen.findByRole("button", {name: "确认并记录"}) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText("暂不可用")).toBeTruthy();
@@ -223,12 +223,12 @@ test("a reload keeps the adopted id of today's judgment", async () => {
 });
 
 // #1380: a chip's hint follows the venue's declared capabilities.
-test("a chip's hint reads the capabilities, not the kind", () => {
-  serve({"GET /api/desk/XAU": () => ({kline: null, executions: []})});
-  const assets = [{key: "XAU", label: "黄金"}, {key: "NEW", label: "新", kind: "anything", capabilities: ["grid_plan"]}, {key: "OLD", label: "旧", kind: "hl_testnet", capabilities: []}];
-  render(<TodayPanel asset="XAU" assets={assets} gridmind={["XAU"]} />);
-  expect(screen.getByRole("button", {name: "新"}).title).toBe("测试盘，下单尚未开通");
-  expect(screen.getByRole("button", {name: "旧"}).title).toBe("只记判断和复盘");
+test("the asset note reads the capabilities, not the kind", () => {
+  const assets = [{key: "NEW", label: "新", kind: "anything", capabilities: ["grid_plan"]}, {key: "OLD", label: "旧", kind: "hl_testnet", capabilities: []}];
+  const {rerender} = render(<AssetNote asset="NEW" assets={assets} gridmind={["XAU"]} />);
+  expect(document.getElementById("deskAssetNote")!.textContent).toContain("的判断和计划在这里");
+  rerender(<AssetNote asset="OLD" assets={assets} gridmind={["XAU"]} />);
+  expect(document.getElementById("deskAssetNote")!.textContent).toContain("只记判断和复盘");
 });
 
 test("an OKX-priced asset says the K-line daily reads futures (#1387)", async () => {
@@ -244,4 +244,14 @@ test("no note when the reading and the price share a feed", async () => {
   render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
   await screen.findByText("K 线日报 ▲ 偏多");
   expect(document.querySelector(".desk-reading-note")).toBeNull();
+});
+
+test("an asset GridMind does not chart says where its chart is, by what its venue can do", () => {
+  const assets = [{key: "ETH", label: "ETH", capabilities: ["grid_plan", "execute"]}, {key: "SOL", label: "SOL", capabilities: []}];
+  const {rerender} = render(<AssetNote asset="ETH" assets={assets} gridmind={["XAU"]} />);
+  expect(document.getElementById("deskAssetNote")!.textContent).toBe("ETH的判断和计划在这里；图表和下方表格仍是 GridMind 上的品种。");
+  rerender(<AssetNote asset="SOL" assets={assets} gridmind={["XAU"]} />);
+  expect(document.getElementById("deskAssetNote")!.textContent).toBe("SOL只记判断和复盘。图表和下方表格仍是 GridMind 上的品种。");
+  rerender(<AssetNote asset="XAU" assets={assets} gridmind={["XAU"]} />);
+  expect(document.getElementById("deskAssetNote")).toBeNull();
 });
