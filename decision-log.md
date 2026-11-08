@@ -185,8 +185,8 @@
 ## Decision
 
 - `boot()` in gm-desk.js waited for `dashboardControlState.selection` before choosing 「今天」's asset. The selection
-  waits on 8765's catalog (8–13 s in production). It now waits for whichever comes first: the selection, or
-  `gridmindView.market.symbol` from GridMind's first read (about 1.5 s). With a usable selection it applies it;
+  waits on 8765's catalog (8–13 s in production). It now waits for whichever comes first: a usable selection
+  (`selectionAsset()`), or `gridmindView.market.symbol` from GridMind's first read (about 1.5 s). With a usable selection it applies it;
   otherwise it focuses `chartAsset()` (#1433). The 2-second follow loop moves 「今天」 to the selection's asset if it
   arrives naming another one. With neither, the 15 s ceiling and the fallback are unchanged.
 - Nothing selects a venue for Park; starting still needs his own pick.
@@ -197,12 +197,18 @@
   asset after 15 s, inside Playwright's 30 s wait. The test now asserts the title appears before 8 s
   (`performance.now()`); on the old code it failed at 15.5 s.
 - `_page` takes `selection=None` to leave `dashboardControlState` unpublished (a selection that has not arrived).
+- The first fix waited for any selection object. The root suite then failed
+  `test_a_retired_selection_judges_what_the_chart_shows` once: a retired selection (venue null) ended the wait
+  before GridMind's read named the chart's asset, so `chartAsset()` fell back to BTC and the follow loop never
+  corrected it. The wait is now for a usable selection or the chart's asset. `_page(hold_read_model=True)` answers
+  the read model only after the selection is published, which makes that order deterministic:
+  `test_a_retired_selection_that_arrives_first_still_waits_for_the_chart` failed on the first fix and passes now.
 
 ## Verification
 
 - `test_today_starts_on_the_chart_before_gridmind_s_selection_arrives`: with no selection, 「今天 · 黄金」 (the chart
   shows GOLD) before 8 s with 黄金 pressed; publishing the BTC selection moves it to 「今天 · BTC」 within 5 s. Failed on
-  the old code (15.5 s), passes on the new. Today file 19 and tree shape pass (no re-record: the boot order does
+  the old code (15.5 s), passes on the new. Today file 20 and tree shape pass (no re-record: the boot order does
   not change the booted shape).
 - Desk DESK_COUNT, root ROOT_COUNT, mjs 29. Mocks only.
 - Production record for #1435 at 41389f7 (no `--dashboard`), read-only: the three static files byte-identical;

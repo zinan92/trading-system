@@ -32,7 +32,8 @@ BTC_SELECTION = "{venue_profile_id: 'hyperliquid.testnet', instrument_id: 'BTC-U
 
 
 def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers: dict | None = None, reads_extra: dict | None = None,
-          selection: str | None = BTC_SELECTION, title: str = "今天 · BTC", width: int = 1680, assets: dict | None = None):
+          selection: str | None = BTC_SELECTION, title: str = "今天 · BTC", width: int = 1680, assets: dict | None = None,
+          hold_read_model: bool = False):
     from trading_desk.gridmind import render_trade_page
 
     html = render_trade_page()  # exactly what the desk's /trade sends (#1414)
@@ -70,12 +71,17 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers:
             "/api/trading-system/read-model": model,
             **(reads_extra or {}),
         }
+        if hold_read_model and path == "/api/trading-system/read-model" and not released:
+            held.append(route)  # answered after the selection is published (see below)
+            return None
         if path in reads:
             return fulfill(route, reads[path])
         if path.startswith("/api/dualtrack/market"):
             return fulfill(route, {**model["market"], "bars": []})
         fulfill(route, {"detail": "not mocked"}, 503)
 
+    held: list = []
+    released = False
     page.route("**/api/**", api)
     page.route("**/trade", lambda route: route.fulfill(status=200, content_type="text/html", body=html))
     def static(name: str):
@@ -89,6 +95,11 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers:
     # the console is on BTC (Hyperliquid Testnet) unless a test says otherwise.
     if selection is not None:  # None: GridMind's selection has not arrived (8765's catalog is slow)
         page.evaluate(f"() => {{ window.dashboardControlState = {{catalog: {{venue_profiles: []}}, preview: null, selection: {selection}}}; }}")
+    if hold_read_model:  # the selection first, GridMind's read after it
+        page.wait_for_timeout(500)
+        released = True
+        for route in held:
+            fulfill(route, model)
     page.locator("#deskJudgeTitle", has_text=title).wait_for()
     return browser, page
 
@@ -417,4 +428,16 @@ def test_today_starts_on_the_chart_before_gridmind_s_selection_arrives() -> None
         page.evaluate(f"() => {{ window.dashboardControlState = {{catalog: {{venue_profiles: []}}, preview: null, selection: {BTC_SELECTION}}}; }}")
         page.locator("#deskJudgeTitle", has_text="今天 · BTC").wait_for(timeout=5000)
         assert page.locator('#deskAssets [data-asset="BTC"]').get_attribute("aria-pressed") == "true"
+        browser.close()
+
+
+def test_a_retired_selection_that_arrives_first_still_waits_for_the_chart() -> None:
+    """#1436: a retired selection is not usable, so it does not end the wait; 「今天」 takes the chart's asset when
+    GridMind's read arrives, not BTC."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    retired = "{venue_profile_id: null, instrument_id: null, retired_selection: {venue_profile_id: 'binance.paper', instrument_id: 'XAUUSDT.BINANCE'}}"
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [], selection=retired, title="今天 · 黄金", hold_read_model=True,
+                              reads_extra={"/api/desk/XAU": _desk(), "/api/news/XAU": {"ok": True, "items": []}})
+        assert page.locator('#deskAssets [data-asset="XAU"]').get_attribute("aria-pressed") == "true"
         browser.close()
