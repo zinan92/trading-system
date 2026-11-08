@@ -72,7 +72,9 @@ def test_idle_is_calm_and_says_how_the_last_run_ended() -> None:
     assert banner["title"] == "现在没有在跑的策略"
     assert banner["body"] == "上一轮在 9/15 结束：价格跌破区间下沿，平仓 10 笔，现已无持仓（停止时还有 10 笔未平，之后才平完）。"
     assert "对账一致" not in banner["body"]
-    assert banner["action"] == {"kind": "start", "label": "开始今天的计划"}
+    # #1438: no start button on the banner; it points at 「今天」, the one way in.
+    assert banner["action"] is None and banner["startable"] is True
+    assert banner["next"] == "今天的计划从「今天」第 1 步开始。"
     assert "lower_boundary_invalidated" not in json.dumps(banner, ensure_ascii=False)
 
 
@@ -227,7 +229,8 @@ def test_nothing_running_but_an_unhealthy_runtime_offers_no_start() -> None:
 
 
 def test_start_is_offered_only_when_everything_is_calm() -> None:
-    """The safety rule of the strip: 「开始今天的计划」 appears for a calm idle state and for nothing else."""
+    """The safety rule of the strip: only a calm idle state is startable and points at 「今天」 (#1429). Since #1438 no
+    state puts a start button on the banner, so the banner and 「今天」 never both offer a way in."""
     open_exposure = idle_view()
     open_exposure["data"]["current_strategy"]["terminal"].update(ended_flat=False, open_positions=2)
     states = {
@@ -246,5 +249,7 @@ def test_start_is_offered_only_when_everything_is_calm() -> None:
         "running, heartbeat lost": with_tick(running_view()),
         "running, error": with_run(running_view(), label="运行异常", runClass="error"),
     }
-    offered = {name for name, view in states.items() if (run("banner", view, {"asset": "黄金"})["action"] or {}).get("kind") == "start"}
-    assert offered == {"calm idle", "calm idle, older page without a verdict"}
+    banners = {name: run("banner", view, {"asset": "黄金"}) for name, view in states.items()}
+    assert {name for name, b in banners.items() if b.get("startable")} == {"calm idle", "calm idle, older page without a verdict"}
+    assert {name for name, b in banners.items() if b.get("next")} == {"calm idle", "calm idle, older page without a verdict"}
+    assert all((b["action"] or {}).get("kind") != "start" for b in banners.values())

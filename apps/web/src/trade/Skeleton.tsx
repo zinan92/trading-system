@@ -58,6 +58,7 @@ function TodayCard() {
         {"\n        "}
         <div className="desk-today" data-island="today" data-props={"{}"} dangerouslySetInnerHTML={{__html: ""}} />
         {"\n        "}
+        <ManualDetails />
         <ol className="desk-steps desk-steps-exec">
           {"\n        "}
           <li className="desk-step" data-step="3">
@@ -81,6 +82,27 @@ function TodayCard() {
         {"\n      "}
       </div>
     </section>
+  );
+}
+
+/* 「自己调」 (#1438): GridMind's manual cards under step 2 of 「今天」, a static sibling of the today island so React
+ * never redraws what GridMind writes into them. Every id inside is unchanged. */
+function ManualDetails() {
+  return (
+    <details className="card desk-more" id="deskManual">
+      <summary>
+        {"自己调"}
+        <small>
+          {"手动设网格参数 · AI 助手 · 趋势评估 · 策略配置与停止"}
+        </small>
+      </summary>
+      <div className="desk-more-body">
+        <ControlCard />
+        <AiChatCard />
+        <MarketCard />
+        <StrategyCard />
+      </div>
+    </details>
   );
 }
 
@@ -207,7 +229,7 @@ function ControlCard() {
         <div className="gm-pick-steps" id="dashboardPicker" data-island="control-picker" dangerouslySetInnerHTML={{__html: "<div class=\"gm-pick-step\"><span class=\"label\">1 · Venue Profile</span><select class=\"select\" id=\"dashboardVenueSelect\" data-gm-intent=\"control.venue\" aria-label=\"选择 Venue Profile\"><option value=\"\">读取中…</option></select></div><div class=\"gm-pick-step\"><span class=\"label\">2 · Instrument</span><select class=\"select\" id=\"dashboardInstrumentSelect\" data-gm-intent=\"control.instrument\" aria-label=\"选择交易资产\" disabled=\"\"><option value=\"\">先选择 Venue</option></select></div><div class=\"gm-pick-step\"><span class=\"label\">3 · Strategy Family</span><div class=\"choice-row\" id=\"dashboardStrategyChoices\"><button class=\"choice\" data-dashboard-strategy=\"grid\" data-gm-intent=\"control.strategy\" type=\"button\" disabled=\"\">Grid<small>旧版网格</small></button><button class=\"choice\" data-dashboard-strategy=\"dca\" data-gm-intent=\"control.strategy\" type=\"button\" disabled=\"\">DCA<small>旧版 DCA</small></button></div></div>"}} />
         <div className="gm-control-actions" id="dashboardActions" data-island="control-actions" dangerouslySetInnerHTML={{__html: "<button class=\"button subtle\" id=\"dashboardPreviewButton\" data-gm-intent=\"control.preview\" type=\"button\" disabled=\"\">生成 Strategy Preview</button><button class=\"button\" id=\"dashboardConfirmButton\" data-gm-intent=\"control.confirm\" type=\"button\" disabled=\"\">Confirm &amp; Run</button>"}} />
         <p className="desk-rail-note">
-          {"日常从「今天」面板开始：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。"}
+          {"日常按上面的 1-2-3 走：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。"}
         </p>
         <div className="dashboard-control-preview" id="dashboardPreviewSummary" aria-live="polite" />
         <div className="dashboard-control-account" id="dashboardAccountSummary" aria-live="polite" />
@@ -510,7 +532,7 @@ function StrategyCard() {
         <div className="preview-summary hidden" id="previewSummary" data-island="gm-preview" data-props={"{}"} dangerouslySetInnerHTML={{__html: ""}} />
         <div className="robot-actions" id="robotActions" data-island="robot-actions" dangerouslySetInnerHTML={{__html: "<button class=\"robot start\" id=\"startRobot\" data-gm-intent=\"robot.start\" type=\"button\">启动机器人</button><button class=\"robot stop\" id=\"stopRobot\" data-gm-intent=\"robot.stop\" type=\"button\">停止 + 撤单 + 平仓</button>"}} />
         <p className="desk-rail-note">
-          {"日常从「今天」面板开始：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。"}
+          {"日常按上面的 1-2-3 走：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。"}
         </p>
       </div>
     </section>
@@ -761,20 +783,6 @@ export function Skeleton() {
             {"\n      "}
             <aside className="control-rail">
               <TodayCard />
-              <details className="card desk-more" id="deskManual">
-                <summary>
-                  {"手动配置与 AI 助手"}
-                  <small>
-                    {"Trading BOT · AI 助手 · 趋势评估 · 策略配置与停止"}
-                  </small>
-                </summary>
-                <div className="desk-more-body">
-                  <ControlCard />
-                  <AiChatCard />
-                  <MarketCard />
-                  <StrategyCard />
-                </div>
-              </details>
               {"\n        \n        \n        \n        \n        \n      "}
             </aside>
             {"\n    "}

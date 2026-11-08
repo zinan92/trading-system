@@ -77,6 +77,6 @@ def open_system(page) -> None:
 
 
 def open_manual(page) -> None:
-    """Unfold 「手动配置与 AI 助手」, where /trade keeps GridMind's own form."""
+    """Unfold 「自己调」 (under step 2 of 「今天」 since #1438), where /trade keeps GridMind's own form."""
     page.locator("#deskManual").wait_for(state="attached")
     page.evaluate("() => { document.getElementById('deskManual').open = true; }")

@@ -183,6 +183,14 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
 .desk-more[open]>summary::after,.desk-sys[open]>summary::after{transform:rotate(225deg)}
 .desk-more>summary small{color:var(--gm-muted,#99a0ab);font-size:12px}
 .desk-more-body,.desk-sys-body{display:grid;gap:9px;padding:0 9px 9px}
+/* 「自己调」 (#1438): under step 2 of 「今天」, indented with the step bodies, not a card of its own. */
+#deskToday #deskManual{margin:0 0 4px 37px;border:1px solid var(--gm-line,rgba(236,238,242,.08));border-radius:8px;background:transparent}
+#deskToday #deskManual>summary{padding:8px 12px;min-height:36px;font-size:13px}
+#deskToday #deskManual>summary small{font-size:11px}
+#deskToday #deskManual .desk-more-body{padding:0 6px 6px}
+/* One highlighted button: the current step's (#1438). Others still work, they just do not compete. */
+.desk-step:not(.on) .desk-btn.primary{background:transparent;color:var(--gm-accent,#3fd0e0);border-color:rgba(63,208,224,.45);font-weight:600}
+.desk-status-next{color:var(--gm-accent,#3fd0e0)!important}
 .desk-sys{margin-top:10px;border-style:dashed}
 .desk-sys-link{color:var(--gm-accent,#3fd0e0);font-size:13px}
 .desk-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--gm-muted,#99a0ab)}

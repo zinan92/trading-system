@@ -79,7 +79,9 @@ const DeskStatus = (() => {
       body = `上一轮${ended ? `在 ${bjDay(ended)} ` : ""}结束：${TERMINAL[terminal.reason] || "已结束（原因见系统详情）"}${finite(closed) && Number(closed) > 0 ? `，平仓 ${num(closed)} 笔` : ""}${state}。`;
       if (flat === false) return {tone: "warn", title: "现在没有在跑的策略", body, action: {kind: "details", label: "查看原因"}};
     }
-    return {tone: "idle", title: "现在没有在跑的策略", body, action: {kind: "start", label: "开始今天的计划"}};
+    // The one way in is 「今天」's steps (#1438); the banner says so instead of offering a second start button.
+    // `startable` marks the calm idle state, the only one where starting a new plan is right.
+    return {tone: "idle", title: "现在没有在跑的策略", body, next: "今天的计划从「今天」第 1 步开始。", action: null, startable: true};
   }
 
   // Only claims a field backs. Never "all good": the calm state is grey, not green.
@@ -163,7 +165,7 @@ if (typeof document !== "undefined") (() => {
         </div></li>
         </ol>
       </div></section>`);
-    const note = "日常从「今天」面板开始：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。";
+    const note = "日常按上面的 1-2-3 走：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。";
     $d(".gm-control-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
     $d(".strategy-card .robot-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
     mountStatus(wrap, rail);
@@ -183,7 +185,7 @@ if (typeof document !== "undefined") (() => {
     // First thing on the page, above 本周三件事: what is happening now and the one next step.
     (wrap.parentNode || wrap).insertAdjacentHTML("afterbegin", `<section class="desk-status wait" id="deskStatus" aria-live="polite"></section><div class="desk-retired hidden" id="deskRetired" role="status"></div>`);
     // Every GridMind card stays in the page with its controls; the ones for fine-tuning are folded away.
-    rail?.querySelector(".desk-judge")?.insertAdjacentHTML("afterend", `<details class="card desk-more" id="deskManual"><summary>手动配置与 AI 助手<small>Trading BOT · AI 助手 · 趋势评估 · 策略配置与停止</small></summary><div class="desk-more-body"></div></details>`);
+    rail?.querySelector(".desk-judge .desk-steps-exec")?.insertAdjacentHTML("beforebegin", `<details class="card desk-more" id="deskManual"><summary>自己调<small>手动设网格参数 · AI 助手 · 趋势评估 · 策略配置与停止</small></summary><div class="desk-more-body"></div></details>`);
     const manual = $d("#deskManual .desk-more-body");
     ["#dashboardControlCard", "#parkAiChatCard", ".market-card", "#strategyCard"].forEach(sel => { const el = $d(sel); if (el && manual) manual.appendChild(el); });
     wrap.insertAdjacentHTML("beforeend", `<details class="card desk-sys" id="deskSystem"><summary><span class="desk-dot" id="deskHealthDot"></span><span id="deskHealth">读取中</span><span class="desk-sys-link">系统详情：运行状态、策略明细、内部记录</span></summary><div class="desk-sys-body"><div class="desk-records" id="deskRecords"></div></div></details>`);
@@ -218,12 +220,11 @@ if (typeof document !== "undefined") (() => {
     document.body.classList.toggle("desk-idle", banner.tone === "idle");
     const box = $d("#deskStatus");
     box.className = `desk-status ${banner.tone}`;
-    box.innerHTML = `<span class="desk-status-ic">${ICONS[banner.tone] || ICONS.idle}</span><div class="desk-status-text"><h1>${escD(banner.title)}</h1>${banner.body ? `<p>${escD(banner.body)}</p>` : ""}</div>`
-      + (banner.action ? `<button type="button" class="desk-btn big ${banner.action.kind === "start" ? "primary" : ""}" id="deskStatusAction">${escD(banner.action.label)}</button>` : "");
+    box.innerHTML = `<span class="desk-status-ic">${ICONS[banner.tone] || ICONS.idle}</span><div class="desk-status-text"><h1>${escD(banner.title)}</h1>${banner.body ? `<p>${escD(banner.body)}</p>` : ""}${banner.next ? `<p class="desk-status-next">${escD(banner.next)}</p>` : ""}</div>`
+      + (banner.action ? `<button type="button" class="desk-btn big" id="deskStatusAction">${escD(banner.action.label)}</button>` : "");
     const action = $d("#deskStatusAction");
     if (action) action.onclick = () => {
-      if (banner.action.kind === "start") reveal($d(".desk-dir [data-d]"));
-      else if (banner.action.kind === "details") reveal($d("#deskSystem summary"), $d("#deskSystem"));
+      if (banner.action.kind === "details") reveal($d("#deskSystem summary"), $d("#deskSystem"));
       // Stop is never pressed for Park: this only takes him to the existing stop button.
       else if (can("stop") && $d("#deskStopBtn")) reveal($d("#deskStopBtn"));
       else reveal($d("#stopRobot"), $d("#deskManual"));
