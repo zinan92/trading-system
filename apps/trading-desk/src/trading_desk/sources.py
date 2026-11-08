@@ -52,8 +52,13 @@ class Sources:
         self.venues = venues or DEFAULT_VENUES
         self.fetch = fetch or http_json
         self.slow_fetch = fetch or (lambda url, body: http_json(url, body, timeout=120))
+        # GridMind's catalog takes 8-13 s; the default 12 s cut it off now and then, leaving gold's venue unknown (#1431).
+        self.catalog_fetch = fetch or (lambda url, body: http_json(url, body, timeout=30))
         self._news_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._news_lock = threading.Lock()
+        self._paper_catalog: tuple[float, dict[str, Any]] | None = None
+        self._paper_catalog_lock = threading.Lock()
+        self._paper_catalog_refreshing = False
 
     # ---- news -------------------------------------------------------------
     NEWS_TTL_SECONDS = 45
@@ -229,7 +234,52 @@ class Sources:
         return {"ok": True, "bars": bars, "source": source, "fresh": payload.get("fresh") is not False,
                 "latest_timestamp": payload.get("latest_timestamp")}
 
-    PAPER_GOLD_TTL_SECONDS = 60.0
+    # The Paper venue and instrument ids come from configs/dualtrack.yaml through GridMind's catalog, and a deploy
+    # restarts the desk, so they are kept 10 minutes and refreshed in the background after 5 (#1431). GridMind's
+    # catalog takes 8-13 s (it reads Hyperliquid's public market each time); gold, silver and crude used to read
+    # it once each, so /api/assets took ~29 s and the page waited on it.
+    PAPER_CATALOG_TTL_SECONDS = 600.0
+    PAPER_CATALOG_REFRESH_SECONDS = 300.0
+
+    def _fetch_paper_catalog(self) -> dict[str, Any] | None:
+        try:
+            payload = self.catalog_fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
+        except Exception:  # noqa: BLE001 - unreachable catalog is reported by the caller.
+            LOG.warning("caught_exception", exc_info=True)
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _refresh_paper_catalog(self) -> None:
+        try:
+            payload = self._fetch_paper_catalog()
+            if payload is not None:  # a failed read never replaces the last good ids; they expire on their own
+                with self._paper_catalog_lock:
+                    self._paper_catalog = (time.monotonic(), payload)
+        finally:
+            self._paper_catalog_refreshing = False
+
+    def paper_catalog(self) -> dict[str, Any] | None:
+        """GridMind's catalog for the Paper ids: one read shared by gold, silver and crude, one request at a time.
+
+        Fresh (under 5 min): served. Ageing (5-10 min): served, and one background refresh starts. Expired or
+        never read: the caller waits for one read; concurrent callers wait for the same read. None when the
+        catalog cannot be read and nothing unexpired is held; callers say so instead of guessing.
+        """
+        cached = self._paper_catalog
+        age = time.monotonic() - cached[0] if cached else None
+        if age is not None and age < self.PAPER_CATALOG_TTL_SECONDS:
+            if age >= self.PAPER_CATALOG_REFRESH_SECONDS and not self._paper_catalog_refreshing:
+                self._paper_catalog_refreshing = True
+                threading.Thread(target=self._refresh_paper_catalog, name="paper-catalog", daemon=True).start()
+            return cached[1]
+        with self._paper_catalog_lock:
+            cached = self._paper_catalog  # another caller may have read it while this one waited
+            if cached and time.monotonic() - cached[0] < self.PAPER_CATALOG_TTL_SECONDS:
+                return cached[1]
+            payload = self._fetch_paper_catalog()
+            if payload is not None:
+                self._paper_catalog = (time.monotonic(), payload)
+            return payload
 
     def paper_gold(self) -> dict[str, Any] | None:
         """The Paper gold venue GridMind actually uses, read from its catalog.
@@ -239,13 +289,8 @@ class Sources:
         when the catalog is unreachable; callers say so instead of guessing.
         """
 
-        cached = getattr(self, "_paper_gold_cache", None)
-        if cached and time.monotonic() - cached[0] < self.PAPER_GOLD_TTL_SECONDS:
-            return cached[1]
-        try:
-            payload = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
-        except Exception:  # noqa: BLE001 - unreachable catalog is reported by the caller.
-            LOG.warning("caught_exception", exc_info=True)
+        payload = self.paper_catalog()
+        if payload is None:
             return None
         profile = next((p for p in (payload or {}).get("venue_profiles") or [] if p.get("environment") == "paper"), None)
         instrument = next((i for i in (profile or {}).get("instruments") or [] if i.get("asset") == "XAU"), None)
@@ -258,20 +303,14 @@ class Sources:
             "venue_label": profile.get("label") or profile.get("id"),
             "market_label": venue.get("label") or profile.get("label") or profile.get("id"),
         }
-        self._paper_gold_cache = (time.monotonic(), result)
         return result
 
     def paper_instrument(self, instrument: str) -> dict[str, Any] | None:
         """A Paper instrument's ids in GridMind's catalog (silver and crude, #1407); None when not listed or unreachable."""
         if instrument == "gold":
             return self.paper_gold()
-        cached = getattr(self, "_paper_instrument_cache", {}).get(instrument)
-        if cached and time.monotonic() - cached[0] < self.PAPER_GOLD_TTL_SECONDS:
-            return cached[1]
-        try:
-            payload = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
-        except Exception:  # noqa: BLE001 - the caller shows the ids as unknown
-            LOG.warning("caught_exception", exc_info=True)
+        payload = self.paper_catalog()
+        if payload is None:
             return None
         result = None
         for profile in (payload or {}).get("venue_profiles") or []:
@@ -282,7 +321,6 @@ class Sources:
                 result = {"venue_profile_id": profile.get("id"), "instrument_id": row.get("instrument_id"),
                           "eligibility": row.get("eligibility")}
                 break
-        self._paper_instrument_cache = {**getattr(self, "_paper_instrument_cache", {}), instrument: (time.monotonic(), result)}
         return result
 
     def catalog(self) -> dict[str, Any]:

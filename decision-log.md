@@ -180,6 +180,44 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — The desk reads GridMind's catalog once and keeps it (#1431)
+
+## Decision
+
+- `Sources.paper_catalog()` is the one read of `/api/dashboard-control/catalog` behind `paper_gold()` and
+  `paper_instrument()`, so `/api/assets` (gold, silver, crude) reads it once. One request at a time: concurrent
+  callers wait on a lock and the second finds the first's result.
+- Kept 10 minutes (`PAPER_CATALOG_TTL_SECONDS`); past 5 minutes it is served and one background refresh starts.
+  These are config ids (configs/dualtrack.yaml), and every deploy restarts the desk.
+- A failed read never replaces the last good one. Once that expires, an unreadable catalog gives `None`, and
+  callers show 「场所读不到」 as before. A failed read is not kept, so the next call tries again.
+- `serve` starts one background read at startup, so the first page after a deploy does not wait either.
+- The catalog read waits up to 30 s (`catalog_fetch`). The default 12 s cut it off now and then: production's
+  `/api/assets` showed gold with an empty `instrument_id` during this work.
+- `catalog()` (the testnet list for adding an asset) still reads fresh: it shows current eligibility.
+
+## Gotchas
+
+- Measured in production before the change: `/api/assets` took 29.4 s in the browser (9.0 s with a warm 60 s
+  cache, one asset expired). `/api/dashboard-control/catalog` on 8765 alone took 8.3-12.8 s, because
+  `public_catalog_loader` reads Hyperliquid's public catalog and a BTC market fact on every call. GridMind's own
+  picker (`dashboardControlState.selection`) waits on it too, about 12 s after load. That is 8765's and is not
+  changed here: caching it would change how fresh BTC's eligibility is, which needs its own decision.
+- The old per-asset caches (`_paper_gold_cache`, `_paper_instrument_cache`, 60 s each) expired separately, so a
+  page load often paid for one, two or three catalog reads.
+
+## Verification
+
+- `test_paper_catalog_cache.py` (5): one read for all three Paper assets (fails on main with 3 reads); an ageing
+  read is served with exactly one background refresh; a failed refresh keeps the last good ids until they
+  expire, then `None`; four concurrent callers share one read; an unreadable catalog is not kept.
+- Desk 272 passed. Docker, own-files and today browser tests 23 passed.
+- Production record for #1429 at d39c2b4, read-only: gridmind.js, read.js, chart.js and control.js are
+  byte-identical on 8790 and 8765, and gm-desk.js on 8790 (asset version 18498c18a76e). `gridmindView.runState`
+  is {已停止, stopped, tickLost false}, `readError` null. The banner shows calm idle with 「开始今天的计划」, as
+  before; the health line reads 「行情可信」. 18 islands, 7 canvases, no console errors. Failure banners were
+  proven with mocks only.
+
 # 2026-11-08 — The status strip says a failed read, a runtime error and a lost heartbeat (#1429)
 
 ## Decision

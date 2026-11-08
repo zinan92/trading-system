@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 
 import uvicorn
 
@@ -50,7 +51,10 @@ def main() -> None:
         advisor = Advisor(store, sources, Watch(config.watch_folder, config.intel_url), asset_state=lambda asset: current_state(sources, asset))
         print(json.dumps(advisor.generate(force=args.force), ensure_ascii=False))
         return
-    uvicorn.run(create_app(config), host=args.host, port=args.port or config.port, log_level="warning")
+    sources = Sources(config)
+    # Read GridMind's catalog once in the background, so the first page after a deploy does not wait on it (#1431).
+    threading.Thread(target=sources.paper_catalog, name="paper-catalog-warm", daemon=True).start()
+    uvicorn.run(create_app(config, sources=sources), host=args.host, port=args.port or config.port, log_level="warning")
 
 
 def _token(config: Config, rest: list[str]) -> int:
