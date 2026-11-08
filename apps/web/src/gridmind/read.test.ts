@@ -100,6 +100,33 @@ describe("market snapshots", () => {
   });
 });
 
+describe("market snapshots, as tests/test_dashboard_gridmind_market.mjs held them before #1416", () => {
+  const bar = (timestamp: string, close: number) => ({timestamp, close});
+  it("failed refresh retains candles but removes execution trust", () => {
+    const trusted = {status: "ready", trusted: true, fresh: true, symbol: "GOLD", timeframe: "1m", latest_timestamp: "2026-07-21T08:00:00+00:00", bars: [bar("2026-07-21T08:00:00+00:00", 4000)]};
+    const retained = read.retainLastTrustedMarket(trusted, {status: "blocked", access_issues: ["upstream timeout"]});
+    expect([retained.trusted, retained.fresh, retained.retained_last_trusted]).toEqual([false, false, true]);
+    expect(retained.bars).toEqual(trusted.bars);
+    expect(retained.access_issues).toEqual(["upstream timeout"]);
+  });
+  it("polling cannot overwrite retained trusted candles with a blocked read model", () => {
+    const trusted = {status: "ready", trusted: true, fresh: true, symbol: "GOLD", timeframe: "30m", latest_timestamp: "2026-07-21T08:00:00+00:00", bars: [bar("2026-07-21T08:00:00+00:00", 4000)]};
+    const retained = read.retainLastTrustedMarket(trusted, {status: "blocked", bars: [], access_issues: ["upstream timeout"]});
+    const afterPoll = read.reconcileReadModelMarket(retained, {status: "blocked", trusted: false, fresh: false, bars: [], access_issues: ["still blocked"]});
+    expect([afterPoll.retained_last_trusted, afterPoll.trusted]).toEqual([true, false]);
+    expect(afterPoll.bars).toEqual(trusted.bars);
+    expect(afterPoll.access_issues).toEqual(["still blocked"]);
+  });
+  it("historical prepend deduplicates timestamps and preserves live authority", () => {
+    const history = {status: "ready", trusted: false, trusted_history: true, symbol: "GOLD", timeframe: "1m", bars: [bar("2026-07-21T07:58:00+00:00", 3998), bar("2026-07-21T07:59:00+00:00", 3999)]};
+    const live = {status: "ready", trusted: true, fresh: true, symbol: "GOLD", timeframe: "1m", latest_timestamp: "2026-07-21T08:00:00+00:00", bars: [bar("2026-07-21T07:59:00+00:00", 3999), bar("2026-07-21T08:00:00+00:00", 4000)]};
+    const merged = read.mergeMarketBars(history, live);
+    expect(merged.trusted).toBe(true);
+    expect(merged.latest_timestamp).toBe("2026-07-21T08:00:00+00:00");
+    expect(merged.bars.map((row: {timestamp: string}) => row.timestamp)).toEqual(["2026-07-21T07:58:00+00:00", "2026-07-21T07:59:00+00:00", "2026-07-21T08:00:00+00:00"]);
+  });
+});
+
 describe("the read model", () => {
   it("each order keeps its furthest state this cycle", () => {
     let lifecycle = read.emptyOrderLifecycle();

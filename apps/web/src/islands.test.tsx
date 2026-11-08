@@ -135,6 +135,13 @@ test("islands POST only to the allow-list, and never reach an order or control e
       expect([path, /\/api\/|fetch\(|XMLHttpRequest|sendBeacon|method:|postJson|api\(/.test(source)]).toEqual([path, false]);
       continue;
     }
+    if (path === "./gridmind/read.ts") {
+      // GridMind's read layer (#1416) is not an island: gridmind.js loads it as read.js. It reads market bars and
+      // carries GridMind's own calls unchanged (ADR 0008), but it never names a method or a control path itself.
+      expect(source.match(/\/api\/[\w/-]+/g)).toEqual(["/api/dualtrack/market/bars", "/api/dashboard-control/market-bars", "/api/auth/session"]);
+      expect(/method:/.test(source)).toBe(false);
+      continue;
+    }
     // Until #1329: 执行, 停止, 补单 and GridMind's own controls stay in the legacy page.
     expect([path, /\/api\/execute|\/api\/grid\/|dashboard-control|\/api\/dualtrack\/orders|\/api\/park-paper|\/api\/mainnet/.test(source)]).toEqual([path, false]);
     if (!path.endsWith("/api.ts")) expect([path, /method:/.test(source)]).toEqual([path, false]);

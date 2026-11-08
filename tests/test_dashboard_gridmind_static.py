@@ -9,6 +9,11 @@ def _html() -> str:
     return gridmind_source()  # #1420: the page and its own files, inlined back
 
 
+def _read_layer() -> str:
+    """#1416: the API call, failure kinds, market trust and top-bar binding are TypeScript, built to assets/gridmind/read.js."""
+    return (ROOT / "apps" / "web" / "src" / "gridmind" / "read.ts").read_text(encoding="utf-8")
+
+
 def _tables() -> str:
     """#1328: the 持仓/委托/成交 cells are laid out by this React island; GridMind publishes the rows."""
     return (ROOT / "apps" / "web" / "src" / "islands" / "ExecTables.tsx").read_text(encoding="utf-8")
@@ -48,15 +53,17 @@ def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
 
     assert 'id="headerPair">XAU / USDT<' in html
     assert 'id="headerChange"' in html
-    assert "function displayTradingPair(market)" in html
-    assert "market?.provider_symbol" in html
-    assert 'function isTrustedHeaderMarket(m){return isFresh(m)&&m?.timeframe==="1m"}' in html
-    assert "function nextHeaderPriceDirection" in html
-    assert 'current>previous?"up":"down"' in html
-    assert "function marketTodayChangePct(market,dailyMarket=state.dailyMarket)" in html
+    read = _read_layer()
+    assert "export function displayTradingPair(market: Json)" in read
+    assert "market?.provider_symbol" in read
+    assert 'export function isTrustedHeaderMarket(m: Json): boolean { return isFresh(m) && m?.timeframe === "1m"; }' in read
+    assert "export function nextHeaderPriceDirection" in read
+    assert 'current > previous ? "up" : "down"' in read
+    assert "export function marketTodayChangePct(market: Json, dailyMarket: Json)" in read
+    assert "gmRead.headerMarket(market,{identity:state.headerMarketIdentity,lastPrice:state.headerLastPrice,direction:state.headerPriceDirection},state.dailyMarket)" in html
     assert 'dashboardMarketBarsUrl({symbol,timeframe:"1d",limit:2})' in html
-    assert "sameVenueMarket(baseMarket,daily)" in html
-    assert "交易所当日开盘价至今" in html
+    assert "sameVenueMarket(baseMarket, daily)" in read and "gmRead.usableDailyMarket(baseMarket,daily)" in html
+    assert "交易所当日开盘价至今" in read
     assert 'class="pill run-state" id="marketBadge"' in html
     assert "acceptedOrderCount>0" in html
     assert "function hasProtectedDcaTarget(data)" in html
@@ -65,7 +72,7 @@ def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
     assert 'data?.completeness?.status!=="complete"' in html
     assert 'risk.outcome!=="allow"' in html
     assert '(risk.blockers||[]).length>0' in html
-    assert 'identity!==state.headerMarketIdentity' in html
+    assert "if (identity !== next.identity) next = {identity, lastPrice: null, direction: \"\"};" in read
     assert "gridmind-run-pulse" in html
     assert "prefers-reduced-motion:reduce" in html
     assert "healthButton" not in html
@@ -264,7 +271,7 @@ def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> No
     assert "alreadyAtOldestEdge" in html
     assert "event=>finish(event,true)" in html
     assert "event=>finish(event,false)" in html
-    assert 'status:"error",fresh:false,trusted:false' in html
+    assert 'status: "error", fresh: false, trusted: false' in _read_layer()
 
 
 def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> None:
@@ -432,14 +439,14 @@ def test_gridmind_tabs_show_authoritative_lifecycle_counts() -> None:
 
 
 def test_gridmind_uses_revision_for_same_phase_lifecycle_recovery() -> None:
-    html = _html()
+    read = _read_layer()  # #1416: the lifecycle reconcile is read.ts's reconcileOrderLifecycle; read.test.ts runs it
 
-    assert "revision=Number(order?.state_revision)" in html
-    assert "previousRevision=Number(previous?.state_revision)" in html
-    assert "hasRevision=Number.isInteger(revision)&&revision>0" in html
-    assert "hasPreviousRevision=Number.isInteger(previousRevision)&&previousRevision>0" in html
-    assert "revision>previousRevision" in html
-    assert "revision>=previousRevision" in html
+    assert "revision = Number(order?.state_revision)" in read
+    assert "previousRevision = Number(previous?.state_revision)" in read
+    assert "hasRevision = Number.isInteger(revision) && revision > 0" in read
+    assert "hasPreviousRevision = Number.isInteger(previousRevision) && previousRevision > 0" in read
+    assert "revision > previousRevision" in read
+    assert "revision >= previousRevision" in read
 
 
 def test_gridmind_current_order_table_uses_only_backend_classified_accepted_lifecycles() -> None:
@@ -447,7 +454,7 @@ def test_gridmind_current_order_table_uses_only_backend_classified_accepted_life
 
     assert "当前委托" in html
     assert "reconcileOrderLifecycle(data)" in html
-    assert "rank>previousRank" in html
+    assert "rank > previousRank" in _read_layer()
     assert "acceptedLifecycleOrders=displayedAcceptedOrderLifecycle()" in html
     assert "current.has(orderId)" in html
     assert "renderTables(execution,acceptedLifecycleOrders)" in html
@@ -495,9 +502,11 @@ def test_gridmind_lifecycle_retention_cannot_change_controls_or_chart_truth() ->
     html = _html()
 
     assert "orderLifecycle:{cycleId:null,byId:new Map(),anonymous:[],currentIds:new Set()}" in html
-    assert "state.orderLifecycle.byId.get(orderId)" in html
-    assert "state.orderLifecycle.cycleId!==cycleId" in html
-    assert "state.orderLifecycle.currentIds=new Set(incoming.map" in html
+    assert "state.orderLifecycle=gmRead.reconcileOrderLifecycle(state.orderLifecycle,data)" in html
+    read = _read_layer()
+    assert "next.byId.get(orderId)" in read
+    assert "lifecycle.cycleId !== cycleId" in read
+    assert "next.currentIds = new Set(incoming.map" in read
     assert "applyReadModel(data)" in html
     assert "applyReadModel(latest)" in html
     assert "renderRobotControls(data,fresh,execution)" in html
@@ -666,7 +675,7 @@ def test_gridmind_trend_card_gives_the_real_reason_on_a_trusted_non_1m_chart() -
     assert "切到 1m 后可评估" in trend
     assert "行情不可用" in trend  # still said when the market itself is not trusted
     # The 1m requirement for the trend refresh and start controls is unchanged.
-    assert "function isTrustedHeaderMarket(m){return isFresh(m)&&m?.timeframe===\"1m\"}" in html
+    assert 'export function isTrustedHeaderMarket(m: Json): boolean { return isFresh(m) && m?.timeframe === "1m"; }' in _read_layer()
     assert "renderRobotControls(data,headerFresh,execution)" in html
 
 
