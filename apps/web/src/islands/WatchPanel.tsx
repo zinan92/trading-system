@@ -1,5 +1,6 @@
 /* 本周要看的三件事: reads /api/watch every 5 minutes (only while the tab is visible) and
- * re-renders every 30 seconds so 「还有 N 分钟」 counts down. */
+ * re-renders every 30 seconds so 「还有 N 分钟」 counts down. Since #1435 「今天」 step 1 reads it (useWatch)
+ * and shows the cards inside 「今天的依据」. */
 import {useEffect, useState} from "react";
 import {getJson} from "../api";
 import {watchSource} from "../sources";
@@ -26,7 +27,9 @@ function Card({item, fresh, now}: {item: WatchItem; fresh: boolean; now: number}
   );
 }
 
-export function WatchPanel() {
+export interface Watch {data: WatchData | null; error: string; now: number}
+
+export function useWatch(): Watch {
   const [data, setData] = useState<WatchData | null>(null);
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
@@ -42,7 +45,15 @@ export function WatchPanel() {
     const tick = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => { alive = false; clearInterval(reload); clearInterval(tick); };
   }, []);
+  return {data, error, now};
+}
 
+export function WatchPanel() {
+  return <WatchCards watch={useWatch()} />;
+}
+
+export function WatchCards({watch}: {watch: Watch}) {
+  const {data, error, now} = watch;
   const items = data?.items ?? [];
   const replaced = new Set(data?.replaced ?? []);
   return (

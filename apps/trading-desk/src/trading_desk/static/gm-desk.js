@@ -1,6 +1,6 @@
 // Desk layer injected into the GridMind console (served at /trade): nav + asset switch, one status
-// line, and step 3 of 「今天」 (执行, 停止, 暂停补单). Steps 1–2 and the news rail are React islands
-// (apps/web TodayPanel / NewsRail, #1327); this file keeps which asset is selected, because that
+// line, and step 3 of 「今天」 (执行, 停止, 暂停补单). Steps 1–2 (with the news) are a React island
+// (apps/web TodayPanel, #1327, #1435); this file keeps which asset is selected, because that
 // drives GridMind's own selects, and every order or control request until #1329.
 // GridMind's own cards stay in the page (collapsed); only presentation changes here.
 
@@ -129,7 +129,6 @@ if (typeof document !== "undefined") (() => {
     setProps($d('[data-island="today"]'), {asset: D.asset,
       assets: D.assets.map(a => ({key: a.key, label: a.label, kind: a.kind, instrument_id: a.instrument_id, capabilities: a.capabilities || []})),
       gridmind: D.assets.filter(onGridMind).map(a => a.key)});
-    setProps($d('[data-island="news"]'), {asset: D.asset});
   }
 
   async function call(path, body) {
@@ -148,11 +147,8 @@ if (typeof document !== "undefined") (() => {
     const wrap = $d(".console-wrap");
     const layout = document.createElement("div"); layout.className = "desk-layout";
     wrap.parentNode.insertBefore(layout, wrap);
-    // 滚动新闻 is a React island (apps/web NewsRail, #1327).
-    layout.innerHTML = `<aside class="card desk-news" aria-labelledby="deskNewsTitle" data-island="news" data-props="{}"></aside>`;
+    // The news and the week's three events are inside 「今天」 step 1 (apps/web TodayPanel, #1435).
     layout.appendChild(wrap);
-    // 本周三件事 is a React island (apps/web WatchPanel, #1325): it reads /api/watch itself.
-    layout.insertAdjacentHTML("afterbegin", `<section class="card desk-watch" aria-labelledby="deskWatchTitle" data-island="watch"></section>`);
     const rail = $d(".control-rail");
     // Steps 1–2 are a React island (apps/web TodayPanel, #1327); step 3 stays here until #1329.
     rail?.insertAdjacentHTML("afterbegin", `<section class="card desk-judge" id="deskToday" aria-labelledby="deskJudgeTitle">
@@ -412,16 +408,13 @@ if (typeof document !== "undefined") (() => {
   }
 
   // ---- boot -------------------------------------------------------------------------
-  // Phone: chart first, then today's call and the news, then GridMind's tables and controls.
+  // Phone: chart first, then today's call (with its news), then GridMind's tables and controls.
   function placeForViewport() {
     const phone = window.matchMedia("(max-width: 760px)").matches;
-    const judge = $d(".desk-judge"), news = $d(".desk-news"), chart = $d(".chart-card");
-    if (!judge || !news || !chart) return;
-    if (phone && judge.previousElementSibling !== chart) {
-      chart.after(judge); judge.after(news);
-    } else if (!phone && judge.parentElement !== $d(".control-rail")) {
-      $d(".control-rail").prepend(judge); $d(".desk-watch").after(news);
-    }
+    const judge = $d(".desk-judge"), chart = $d(".chart-card");
+    if (!judge || !chart) return;
+    if (phone && judge.previousElementSibling !== chart) chart.after(judge);
+    else if (!phone && judge.parentElement !== $d(".control-rail")) $d(".control-rail").prepend(judge);
   }
 
   // 交易回看 is a React island (apps/web ReviewPanel, #1326). GridMind keeps rewriting its own
@@ -463,7 +456,7 @@ if (typeof document !== "undefined") (() => {
     setInterval(renderStatus, 1000);  // follows whatever GridMind last rendered
     placeForViewport();
     window.matchMedia("(max-width: 760px)").addEventListener("change", placeForViewport);
-    try { D.assets = (await call("/api/assets")).assets; } catch (e) { $d(".desk-news").innerHTML = `<p class="desk-bad">${escD(e.message)}</p>`; return; }
+    try { D.assets = (await call("/api/assets")).assets; } catch (e) { setProps($d('[data-island="today"]'), {error: e.message}); return; }
     renderAssets();  // the buttons show as soon as the list is read, before GridMind's selection (#1433)
     const ready = await waitFor(() => window.dashboardControlState?.selection, 15000);
     if (!ready || !selectionAsset()) focusAsset(chartAsset());

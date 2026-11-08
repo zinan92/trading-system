@@ -107,6 +107,7 @@ def test_today_flow_hands_an_approved_preview_to_the_legacy_execute_step() -> No
         browser, page = _page(runtime, origin, _desk(), posts, dialogs)
         exec_box = page.locator("#deskExecBox")
         assert exec_box.inner_text() == "先完成前两步"
+        page.locator("#deskBasis summary").click()  # the news is inside 「今天的依据」 (#1435)
         page.locator("#deskNews li", has_text="比特币 ETF 净流入").click()
         page.locator(".desk-dir [data-d=long]").click()
         page.locator("#deskReason").fill("ETF 流入")
@@ -370,4 +371,31 @@ def test_five_assets_fit_a_phone_top_bar_without_widening_the_page() -> None:
         assert page.evaluate("() => document.documentElement.scrollWidth") <= 375
         box = page.locator("#deskAssets").bounding_box()
         assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= 375
+        browser.close()
+
+
+WATCH = {"generated_at": "2026-11-08T09:12:00+08:00", "provider": "codex", "items": [
+    {"ref": "a", "title": "非农", "at": "2030-01-01T00:00:00Z", "volatility": "高", "why": "就业强弱定利率"},
+    {"ref": "b", "title": "CPI", "at": "2030-01-02T00:00:00Z", "why": "通胀"},
+    {"ref": "c", "title": "美联储讲话", "at": "2030-01-03T00:00:00Z", "why": "措辞"}]}
+
+
+@pytest.mark.parametrize("width", [1680, 1100, 375])
+def test_the_news_and_the_three_events_are_one_line_in_step_one(width: int) -> None:
+    """#1435: no news column and no events row; step 1 says 「今天的依据」 and opens to both. The page is one column
+    and never wider than the window."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [], width=width, reads_extra={"/api/watch": WATCH})
+        line = page.locator("#deskBasisLine", has_text="3 件大事")
+        line.wait_for()
+        assert line.inner_text() == "今天的依据：3 件大事 · 1 条新闻"
+        assert page.locator(".desk-news, .desk-watch").evaluate_all(
+            "els => els.every(el => el.closest('#deskToday [data-step=\"1\"] #deskBasis'))")
+        assert not page.locator("#deskNews").is_visible()
+        page.locator("#deskBasis summary").click()
+        assert page.locator("#deskBasis .desk-watch-card").count() == 3
+        assert page.locator("#deskNews li", has_text="比特币 ETF 净流入").is_visible()
+        assert page.evaluate("() => getComputedStyle(document.querySelector('.desk-layout')).gridTemplateColumns.split(' ').length") == 1
+        assert page.evaluate("() => document.documentElement.scrollWidth") <= width
         browser.close()

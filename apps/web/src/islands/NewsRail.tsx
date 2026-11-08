@@ -1,5 +1,6 @@
-/* 滚动新闻 (#1327), moved from gm-desk.js: /api/news/{asset} every minute while the tab is visible,
- * 「新」 on items that were not there last time, and a click cites the item in today's judgment. */
+/* 滚动新闻 (#1327): /api/news/{asset} every minute while the tab is visible, 「新」 on items that were not there
+ * last time, and a click cites the item in today's judgment. Since #1435 it is read by 「今天」 step 1
+ * (useNews) and shown inside 「今天的依据」; the reads go on while that line is folded. */
 import {useEffect, useRef, useState} from "react";
 import {getJson} from "../api";
 import {ago, type Cite} from "../today";
@@ -10,12 +11,55 @@ export const AGO_MS = 30000;
 const LABEL: Record<string, string> = {high_impact: "重要", watch: "关注", noise: "噪音", unrated: "未分级"};
 const CLS: Record<string, string> = {high_impact: "high", watch: "watch", noise: "noise", unrated: "noise"};
 
-interface NewsItem {id?: string | number; title: string; bucket?: string; source?: string; collected_at?: string}
+export interface NewsItem {id?: string | number; title: string; bucket?: string; source?: string; collected_at?: string}
 interface NewsData {ok?: boolean; reason?: string; items?: NewsItem[]; stale?: boolean}
+export interface News {items: NewsItem[]; error: string; stale: boolean; at: Date | null; fresh: Set<string | number>}
+
+/** The list's default filter, 「重要+关注」: what 「N 条新闻」 counts too. */
+export const isKey = (n: NewsItem) => n.bucket === "high_impact" || n.bucket === "watch";
+const keyOf = (n: NewsItem) => n.id ?? n.title;
+/** Important items that were not there on the previous read. */
+export const freshImportant = (news: News) => news.items.filter(n => n.bucket === "high_impact" && news.fresh.has(keyOf(n)));
+
+export function useNews(asset: string): News {
+  const [news, setNews] = useState<News>({items: [], error: "", stale: false, at: null, fresh: new Set()});
+  const [, setTick] = useState(0);
+  const seen = useRef<Set<string | number> | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    seen.current = null;
+    setNews({items: [], error: "", stale: false, at: null, fresh: new Set()});
+    const load = async (silent: boolean) => {
+      let data: NewsData;
+      try { data = await getJson<NewsData>(`/api/news/${asset}`); } catch (e) { data = {ok: false, reason: e instanceof Error ? e.message : String(e), items: []}; }
+      if (!alive) return;
+      if (!data.ok) {
+        // A failed minute refresh keeps the list it had; only a first read shows the reason.
+        setNews(current => (!silent || !current.items.length ? {...current, items: [], error: data.reason || "新闻读取失败"} : current));
+        return;
+      }
+      const list = data.items || [];
+      const before = seen.current;
+      seen.current = new Set(list.map(keyOf));
+      setNews({items: list, error: "", stale: Boolean(data.stale), at: new Date(),
+        fresh: new Set(before ? list.filter(n => !before.has(keyOf(n))).map(keyOf) : [])});
+    };
+    void load(false);
+    const reload = setInterval(() => { if (!document.hidden) void load(true); }, NEWS_MS);
+    const tick = setInterval(() => { if (!document.hidden) setTick(n => n + 1); }, AGO_MS);
+    return () => { alive = false; clearInterval(reload); clearInterval(tick); };
+  }, [asset]);
+  return news;
+}
 
 export function NewsRail({asset}: {asset?: string}) {
   if (!asset) return <Shell meta="读取中"><li className="desk-empty">正在读取新闻…</li></Shell>;
   return <Rail key={asset} asset={asset} />;
+}
+
+function Rail({asset}: {asset: string}) {
+  return <NewsList asset={asset} news={useNews(asset)} />;
 }
 
 function Shell({meta, filter, onFilter, children}: {meta: string; filter?: "key" | "all"; onFilter?: (f: "key" | "all") => void; children: React.ReactNode}) {
@@ -34,44 +78,15 @@ function Shell({meta, filter, onFilter, children}: {meta: string; filter?: "key"
   );
 }
 
-function Rail({asset}: {asset: string}) {
-  const [items, setItems] = useState<NewsItem[]>([]);
-  const [error, setError] = useState("");
-  const [stale, setStale] = useState(false);
-  const [at, setAt] = useState<Date | null>(null);
-  const [fresh, setFresh] = useState<Set<string | number>>(new Set());
+export function NewsList({asset, news}: {asset: string; news: News}) {
+  const {items, error, stale, at, fresh} = news;
   const [filter, setFilter] = useState<"key" | "all">("key");
-  const [, setTick] = useState(0);
-  const seen = useRef<Set<string | number> | null>(null);
   const cites = useCites(asset);
-
-  useEffect(() => {
-    let alive = true;
-    const load = async (silent: boolean) => {
-      let data: NewsData;
-      try { data = await getJson<NewsData>(`/api/news/${asset}`); } catch (e) { data = {ok: false, reason: e instanceof Error ? e.message : String(e), items: []}; }
-      if (!alive) return;
-      if (!data.ok) {
-        // A failed minute refresh keeps the list it had; only a first read shows the reason.
-        setItems(current => { if (!silent || !current.length) { setError(data.reason || "新闻读取失败"); return []; } return current; });
-        return;
-      }
-      const list = data.items || [];
-      const before = seen.current;
-      setFresh(new Set(before ? list.filter(n => !before.has(n.id ?? n.title)).map(n => n.id ?? n.title) : []));
-      seen.current = new Set(list.map(n => n.id ?? n.title));
-      setItems(list); setError(""); setStale(Boolean(data.stale)); setAt(new Date());
-    };
-    void load(false);
-    const reload = setInterval(() => { if (!document.hidden) void load(true); }, NEWS_MS);
-    const tick = setInterval(() => { if (!document.hidden) setTick(n => n + 1); }, AGO_MS);
-    return () => { alive = false; clearInterval(reload); clearInterval(tick); };
-  }, [asset]);
 
   const meta = at ? `每分钟更新 · ${at.toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"})}` : "";
   if (error) return <Shell meta={meta} filter={filter} onFilter={setFilter}><li className="desk-bad">{error}</li></Shell>;
   if (!at) return <Shell meta="读取中" filter={filter} onFilter={setFilter}><li className="desk-empty">正在读取新闻…</li></Shell>;
-  const shown = items.filter(n => filter === "all" || n.bucket === "high_impact" || n.bucket === "watch");
+  const shown = items.filter(n => filter === "all" || isKey(n));
   const cite = (n: NewsItem) => citeStore.toggle(asset, {id: n.id, title: n.title, bucket: n.bucket} as Cite);
   return (
     <Shell meta={meta} filter={filter} onFilter={setFilter}>
