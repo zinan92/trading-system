@@ -142,6 +142,14 @@ test("islands POST only to the allow-list, and never reach an order or control e
       expect(/method:/.test(source)).toBe(false);
       continue;
     }
+    if (path === "./gridmind/control.ts" || path === "./gridmind/control-entry.ts") {
+      // GridMind's control layer (#1418) builds and gates control bodies and runs the start/stop/replace flows, but
+      // sends nothing: every request goes through the host gridmind.js passes in, whose control() is the one sender.
+      expect([path, /\/api\/|dashboard-control|fetch\(|XMLHttpRequest|sendBeacon|method:|postJson|api\(/.test(source)]).toEqual([path, false]);
+      continue;
+    }
+    // No island may reach the control layer, even to build a body.
+    if (!path.startsWith("./gridmind/")) expect([path, /gridmind\/control/.test(source)]).toEqual([path, false]);
     // Until #1329: 执行, 停止, 补单 and GridMind's own controls stay in the legacy page.
     expect([path, /\/api\/execute|\/api\/grid\/|dashboard-control|\/api\/dualtrack\/orders|\/api\/park-paper|\/api\/mainnet/.test(source)]).toEqual([path, false]);
     if (!path.endsWith("/api.ts")) expect([path, /method:/.test(source)]).toEqual([path, false]);

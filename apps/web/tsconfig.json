@@ -14,5 +14,5 @@
     "noEmit": true,
     "types": ["vitest/globals", "vite/client"]
   },
-  "include": ["src", "vite.config.ts", "vite.read.config.ts", "vite.chart.config.ts"]
+  "include": ["src", "vite.config.ts", "vite.read.config.ts", "vite.chart.config.ts", "vite.control.config.ts"]
 }

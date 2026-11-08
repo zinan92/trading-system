@@ -9,32 +9,14 @@ import {gridmindSource} from "./gridmind_page.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const html = gridmindSource(); // #1420: the page and its own files, inlined back
 
-function extractedFunction(name, nextName) {
-  const start = html.indexOf(`function ${name}`);
-  const end = html.indexOf(`\nfunction ${nextName}`, start);
-  assert.ok(start >= 0 && end > start, `could not extract ${name}`);
-  return vm.runInNewContext(`(${html.slice(start, end)})`);
-}
-
 // #1417: the drag bounds are TypeScript (apps/web/src/gridmind/chart.ts), built to assets/gridmind/chart.js.
 const chartLayer = vm.runInNewContext(readFileSync(resolve(root, "assets/gridmind/chart.js"), "utf8") + ";window.gmChart", {window: {}});
 const {calculateGridDragBounds} = chartLayer;
-const runtimeMatchesProductionPlan = extractedFunction(
-  "runtimeMatchesProductionPlan",
-  "createGridRangeDraft",
-);
-const gridDraftHandle = extractedFunction(
-  "gridDraftHandle",
-  "gridRangePreviewPayload",
-);
-const gridRangePreviewContractIssue = extractedFunction(
-  "gridRangePreviewContractIssue",
-  "executionIdentity",
-);
-const executionIdentity = extractedFunction(
-  "executionIdentity",
-  "gridReplacementPayload",
-);
+// #1418: the range draft, its preview contract and the replace_grid body are TypeScript (apps/web/src/gridmind/control.ts),
+// built to assets/gridmind/control.js. gridmind.js still sends the request through its own control().
+const controlLayer = vm.runInNewContext(readFileSync(resolve(root, "assets/gridmind/control.js"), "utf8") + ";window.gmControl", {window: {}});
+const {runtimeMatchesProductionPlan, gridDraftHandle, gridRangePreviewContractIssue, executionIdentity} = controlLayer;
+const controlSource = readFileSync(resolve(root, "apps/web/src/gridmind/control.ts"), "utf8");
 
 test("inline dashboard JavaScript parses", () => {
   const start = html.lastIndexOf("<script>") + "<script>".length;
@@ -216,9 +198,9 @@ test("replacement confirmation has the exact destructive label and sends stable 
     accepted_order_ids: ["order-a", "order-b"],
     open_position_ids: ["position-2", "trade-1"],
   });
-  assert.match(html, /expected_preview_id:preview\.preview_id/);
-  assert.match(html, /risk_acknowledgements:gridRiskAcknowledgementPayload\(preview\)/);
-  assert.match(html, /control\("replace_grid",payload/);
+  assert.match(controlSource, /expected_preview_id: preview\.preview_id/);
+  assert.match(controlSource, /risk_acknowledgements: gridRiskAcknowledgementPayload\(preview, acks\)/);
+  assert.match(controlSource, /host\.control\("replace_grid", payload/);
 });
 
 test("replacement confirmation fails closed on ambiguous execution identity", () => {

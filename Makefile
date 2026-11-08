@@ -65,9 +65,9 @@ test-strategy:
 test-kline:
 	@if command -v node >/dev/null; then cd packages/standard-kline && node --test standard-kline.test.js; else echo "node not found; skipping standard-kline tests"; fi
 
-# React islands (apps/web, #1325) and GridMind's read (#1416) and chart (#1417) layers. The built web.js, read.js and chart.js are committed;
+# React islands (apps/web, #1325) and GridMind's read (#1416), chart (#1417) and control (#1418) layers. The built web.js and layer files are committed;
 # test-web fails when either is stale.
-WEB_OUT := apps/trading-desk/src/trading_desk/static/web assets/gridmind/read.js assets/gridmind/chart.js
+WEB_OUT := apps/trading-desk/src/trading_desk/static/web assets/gridmind/read.js assets/gridmind/chart.js assets/gridmind/control.js
 
 web:
 	cd apps/web && (test -d node_modules || npm ci --no-audit --no-fund) && npm run build

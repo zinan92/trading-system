@@ -180,6 +180,72 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — GridMind's control layer is TypeScript; the one sender stays in gridmind.js (#1418)
+
+## Decision
+
+- Step 6 of #1330. These moved out of `gridmind.js` into `apps/web/src/gridmind/control.ts`:
+  - the start form: `strategyPayload`, `invalidStrategyDraft`, `previewProblemFromError`, the legacy single-side
+    migration;
+  - the control body and its gates: `controlRequestBody` (needs a Cloudflare session and a read cycle id);
+  - lost-response handling: `isUncertainControlError`, the audited control receipt, `reconcileControlOutcome`
+    (12 reads, 2.5 s apart);
+  - the flows: `requestPreview`, `prepareStartRobot`, `performStartRobot`, `startRobot`, `stopRobot`, `runButton`;
+  - the start risk review: acknowledgements, payload, blocker copy and evidence lines, `startRiskView`;
+  - the range draft: `runtimeMatchesProductionPlan`, the draft builders, the preview contract,
+    `requestGridRangePreview`, `gridReplacementPayload`, `executeGridRangeReplacement`.
+- ADR 0008 holds. `control.ts` sends nothing: it has no path, no `method:`, no fetch. Every flow takes a
+  `ControlHost`, and `host.control` is gridmind.js's `control()`, which is still the one place a GridMind control
+  request is sent. `control()` now gets its body from `gmControl.controlRequestBody`. The islands guard checks
+  `control.ts` for any path or method, and fails if a file outside `src/gridmind/` names `gridmind/control`.
+- Not moved, for #1419: the UI that draws or reads the page (`applyPreview`, `fillInputs`, `schedulePreview`,
+  `selectStrategyType`, `toggleGridAdjustMode`, `clearGridRangeDraft`, `renderGridRangeReview`,
+  `renderStartRiskReview`, `openStartRiskReview`, `writeLegacyStartRisk`), and `dashboard-control.js`, which the
+  ADR 0008 ban names and which stays a separate plain script.
+- `controlHost` in gridmind.js maps each hook to the existing page function; it is declared after `state`, since
+  it reads `RUNTIME` and `state` (temporal dead zone otherwise). gridmind.js keeps the old names as wrappers, so
+  page scripts and the browser tests (`isUncertainControlError`, `startBlockerCopy`, `reconcileControlOutcome`,
+  `startRiskPayload()`, `strategyPayload()`) reach them unchanged.
+- Built like chart.js: `vite.control.config.ts` writes `assets/gridmind/control.js` (IIFE, not minified). It loads
+  after chart.js and before gridmind.js; 8765, the desk and the gateway allow-list carry it.
+
+## Gotchas
+
+- Wire parity: `gridReplacementPayload` in gridmind.js checked the draft captured when confirm was pressed, but
+  took the body's range and handle from `state.gridDraft` as it was after the fresh read model arrived. The port
+  keeps that (`bodyDraft`, a fifth argument the flow passes as `host.state.gridDraft`) and pins it with a test.
+  The two are the same object unless the draft moved during the read. If it did, `_replace_grid` in
+  `services/strategy_control_plane.py` rebuilds the preview from the range in the body and raises
+  `strategy_preview_changed` unless that preview's id equals `expected_preview_id`, so a moved range is refused.
+- `controlErrorMessage` now uses an own-property check: the legacy lookup on a plain object would have matched
+  `"constructor"` and similar names.
+- `legacy-control-layer.json` was captured from 3e116a7 in a VM with a fake `state`, fake inputs and every page
+  hook stubbed to a log (`TZ=UTC`): about 1,500 table cases and 56 flow scenarios. Bodies are compared as JSON
+  strings, so key order counts. Undefined results are encoded as `"<undefined>"`; Sets are hydrated from arrays.
+  A first capture of `gridReplacementPayload` left `state.gridDraft` unset and recorded 20 false errors; the
+  capture now sets it as the one production caller does.
+- Static asserts that searched the page for the moved code now search `control.ts`. The range-drag mjs test loads
+  the built `control.js` in a VM. One assert that `orders_created: 0` is never page copy now skips the built
+  control layer, where it is the table of no-side-effect fields.
+
+## Verification
+
+- Vitest 2259 passed (`control.test.ts`: 1570, every table case, every flow's log, outcome and final state, plus
+  the race above). Typecheck clean; the build leaves `read.js`, `chart.js` and `web.js` unchanged.
+- Desk 263 passed (`data-boot` equals the page's 7 scripts). Static, own-files, gateway and server tests: 137
+  passed. mjs: 29 passed.
+- Browser suites 91 passed, with `tests/fixtures/gridmind_control_wire.json` unchanged: the control wire,
+  operator journey, intents, failure chains and range-drag journeys. All against mocks; no control button was
+  pressed in production.
+- Production record for #1417 at 3e116a7, read-only on 127.0.0.1:8790/trade:
+  - chart.js, read.js and gridmind.js are served byte-identical; `data-boot` lists chart.js; 8765 serves it
+    (no-store) with no restart. The gateway is not running, so its allow-list is changed in code only.
+  - `gmChart` has 20 exports, `gmRead` 31; the overlay is aria-hidden and the adjust toggle unpressed; 18 islands,
+    7 canvases, 2 venues, 30m trusted; no console errors. The pane was hidden, so width was not measured. The drag
+    was not exercised in production by design.
+  - Correction to #1417's screenshot note: the two c63a066 runs of the range-draft screenshot differed across
+    about 620k px, not only at the status dot. Base vs branch differed only at the dot (216 px).
+
 # 2026-11-08 — GridMind's chart and range drag are TypeScript (#1417)
 
 ## Decision
@@ -222,7 +288,8 @@
 - GridMind, control, intents, today, tree and kline browser suites: 91 passed, including the range-drag journeys
   (drag, release, remount, wheel unclamp, ghost sides, startup apply/cancel, risk confirmation).
 - Screenshots: the 4 range-drag screenshots taken on c63a066 and on this branch, pixel-diffed in Chromium. The only
-  changed pixels are a 24 x 28 px patch over the header's live status dot, and two c63a066 runs differ there too.
+  changed pixels are a 24 x 28 px patch over the header's live status dot (two c63a066 runs differ more widely; see
+  the correction under #1418).
   The chart, grid lines and drag overlay are pixel-identical.
 - Production record for #1416 at c63a066, read-only on 127.0.0.1:8790/trade:
   - read.js and gridmind.js are served byte-identical to the repo; 8765 serves read.js; `data-boot` lists it.
