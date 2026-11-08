@@ -9,6 +9,13 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-08, GridMind 读取层搬到 TypeScript · #1416)
+
+- 整页换 React（#1330）第 4 步：GridMind 读数据的那部分逻辑搬成了一个带类型、带测试的 TypeScript 模块（`apps/web/src/gridmind/read.ts`），包括调接口、出错时给 Park 看的说明、行情可不可信、刷新失败时保留最后可信 K 线、顶栏价格和涨跌、定时刷新。原脚本 gridmind.js 改成调用这个模块。
+- 判断一条没改：先让旧代码对 80 组输入跑一遍，记下结果，新模块逐条对上。「行情不可信不开新仓」还是同一个判断。
+- 新文件 `assets/gridmind/read.js` 由模块编译出来、随代码提交，CI 会检查它是不是最新的。8765、交易台和云网关都放行它。部署不用重启 8765。
+- 第 3 步（#1415）已在生产 5a5d380 上只读核对：整页是一棵 React 树，18 个组件都在，149 个页面元素里 148 个在原位；缺的是「载入 AI 建议」按钮，只有 AI 给出建议时才画。图表外多一层是原有的图表外框组件。手机宽度不溢出，控制台没有报错。
+
 ## 现在在哪里(2026-11-08, 交易页整页由一棵 React 树画出 · #1415)
 
 - 整页换 React（#1330）第 3 步：/trade 的整页结构（顶栏、指标卡、K 线外框、持仓/委托/成交、控制栏、交易台栏、对话框）现在由一棵 React 树画出，原来各自挂载的小块成了这棵树的子组件。

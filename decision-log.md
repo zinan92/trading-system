@@ -180,6 +180,62 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — GridMind's read layer is TypeScript (#1416)
+
+## Decision
+
+- Step 4 of #1330. These moved out of `gridmind.js` into `apps/web/src/gridmind/read.ts`:
+  - the API call, with its error kinds and the `OPERATOR_FAILURE_COPY` text;
+  - market trust (`isFresh`, `isTrustedHeaderMarket`, `statusText`);
+  - keeping the last trusted candles on a failed refresh, and merging bars;
+  - the top bar's price, tick and today's change;
+  - the read-model cycle id, the order lifecycle and the supervisor-audit carry-over;
+  - the poll.
+- `read.ts` keeps no state. gridmind.js still owns `state` and passes in what each function used to read from it.
+  - `headerMarket` returns the new memo (identity, last price, tick direction).
+  - `reconcileOrderLifecycle` returns a new lifecycle instead of changing it in place.
+- gridmind.js is a plain script, so the module reaches it as `window.gmRead`. A second Vite build
+  (`vite.read.config.ts`, IIFE, not minified) writes `assets/gridmind/read.js`. That file is committed, and
+  `make test-web` fails when it is stale.
+  - `dashboard-gridmind.html` and the desk's `data-boot` both load `read.js` just before `gridmind.js`.
+  - 8765 (no-cache), the desk (`STATIC_FILES`) and the gateway allow-list carry the new path.
+- gridmind.js keeps the names it had (`api`, `tradingFailure`, `isFresh`, …) as top-level consts. Same-page scripts
+  that call `api` (dashboard-control.js), and tests that call `tradingFailure` in the page, are unchanged.
+- No behaviour changed. 「行情不可信不开新仓」 is the same check: only `trusted === true` counts, and a retained
+  market is marked untrusted.
+
+## Gotchas
+
+- `legacy-read.json` was captured once by running the 5a5d380 functions in a VM over an input table
+  (scratchpad generator, `TZ=UTC`).
+  - `read.test.ts` (80 cases) holds the port to it, including `api()`'s headers, credentials, 401 re-login and
+    error bodies.
+  - It covers every `OPERATOR_FAILURE_COPY` code and a 13-step sequence of header snapshots.
+- Static tests that searched gridmind.js for the moved code now search `read.ts`. The 3 mjs tests that pulled
+  `mergeMarketBars`, `retainLastTrustedMarket` and `reconcileReadModelMarket` out of the page moved to
+  `read.test.ts`, unchanged.
+- The islands guard test is a text search, and `read.ts` names `/api/dashboard-control/market-bars`. It gets its own
+  check: exactly three read paths and no `method:`.
+- If `read.js` fails to load, gridmind.js stops at its first line, as it would if gridmind.js itself failed. On
+  /trade, the #1415 fallback line still shows.
+
+## Verification
+
+- Vitest 247 passed. `read.test.ts` (80) checks the port against the legacy table. Typecheck is clean, and
+  `web.js` rebuilds byte-identically.
+- Desk 263 passed. `data-boot` equals the 8765 page's 5 scripts, in order.
+- Static, own-files tie, gateway and server tests: 137 passed. mjs: 29 passed.
+- GridMind, control, intents, today, tree and kline browser suites: 91 passed. That includes:
+  - `test_trade_tree_browser.py`: reference vs tree, node for node, plus the 7-request control journey;
+  - `test_dashboard_control_wire_browser.py`, with zero edits to `gridmind_control_wire.json`;
+  - the failure-chain tests, which call `tradingFailure` in the page.
+- Production record for #1415 at 5a5d380, read-only on 127.0.0.1:8790/trade:
+  - The tree is on, 18 islands are live, and 7 chart canvases are drawn.
+  - 148 of 149 skeleton ids sit under their reference ancestors. `adoptRecommendation` is drawn only with an AI
+    recommendation, and none was shown. `productionChart` sits inside ChartFrame's `.chart-slot` (#1398).
+  - At 375 px, `scrollWidth` is 375, both venues load and there are no console errors. The catalog took about 13 s
+    to load.
+
 # 2026-11-08 — /trade is one React tree (#1415)
 
 ## Decision

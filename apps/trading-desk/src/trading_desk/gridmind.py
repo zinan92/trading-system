@@ -34,6 +34,7 @@ STATIC_FILES = {
     "/assets/gridmind/base.css": CSS,
     "/assets/gridmind/skin.css": CSS,
     "/assets/gridmind/control-intents.js": JS,
+    "/assets/gridmind/read.js": JS,  # #1416: built from apps/web/src/gridmind/read.ts
     "/assets/gridmind/gridmind.js": JS,
     "/assets/gridmind/park-ai-chat.js": JS,
     "/assets/gridmind/dashboard-control.js": JS,

@@ -1,0 +1,4970 @@
+{
+ "source": "assets/gridmind/gridmind.js at 5a5d380",
+ "cases": {
+  "tradingFailure": [
+   {
+    "input": {
+     "message": "network down",
+     "status": 0,
+     "code": "dashboard_response_unconfirmed"
+    },
+    "output": {
+     "kind": "dashboard_response_unconfirmed",
+     "title": "Dashboard 响应未收到",
+     "reason": "浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。",
+     "action": "不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。",
+     "text": "Dashboard 响应未收到：浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。 下一步：不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。"
+    }
+   },
+   {
+    "input": {
+     "message": "x",
+     "status": 0,
+     "code": ""
+    },
+    "output": {
+     "kind": "dashboard_response_unconfirmed",
+     "title": "Dashboard 响应未收到",
+     "reason": "浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。",
+     "action": "不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。",
+     "text": "Dashboard 响应未收到：浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。 下一步：不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。"
+    }
+   },
+   {
+    "input": {
+     "message": "x",
+     "status": 200,
+     "code": "request_not_reached_backend"
+    },
+    "output": {
+     "kind": "dashboard_response_unconfirmed",
+     "title": "Dashboard 响应未收到",
+     "reason": "浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。",
+     "action": "不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。",
+     "text": "Dashboard 响应未收到：浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。 下一步：不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "dashboard_response_unconfirmed"
+    },
+    "output": {
+     "kind": "dashboard_response_unconfirmed",
+     "title": "Dashboard 响应未收到",
+     "reason": "浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。",
+     "action": "不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。",
+     "text": "Dashboard 响应未收到：浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。 下一步：不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "cloudflare_tunnel_unavailable"
+    },
+    "output": {
+     "kind": "cloudflare_tunnel_unavailable",
+     "title": "Cloudflare 隧道不可达",
+     "reason": "浏览器已到达 Cloudflare，但隧道未能连接本地 Dashboard（HTTP 530/1033）。",
+     "action": "检查或等待 Cloudflare Tunnel 恢复后刷新；这不会改变本地 Paper 委托。",
+     "text": "Cloudflare 隧道不可达：浏览器已到达 Cloudflare，但隧道未能连接本地 Dashboard（HTTP 530/1033）。 下一步：检查或等待 Cloudflare Tunnel 恢复后刷新；这不会改变本地 Paper 委托。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "binance_upstream_unavailable"
+    },
+    "output": {
+     "kind": "binance_upstream_unavailable",
+     "title": "Binance USD-M 行情上游不可用",
+     "reason": "Dashboard 无法取得执行场所的可信实时行情。",
+     "action": "已保留最后可信 K 线时仅供查看；等待行情恢复后重新预览或启动，禁止新开仓。",
+     "text": "Binance USD-M 行情上游不可用：Dashboard 无法取得执行场所的可信实时行情。 下一步：已保留最后可信 K 线时仅供查看；等待行情恢复后重新预览或启动，禁止新开仓。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "execution_grid_rolled_back"
+    },
+    "output": {
+     "kind": "execution_grid_rolled_back",
+     "title": "网格未被完整接受，已安全回滚",
+     "reason": "执行层没有接受完整网格；可能短暂收到部分回执，但控制面会撤回并拒绝启动。",
+     "action": "刷新当前委托与持仓；确认均为零后修改参数或检查执行器，再重新启动。",
+     "text": "网格未被完整接受，已安全回滚：执行层没有接受完整网格；可能短暂收到部分回执，但控制面会撤回并拒绝启动。 下一步：刷新当前委托与持仓；确认均为零后修改参数或检查执行器，再重新启动。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "dashboard_service_unavailable"
+    },
+    "output": {
+     "kind": "dashboard_service_unavailable",
+     "title": "Dashboard 服务暂不可用",
+     "reason": "请求已到达 Dashboard 边界，但服务暂时无法完成处理。",
+     "action": "稍后刷新；若持续发生，重启本地 Dashboard 服务后重新读取。",
+     "text": "Dashboard 服务暂不可用：请求已到达 Dashboard 边界，但服务暂时无法完成处理。 下一步：稍后刷新；若持续发生，重启本地 Dashboard 服务后重新读取。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "execution_reconciliation_drift"
+    },
+    "output": {
+     "kind": "execution_reconciliation_drift",
+     "title": "账户对账未通过",
+     "reason": "账户余额、盈亏或交易身份与账本不一致，系统无法确认执行状态。",
+     "action": "先完成账户对账，再重新生成启动预览。",
+     "text": "账户对账未通过：账户余额、盈亏或交易身份与账本不一致，系统无法确认执行状态。 下一步：先完成账户对账，再重新生成启动预览。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "paper_execution_tick_unavailable"
+    },
+    "output": {
+     "kind": "paper_execution_tick_unavailable",
+     "title": "Paper 执行心跳不可用",
+     "reason": "执行调度器没有提供足够新的完整 tick，不能安全推进或启动策略。",
+     "action": "检查 datafeed、生命周期和账本阶段；恢复完整 tick 后再启动。",
+     "text": "Paper 执行心跳不可用：执行调度器没有提供足够新的完整 tick，不能安全推进或启动策略。 下一步：检查 datafeed、生命周期和账本阶段；恢复完整 tick 后再启动。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "prepare_start_response_lost"
+    },
+    "output": {
+     "kind": "prepare_start_response_lost",
+     "title": "启动规格回执丢失",
+     "reason": "后台可能已生成只读启动规格，但浏览器没有收到回执；此步骤不会下单。",
+     "action": "不要重复提交控制请求；重新点击启动机器人以读取一份新的冻结规格。",
+     "text": "启动规格回执丢失：后台可能已生成只读启动规格，但浏览器没有收到回执；此步骤不会下单。 下一步：不要重复提交控制请求；重新点击启动机器人以读取一份新的冻结规格。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "prepare_start_outcome_unknown"
+    },
+    "output": {
+     "kind": "prepare_start_outcome_unknown",
+     "title": "启动规格结果仍未确认",
+     "reason": "浏览器无法确认后台是否已生成启动规格；此步骤不会下单。",
+     "action": "不要重复提交控制请求；刷新运行状态后重新点击启动机器人。",
+     "text": "启动规格结果仍未确认：浏览器无法确认后台是否已生成启动规格；此步骤不会下单。 下一步：不要重复提交控制请求；刷新运行状态后重新点击启动机器人。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "start_not_applied"
+    },
+    "output": {
+     "kind": "start_not_applied",
+     "title": "机器人尚未启动",
+     "reason": "运行状态已确认仍为停止，未创建新的 Paper 委托。",
+     "action": "检查行情与启动条件后重新生成预览。",
+     "text": "机器人尚未启动：运行状态已确认仍为停止，未创建新的 Paper 委托。 下一步：检查行情与启动条件后重新生成预览。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "control_outcome_unknown"
+    },
+    "output": {
+     "kind": "control_outcome_unknown",
+     "title": "操作结果仍未确认",
+     "reason": "浏览器响应中断后，控制审计回执和运行状态仍不足以确认操作结果。",
+     "action": "不要重复点击；刷新运行状态，确认控制回执或请先安全停止。",
+     "text": "操作结果仍未确认：浏览器响应中断后，控制审计回执和运行状态仍不足以确认操作结果。 下一步：不要重复点击；刷新运行状态，确认控制回执或请先安全停止。"
+    }
+   },
+   {
+    "input": {
+     "message": "raw backend detail",
+     "status": 400,
+     "code": "control_request_rejected"
+    },
+    "output": {
+     "kind": "control_request_rejected",
+     "title": "操作未完成",
+     "reason": "请求未通过当前控制条件。",
+     "action": "按页面提示修改参数或恢复依赖后重试；未确认成功前不会假定订单已创建。",
+     "text": "操作未完成：请求未通过当前控制条件。 下一步：按页面提示修改参数或恢复依赖后重试；未确认成功前不会假定订单已创建。"
+    }
+   },
+   {
+    "input": {
+     "message": "Error 1033",
+     "status": 530,
+     "code": "unexpected_content_type"
+    },
+    "output": {
+     "kind": "cloudflare_tunnel_unavailable",
+     "title": "Cloudflare 隧道不可达",
+     "reason": "浏览器已到达 Cloudflare，但隧道未能连接本地 Dashboard（HTTP 530/1033）。",
+     "action": "检查或等待 Cloudflare Tunnel 恢复后刷新；这不会改变本地 Paper 委托。",
+     "text": "Cloudflare 隧道不可达：浏览器已到达 Cloudflare，但隧道未能连接本地 Dashboard（HTTP 530/1033）。 下一步：检查或等待 Cloudflare Tunnel 恢复后刷新；这不会改变本地 Paper 委托。"
+    }
+   },
+   {
+    "input": {
+     "message": "cloudflare tunnel error 1033",
+     "status": 400,
+     "code": "x"
+    },
+    "output": {
+     "kind": "cloudflare_tunnel_unavailable",
+     "title": "Cloudflare 隧道不可达",
+     "reason": "浏览器已到达 Cloudflare，但隧道未能连接本地 Dashboard（HTTP 530/1033）。",
+     "action": "检查或等待 Cloudflare Tunnel 恢复后刷新；这不会改变本地 Paper 委托。",
+     "text": "Cloudflare 隧道不可达：浏览器已到达 Cloudflare，但隧道未能连接本地 Dashboard（HTTP 530/1033）。 下一步：检查或等待 Cloudflare Tunnel 恢复后刷新；这不会改变本地 Paper 委托。"
+    }
+   },
+   {
+    "input": {
+     "message": "boom",
+     "status": 400,
+     "code": "y",
+     "details": {
+      "body": {
+       "detail": "fapi.binance.com timeout"
+      }
+     }
+    },
+    "output": {
+     "kind": "binance_upstream_unavailable",
+     "title": "Binance USD-M 行情上游不可用",
+     "reason": "Dashboard 无法取得执行场所的可信实时行情。",
+     "action": "已保留最后可信 K 线时仅供查看；等待行情恢复后重新预览或启动，禁止新开仓。",
+     "text": "Binance USD-M 行情上游不可用：Dashboard 无法取得执行场所的可信实时行情。 下一步：已保留最后可信 K 线时仅供查看；等待行情恢复后重新预览或启动，禁止新开仓。"
+    }
+   },
+   {
+    "input": {
+     "message": "datafeed stale",
+     "status": 409,
+     "code": "z"
+    },
+    "output": {
+     "kind": "binance_upstream_unavailable",
+     "title": "Binance USD-M 行情上游不可用",
+     "reason": "Dashboard 无法取得执行场所的可信实时行情。",
+     "action": "已保留最后可信 K 线时仅供查看；等待行情恢复后重新预览或启动，禁止新开仓。",
+     "text": "Binance USD-M 行情上游不可用：Dashboard 无法取得执行场所的可信实时行情。 下一步：已保留最后可信 K 线时仅供查看；等待行情恢复后重新预览或启动，禁止新开仓。"
+    }
+   },
+   {
+    "input": {
+     "message": "paper start did not accept the complete grid",
+     "status": 502,
+     "code": "execution_incomplete"
+    },
+    "output": {
+     "kind": "execution_grid_rolled_back",
+     "title": "网格未被完整接受，已安全回滚",
+     "reason": "执行层没有接受完整网格；可能短暂收到部分回执，但控制面会撤回并拒绝启动。",
+     "action": "刷新当前委托与持仓；确认均为零后修改参数或检查执行器，再重新启动。",
+     "text": "网格未被完整接受，已安全回滚：执行层没有接受完整网格；可能短暂收到部分回执，但控制面会撤回并拒绝启动。 下一步：刷新当前委托与持仓；确认均为零后修改参数或检查执行器，再重新启动。"
+    }
+   },
+   {
+    "input": {
+     "message": "partial grid was accepted",
+     "status": 409,
+     "code": "q"
+    },
+    "output": {
+     "kind": "execution_grid_rolled_back",
+     "title": "网格未被完整接受，已安全回滚",
+     "reason": "执行层没有接受完整网格；可能短暂收到部分回执，但控制面会撤回并拒绝启动。",
+     "action": "刷新当前委托与持仓；确认均为零后修改参数或检查执行器，再重新启动。",
+     "text": "网格未被完整接受，已安全回滚：执行层没有接受完整网格；可能短暂收到部分回执，但控制面会撤回并拒绝启动。 下一步：刷新当前委托与持仓；确认均为零后修改参数或检查执行器，再重新启动。"
+    }
+   },
+   {
+    "input": {
+     "message": "internal",
+     "status": 500,
+     "code": "http_error"
+    },
+    "output": {
+     "kind": "dashboard_service_unavailable",
+     "title": "Dashboard 服务暂不可用",
+     "reason": "请求已到达 Dashboard 边界，但服务返回 HTTP 500。",
+     "action": "稍后刷新；若持续发生，重启本地 Dashboard 服务后重新读取。",
+     "text": "Dashboard 服务暂不可用：请求已到达 Dashboard 边界，但服务返回 HTTP 500。 下一步：稍后刷新；若持续发生，重启本地 Dashboard 服务后重新读取。"
+    }
+   },
+   {
+    "input": {
+     "message": "bad gateway",
+     "status": 502,
+     "code": "gateway_failure"
+    },
+    "output": {
+     "kind": "dashboard_service_unavailable",
+     "title": "Dashboard 服务暂不可用",
+     "reason": "请求已到达 Dashboard 边界，但服务返回 HTTP 502。",
+     "action": "稍后刷新；若持续发生，重启本地 Dashboard 服务后重新读取。",
+     "text": "Dashboard 服务暂不可用：请求已到达 Dashboard 边界，但服务返回 HTTP 502。 下一步：稍后刷新；若持续发生，重启本地 Dashboard 服务后重新读取。"
+    }
+   },
+   {
+    "input": {
+     "message": "private RuntimeError detail",
+     "status": 400,
+     "code": "future_code"
+    },
+    "output": {
+     "kind": "control_request_rejected",
+     "title": "操作未完成",
+     "reason": "请求未通过当前控制条件。",
+     "action": "按页面提示修改参数或恢复依赖后重试；未确认成功前不会假定订单已创建。",
+     "text": "操作未完成：请求未通过当前控制条件。 下一步：按页面提示修改参数或恢复依赖后重试；未确认成功前不会假定订单已创建。"
+    }
+   },
+   {
+    "input": {
+     "message": "",
+     "status": 404,
+     "code": ""
+    },
+    "output": {
+     "kind": "control_request_rejected",
+     "title": "操作未完成",
+     "reason": "请求未通过当前控制条件。",
+     "action": "按页面提示修改参数或恢复依赖后重试；未确认成功前不会假定订单已创建。",
+     "text": "操作未完成：请求未通过当前控制条件。 下一步：按页面提示修改参数或恢复依赖后重试；未确认成功前不会假定订单已创建。"
+    }
+   },
+   {
+    "input": "plain string error",
+    "output": {
+     "kind": "dashboard_response_unconfirmed",
+     "title": "Dashboard 响应未收到",
+     "reason": "浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。",
+     "action": "不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。",
+     "text": "Dashboard 响应未收到：浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。 下一步：不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。"
+    }
+   },
+   {
+    "input": null,
+    "output": {
+     "kind": "dashboard_response_unconfirmed",
+     "title": "Dashboard 响应未收到",
+     "reason": "浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。",
+     "action": "不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。",
+     "text": "Dashboard 响应未收到：浏览器未收到 Dashboard 的响应；后台是否已收到请求、Paper 是否已改变，当前无法确认。 下一步：不要重复点击控制按钮；系统会核对真实运行状态。读取请求可刷新后重试。"
+    }
+   }
+  ],
+  "operatorFailure": [
+   {
+    "input": [
+     "start_not_applied",
+     ""
+    ],
+    "output": {
+     "kind": "start_not_applied",
+     "title": "机器人尚未启动",
+     "reason": "运行状态已确认仍为停止，未创建新的 Paper 委托。",
+     "action": "检查行情与启动条件后重新生成预览。",
+     "text": "机器人尚未启动：运行状态已确认仍为停止，未创建新的 Paper 委托。 下一步：检查行情与启动条件后重新生成预览。"
+    }
+   },
+   {
+    "input": [
+     "start_not_applied",
+     "custom"
+    ],
+    "output": {
+     "kind": "start_not_applied",
+     "title": "机器人尚未启动",
+     "reason": "custom",
+     "action": "检查行情与启动条件后重新生成预览。",
+     "text": "机器人尚未启动：custom 下一步：检查行情与启动条件后重新生成预览。"
+    }
+   },
+   {
+    "input": [
+     "nope",
+     ""
+    ],
+    "output": {
+     "kind": "nope",
+     "title": "操作未完成",
+     "reason": "请求未通过当前控制条件。",
+     "action": "按页面提示修改参数或恢复依赖后重试；未确认成功前不会假定订单已创建。",
+     "text": "操作未完成：请求未通过当前控制条件。 下一步：按页面提示修改参数或恢复依赖后重试；未确认成功前不会假定订单已创建。"
+    }
+   }
+  ],
+  "apiFailure": [
+   {
+    "input": [
+     "m"
+    ],
+    "output": {
+     "message": "m",
+     "status": 0,
+     "code": "",
+     "details": {}
+    }
+   },
+   {
+    "input": [
+     "m",
+     401,
+     "c"
+    ],
+    "output": {
+     "message": "m",
+     "status": 401,
+     "code": "c",
+     "details": {}
+    }
+   },
+   {
+    "input": [
+     "m",
+     500,
+     "c",
+     {
+      "a": 1
+     }
+    ],
+    "output": {
+     "message": "m",
+     "status": 500,
+     "code": "c",
+     "details": {
+      "a": 1
+     }
+    }
+   }
+  ],
+  "marketFailure": [
+   {
+    "input": {
+     "access_issues": [
+      "HTTP 503 upstream_error"
+     ],
+     "status": "blocked"
+    },
+    "output": {
+     "message": "HTTP 503 upstream_error",
+     "status": 503,
+     "code": "binance_upstream_error",
+     "details": {
+      "market": {
+       "access_issues": [
+        "HTTP 503 upstream_error"
+       ],
+       "status": "blocked"
+      }
+     }
+    }
+   },
+   {
+    "input": {
+     "operational_error": "binance_usdm down"
+    },
+    "output": {
+     "message": "binance_usdm down",
+     "status": 0,
+     "code": "binance_upstream_error",
+     "details": {
+      "market": {
+       "operational_error": "binance_usdm down"
+      }
+     }
+    }
+   },
+   {
+    "input": {
+     "error": "plain error",
+     "message": "and a message"
+    },
+    "output": {
+     "message": "plain error / and a message",
+     "status": 0,
+     "code": "market_unavailable",
+     "details": {
+      "market": {
+       "error": "plain error",
+       "message": "and a message"
+      }
+     }
+    }
+   },
+   {
+    "input": {
+     "status": "stale"
+    },
+    "output": {
+     "message": "stale",
+     "status": 0,
+     "code": "market_unavailable",
+     "details": {
+      "market": {
+       "status": "stale"
+      }
+     }
+    }
+   },
+   {
+    "input": {},
+    "output": {
+     "message": "unknown",
+     "status": 0,
+     "code": "market_unavailable",
+     "details": {
+      "market": {}
+     }
+    }
+   },
+   {
+    "input": null,
+    "output": {
+     "message": "unknown",
+     "status": 0,
+     "code": "market_unavailable",
+     "details": {
+      "market": null
+     }
+    }
+   }
+  ],
+  "trust": [
+   {
+    "input": null,
+    "isFresh": false,
+    "isTrustedHeaderMarket": false,
+    "statusText": "异常·停止新开仓"
+   },
+   {
+    "input": {},
+    "isFresh": false,
+    "isTrustedHeaderMarket": false,
+    "statusText": "异常·停止新开仓"
+   },
+   {
+    "input": {
+     "trusted": true
+    },
+    "isFresh": true,
+    "isTrustedHeaderMarket": false,
+    "statusText": "实时·可信"
+   },
+   {
+    "input": {
+     "trusted": "true"
+    },
+    "isFresh": false,
+    "isTrustedHeaderMarket": false,
+    "statusText": "异常·停止新开仓"
+   },
+   {
+    "input": {
+     "trusted": 1
+    },
+    "isFresh": false,
+    "isTrustedHeaderMarket": false,
+    "statusText": "异常·停止新开仓"
+   },
+   {
+    "input": {
+     "trusted": false,
+     "retained_last_trusted": true
+    },
+    "isFresh": false,
+    "isTrustedHeaderMarket": false,
+    "statusText": "已阻断·保留最后可信K线"
+   },
+   {
+    "input": {
+     "trusted": true,
+     "timeframe": "1m"
+    },
+    "isFresh": true,
+    "isTrustedHeaderMarket": true,
+    "statusText": "实时·可信"
+   },
+   {
+    "input": {
+     "trusted": true,
+     "timeframe": "30m"
+    },
+    "isFresh": true,
+    "isTrustedHeaderMarket": false,
+    "statusText": "实时·可信"
+   },
+   {
+    "input": {
+     "trusted": false,
+     "timeframe": "1m"
+    },
+    "isFresh": false,
+    "isTrustedHeaderMarket": false,
+    "statusText": "异常·停止新开仓"
+   }
+  ],
+  "displayTradingPair": [
+   {
+    "input": {
+     "instrument_id": "BTC-USD-PERP"
+    },
+    "output": "BTC / USD"
+   },
+   {
+    "input": {
+     "instrument_id": "btc-usd-perp"
+    },
+    "output": "BTC / USD"
+   },
+   {
+    "input": {
+     "provider_symbol": "XAU/USDT"
+    },
+    "output": "XAU / USDT"
+   },
+   {
+    "input": {
+     "provider_symbol": "xau / usdt"
+    },
+    "output": "XAU / USDT"
+   },
+   {
+    "input": {
+     "provider_symbol": "XAG-USDT-SWAP"
+    },
+    "output": "XAG / USDT"
+   },
+   {
+    "input": {
+     "provider_symbol": "BTC-PERP"
+    },
+    "output": "BTC-PERP"
+   },
+   {
+    "input": {
+     "provider_symbol": "XAUUSDT"
+    },
+    "output": "XAU / USDT"
+   },
+   {
+    "input": {
+     "provider_symbol": "ETHBTC"
+    },
+    "output": "ETH / BTC"
+   },
+   {
+    "input": {
+     "provider_symbol": "PAXGUSDC"
+    },
+    "output": "PAXG / USDC"
+   },
+   {
+    "input": {
+     "provider_symbol": "GOLD"
+    },
+    "output": "GOLD"
+   },
+   {
+    "input": {
+     "provider_symbol": "USDT"
+    },
+    "output": "USDT"
+   },
+   {
+    "input": {},
+    "output": "--"
+   },
+   {
+    "input": null,
+    "output": "--"
+   }
+  ],
+  "sameVenueMarket": [
+   {
+    "input": [
+     {
+      "provider_symbol": "xauusdt",
+      "provider": "binance"
+     },
+     {
+      "provider_symbol": "XAUUSDT",
+      "provider": "binance"
+     }
+    ],
+    "output": true
+   },
+   {
+    "input": [
+     {
+      "provider_symbol": "XAUUSDT",
+      "provider": "binance"
+     },
+     {
+      "provider_symbol": "XAUUSDT",
+      "provider": "okx"
+     }
+    ],
+    "output": false
+   },
+   {
+    "input": [
+     {
+      "provider_symbol": "XAUUSDT"
+     },
+     {
+      "provider_symbol": "XAUUSDT"
+     }
+    ],
+    "output": false
+   },
+   {
+    "input": [
+     null,
+     null
+    ],
+    "output": false
+   }
+  ],
+  "dashboardMarketBarsUrl": [
+   {
+    "selection": null,
+    "args": {
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "limit": 240
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=GOLD&timeframe=1m&limit=240"
+   },
+   {
+    "selection": null,
+    "args": {
+     "symbol": "",
+     "timeframe": "1d",
+     "limit": 2
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=GOLD&timeframe=1d&limit=2"
+   },
+   {
+    "selection": null,
+    "args": {
+     "symbol": "XAU&X",
+     "timeframe": "30m",
+     "limit": 240,
+     "end": "2026-07-21T08:00:00+00:00"
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=XAU%26X&timeframe=30m&limit=240&end=2026-07-21T08%3A00%3A00%2B00%3A00"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "okx.paper",
+     "instrument_id": "XAU-USDT-SWAP.OKX"
+    },
+    "args": {
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "limit": 240
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=GOLD&timeframe=1m&limit=240"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "okx.paper",
+     "instrument_id": "XAU-USDT-SWAP.OKX"
+    },
+    "args": {
+     "symbol": "",
+     "timeframe": "1d",
+     "limit": 2
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=GOLD&timeframe=1d&limit=2"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "okx.paper",
+     "instrument_id": "XAU-USDT-SWAP.OKX"
+    },
+    "args": {
+     "symbol": "XAU&X",
+     "timeframe": "30m",
+     "limit": 240,
+     "end": "2026-07-21T08:00:00+00:00"
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=XAU%26X&timeframe=30m&limit=240&end=2026-07-21T08%3A00%3A00%2B00%3A00"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "hyperliquid.testnet",
+     "instrument_id": "BTC-USD-PERP"
+    },
+    "args": {
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "limit": 240
+    },
+    "binding": {
+     "venueProfileId": "hyperliquid.testnet",
+     "instrumentId": "BTC-USD-PERP",
+     "symbol": "BTC"
+    },
+    "output": "/api/dashboard-control/market-bars?venue_profile_id=hyperliquid.testnet&instrument_id=BTC-USD-PERP&timeframe=1m&limit=240"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "hyperliquid.testnet",
+     "instrument_id": "BTC-USD-PERP"
+    },
+    "args": {
+     "symbol": "",
+     "timeframe": "1d",
+     "limit": 2
+    },
+    "binding": {
+     "venueProfileId": "hyperliquid.testnet",
+     "instrumentId": "BTC-USD-PERP",
+     "symbol": "BTC"
+    },
+    "output": "/api/dashboard-control/market-bars?venue_profile_id=hyperliquid.testnet&instrument_id=BTC-USD-PERP&timeframe=1d&limit=2"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "hyperliquid.testnet",
+     "instrument_id": "BTC-USD-PERP"
+    },
+    "args": {
+     "symbol": "XAU&X",
+     "timeframe": "30m",
+     "limit": 240,
+     "end": "2026-07-21T08:00:00+00:00"
+    },
+    "binding": {
+     "venueProfileId": "hyperliquid.testnet",
+     "instrumentId": "BTC-USD-PERP",
+     "symbol": "BTC"
+    },
+    "output": "/api/dashboard-control/market-bars?venue_profile_id=hyperliquid.testnet&instrument_id=BTC-USD-PERP&timeframe=30m&limit=240&end=2026-07-21T08%3A00%3A00%2B00%3A00"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "hyperliquid.testnet"
+    },
+    "args": {
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "limit": 240
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=GOLD&timeframe=1m&limit=240"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "hyperliquid.testnet"
+    },
+    "args": {
+     "symbol": "",
+     "timeframe": "1d",
+     "limit": 2
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=GOLD&timeframe=1d&limit=2"
+   },
+   {
+    "selection": {
+     "venue_profile_id": "hyperliquid.testnet"
+    },
+    "args": {
+     "symbol": "XAU&X",
+     "timeframe": "30m",
+     "limit": 240,
+     "end": "2026-07-21T08:00:00+00:00"
+    },
+    "binding": null,
+    "output": "/api/dualtrack/market/bars?symbol=XAU%26X&timeframe=30m&limit=240&end=2026-07-21T08%3A00%3A00%2B00%3A00"
+   }
+  ],
+  "marketTodayChangePct": [
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": 1.0000000000000009,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 3960,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 3960
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": -1.0000000000000009,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-20T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-20T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": null,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "okx",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": null,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "4h",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": null,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 0
+       }
+      ]
+     }
+    ],
+    "output": null,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "30m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": null,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": false,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": null,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": false,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": null,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     null
+    ],
+    "output": null,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4100
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": "2026-07-21T00:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T00:00:00+00:00",
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": 2.499999999999991,
+    "dayKey": "2026-07-21"
+   },
+   {
+    "input": [
+     {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": 1784620800000,
+      "bars": [
+       {
+        "timestamp": 1784620800000,
+        "close": 4040
+       }
+      ]
+     },
+     {
+      "trusted": true,
+      "timeframe": "1d",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_timestamp": 1784592000,
+      "bars": [
+       {
+        "timestamp": 1784592000,
+        "open": 4000
+       }
+      ]
+     }
+    ],
+    "output": 1.0000000000000009,
+    "dayKey": "2026-07-21"
+   }
+  ],
+  "nextHeaderPriceDirection": [
+   {
+    "input": [
+     null,
+     1,
+     "up"
+    ],
+    "output": "up"
+   },
+   {
+    "input": [
+     1,
+     null,
+     "down"
+    ],
+    "output": "down"
+   },
+   {
+    "input": [
+     1,
+     1,
+     "up"
+    ],
+    "output": "up"
+   },
+   {
+    "input": [
+     1,
+     2,
+     ""
+    ],
+    "output": "up"
+   },
+   {
+    "input": [
+     2,
+     1,
+     "up"
+    ],
+    "output": "down"
+   },
+   {
+    "input": [
+     1,
+     2
+    ],
+    "output": "up"
+   }
+  ],
+  "updateHeaderMarket": {
+   "daily": {
+    "trusted": true,
+    "timeframe": "1d",
+    "provider": "binance",
+    "provider_symbol": "XAUUSDT",
+    "latest_timestamp": "2026-07-21T00:00:00+00:00",
+    "bars": [
+     {
+      "timestamp": "2026-07-21T00:00:00+00:00",
+      "open": 4000
+     }
+    ]
+   },
+   "steps": [
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4040,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4040
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAU / USDT",
+      "price": "4,040",
+      "priceClass": "",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "+1.00%",
+      "changeClass": "header-change pos",
+      "changeTitle": "交易所当日开盘价至今"
+     },
+     "memo": {
+      "identity": "binance|XAUUSDT",
+      "lastPrice": 4040,
+      "direction": ""
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4041,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4041
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAU / USDT",
+      "price": "4,041",
+      "priceClass": "tick-up",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "+1.03%",
+      "changeClass": "header-change pos",
+      "changeTitle": "交易所当日开盘价至今"
+     },
+     "memo": {
+      "identity": "binance|XAUUSDT",
+      "lastPrice": 4041,
+      "direction": "up"
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4041,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4041
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAU / USDT",
+      "price": "4,041",
+      "priceClass": "tick-up",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "+1.03%",
+      "changeClass": "header-change pos",
+      "changeTitle": "交易所当日开盘价至今"
+     },
+     "memo": {
+      "identity": "binance|XAUUSDT",
+      "lastPrice": 4041,
+      "direction": "up"
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4039.5,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4039.5
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAU / USDT",
+      "price": "4,039.5",
+      "priceClass": "tick-down",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "+0.99%",
+      "changeClass": "header-change pos",
+      "changeTitle": "交易所当日开盘价至今"
+     },
+     "memo": {
+      "identity": "binance|XAUUSDT",
+      "lastPrice": 4039.5,
+      "direction": "down"
+     }
+    },
+    {
+     "input": {
+      "trusted": false,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4100,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4100
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAU / USDT",
+      "price": "4,100",
+      "priceClass": "",
+      "priceTitle": "最新 1m 行情未通过可信门控",
+      "change": "--",
+      "changeClass": "header-change ",
+      "changeTitle": "交易所当日涨跌幅暂不可用"
+     },
+     "memo": {
+      "identity": "binance|XAUUSDT",
+      "lastPrice": 4039.5,
+      "direction": "down"
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": 4038,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4038
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAU / USDT",
+      "price": "4,038",
+      "priceClass": "tick-down",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "+0.95%",
+      "changeClass": "header-change pos",
+      "changeTitle": "交易所当日开盘价至今"
+     },
+     "memo": {
+      "identity": "binance|XAUUSDT",
+      "lastPrice": 4038,
+      "direction": "down"
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAGUSDT",
+      "latest_close": 4038,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4038
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAG / USDT",
+      "price": "4,038",
+      "priceClass": "",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "--",
+      "changeClass": "header-change ",
+      "changeTitle": "交易所当日涨跌幅暂不可用"
+     },
+     "memo": {
+      "identity": "binance|XAGUSDT",
+      "lastPrice": 4038,
+      "direction": ""
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "BINANCE",
+      "provider_symbol": "XAGUSDT",
+      "latest_close": 30.1,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 30.1
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAG / USDT",
+      "price": "30.1",
+      "priceClass": "tick-down",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "--",
+      "changeClass": "header-change ",
+      "changeTitle": "交易所当日涨跌幅暂不可用"
+     },
+     "memo": {
+      "identity": "binance|XAGUSDT",
+      "lastPrice": 30.1,
+      "direction": "down"
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "Binance",
+      "provider_symbol": "xagusdt",
+      "latest_close": 30.2,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 30.2
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAG / USDT",
+      "price": "30.2",
+      "priceClass": "tick-up",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "--",
+      "changeClass": "header-change ",
+      "changeTitle": "交易所当日涨跌幅暂不可用"
+     },
+     "memo": {
+      "identity": "binance|XAGUSDT",
+      "lastPrice": 30.2,
+      "direction": "up"
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "30m",
+      "provider": "Binance",
+      "provider_symbol": "xagusdt",
+      "latest_close": 31,
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 31
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAG / USDT",
+      "price": "31",
+      "priceClass": "",
+      "priceTitle": "最新 1m 行情未通过可信门控",
+      "change": "--",
+      "changeClass": "header-change ",
+      "changeTitle": "交易所当日涨跌幅暂不可用"
+     },
+     "memo": {
+      "identity": "binance|XAGUSDT",
+      "lastPrice": 30.2,
+      "direction": "up"
+     }
+    },
+    {
+     "input": null,
+     "view": {
+      "pair": "--",
+      "price": "--",
+      "priceClass": "",
+      "priceTitle": "最新 1m 行情未通过可信门控",
+      "change": "--",
+      "changeClass": "header-change ",
+      "changeTitle": "交易所当日涨跌幅暂不可用"
+     },
+     "memo": {
+      "identity": "|",
+      "lastPrice": null,
+      "direction": ""
+     }
+    },
+    {
+     "input": {},
+     "view": {
+      "pair": "--",
+      "price": "--",
+      "priceClass": "",
+      "priceTitle": "最新 1m 行情未通过可信门控",
+      "change": "--",
+      "changeClass": "header-change ",
+      "changeTitle": "交易所当日涨跌幅暂不可用"
+     },
+     "memo": {
+      "identity": "|",
+      "lastPrice": null,
+      "direction": ""
+     }
+    },
+    {
+     "input": {
+      "trusted": true,
+      "timeframe": "1m",
+      "provider": "binance",
+      "provider_symbol": "XAUUSDT",
+      "latest_close": "--",
+      "latest_timestamp": "2026-07-21T08:00:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": "--"
+       }
+      ]
+     },
+     "view": {
+      "pair": "XAU / USDT",
+      "price": "--",
+      "priceClass": "",
+      "priceTitle": "最新 1m 行情 · 2026-07-21 16:00",
+      "change": "--",
+      "changeClass": "header-change ",
+      "changeTitle": "交易所当日涨跌幅暂不可用"
+     },
+     "memo": {
+      "identity": "binance|XAUUSDT",
+      "lastPrice": null,
+      "direction": ""
+     }
+    }
+   ]
+  },
+  "mergeMarketBars": [
+   {
+    "input": [
+     null,
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ]
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     null
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ]
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": []
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ]
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:02:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001.5
+      },
+      {
+       "timestamp": "2026-07-21T08:02:00+00:00",
+       "close": 4002
+      }
+     ],
+     "bar_count": 3,
+     "oldest_timestamp": "2026-07-21T08:00:00+00:00"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "SILVER",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "SILVER",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:02:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001.5
+      },
+      {
+       "timestamp": "2026-07-21T08:02:00+00:00",
+       "close": 4002
+      }
+     ]
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "5m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "5m",
+     "latest_timestamp": "2026-07-21T08:02:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001.5
+      },
+      {
+       "timestamp": "2026-07-21T08:02:00+00:00",
+       "close": 4002
+      }
+     ]
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "",
+        "close": 1
+       },
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "x",
+      "bars": [
+       {
+        "close": 9
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "bar_count": 2,
+     "oldest_timestamp": "2026-07-21T08:00:00+00:00"
+    }
+   }
+  ],
+  "retainLastTrustedMarket": [
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     }
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "upstream timeout",
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "failed_refresh_status": "blocked"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "status": "error",
+      "message": "network"
+     }
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "network",
+     "access_issues": [
+      "network"
+     ],
+     "failed_refresh_status": "error"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "operational_error": "op",
+      "error": "e"
+     }
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "op",
+     "access_issues": [
+      "op"
+     ],
+     "failed_refresh_status": "error"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "access_issues": [
+       "",
+       "a",
+       "b"
+      ]
+     }
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "a / b",
+     "access_issues": [
+      "a",
+      "b"
+     ],
+     "failed_refresh_status": "error"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     null
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "最新行情刷新未通过可信门控",
+     "access_issues": [
+      "最新行情刷新未通过可信门控"
+     ],
+     "failed_refresh_status": "error"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ],
+      "is_synthetic": true
+     },
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     }
+    ],
+    "output": {
+     "status": "blocked",
+     "trusted": false,
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "bars": []
+    }
+   },
+   {
+    "input": [
+     null,
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     }
+    ],
+    "output": {
+     "status": "blocked",
+     "trusted": false,
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "bars": []
+    }
+   },
+   {
+    "input": [
+     {
+      "bars": []
+     },
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     }
+    ],
+    "output": {
+     "status": "blocked",
+     "trusted": false,
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "bars": []
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {}
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "最新行情刷新未通过可信门控",
+     "access_issues": [
+      "最新行情刷新未通过可信门控"
+     ],
+     "failed_refresh_status": "error"
+    }
+   }
+  ],
+  "acceptMarketSnapshot": [
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:02:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001.5
+      },
+      {
+       "timestamp": "2026-07-21T08:02:00+00:00",
+       "close": 4002
+      }
+     ],
+     "bar_count": 3,
+     "oldest_timestamp": "2026-07-21T08:00:00+00:00",
+     "retained_last_trusted": false,
+     "last_trusted_timestamp": null,
+     "operational_error": "",
+     "failed_refresh_status": null
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     },
+     {
+      "status": "error",
+      "trusted": false,
+      "fresh": false,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ],
+      "retained_last_trusted": true,
+      "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+      "operational_error": "upstream timeout",
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "failed_refresh_status": "blocked"
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:02:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001.5
+      },
+      {
+       "timestamp": "2026-07-21T08:02:00+00:00",
+       "close": 4002
+      }
+     ],
+     "retained_last_trusted": false,
+     "last_trusted_timestamp": null,
+     "operational_error": "",
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "failed_refresh_status": null,
+     "bar_count": 3,
+     "oldest_timestamp": "2026-07-21T08:00:00+00:00"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "upstream timeout",
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "failed_refresh_status": "blocked"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": []
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "最新行情刷新未通过可信门控",
+     "access_issues": [
+      "最新行情刷新未通过可信门控"
+     ],
+     "failed_refresh_status": "ready"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": "true",
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "最新行情刷新未通过可信门控",
+     "access_issues": [
+      "最新行情刷新未通过可信门控"
+     ],
+     "failed_refresh_status": "ready"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     },
+     null
+    ],
+    "output": {
+     "status": "blocked",
+     "trusted": false,
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "bars": []
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     },
+     null
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:02:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001.5
+      },
+      {
+       "timestamp": "2026-07-21T08:02:00+00:00",
+       "close": 4002
+      }
+     ],
+     "retained_last_trusted": false,
+     "last_trusted_timestamp": null,
+     "operational_error": "",
+     "failed_refresh_status": null
+    }
+   }
+  ],
+  "reconcileReadModelMarket": [
+   {
+    "input": [
+     null,
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ]
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ]
+     },
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ]
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "error",
+      "trusted": false,
+      "fresh": false,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ],
+      "retained_last_trusted": true,
+      "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+      "operational_error": "upstream timeout",
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "failed_refresh_status": "blocked"
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:02:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001.5
+      },
+      {
+       "timestamp": "2026-07-21T08:02:00+00:00",
+       "close": 4002
+      }
+     ],
+     "retained_last_trusted": false,
+     "last_trusted_timestamp": null,
+     "operational_error": "",
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "failed_refresh_status": null,
+     "bar_count": 3,
+     "oldest_timestamp": "2026-07-21T08:00:00+00:00"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "error",
+      "trusted": false,
+      "fresh": false,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:01:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:00:00+00:00",
+        "close": 4000
+       },
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001
+       }
+      ],
+      "retained_last_trusted": true,
+      "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+      "operational_error": "upstream timeout",
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "failed_refresh_status": "blocked"
+     },
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     }
+    ],
+    "output": {
+     "status": "error",
+     "trusted": false,
+     "fresh": false,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:01:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:00:00+00:00",
+       "close": 4000
+      },
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001
+      }
+     ],
+     "retained_last_trusted": true,
+     "last_trusted_timestamp": "2026-07-21T08:01:00+00:00",
+     "operational_error": "upstream timeout",
+     "access_issues": [
+      "upstream timeout"
+     ],
+     "failed_refresh_status": "blocked"
+    }
+   },
+   {
+    "input": [
+     {
+      "status": "blocked",
+      "trusted": false,
+      "access_issues": [
+       "upstream timeout"
+      ],
+      "bars": []
+     },
+     {
+      "status": "ready",
+      "trusted": true,
+      "fresh": true,
+      "symbol": "GOLD",
+      "timeframe": "1m",
+      "latest_timestamp": "2026-07-21T08:02:00+00:00",
+      "bars": [
+       {
+        "timestamp": "2026-07-21T08:01:00+00:00",
+        "close": 4001.5
+       },
+       {
+        "timestamp": "2026-07-21T08:02:00+00:00",
+        "close": 4002
+       }
+      ]
+     }
+    ],
+    "output": {
+     "status": "ready",
+     "trusted": true,
+     "fresh": true,
+     "symbol": "GOLD",
+     "timeframe": "1m",
+     "latest_timestamp": "2026-07-21T08:02:00+00:00",
+     "bars": [
+      {
+       "timestamp": "2026-07-21T08:01:00+00:00",
+       "close": 4001.5
+      },
+      {
+       "timestamp": "2026-07-21T08:02:00+00:00",
+       "close": 4002
+      }
+     ]
+    }
+   },
+   {
+    "input": [
+     null,
+     null
+    ],
+    "output": null
+   }
+  ],
+  "reconcileOrderLifecycle": [
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "c1",
+      "orders": [
+       {
+        "order_id": "a",
+        "state": "submitted",
+        "state_rank": 1,
+        "state_revision": 1
+       },
+       {
+        "order_id": "b",
+        "state": "accepted",
+        "state_rank": 2,
+        "state_revision": 1
+       },
+       {
+        "order_id": "",
+        "state": "pending",
+        "state_rank": 0
+       },
+       {
+        "state": "pending"
+       }
+      ]
+     }
+    },
+    "cycleId": "c1",
+    "lifecycle": {
+     "cycleId": "c1",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "submitted",
+         "state_rank": 1,
+         "state_revision": 1
+        }
+       ],
+       [
+        "b",
+        {
+         "order_id": "b",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 1
+        }
+       ]
+      ]
+     },
+     "anonymous": [
+      {
+       "order_id": "",
+       "state": "pending",
+       "state_rank": 0
+      },
+      {
+       "state": "pending"
+      }
+     ],
+     "currentIds": {
+      "set": [
+       "a",
+       "b"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "c1",
+      "orders": [
+       {
+        "order_id": "a",
+        "state": "accepted",
+        "state_rank": 2,
+        "state_revision": 2
+       },
+       {
+        "order_id": "b",
+        "state": "submitted",
+        "state_rank": 1,
+        "state_revision": 2
+       }
+      ]
+     }
+    },
+    "cycleId": "c1",
+    "lifecycle": {
+     "cycleId": "c1",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 2
+        }
+       ],
+       [
+        "b",
+        {
+         "order_id": "b",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 1
+        }
+       ]
+      ]
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": [
+       "a",
+       "b"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "c1",
+      "orders": [
+       {
+        "order_id": "a",
+        "state": "accepted",
+        "state_rank": 2,
+        "state_revision": 1,
+        "note": "older revision"
+       },
+       {
+        "order_id": "b",
+        "state": "accepted",
+        "state_rank": 2,
+        "state_revision": 3,
+        "note": "same state newer"
+       }
+      ]
+     }
+    },
+    "cycleId": "c1",
+    "lifecycle": {
+     "cycleId": "c1",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 2
+        }
+       ],
+       [
+        "b",
+        {
+         "order_id": "b",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 3,
+         "note": "same state newer"
+        }
+       ]
+      ]
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": [
+       "a",
+       "b"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "c1",
+      "orders": [
+       {
+        "order_id": "a",
+        "state": "cancel_pending",
+        "state_rank": 2,
+        "state_revision": 3
+       },
+       {
+        "order_id": "b",
+        "state": "filled",
+        "state_rank": 2,
+        "state_revision": 2
+       }
+      ]
+     }
+    },
+    "cycleId": "c1",
+    "lifecycle": {
+     "cycleId": "c1",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "cancel_pending",
+         "state_rank": 2,
+         "state_revision": 3
+        }
+       ],
+       [
+        "b",
+        {
+         "order_id": "b",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 3,
+         "note": "same state newer"
+        }
+       ]
+      ]
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": [
+       "a",
+       "b"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "c1",
+      "orders": [
+       {
+        "order_id": "a",
+        "state": "cancel_pending",
+        "state_rank": 2,
+        "state_revision": 3,
+        "note": "refresh"
+       },
+       {
+        "order_id": "c",
+        "state": "new",
+        "state_rank": "x"
+       },
+       {
+        "order_id": " d ",
+        "state": "submitted",
+        "state_rank": 1
+       }
+      ]
+     }
+    },
+    "cycleId": "c1",
+    "lifecycle": {
+     "cycleId": "c1",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "cancel_pending",
+         "state_rank": 2,
+         "state_revision": 3,
+         "note": "refresh"
+        }
+       ],
+       [
+        "b",
+        {
+         "order_id": "b",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 3,
+         "note": "same state newer"
+        }
+       ],
+       [
+        "c",
+        {
+         "order_id": "c",
+         "state": "new",
+         "state_rank": "x"
+        }
+       ],
+       [
+        "d",
+        {
+         "order_id": " d ",
+         "state": "submitted",
+         "state_rank": 1
+        }
+       ]
+      ]
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": [
+       "a",
+       "c",
+       "d"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "c1",
+      "orders": [
+       {
+        "order_id": "c",
+        "state": "accepted",
+        "state_rank": 1
+       },
+       {
+        "order_id": "a",
+        "state": "x",
+        "state_rank": 2
+       }
+      ]
+     }
+    },
+    "cycleId": "c1",
+    "lifecycle": {
+     "cycleId": "c1",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "cancel_pending",
+         "state_rank": 2,
+         "state_revision": 3,
+         "note": "refresh"
+        }
+       ],
+       [
+        "b",
+        {
+         "order_id": "b",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 3,
+         "note": "same state newer"
+        }
+       ],
+       [
+        "c",
+        {
+         "order_id": "c",
+         "state": "accepted",
+         "state_rank": 1
+        }
+       ],
+       [
+        "d",
+        {
+         "order_id": " d ",
+         "state": "submitted",
+         "state_rank": 1
+        }
+       ]
+      ]
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": [
+       "c",
+       "a"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "c1",
+      "orders": [
+       {
+        "order_id": "d",
+        "state": "accepted",
+        "state_rank": 2
+       },
+       {
+        "order_id": "d",
+        "state": "accepted",
+        "state_rank": 2,
+        "state_revision": 4
+       }
+      ]
+     }
+    },
+    "cycleId": "c1",
+    "lifecycle": {
+     "cycleId": "c1",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "cancel_pending",
+         "state_rank": 2,
+         "state_revision": 3,
+         "note": "refresh"
+        }
+       ],
+       [
+        "b",
+        {
+         "order_id": "b",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 3,
+         "note": "same state newer"
+        }
+       ],
+       [
+        "c",
+        {
+         "order_id": "c",
+         "state": "accepted",
+         "state_rank": 1
+        }
+       ],
+       [
+        "d",
+        {
+         "order_id": "d",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 4
+        }
+       ]
+      ]
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": [
+       "d"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "contract": {
+      "source_identities": {
+       "cycle_id": "c2"
+      }
+     },
+     "execution": {
+      "orders": [
+       {
+        "order_id": "a",
+        "state": "submitted",
+        "state_rank": 1,
+        "state_revision": 1
+       }
+      ]
+     }
+    },
+    "cycleId": "c2",
+    "lifecycle": {
+     "cycleId": "c2",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "submitted",
+         "state_rank": 1,
+         "state_revision": 1
+        }
+       ]
+      ]
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": [
+       "a"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "cycle": {
+      "cycle_id": "c2"
+     },
+     "execution": {
+      "orders": [
+       {
+        "order_id": "a",
+        "state": "accepted",
+        "state_rank": 2,
+        "state_revision": 2
+       }
+      ]
+     }
+    },
+    "cycleId": "c2",
+    "lifecycle": {
+     "cycleId": "c2",
+     "byId": {
+      "map": [
+       [
+        "a",
+        {
+         "order_id": "a",
+         "state": "accepted",
+         "state_rank": 2,
+         "state_revision": 2
+        }
+       ]
+      ]
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": [
+       "a"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "",
+      "orders": [
+       {
+        "order_id": "z",
+        "state": "accepted",
+        "state_rank": 2
+       },
+       {
+        "order_id": "",
+        "state": "x",
+        "state_rank": 1
+       }
+      ]
+     }
+    },
+    "cycleId": "",
+    "lifecycle": {
+     "cycleId": null,
+     "byId": {
+      "map": []
+     },
+     "anonymous": [
+      {
+       "order_id": "z",
+       "state": "accepted",
+       "state_rank": 2
+      },
+      {
+       "order_id": "",
+       "state": "x",
+       "state_rank": 1
+      }
+     ],
+     "currentIds": {
+      "set": [
+       "z"
+      ]
+     }
+    }
+   },
+   {
+    "input": {
+     "execution": {
+      "cycle_id": "c3",
+      "orders": "nope"
+     }
+    },
+    "cycleId": "c3",
+    "lifecycle": {
+     "cycleId": "c3",
+     "byId": {
+      "map": []
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": []
+     }
+    }
+   },
+   {
+    "input": null,
+    "cycleId": "",
+    "lifecycle": {
+     "cycleId": null,
+     "byId": {
+      "map": []
+     },
+     "anonymous": [],
+     "currentIds": {
+      "set": []
+     }
+    }
+   }
+  ],
+  "applyReadModel": [
+   {
+    "before": {
+     "supervisorAuditCycle": "",
+     "supervisorAudit": null,
+     "supervisorAuditRequest": null
+    },
+    "input": {
+     "execution": {
+      "cycle_id": "c1"
+     },
+     "runtime": {
+      "supervisor": {
+       "from": "read model"
+      }
+     }
+    },
+    "after": {
+     "supervisorAuditCycle": "",
+     "supervisorAudit": null,
+     "supervisorAuditRequest": null
+    },
+    "data": {
+     "execution": {
+      "cycle_id": "c1"
+     },
+     "runtime": {
+      "supervisor": {
+       "from": "read model"
+      }
+     }
+    }
+   },
+   {
+    "before": {
+     "supervisorAuditCycle": "c1",
+     "supervisorAudit": {
+      "current_cycle": {
+       "history": {
+        "complete": true
+       }
+      },
+      "from": "audit"
+     },
+     "supervisorAuditRequest": "pending"
+    },
+    "input": {
+     "execution": {
+      "cycle_id": "c1"
+     },
+     "runtime": {
+      "supervisor": {
+       "from": "read model"
+      }
+     }
+    },
+    "after": {
+     "supervisorAuditCycle": "c1",
+     "supervisorAudit": {
+      "current_cycle": {
+       "history": {
+        "complete": true
+       }
+      },
+      "from": "audit"
+     },
+     "supervisorAuditRequest": "pending"
+    },
+    "data": {
+     "execution": {
+      "cycle_id": "c1"
+     },
+     "runtime": {
+      "supervisor": {
+       "current_cycle": {
+        "history": {
+         "complete": true
+        }
+       },
+       "from": "audit"
+      }
+     }
+    }
+   },
+   {
+    "before": {
+     "supervisorAuditCycle": "c1",
+     "supervisorAudit": {
+      "current_cycle": {
+       "history": {
+        "complete": true
+       }
+      },
+      "from": "audit"
+     },
+     "supervisorAuditRequest": "pending"
+    },
+    "input": {
+     "execution": {
+      "cycle_id": "c1"
+     }
+    },
+    "after": {
+     "supervisorAuditCycle": "c1",
+     "supervisorAudit": {
+      "current_cycle": {
+       "history": {
+        "complete": true
+       }
+      },
+      "from": "audit"
+     },
+     "supervisorAuditRequest": "pending"
+    },
+    "data": {
+     "execution": {
+      "cycle_id": "c1"
+     }
+    }
+   },
+   {
+    "before": {
+     "supervisorAuditCycle": "c1",
+     "supervisorAudit": {
+      "current_cycle": {
+       "history": {
+        "complete": true
+       }
+      },
+      "from": "audit"
+     },
+     "supervisorAuditRequest": "pending"
+    },
+    "input": {
+     "execution": {
+      "cycle_id": "c2"
+     },
+     "runtime": {
+      "supervisor": {
+       "from": "read model"
+      }
+     }
+    },
+    "after": {
+     "supervisorAuditCycle": "",
+     "supervisorAudit": null,
+     "supervisorAuditRequest": null
+    },
+    "data": {
+     "execution": {
+      "cycle_id": "c2"
+     },
+     "runtime": {
+      "supervisor": {
+       "from": "read model"
+      }
+     }
+    }
+   },
+   {
+    "before": {
+     "supervisorAuditCycle": "c1",
+     "supervisorAudit": null,
+     "supervisorAuditRequest": "pending"
+    },
+    "input": {
+     "execution": {
+      "cycle_id": "c1"
+     },
+     "runtime": {}
+    },
+    "after": {
+     "supervisorAuditCycle": "c1",
+     "supervisorAudit": null,
+     "supervisorAuditRequest": "pending"
+    },
+    "data": {
+     "execution": {
+      "cycle_id": "c1"
+     },
+     "runtime": {}
+    }
+   },
+   {
+    "before": {
+     "supervisorAuditCycle": "c1",
+     "supervisorAudit": {
+      "current_cycle": {
+       "history": {
+        "complete": true
+       }
+      },
+      "from": "audit"
+     },
+     "supervisorAuditRequest": null
+    },
+    "input": {
+     "runtime": {
+      "supervisor": {
+       "from": "read model"
+      }
+     }
+    },
+    "after": {
+     "supervisorAuditCycle": "",
+     "supervisorAudit": null,
+     "supervisorAuditRequest": null
+    },
+    "data": {
+     "runtime": {
+      "supervisor": {
+       "from": "read model"
+      }
+     }
+    }
+   }
+  ],
+  "api": [
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "application/json",
+     "body": "{\"a\":1}"
+    },
+    "outcome": {
+     "ok": {
+      "a": 1
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "application/json",
+     "body": ""
+    },
+    "outcome": {
+     "ok": {}
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {
+     "method": "POST",
+     "body": "{\"x\":1}",
+     "headers": {
+      "Content-Type": "application/json",
+      "Accept": "text/html"
+     }
+    },
+    "response": {
+     "status": 200,
+     "contentType": "application/json; charset=utf-8",
+     "body": "{\"a\":2}"
+    },
+    "outcome": {
+     "ok": {
+      "a": 2
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "POST",
+      "body": "{\"x\":1}",
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "content-type",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": true,
+    "reauth": "1",
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "application/json",
+     "body": "{\"a\":1}"
+    },
+    "outcome": {
+     "ok": {
+      "a": 1
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": "1",
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "application/json",
+     "body": "{\"a\":1}"
+    },
+    "outcome": {
+     "ok": {
+      "a": 1
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": [
+     [
+      "goldbot-access-reauth",
+      "1"
+     ]
+    ]
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 401,
+     "contentType": "application/json",
+     "body": "{\"error\":\"x\"}"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "登录会话已过期，正在重新登录……",
+      "status": 401,
+      "code": "access_session_expired",
+      "details": {}
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": true,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 401,
+     "contentType": "application/json",
+     "body": "{}"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "登录会话已过期，正在重新登录……",
+      "status": 401,
+      "code": "access_session_expired",
+      "details": {}
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [
+     80
+    ],
+    "storage": [
+     [
+      "goldbot-access-reauth",
+      "1"
+     ]
+    ]
+   },
+   {
+    "publicObserver": true,
+    "reauth": "1",
+    "opts": {},
+    "response": {
+     "status": 401,
+     "contentType": "application/json",
+     "body": "{}"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "登录会话已过期，正在重新登录……",
+      "status": 401,
+      "code": "access_session_expired",
+      "details": {}
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": [
+     [
+      "goldbot-access-reauth",
+      "1"
+     ]
+    ]
+   },
+   {
+    "publicObserver": true,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "text/html",
+     "body": "<html><title>Sign in · Cloudflare Access</title>"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "登录会话已过期，正在重新登录……",
+      "status": 401,
+      "code": "access_session_expired",
+      "details": {}
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [
+     80
+    ],
+    "storage": [
+     [
+      "goldbot-access-reauth",
+      "1"
+     ]
+    ]
+   },
+   {
+    "publicObserver": true,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "text/html",
+     "body": "<title> Sign in</title>"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "登录会话已过期，正在重新登录……",
+      "status": 401,
+      "code": "access_session_expired",
+      "details": {}
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [
+     80
+    ],
+    "storage": [
+     [
+      "goldbot-access-reauth",
+      "1"
+     ]
+    ]
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "text/html",
+     "body": "<title>Sign in</title>"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "服务暂时返回了网页而不是数据（HTTP 200）。",
+      "status": 200,
+      "code": "unexpected_content_type",
+      "details": {
+       "content_type": "text/html",
+       "response_text": "<title>Sign in</title>",
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 530,
+     "contentType": "text/html",
+     "body": "<title>Error 1033</title><p>Cloudflare Tunnel error</p>"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "Cloudflare 隧道未能连接 Dashboard。",
+      "status": 530,
+      "code": "cloudflare_tunnel_unavailable",
+      "details": {
+       "content_type": "text/html",
+       "response_text": "<title>Error 1033</title><p>Cloudflare Tunnel error</p>",
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 502,
+     "contentType": "text/html",
+     "body": "<p>Bad gateway</p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "服务暂时返回了网页而不是数据（HTTP 502）。",
+      "status": 502,
+      "code": "unexpected_content_type",
+      "details": {
+       "content_type": "text/html",
+       "response_text": "<p>Bad gateway</p>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "",
+     "body": "plain"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "服务暂时返回了网页而不是数据（HTTP 200）。",
+      "status": 200,
+      "code": "unexpected_content_type",
+      "details": {
+       "content_type": "text/plain;charset=utf-8",
+       "response_text": "plain",
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 200,
+     "contentType": "application/json",
+     "body": "{oops"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "服务返回的数据格式异常，请刷新后重试。",
+      "status": 200,
+      "code": "invalid_json",
+      "details": {}
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 502,
+     "contentType": "application/json",
+     "body": "{\"error\":\"gateway_failure\"}"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "gateway_failure",
+      "status": 502,
+      "code": "gateway_failure",
+      "details": {
+       "body": {
+        "error": "gateway_failure"
+       },
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 409,
+     "contentType": "application/json",
+     "body": "{\"detail\":{\"error\":\"risk_blocked\",\"detail\":\"风险未确认\"}}"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "风险未确认",
+      "status": 409,
+      "code": "risk_blocked",
+      "details": {
+       "body": {
+        "detail": {
+         "error": "risk_blocked",
+         "detail": "风险未确认"
+        }
+       },
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 409,
+     "contentType": "application/json",
+     "body": "{\"detail\":{\"reject_reason\":\"stale_preview\"}}"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "请求失败（HTTP 409）",
+      "status": 409,
+      "code": "stale_preview",
+      "details": {
+       "body": {
+        "detail": {
+         "reject_reason": "stale_preview"
+        }
+       },
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 422,
+     "contentType": "application/json",
+     "body": "{\"detail\":\"plain string detail\",\"message\":\"msg wins\"}"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "msg wins",
+      "status": 422,
+      "code": "http_error",
+      "details": {
+       "body": {
+        "detail": "plain string detail",
+        "message": "msg wins"
+       },
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 500,
+     "contentType": "application/json",
+     "body": ""
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "请求失败（HTTP 500）",
+      "status": 500,
+      "code": "http_error",
+      "details": {
+       "body": {},
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "status": 404,
+     "contentType": "application/json",
+     "body": "[]"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "请求失败（HTTP 404）",
+      "status": 404,
+      "code": "http_error",
+      "details": {
+       "body": [],
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "throw": "Failed to fetch"
+    },
+    "outcome": {
+     "error": {
+      "name": "Error",
+      "message": "浏览器未收到 Dashboard 响应",
+      "status": 0,
+      "code": "dashboard_response_unconfirmed",
+      "details": {
+       "cause": "Failed to fetch",
+       "url": "/api/x"
+      }
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   },
+   {
+    "publicObserver": false,
+    "reauth": null,
+    "opts": {},
+    "response": {
+     "throw": "aborted",
+     "abort": true
+    },
+    "outcome": {
+     "error": {
+      "name": "AbortError",
+      "message": "aborted"
+     }
+    },
+    "calls": [
+     {
+      "url": "/api/x",
+      "method": "GET",
+      "body": null,
+      "credentials": "same-origin",
+      "headers": [
+       [
+        "accept",
+        "application/json"
+       ],
+       [
+        "x-requested-with",
+        "XMLHttpRequest"
+       ]
+      ]
+     }
+    ],
+    "timers": [],
+    "storage": []
+   }
+  ]
+ }
+}
