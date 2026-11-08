@@ -3,6 +3,7 @@
 #
 #   ops/deploy-paper.sh <sha>             fast-forward production, wait for the gate, restart the desk
 #   ops/deploy-paper.sh <sha> --dashboard also restart the GridMind dashboard (8765)
+#                                         (not for /trade's page or its files: the desk serves those, #1414)
 #   ops/deploy-paper.sh <sha> --dry-run   run every check, change nothing
 #
 # Refuses (exit 1, nothing changed) when:

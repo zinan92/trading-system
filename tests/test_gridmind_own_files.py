@@ -1,7 +1,7 @@
 """#1420: dashboard-gridmind.html keeps only its structure; its styles and scripts are files.
 
 Every file the page loads must exist and be forwarded by each server that carries the page:
-8765 (never cached), the desk's /trade relay and the cloud gateway. A path missing from one of
+8765 (never cached), the desk (which serves them itself since #1414) and the cloud gateway. A path missing from one of
 them leaves that page without its controls, and no test that reads files from disk would notice.
 """
 from __future__ import annotations
@@ -37,12 +37,12 @@ def test_the_page_loads_its_files_in_the_old_order_as_plain_blocking_tags() -> N
 def test_every_server_that_carries_the_page_forwards_its_files() -> None:
     from pipelines.dashboard_server import GRIDMIND_OWN_FILES, DashboardHandler
     from services.cloud_access_gateway import _is_allowed
-    from trading_desk.gridmind import READ_PATHS, WRITE_PATHS
+    from trading_desk.gridmind import STATIC_FILES
 
     paths = ["/" + path for path in gridmind_files()]
     assert list(GRIDMIND_OWN_FILES) == paths
     for path in paths:
-        assert path in READ_PATHS and path not in WRITE_PATHS
+        assert STATIC_FILES[path] in {"text/css; charset=utf-8", "text/javascript; charset=utf-8"}
         assert _is_allowed(path)
         handler = DashboardHandler.__new__(DashboardHandler)
         handler.path = path

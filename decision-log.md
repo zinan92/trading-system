@@ -180,6 +180,54 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — The desk renders /trade itself (#1414)
+
+## Decision
+
+- Step 2 of #1330. `/trade` is rendered from the desk's own template, `apps/trading-desk/src/trading_desk/trade.html`.
+  The template is today's page: 8765's `dashboard-gridmind.html` plus the desk shell, with the asset version as a
+  placeholder.
+- The page's static files are served by the desk from its checkout through an explicit map (`STATIC_FILES`): path to
+  file, `charset=utf-8` content type, `no-store`. Any other path is 404. Data and control APIs are still relayed to
+  8765 (`READ_PATHS`, `WRITE_PATHS`).
+- The template and the files are read from disk on every request, as 8765 did. A deploy therefore never serves a new
+  structure with old scripts, or the reverse.
+- **Deliberate change:** with 8765 down, `/trade` used to be a 503 page, 「交易后台暂时连不上」. It now loads. GridMind's
+  read fails and the chart notice and action status show 「Dashboard 服务暂不可用 … HTTP 503」. Every control POST
+  gets the relay's 503 `gridmind_unavailable`, so fail-closed holds.
+- 8765's `/dashboard-v5.html` and the gateway allowlist stay as the fallback until #1415.
+  `test_the_desk_page_is_the_8765_page_with_the_desk_shell` keeps the two pages identical until then.
+- Page-only deploys no longer need `--dashboard`.
+
+## Gotchas
+
+- On `/trade`, `gm-desk.css` hides GridMind's header pills, so a 运行异常 badge is not what Park sees. The visible
+  failure is `#chartHistoryNotice`. The browser test asserts that one.
+- `ROOT` is `parents[4]` of `gridmind.py`. That is the checkout in production (`~/work/trading-platform`) and `/app`
+  in the Docker image, and both contain the files.
+- A test client normalises `../` before sending, so path traversal is checked with `curl --path-as-is` (404) and an
+  encoded `%2e%2e` path (404).
+
+## Verification
+
+- The template with the production asset version is byte-identical to production `/trade` before the switch (sha256
+  04016be1…, 19,839 bytes).
+- Desk tests (262 passed):
+  - `/trade` makes no call to 8765;
+  - every mapped file is served with its own bytes, content type and `no-store`;
+  - unmapped paths are 404;
+  - with 8765 down the page is 200 and relayed calls are 503;
+  - the desk page equals the 8765 page with the desk shell.
+- Browser test `test_with_8765_gone_the_page_says_so_and_sends_nothing`: the visible failure shows and nothing is
+  posted.
+- Local: browser, static, gateway, server and root focused tests 1023 passed.
+- Production record for #1420 at 4d57569, deployed with `--dashboard`:
+  - All 6 `assets/gridmind/*` files return 200 through 8790 and 8765, with bytes equal to the repo.
+  - `/trade` loads 0 inline scripts and the 4 own scripts in order. `gmIntent` and `gmChartHost` are present, the
+    venue select has options, and the AI chat greeting (rendered by JS) is in Chinese.
+  - The control-card skin is applied, the badge reads PAPER, and there are no console errors. GETs and read-only
+    property reads only.
+
 # 2026-11-08 — GridMind's inline scripts and styles become files (#1420)
 
 ## Decision
