@@ -567,8 +567,10 @@ def test_the_desk_page_is_a_mount_point_that_starts_the_old_scripts_in_order(con
     from trading_desk import gridmind
     page = gridmind.render_trade_page()
     boot = json.loads(re.search(r"data-boot='([^']+)'", page).group(1))
-    old = re.findall(r'<script src="(assets/gridmind/[^"]+)"></script>', (gridmind.ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8"))
-    assert boot[:-1] == old and len(old) == 7
+    # The order dashboard-gridmind.html ran them in, before #1419 retired that page.
+    old = ["assets/gridmind/control-intents.js", "assets/gridmind/read.js", "assets/gridmind/chart.js", "assets/gridmind/control.js",
+           "assets/gridmind/gridmind.js", "assets/gridmind/park-ai-chat.js", "assets/gridmind/dashboard-control.js"]
+    assert boot[:-1] == old
     assert boot[-1] == f"/static/gm-desk.js?v={gridmind._asset_version()}"
     assert page.index('id="trade-app"') < page.index("/static/web/web.js") and "交易页面没有加载出来" in page
     assert "defer" not in page and "async" not in page
@@ -728,8 +730,9 @@ def test_desk_assets_are_cache_busted_by_content():
     static = Path(gridmind.__file__).resolve().parent / "static"
     expected = hashlib.sha256(b"".join((static / name).read_bytes() for name in ("gm-desk.js", "gm-desk.css", "web/web.js"))).hexdigest()[:12]
     assert gridmind.ASSET_VERSION == expected
-    assert f"gm-desk.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
-    assert f"/static/web/web.js?v={expected}" in gridmind.inject_shell("<html><body></body></html>")
+    page = gridmind.render_trade_page()
+    assert f"gm-desk.js?v={expected}" in page and f"gm-desk.css?v={expected}" in page
+    assert f"/static/web/web.js?v={expected}" in page
 
 
 def test_react_islands_bundle_is_shipped_and_replaces_the_old_scripts():
@@ -741,7 +744,7 @@ def test_react_islands_bundle_is_shipped_and_replaces_the_old_scripts():
     static = Path(gridmind.__file__).resolve().parent / "static"
     bundle = (static / "web" / "web.js").read_text(encoding="utf-8")
     assert bundle.startswith("var DeskWeb=") and "process.env" not in bundle
-    shell = gridmind.inject_shell("<html><body></body></html>")
+    shell = gridmind.render_trade_page()
     for retired in ("gm-backtest.js", "gm-ai-sources.js", "gm-review.js"):
         assert retired not in shell and not (static / retired).exists()
     desk = (static / "gm-desk.js").read_text(encoding="utf-8")

@@ -13,6 +13,7 @@ import pytest
 from tests.test_dashboard_control_wire_browser import WIRE, _fulfill_control, _open
 from tests.test_dashboard_gridmind_control_track_browser import _catalog
 from tests.test_dashboard_gridmind_profit_controls_browser import _risky_preview
+from tests.trade_page import press
 
 def _browser(runtime):
     try:
@@ -46,21 +47,21 @@ def test_replaced_controls_send_the_same_requests() -> None:
         page.evaluate(SWAP)  # again, mid-journey: the preview button must be the live one
         page.wait_for_function(REMOUNTED)
         page.locator("#dashboardPreviewButton").click()
-        page.locator("#dashboardConfirmButton:not([disabled])").wait_for()  # enabled on the replacement
+        page.locator("#dashboardConfirmButton:not([disabled])").wait_for(state="attached")  # enabled on the replacement
         page.evaluate(SWAP)
         page.wait_for_function(REMOUNTED)
-        page.locator("#dashboardConfirmButton").click()
+        press(page, "#dashboardConfirmButton")  # /trade hides it behind the desk flow (#1419)
         page.locator("#dashboardPreviewSummary", has_text="mock-1").wait_for()
         page.locator("#smartFill").click()
         page.locator("#previewSummary", has_text="预计最大损失").wait_for()
         page.evaluate(SWAP)
         page.wait_for_function(REMOUNTED)
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         page.locator(".trade-toast").filter(has_text="机器人已启动").wait_for()
         page.evaluate(SWAP)
         page.wait_for_function(REMOUNTED)
-        page.locator("#stopRobot").click()
-        page.locator("#actionStatus").filter(has_text="机器人已停止").wait_for()
+        press(page, "#stopRobot")
+        page.wait_for_function("() => document.getElementById('actionStatus').textContent.includes('机器人已停止')")
         browser.close()
 
     assert wire == WIRE
@@ -96,13 +97,12 @@ SWITCH = """async () => {
 }"""
 
 
-@pytest.mark.parametrize("bundle_blocked", [False, True], ids=["react", "no-bundle"])
-def test_the_desk_asset_switch_reaches_the_selection(bundle_blocked: bool) -> None:
+def test_the_desk_asset_switch_reaches_the_selection() -> None:
     """gm-desk.js switchAsset, step for step: intents with an id, and the selects show the result."""
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as runtime:
         browser = _browser(runtime)
-        page, wire, _unexpected, errors = _open(browser, _fulfill_control, catalog=_two_venues(), bundle_blocked=bundle_blocked)
+        page, wire, _unexpected, errors = _open(browser, _fulfill_control, catalog=_two_venues())
         page.evaluate(SWITCH)
         page.locator("#dashboardControlStatus", has_text="BTC-USD-PERP 已选择").wait_for()
         assert page.locator("#dashboardVenueSelect").input_value() == "hyperliquid.testnet"
@@ -152,14 +152,13 @@ def test_a_select_keeps_the_choice_through_a_re_render_while_the_request_is_out(
     assert errors == []
 
 
-@pytest.mark.parametrize("bundle_blocked", [False, True], ids=["react", "no-bundle"])
-def test_a_retired_selection_shows_the_venue_and_offers_nothing_to_press(bundle_blocked: bool) -> None:
+def test_a_retired_selection_shows_the_venue_and_offers_nothing_to_press() -> None:
     """Production's state on d7dded8: the saved instrument was retired, so no instrument, strategy, preview or confirm."""
     playwright = pytest.importorskip("playwright.sync_api")
     selection = {"retired_selection": {"venue_profile_id": "binance.old", "instrument_id": "XAUUSDT.OLD"}}
     with playwright.sync_playwright() as runtime:
         browser = _browser(runtime)
-        page, wire, _unexpected, errors = _open(browser, _fulfill_control, selection=selection, bundle_blocked=bundle_blocked)
+        page, wire, _unexpected, errors = _open(browser, _fulfill_control, selection=selection)
         page.locator("#dashboardControlStatus", has_text="已停用").wait_for()
         assert page.locator("#dashboardVenueSelect").input_value() == "binance.paper"
         assert page.locator("#dashboardInstrumentSelect").input_value() == ""
@@ -201,7 +200,7 @@ CODES = ["grid_count_outside_preferred_band", "maximum_loss_scenario", "specific
 def _open_review(page) -> None:
     page.locator("#smartFill").click()
     page.locator("#previewSummary", has_text="预计最大损失").wait_for()
-    page.locator("#startRobot").click()
+    press(page, "#startRobot")  # hidden behind the desk's 「你亲手启动」 on /trade; pressed as the intent router sees it
     page.locator("#startRiskDialog").wait_for(state="visible")
     assert page.locator("#confirmStartRisk").is_disabled()
 
@@ -213,12 +212,11 @@ def _tick_all(page) -> None:
         boxes.nth(index).check()
 
 
-@pytest.mark.parametrize("bundle_blocked", [False, True], ids=["react", "no-bundle"])
-def test_a_new_preview_clears_the_ticks_and_disables_confirm(bundle_blocked: bool) -> None:
+def test_a_new_preview_clears_the_ticks_and_disables_confirm() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as runtime:
         browser = _browser(runtime)
-        page, wire, _unexpected, errors = _open(browser, _risky_control, bundle_blocked=bundle_blocked)
+        page, wire, _unexpected, errors = _open(browser, _risky_control)
         _open_review(page)
         _tick_all(page)
         page.locator("#confirmStartRisk:not([disabled])").wait_for()
@@ -276,16 +274,5 @@ def test_a_stop_gate_held_in_state_stops_an_enabled_looking_button() -> None:
         page.evaluate("""() => { state.robot.stop.disabled = true; const stop = document.getElementById('stopRobot'); stop.disabled = false; stop.click(); }""")
         page.wait_for_timeout(200)
         assert [row for row in wire if row[1].endswith("/control")] == []
-        browser.close()
-    assert errors == []
-
-
-def test_without_the_bundle_the_chart_stays_in_the_legacy_markup() -> None:
-    playwright = pytest.importorskip("playwright.sync_api")
-    with playwright.sync_playwright() as runtime:
-        browser = _browser(runtime)
-        page, _wire, _unexpected, errors = _open(browser, _fulfill_control, bundle_blocked=True)
-        assert page.evaluate("""() => { const frame = document.getElementById('chartFrame');
-          return !frame.hasAttribute('data-island-live') && window.gmChartHost.parentElement === frame; }""")
         browser.close()
     assert errors == []

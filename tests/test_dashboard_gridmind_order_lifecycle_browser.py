@@ -12,30 +12,39 @@ import pytest
 
 from services.trading_system_read_model import project_trading_system_read_model
 from tests.test_trading_system_read_model import _broker, _risk, _source
+from tests.trade_page import desk_answer, open_manual, open_system, press, static_file, text, trade_html
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# GridMind's 持仓/委托/成交 tables are React islands (#1328). /trade loads web.js through the desk
-# shell; the raw page served here gets the same bundle so these tests see what /trade shows.
-ISLANDS = '<script src="/apps/trading-desk/src/trading_desk/static/web/web.js" defer></script>'
-
-
 class _QuietStaticHandler(SimpleHTTPRequestHandler):
+    """/trade as the desk renders it (#1419: the old dashboard-gridmind.html is gone), its files from disk."""
+
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
-    def do_GET(self) -> None:
-        if self.path.split("?", 1)[0] != "/dashboard-gridmind.html":
-            return super().do_GET()
-        html = (ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8").replace("</body>", ISLANDS + "</body>", 1)
-        body = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+    def _send(self, status: int, body: bytes, kind: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == "/trade":
+            return self._send(200, trade_html().encode("utf-8"), "text/html; charset=utf-8")
+        if path.startswith("/static/"):
+            local = static_file(path)
+            if local is None:
+                return self._send(404, b"", "text/plain")
+            kind = "text/css; charset=utf-8" if local.suffix == ".css" else "text/javascript; charset=utf-8"
+            return self._send(200, local.read_bytes(), kind)
+        answer = desk_answer(path)
+        if answer is not None:
+            return self._send(200, json.dumps(answer, ensure_ascii=False).encode("utf-8"), "application/json")
+        return super().do_GET()
 
 
 @contextmanager
@@ -182,7 +191,8 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#orders tbody tr").first.wait_for(state="attached")
 
         labels: list[str] = []
@@ -201,7 +211,7 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
         assert page.locator("#orders img").count() == 0
         assert page.evaluate("() => globalThis.pwned === true") is False
         assert "ok" not in (page.locator("#runBadge").get_attribute("class") or "").split()
-        assert page.locator("#runBadge").inner_text() == "运行异常"
+        assert page.locator("#runBadge").text_content() == "运行异常"
 
         page.evaluate("() => load({withMarket:false})")
         assert page.locator("#orders tbody tr").first.locator("td").first.inner_text() == "已接受"
@@ -264,7 +274,8 @@ def test_gridmind_running_summary_and_execution_tables_show_authoritative_fields
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#positions tbody tr").first.wait_for(state="attached")
 
         summary = page.locator("#productionStrategySummary").inner_text()
@@ -386,16 +397,17 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
+        open_system(page)  # /trade keeps this card inside 「系统详情」 (#1419)
         page.locator("#currentStrategyCard").wait_for(state="visible")
 
         card = page.locator("#currentStrategyCard")
         copy = card.inner_text()
         yesterday = page.locator("#yesterdayPnlCard")
         yesterday_copy = yesterday.inner_text()
-        assert page.evaluate(
-            "() => document.querySelector('#currentStrategyCard').compareDocumentPosition(document.querySelector('#parkAiChatCard')) & Node.DOCUMENT_POSITION_FOLLOWING"
-        )
+        # /trade puts the strategy card in 「系统详情」, under the desk's own 今天 flow (#1419; before, it sat above the AI chat).
+        assert page.evaluate("() => !!document.querySelector('#deskSystem #currentStrategyCard')")
         assert "当前运行策略" in copy
         assert "运行中" in copy
         assert "Short · Grid" in copy
@@ -473,7 +485,8 @@ def test_gridmind_yesterday_pnl_renders_negative_zero_and_partial_evidence(
         page = browser.new_page(viewport={"width": 1680, "height": 1050})
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         copy = page.locator("#yesterdayPnlCard").inner_text()
         assert expected in copy
         assert ("证据完整" if status == "complete" else "部分证据") in copy
@@ -538,7 +551,8 @@ def test_gridmind_park_draft_snapshot_shows_risk_digest_and_exact_grid_geometry(
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
         page.route("**/api/park-paper/ai-chat", fulfill_ai)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#parkAiChatInput").fill("中性网格 3800~4000 间距10 最大10倍杠杆")
         page.locator("#parkAiSend").click()
         page.locator("#parkAiSnapshot").wait_for(state="visible")
@@ -582,7 +596,9 @@ def test_gridmind_surfaces_legacy_exposure_as_a_visible_migration_blocker() -> N
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
+        open_system(page)  # /trade keeps this card inside 「系统详情」 (#1419)
         page.locator("#currentStrategyCard").wait_for(state="visible")
 
         copy = page.locator("#currentStrategyCard").inner_text()
@@ -638,7 +654,9 @@ def test_gridmind_distinguishes_evidence_blocked_from_clean_idle() -> None:
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
+        open_system(page)  # /trade keeps this card inside 「系统详情」 (#1419)
         page.locator("#currentStrategyCard").wait_for(state="visible")
         copy = page.locator("#currentStrategyCard").inner_text()
         yesterday_copy = page.locator("#yesterdayPnlCard").inner_text()
@@ -685,7 +703,9 @@ def test_gridmind_shows_recording_window_in_progress_without_strategy_transition
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_system(page)  # /trade keeps this card inside 「系统详情」 (#1419)
+        page.locator("#currentStrategyCard").wait_for(state="visible")
         copy = page.locator("#currentStrategyCard").inner_text()
         assert "Recording Window 2026-08-18_NIGHT · in_progress" in copy
         assert "Recording Window 阻塞" not in copy
@@ -739,7 +759,9 @@ def test_gridmind_shows_dca_tp_sl_without_grid_only_facts() -> None:
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
+        open_system(page)  # /trade keeps this card inside 「系统详情」 (#1419)
         page.locator("#currentStrategyCard").wait_for(state="visible")
         copy = page.locator("#currentStrategyCard").inner_text()
         assert "Long · DCA" in copy
@@ -791,7 +813,8 @@ def test_gridmind_ai_reply_shows_what_it_was_based_on() -> None:
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
         page.route("**/api/park-paper/ai-chat", fulfill_ai)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         for text in ("做空 DCA 区间 4444~4200", "反手"):
             page.locator("#parkAiChatInput").fill(text)
             page.locator("#parkAiSend").click()
@@ -835,7 +858,8 @@ def test_manual_close_on_the_react_positions_table_still_posts_gridminds_exit() 
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
         page.route("**/api/dualtrack/orders", fulfill_order)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator('#tabs [data-tab="positions"]').click()
         button = page.locator("#positions [data-close]")
         button.wait_for()
@@ -850,17 +874,14 @@ def test_manual_close_on_the_react_positions_table_still_posts_gridminds_exit() 
     }, separators=(",", ":")))]
 
 
-def test_without_the_react_bundle_the_top_bar_stays_on_its_loading_placeholders() -> None:
-    """#1353: if web.js fails to load, the operator must not see a healthy-looking state."""
+def test_without_the_react_bundle_trade_shows_its_failure_notice_and_no_state() -> None:
+    """#1353, on /trade since #1419: if web.js fails to load, the operator must not see a healthy-looking state.
+    /trade draws its whole skeleton with web.js, so nothing of the console appears and the mount keeps its notice."""
     playwright = pytest.importorskip("playwright.sync_api")
     model = _read_model("accepted", full_orders=True, open_trade=True)
 
     def fulfill_read_model(route) -> None:
         route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
-
-    def fulfill_market(route) -> None:
-        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
-        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
 
     with _static_server() as origin, playwright.sync_playwright() as runtime:
         try:
@@ -869,11 +890,11 @@ def test_without_the_react_bundle_the_top_bar_stays_on_its_loading_placeholders(
             pytest.skip(f"Playwright Chromium unavailable: {exc}")
         page = browser.new_page(viewport={"width": 1680, "height": 1050})
         page.add_init_script("window.setInterval = () => 0")
-        page.route("**/web.js", lambda route: route.abort())
+        page.route("**/static/web/web.js*", lambda route: route.abort())  # /trade loads it with ?v=
         page.route("**/api/trading-system/read-model", fulfill_read_model)
-        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
-        page.wait_for_function("() => document.getElementById('gmStatus').getAttribute('data-props') !== '{}'")
-        assert page.locator("#marketBadge").inner_text() == "状态读取中"
-        assert page.locator("#runBadge").inner_text() == "状态读取中"
+        page.goto(f"{origin}/trade", wait_until="load")
+        page.get_by_text("交易页面没有加载出来").wait_for(state="visible")
+        page.wait_for_timeout(500)
+        for selector in ("#marketBadge", "#runBadge", "#startRobot", "#productionChart", "#deskSystem"):
+            assert page.locator(selector).count() == 0, selector
         browser.close()

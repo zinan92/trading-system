@@ -191,7 +191,7 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
             ),
         )
         page.goto(
-            f"{origin}/dashboard-gridmind.html",
+            f"{origin}/trade",
             wait_until="load",
         )
         assert history_requests == []
@@ -213,7 +213,7 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
         assert panel.get_by_text("prepared-new", exact=True).count() == 2
         assert "24h 91.25% / 7d 证据不足" in page.locator(
             "#live"
-        ).inner_text()
+        ).text_content()  # /trade folds #live into 「系统详情」 (#1419)
         assert browser_errors == []
 
         artifact_dir = os.environ.get("GRID_SUPERVISOR_SCREENSHOT_DIR")

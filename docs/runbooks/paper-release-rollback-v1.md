@@ -149,10 +149,11 @@ release complete. The baseline Paper operator-flow command is:
 python3 -m pytest -q tests/test_dashboard_gridmind_operator_journey_browser.py
 ```
 
-For the actual local dashboard, open the supported route alias
-`http://127.0.0.1:8765/dashboard-v5.html`. The server maps that URL to the
-on-disk asset `dashboard-gridmind.html`; there is intentionally no
-`dashboard-v5.html` file. Exercise the changed **read-only or Paper-safe** flow
+For the actual local trading page, open the desk's
+`http://127.0.0.1:8790/trade`. The old address
+`http://127.0.0.1:8765/dashboard-v5.html` (and the retired file name
+`dashboard-gridmind.html`) only redirects there since #1419; neither file exists
+any more. Exercise the changed **read-only or Paper-safe** flow
 once, and save a screenshot plus the relevant read-model or control receipt. A
 test fixture and a screenshot prove UI behavior; only accepted lifecycle and
 reconciliation artifacts prove Paper execution.

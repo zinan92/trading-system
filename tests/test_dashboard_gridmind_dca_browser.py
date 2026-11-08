@@ -7,6 +7,7 @@ import pytest
 from services.dca_plan import build_deterministic_dca_candidate_payload_v1
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
+from tests.trade_page import open_manual, press, text
 
 
 def _dca_preview(payload: dict) -> dict:
@@ -144,7 +145,8 @@ def test_gridmind_dca_smart_fill_preview_risk_ack_and_start() -> None:
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
         page.locator('[data-strategy-type="dca"]').click()
         page.locator("#previewSummary").wait_for(state="visible")
@@ -173,7 +175,7 @@ def test_gridmind_dca_smart_fill_preview_risk_ack_and_start() -> None:
         assert requests[-1]["dca"]["notional_per_addition"] == 2500
         assert requests[-1]["dca"]["target_price"] == 4050
 
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         page.locator("#startRiskDialog").wait_for(state="visible")
         review = page.locator("#startRiskDialog").inner_text()
         assert "DCA 参数 · 风险确认" in review
@@ -216,11 +218,11 @@ def test_gridmind_dca_smart_fill_preview_risk_ack_and_start() -> None:
         model["execution"]["counts"].update({"open_order_count": 0, "accepted_order_count": 0, "open_position_count": 2})
         page.reload(wait_until="load")
         assert "聚合 TP #2：1.001 @ 4,050（行情触发）" in page.locator("#gridSummary").inner_text()
-        assert page.locator("#marketBadge").inner_text() == "运行中"
+        assert page.locator("#marketBadge").text_content() == "运行中"
 
         model["execution"]["dca_lifecycle"]["active_target"] = None
         page.reload(wait_until="load")
-        assert page.locator("#marketBadge").inner_text() == "运行异常"
+        assert page.locator("#marketBadge").text_content() == "运行异常"
         assert browser_errors == []
         browser.close()
 
@@ -282,7 +284,8 @@ def test_gridmind_dca_smart_fill_matches_half_cent_boundary() -> None:
             "**/api/strategy-console/control",
             fulfill_control,
         )
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator('[data-strategy-type="dca"]').click()
         page.locator("#previewSummary").wait_for(state="visible")
         browser.close()
@@ -423,7 +426,8 @@ def test_gridmind_strategy_type_selection_is_explicit_and_exclusive() -> None:
                 body=json.dumps({"error": "preview_fixture_rejected"}),
             ),
         )
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         grid = page.locator('#strategyTypeChoices [data-strategy-type="grid"]')
         dca = page.locator('#strategyTypeChoices [data-strategy-type="dca"]')
         assert grid.count() == 1

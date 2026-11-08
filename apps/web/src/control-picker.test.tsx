@@ -1,7 +1,7 @@
 import {act} from "@testing-library/react";
 import {createRoot} from "react-dom/client";
 import {ControlPicker} from "./islands/ControlPicker";
-import gridmind from "../../../dashboard-gridmind.html?raw";
+import gridmind from "./trade/skeleton.reference.html?raw";  // /trade's markup; the old page is gone (#1419)
 
 function draw(props: Record<string, unknown>): HTMLElement {
   const host = document.createElement("div");

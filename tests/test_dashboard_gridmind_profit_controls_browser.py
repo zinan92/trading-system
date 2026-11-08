@@ -11,6 +11,7 @@ from services.journal_store import load_json, write_json
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
+from tests.trade_page import open_manual, press, text
 
 
 def _preview() -> dict:
@@ -223,11 +224,17 @@ def test_gridmind_smart_fill_replaces_manual_range_with_one_read_only_preview() 
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
         page.locator("#rangeLow").fill("3950")
         page.locator("#rangeHigh").fill("4050")
-        page.wait_for_timeout(400)
+        # Wait for the typed range's own debounced preview instead of a fixed 400 ms, which raced it under load.
+        for _ in range(100):
+            if any(row["solver"]["locked"] == ["range"] for row in requests):
+                break
+            page.wait_for_timeout(50)
+        assert any(row["solver"]["locked"] == ["range"] for row in requests)
         requests.clear()
 
         page.locator("#smartFill").click()
@@ -337,10 +344,11 @@ def test_gridmind_explains_reconciliation_start_blocker_in_plain_language(
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#smartFill").click()
         page.locator("#previewSummary").wait_for(state="visible")
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         page.locator("#startRiskDialog").wait_for(state="visible")
 
         text = page.locator("#startRiskDialog").inner_text()
@@ -421,10 +429,11 @@ def test_gridmind_keeps_leverage_capacity_details_alone_and_with_ledger_blocker(
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#smartFill").click()
         page.locator("#previewSummary").wait_for(state="visible")
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         page.locator("#startRiskDialog").wait_for(state="visible")
 
         text = page.locator("#startRiskDialog").inner_text()
@@ -458,7 +467,8 @@ def test_gridmind_explains_every_hard_solver_or_candidate_blocker(
         browser = runtime.chromium.launch(headless=True, channel="chrome")
         page = browser.new_page(viewport={"width": 1680, "height": 1050})
         page.add_init_script("window.setInterval = () => 0")
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.evaluate(
             """code => { state.preview = {preview_id: "blocked", manual_confirmation: {
                 non_overridable_blocker_codes: [code],
@@ -530,7 +540,8 @@ def test_gridmind_sizing_controls_lock_manual_input_and_keep_other_values_auto()
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#smartFill").click()
         page.locator("#previewSummary").wait_for(state="visible")
 
@@ -662,10 +673,11 @@ def test_gridmind_risky_preview_requires_every_ack_before_start() -> None:
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#smartFill").click()
         page.locator("#previewSummary").wait_for(state="visible")
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         page.locator("#startRiskDialog").wait_for(state="visible")
 
         assert [row["action"] for row in requests] == [
@@ -769,9 +781,10 @@ def test_gridmind_start_click_uses_prepared_candidate_and_shows_success() -> Non
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         page.locator(".trade-toast").filter(has_text="机器人已启动").wait_for()
 
         assert [row["action"] for row in requests] == ["prepare_start", "start"]
@@ -837,9 +850,10 @@ def test_gridmind_start_surfaces_audited_stale_market_without_prepare_retry() ->
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         dialog = page.locator("#startFailureDialog[open]").filter(
             has_text="启动瞬间实时行情暂时过期"
         )
@@ -921,9 +935,10 @@ def test_gridmind_start_does_not_retry_orders_and_surfaces_audited_market_move()
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         dialog = page.locator("#startFailureDialog[open]").filter(
             has_text="行情已跨越网格线"
         )
@@ -1022,11 +1037,12 @@ def test_gridmind_start_invalidates_a_deferred_parameter_preview() -> None:
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
         page.locator("#rangeLow").fill("3910")
         page.wait_for_function("window.__deferredPreviewRequested === true")
-        page.locator("#startRobot").click()
+        press(page, "#startRobot")
         page.locator(".trade-toast").filter(has_text="机器人已启动").wait_for()
         page.evaluate("window.__releaseDeferredPreview()")
         page.wait_for_timeout(50)
@@ -1083,14 +1099,15 @@ def test_gridmind_invalid_manual_notional_is_visible_and_disables_start() -> Non
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
         page.locator("#gridNotional").fill("")
-        page.locator("#startRobot").wait_for()
+        page.locator("#startRobot").wait_for(state="attached")
 
         assert page.locator("#gridNotional").get_attribute("aria-invalid") == "true"
         assert page.locator("#previewSummary").inner_text().startswith("启动前需补齐：每格名义缺失")
-        assert page.locator("#startRobot").inner_text() == "请先修复参数"
+        assert page.locator("#startRobot").text_content() == "请先修复参数"
         assert page.locator("#startRobot").is_disabled()
         assert requests == []
 

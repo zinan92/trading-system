@@ -9,6 +9,7 @@ from tests.test_dashboard_gridmind_order_lifecycle_browser import (
     _read_model,
     _static_server,
 )
+from tests.trade_page import open_manual, press, text
 
 
 def _header_model(
@@ -197,13 +198,14 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#marketBadge.running").wait_for(state="attached")
 
         assert page.locator("#headerPair").inner_text() == "XAU / USDT"
         assert page.locator("#headerPrice").inner_text() == "4,000"
         assert page.locator("#headerChange").inner_text() == "+1.01%"
-        assert page.locator("#marketBadge").inner_text() == "运行中"
+        assert page.locator("#marketBadge").text_content() == "运行中"
         assert page.locator("#healthButton").count() == 0
 
         page.evaluate("() => { state.timeframe = '1m'; return load(); }")
@@ -219,22 +221,22 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
         page.evaluate("() => load()")  # another venue: no tick against the old venue's price
         assert page.locator("#headerPrice").inner_text() == "5,000"
         assert page.locator("#headerPrice").get_attribute("class") == ""
-        assert page.locator("#marketBadge").inner_text() == "运行中"
+        assert page.locator("#marketBadge").text_content() == "运行中"
 
         page.evaluate("() => load()")
-        assert page.locator("#marketBadge").inner_text() == "运行中"
+        assert page.locator("#marketBadge").text_content() == "运行中"
 
         page.evaluate("() => load()")
-        assert page.locator("#marketBadge").inner_text() == "运行异常"
+        assert page.locator("#marketBadge").text_content() == "运行异常"
 
         page.evaluate("() => load()")
         assert page.locator("#headerPrice").get_attribute("class") == ""  # an untrusted feed never ticks
         assert "running" not in (
             page.locator("#marketBadge").get_attribute("class") or ""
         ).split()
-        assert page.locator("#marketBadge").inner_text() == "运行异常"
+        assert page.locator("#marketBadge").text_content() == "运行异常"
 
         page.evaluate("() => load()")
-        assert page.locator("#marketBadge").inner_text() == "运行降级"
+        assert page.locator("#marketBadge").text_content() == "运行降级"
         assert browser_errors == []
         browser.close()

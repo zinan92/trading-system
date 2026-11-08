@@ -13,6 +13,7 @@ from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
 from tests.test_dashboard_gridmind_profit_controls_browser import (
     _preview as _startup_preview,
 )
+from tests.trade_page import open_manual, press, text
 
 
 def _bars(timeframe: str) -> dict:
@@ -303,7 +304,8 @@ def test_gridmind_legacy_single_side_card_explicitly_migrates_39_to_20() -> None
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#gridAdjustToggle").click()
 
         assert page.evaluate(
@@ -414,7 +416,8 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm(remount: bool)
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#gridAdjustToggle").wait_for(state="visible")
         page.evaluate("() => refreshMarket()")
         assert page.evaluate("() => [state.market?.timeframe,state.market?.bars?.length]") == [
@@ -673,7 +676,8 @@ def test_gridmind_stopped_robot_can_apply_or_cancel_chart_range_before_start() -
             ),
         )
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
 
         toggle = page.locator("#gridAdjustToggle")
         assert toggle.is_enabled()
@@ -764,7 +768,8 @@ def test_gridmind_risky_range_requires_every_human_confirmation() -> None:
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
         page.route("**/api/strategy-console/control", fulfill_control)
-        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.goto(f"{origin}/trade", wait_until="load")
+        open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
         page.locator("#gridAdjustToggle").click()
         page.evaluate(
             """() => {

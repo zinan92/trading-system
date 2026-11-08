@@ -594,7 +594,7 @@ def test_telegram_strategy_entry_is_disabled_before_draft_or_provider(tmp_path: 
     assert result["status"] == "blocked"
     assert result["code"] == "entry_disabled"
     assert result["receipt"]["code"] == "entry_disabled"
-    assert "dashboard-v5.html" in result["message"]
+    assert "https://trade.park-ai-intel.com/trade" in result["message"]
     assert calls == []
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
     assert not (tmp_path / "outputs" / "park_strategy" / "telegram_continuations.jsonl").exists()
