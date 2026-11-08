@@ -210,6 +210,8 @@
   `ui_capabilities.market_timeframes` lacks it; the new browser test sets the list.
 - The browser test must not stub `setInterval`: the desk strip redraws on its own interval.
 - One extra small request per refresh while the chart is not on 1m.
+- `tests/fixtures/trade_tree_shape.json` re-recorded on purpose: over 466 nodes per viewport the only difference is
+  the hidden `#gate` text (「行情 ready：…」 → 「1 分钟行情 ready：…」); reads, wire, islands and width unchanged.
 
 ## Verification
 
@@ -219,6 +221,7 @@
   red strip without start. All four fail on the previous code.
 - `test_a_failed_1m_feed_is_named_even_when_the_chart_shows_a_trusted_4h`; static assertions updated.
 - gridmind browser + static + today 131, control wire 1 (`gridmind_control_wire.json` unchanged), desk 276, mjs 29.
+- Root: 4155 passed, 2 skipped before the re-record (the 2 tree cases failed on the `#gate` text); tree 2 passed after.
 
 # 2026-11-09 — The banner's "market trusted" reads the same feed the start gate does (#1441)
 
