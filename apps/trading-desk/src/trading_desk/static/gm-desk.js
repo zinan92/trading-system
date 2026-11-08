@@ -18,19 +18,35 @@ const DeskStatus = (() => {
   const bjDay = stamp => { const t = beijing(stamp); return t ? `${t.getUTCMonth() + 1}/${t.getUTCDate()}` : ""; };
   const bjTime = stamp => { const t = beijing(stamp); return t ? `${bjDay(stamp)} ${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}` : "--"; };
 
+  function tickText(data) {
+    const tick = data?.runtime?.execution_tick_health || {};
+    if (!finite(tick.age_seconds)) return "";
+    return `执行心跳 ${num(tick.age_seconds)} 秒没更新${finite(tick.max_age_seconds) ? `（上限 ${num(tick.max_age_seconds)} 秒）` : ""}。`;
+  }
+
   function isActive(view) {
     const data = view?.data || {}, plan = view?.livePlan;
     const lifecycle = plan?.source === "testnet_grid_lifecycle" ? plan : null;
     return data.current_strategy?.active === true || Boolean(lifecycle && !ENDED.has(String(lifecycle.status || "")));
   }
 
+  // GridMind's own run verdict (#1429): the header pill it no longer shows on /trade. Absent on an older page.
+  const runOf = view => view?.runState || {};
+  // Start is offered only here: read ok, data present, feed trusted, nothing running, GridMind says stopped.
+  const calmRun = run => !run.tickLost && (run.runClass === undefined || run.runClass === "stopped");
+
   function banner(view, {asset = "黄金"} = {}) {
+    // A failed read outranks everything: what is on the page is no longer known to be true.
+    if (view?.readError) {
+      const old = view.data && view.renderedAt ? `页面上的数字停在 ${bjTime(view.renderedAt)} 那次读取，不代表现在。` : "";
+      return {tone: "bad", title: view.data ? "读不到最新交易状态" : "读不到交易状态", body: [view.readError, old].filter(Boolean).join(" "), action: null};
+    }
     if (!view?.data) return {tone: "wait", title: "正在读取交易状态", body: "", action: null};
     const data = view.data, market = view.market || data.market || {}, current = data.current_strategy || {};
     if (view.marketTrusted !== true) {
       const last = market.latest_timestamp ? `最后可信数据 ${bjTime(market.latest_timestamp)}` : "还没有可信数据";
       return {tone: "bad", title: `${asset}行情中断，已停止开新仓`,
-        body: `${market.provider_label || "行情源"}的数据没有通过可信检查（${last}）。恢复之前不会开新仓，也不会改用别的数据源顶替。`,
+        body: `${market.provider_label || "行情源"}的数据没有通过可信检查（${last}）。恢复之前不会开新仓，也不会改用别的数据源顶替。页面会自动重试。`,
         action: {kind: "details", label: "查看原因"}};
     }
     if (isActive(view)) {
@@ -42,9 +58,16 @@ const DeskStatus = (() => {
       const direction = {long: "做多", short: "做空", neutral: "中性"}[spec.direction || plan.direction] || null;
       const parts = [finite(low) && finite(high) ? `区间 ${num(low)} – ${num(high)}` : null, finite(rungs) && Number(rungs) > 0 ? `${num(rungs)} 格` : null, direction,
         finite(fills) ? `已成交 ${num(fills)} 笔` : null, finite(held) ? `持仓 ${num(held)} 笔` : null].filter(Boolean);
-      const bad = /hard_stop|flatten/.test(lifecycle), paused = /paused/.test(lifecycle);
-      return {tone: bad ? "bad" : paused ? "warn" : "run", title: `${asset}${type}${LIFECYCLE[lifecycle] || "运行中"}`, body: parts.join(" · "), action: {kind: "stop", label: "去停止"}};
+      const bad = /hard_stop|flatten/.test(lifecycle), paused = /paused/.test(lifecycle), run = runOf(view), stop = {kind: "stop", label: "去停止"};
+      if (run.tickLost) return {tone: "warn", title: `${asset}${type}运行降级`, body: [tickText(data), parts.join(" · ")].filter(Boolean).join(" "), action: stop};
+      if (!lifecycle && run.runClass === "error") return {tone: "bad", title: `${asset}${type}运行异常`, body: ["运行状态没有通过检查（风控、对账或状态记录），原因见系统详情。", parts.join(" · ")].filter(Boolean).join(" "), action: stop};
+      return {tone: bad ? "bad" : paused ? "warn" : "run", title: `${asset}${type}${LIFECYCLE[lifecycle] || "运行中"}`, body: parts.join(" · "), action: stop};
     }
+    const run = runOf(view), details = {kind: "details", label: "查看原因"};
+    if (run.tickLost) return {tone: "warn", title: "执行心跳中断", body: `${tickText(data) || "执行引擎的心跳没有按时更新。"} 恢复之前不要开始新计划。`, action: details};
+    if (run.runClass === "error") return {tone: "bad", title: "运行状态异常", body: "交易系统报告运行异常。先查看原因，恢复之前不要开始新计划。", action: details};
+    if (run.runClass === "working") return {tone: "wait", title: `${asset}${run.label || "处理中"}`, body: "", action: null};
+    if (!calmRun(run)) return {tone: "warn", title: `${asset}${run.label || "状态未知"}`, body: "运行状态和当前策略记录对不上，先查看原因。", action: details};
     const terminal = current.terminal || {};
     let body = "还没有上一轮策略的记录。";
     if (terminal.reason) {
@@ -61,13 +84,14 @@ const DeskStatus = (() => {
 
   // Only claims a field backs. Never "all good": the calm state is grey, not green.
   function health(view) {
+    if (view?.readError) return {tone: "bad", text: "读不到最新状态", other: [], expected: []};
     if (!view?.data) return {tone: "wait", text: "读取中", other: [], expected: []};
     const data = view.data, active = isActive(view), issues = [...(data.completeness?.issues || [])];
     const rec = data.execution?.reconciliation;
     if (rec?.status && !["ok", "pass", "reconciled"].includes(rec.status)) issues.push(`reconciliation_${rec.status}${rec.reason ? `:${rec.reason}` : ""}`);
     const expected = active ? [] : issues.filter(code => IDLE_EXPECTED.has(code)), other = issues.filter(code => !expected.includes(code));
+    // Whether a plan runs is the banner's to say, once (#1429).
     const parts = [view.marketTrusted === true ? "行情可信" : "行情没有通过可信检查"];
-    if (!active) parts.push("没有运行中的计划");
     if (other.length) parts.push(`${other.length} 项需要看一下`);
     return {tone: view.marketTrusted !== true ? "bad" : other.length ? "warn" : "calm", text: parts.join(" · "), other, expected};
   }
@@ -81,7 +105,7 @@ const DeskStatus = (() => {
     return {old: label, next: paper?.label || null};
   }
 
-  return {banner, health, retired, isActive};
+  return {banner, health, retired, isActive, calmRun};
 })();
 if (typeof module !== "undefined") module.exports = DeskStatus;
 

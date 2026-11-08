@@ -180,6 +180,56 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — The status strip says a failed read, a runtime error and a lost heartbeat (#1429)
+
+## Decision
+
+- Block 1a of the redesign (#1427). The banner (`DeskStatus.banner` in gm-desk.js) ranks, first match wins:
+  1. a failed read: 「读不到交易状态」, or 「读不到最新交易状态」 plus 「页面上的数字停在 <time> 那次读取」 when old
+     data exists; no action;
+  2. an untrusted feed: the red block as before, plus 「页面会自动重试」;
+  3. a running plan: a lost heartbeat is amber 「…运行降级」 with the tick age; GridMind's `runClass: "error"` is red
+     「…运行异常」 (not for the testnet lifecycle, which has its own wording); both keep 「去停止」;
+  4. nothing running: a lost heartbeat (「执行心跳中断」), a runtime error (「运行状态异常」), starting or stopping
+     (wait, no action), or any verdict other than stopped (「…对不上」) each offer no start;
+  5. calm idle: 「开始今天的计划」, as before.
+- No second verdict. gridmind.js puts its own `headerState` (label, runClass, tickLost: what the hidden header pill
+  shows) and `state.readError` on `window.gridmindView`. `state.readError` is set from `tradingFailure(error).text`,
+  the same words as the chart notice, and cleared only by a good read-model load, so a redraw from old data keeps it.
+- The health line in 系统详情 drops 「没有运行中的计划」: whether a plan runs is the banner's to say, once.
+- Bridge scope: this widens `gridmindView` instead of retiring it. 1b, which makes the strip a component, retires it.
+
+## Gotchas
+
+- In the fixture behind `_header_model`, the runtime is running but `current_strategy` is absent. The desk's
+  `isActive` says idle while GridMind's verdict says running, so the old banner offered start. Production's idle
+  read model today is consistent (stopped, risk missing, tick not applicable), but the banner no longer trusts that.
+- Open for 1b: the production read model's completeness lists `market_not_trusted` while the strip says 「行情可信」,
+  because `marketTrusted` is the chart feed's verdict. Decide which feed 「行情可信」 means, and make it the one the
+  backend start gate checks.
+- `test_open_api.py::test_an_allowed_path_answers_exactly_what_the_page_gets` failed once in the desk suite while the
+  root suite ran alongside, and passed alone and on a rerun of the whole desk suite (and on main). It is not touched
+  here.
+
+## Verification
+
+- `test_gm_desk_status.py` 17 passed, including every banner state above and
+  `test_start_is_offered_only_when_everything_is_calm` (14 states; start offered for the two calm idle ones only).
+- Browser, timers running: `test_trade_shows_park_the_failure_the_hidden_header_pills_carry` now asserts the banner
+  for an untrusted feed, a 502, a runtime error and a stale heartbeat, none offering start.
+  `test_a_failed_read_survives_any_redraw_until_the_next_good_read` checks a 502 after a good read survives
+  `render()` and a good read clears it. Header file 6 passed; tree shape and today 15 passed (the shape is
+  unchanged, no re-record).
+- Root suite 4141 passed, 2 skipped, plus the static test fixed after (43 passed). Desk 267, web 2259 (build
+  unchanged), mjs 29. `gridmind_control_wire.json` unchanged. Mocks only.
+- Production record for #1419 at 602df02, read-only: 8765 GET `/dashboard-v5.html`, `/dashboard-gridmind.html`
+  and `?v=1` answer 302 to `http://127.0.0.1:8790/trade`; with Host goldbot.park-ai-intel.com, to
+  `https://trade.park-ai-intel.com/trade`. HEAD answers 404 (the redirect is in `do_GET`). /trade's 12 files are
+  byte-identical; asset version unchanged; 18 islands, 7 canvases, gmControl 53, gmChart 20, gmRead 31, both
+  venues, no console errors. A first headless capture at 25 s showed 「今天」 still on 「正在读取品种…」; a rerun with
+  error capture and the browser pane both showed it filled (BTC fallback for the retired selection) and no errors:
+  the page settles slowly (it waits up to 15 s for GridMind's selection), which 1b addresses.
+
 # 2026-11-08 — The old single-file trading page is gone; /trade is the only page (#1419, phase 1)
 
 ## Decision

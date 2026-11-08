@@ -101,7 +101,7 @@ def test_unknown_flat_state_claims_neither_flat_nor_reconciled() -> None:
 def test_idle_health_is_grey_not_green_and_keeps_every_record() -> None:
     health = run("health", idle_view())
     assert health["tone"] == "calm"
-    assert health["text"] == "行情可信 · 没有运行中的计划"
+    assert health["text"] == "行情可信"  # whether a plan runs is the banner's to say, once (#1429)
     assert "一切" not in health["text"] and "就绪" not in health["text"]
     assert set(health["expected"]) == {"production_plan_missing", "risk_decision_missing", "reconciliation_blocked:local_execution_authority_unavailable"}
     assert health["other"] == []
@@ -169,3 +169,82 @@ def test_retired_selection_names_old_and_new_venue_only_when_nothing_is_selected
     assert run("retired", selection, catalog) == {"old": "Binance Paper", "next": "OKX Paper"}
     assert run("retired", {**selection, "venue_profile_id": "okx.paper"}, catalog) is None
     assert run("retired", {"venue_profile_id": None}, catalog) is None
+
+
+# ---- #1429: GridMind's run verdict and a failed read reach the banner; start only when all is calm ----
+
+def with_run(view: dict | None, **run) -> dict:
+    view = dict(view or {})
+    view["runState"] = {"label": "已停止", "runClass": "stopped", "tickLost": False, **run}
+    return view
+
+
+TICK = {"status": "blocked", "reason": "heartbeat_stale", "age_seconds": 181, "max_age_seconds": 180}
+
+
+def with_tick(view: dict) -> dict:
+    view["data"]["runtime"] = {"execution_tick_health": TICK}
+    return with_run(view, label="运行降级", runClass="stopped", tickLost=True)
+
+
+def test_a_failed_read_outranks_everything_and_says_the_page_is_old() -> None:
+    first = run("banner", {"readError": "Dashboard 服务暂不可用：服务返回 HTTP 502。"}, {"asset": "黄金"})
+    assert first == {"tone": "bad", "title": "读不到交易状态", "body": "Dashboard 服务暂不可用：服务返回 HTTP 502。", "action": None}
+    stale = with_run(running_view(), label="运行中", runClass="running")
+    stale.update(readError="Cloudflare 隧道不可达。", renderedAt=1762603800000)  # 2025-11-08 12:10 UTC
+    banner = run("banner", stale, {"asset": "黄金"})
+    assert banner["tone"] == "bad" and banner["title"] == "读不到最新交易状态"
+    assert banner["body"] == "Cloudflare 隧道不可达。 页面上的数字停在 11/8 20:10 那次读取，不代表现在。"
+    assert "运行中" not in json.dumps(banner, ensure_ascii=False) and banner["action"] is None
+    untrusted = idle_view(trusted=False)
+    untrusted["readError"] = "x"
+    assert run("banner", untrusted, {})["title"] == "读不到最新交易状态"
+    assert run("health", stale) == {"tone": "bad", "text": "读不到最新状态", "other": [], "expected": []}
+
+
+def test_a_running_grid_names_a_stale_heartbeat_and_a_failed_check() -> None:
+    lost = run("banner", with_tick(running_view()), {"asset": "黄金"})
+    assert lost["tone"] == "warn" and lost["title"] == "黄金网格运行降级"
+    assert lost["body"].startswith("执行心跳 181 秒没更新（上限 180 秒）。 区间 4,080 – 4,180")
+    assert lost["action"] == {"kind": "stop", "label": "去停止"}
+    error = run("banner", with_run(running_view(), label="运行异常", runClass="error"), {"asset": "黄金"})
+    assert error["tone"] == "bad" and error["title"] == "黄金网格运行异常"
+    assert "原因见系统详情" in error["body"] and error["action"]["kind"] == "stop"
+    calm = run("banner", with_run(running_view(), label="运行中", runClass="running"), {"asset": "黄金"})
+    assert calm["tone"] == "run" and calm["title"] == "黄金网格运行中"
+
+
+def test_nothing_running_but_an_unhealthy_runtime_offers_no_start() -> None:
+    lost = run("banner", with_tick(idle_view()), {"asset": "黄金"})
+    assert lost["title"] == "执行心跳中断" and lost["tone"] == "warn"
+    assert lost["body"] == "执行心跳 181 秒没更新（上限 180 秒）。 恢复之前不要开始新计划。"
+    error = run("banner", with_run(idle_view(), label="运行异常", runClass="error"), {"asset": "黄金"})
+    assert error["title"] == "运行状态异常" and error["tone"] == "bad" and error["action"]["kind"] == "details"
+    working = run("banner", with_run(idle_view(), label="启动中", runClass="working"), {"asset": "黄金"})
+    assert working == {"tone": "wait", "title": "黄金启动中", "body": "", "action": None}
+    odd = run("banner", with_run(idle_view(), label="运行中", runClass="running"), {"asset": "黄金"})
+    assert odd["tone"] == "warn" and "对不上" in odd["body"] and odd["action"]["kind"] == "details"
+
+
+def test_start_is_offered_only_when_everything_is_calm() -> None:
+    """The safety rule of the strip: 「开始今天的计划」 appears for a calm idle state and for nothing else."""
+    open_exposure = idle_view()
+    open_exposure["data"]["current_strategy"]["terminal"].update(ended_flat=False, open_positions=2)
+    states = {
+        "calm idle": with_run(idle_view()),
+        "calm idle, older page without a verdict": idle_view(),
+        "reading": None,
+        "read failed": {"readError": "x"},
+        "read failed with old idle data": {**with_run(idle_view()), "readError": "x"},
+        "untrusted feed": with_run(idle_view(trusted=False)),
+        "heartbeat lost": with_tick(idle_view()),
+        "runtime error": with_run(idle_view(), label="运行异常", runClass="error"),
+        "starting": with_run(idle_view(), label="启动中", runClass="working"),
+        "runtime says running": with_run(idle_view(), label="运行中", runClass="running"),
+        "open exposure": with_run(open_exposure),
+        "running": with_run(running_view(), label="运行中", runClass="running"),
+        "running, heartbeat lost": with_tick(running_view()),
+        "running, error": with_run(running_view(), label="运行异常", runClass="error"),
+    }
+    offered = {name for name, view in states.items() if (run("banner", view, {"asset": "黄金"})["action"] or {}).get("kind") == "start"}
+    assert offered == {"calm idle", "calm idle, older page without a verdict"}
