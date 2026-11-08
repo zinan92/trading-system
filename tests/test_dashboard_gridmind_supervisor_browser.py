@@ -11,6 +11,7 @@ from tests.test_dashboard_gridmind_order_lifecycle_browser import (
     _read_model,
     _static_server,
 )
+from tests.trade_page import open_system
 
 
 def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
@@ -211,9 +212,8 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
         assert panel.get_by_text("preview-new", exact=True).count() == 2
         assert panel.get_by_text("prepared-old", exact=True).count() == 1
         assert panel.get_by_text("prepared-new", exact=True).count() == 2
-        assert "24h 91.25% / 7d 证据不足" in page.locator(
-            "#live"
-        ).text_content()  # /trade folds #live into 「系统详情」 (#1419)
+        open_system(page)  # /trade folds #live into 「系统详情」; read it as Park sees it unfolded (#1419)
+        assert "24h 91.25% / 7d 证据不足" in page.locator("#live").inner_text()
         assert browser_errors == []
 
         artifact_dir = os.environ.get("GRID_SUPERVISOR_SCREENSHOT_DIR")

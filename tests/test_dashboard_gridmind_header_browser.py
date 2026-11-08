@@ -240,3 +240,48 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
         assert page.locator("#marketBadge").text_content() == "运行降级"
         assert browser_errors == []
         browser.close()
+
+
+@pytest.mark.parametrize("case", ["untrusted_market", "read_model_502"])
+def test_trade_shows_park_the_failure_the_hidden_header_pills_carry(case: str) -> None:
+    """#1419: /trade hides GridMind's header pills (#1294), so the tests above read them hidden. This pins what Park
+    sees for the same failures, with the page's own timers running (the desk banner refreshes every second):
+    an untrusted feed is the red banner, and a failed read names its cause on the chart, never a healthy state.
+    Known gap, for #1427 block 1: a risk block (pill 运行异常) and a stale execution heartbeat (运行降级) do not
+    reach the banner yet; it shows the idle state for both."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(5002.0, provider="backup_venue", trusted=False)
+
+    def fulfill_read_model(route) -> None:
+        if case == "read_model_502":
+            route.fulfill(status=502, content_type="text/plain", body="bad gateway")
+        else:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_bars(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "bars": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - local browser dependency
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
+        page.goto(f"{origin}/trade", wait_until="load")
+        banner = page.locator("#deskStatus")
+        if case == "untrusted_market":
+            page.locator("#deskStatus.bad").wait_for(state="visible")
+            assert banner.locator("h1").inner_text() == "黄金行情中断，已停止开新仓"
+            assert "不会改用别的数据源顶替" in banner.inner_text()
+            assert page.locator("#deskHealth").inner_text().startswith("行情没有通过可信检查")
+        else:
+            # The one place in view that names the cause is the chart's notice; #actionStatus says it too, folded.
+            page.locator("#chartHistoryNotice").filter(has_text="Dashboard 服务暂不可用").wait_for(state="visible")
+            assert "HTTP 502" in page.locator("#chartHistoryNotice").inner_text()
+            page.wait_for_timeout(1500)  # a banner tick or more
+            assert banner.get_attribute("class") == "desk-status wait"
+            assert banner.inner_text().strip() == "正在读取交易状态"
+            assert page.locator("#deskStatusAction").count() == 0  # no start offered on a failed read
+        browser.close()

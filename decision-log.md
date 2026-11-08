@@ -223,6 +223,20 @@
   `https://goldbot.park-ai-intel.com/dashboard-v5.html` and looks for page markers. That page now redirects, so
   those checks would report missing features. The gateway is not running (exit 78), so nothing reads them today;
   retire or repoint them with the gateway.
+- The gateway (`services/cloud_access_gateway.py`) still sends `/` to `/dashboard-v5.html` and rewrites `Host` to
+  `127.0.0.1:8765` upstream. Through it, 8765's redirect would send a remote visitor to their own
+  `127.0.0.1:8790/trade`. Whoever revives the gateway must point it at the desk's public `/trade` first.
+- Hidden is not shown. Tests that asserted GridMind's header pills (`#runBadge`, `#marketBadge`) or the start
+  button's label now read them as hidden text, because /trade hides them (since #1294). What Park sees instead:
+  - an untrusted feed: the red banner 「…行情中断，已停止开新仓」 (new browser test, timers running);
+  - a failed read: the cause on the chart's notice, and the banner stays 「正在读取交易状态」 with no start offered
+    (same test);
+  - 系统详情 text (`#live`): the tests unfold it and read it as shown;
+  - invalid start parameters: `#previewSummary` in the open form (already asserted).
+- Known gaps, found here, not caused here, first in #1427 block 1: a risk block (pill 运行异常) and a stale
+  execution heartbeat (运行降级) never reach the banner, which shows the calm idle state with 「开始今天的计划」;
+  a failed read names its cause only on the chart, while the banner and 系统详情 line say 「读取中」. Starting
+  stays refused by the backend gates in all three; only the display is missing.
 - `tests/fixtures/trade_tree_shape.json` is the frozen reference. Phase 2 changes the layout on purpose, so each
   block re-records it on purpose and says so in its record.
 
@@ -236,6 +250,7 @@
   control wire, intents, crosshair, tree shape and today 28. `gridmind_control_wire.json` unchanged.
 - Web: typecheck clean, vitest 2259 passed, the build leaves web.js, read.js, chart.js and control.js unchanged.
   Desk 263 passed. K-line 21 passed. mjs 29 passed.
+- New: `test_trade_shows_park_the_failure_the_hidden_header_pills_carry` (2 cases) passes.
 - Mocks only; no production control was pressed.
 
 # 2026-11-08 — GridMind's control layer is TypeScript; the one sender stays in gridmind.js (#1418)

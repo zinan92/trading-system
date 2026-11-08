@@ -6,7 +6,7 @@ from copy import deepcopy
 import pytest
 
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _read_model, _static_server
-from tests.trade_page import open_manual, press, text
+from tests.trade_page import open_manual, open_system, press, text
 
 
 @pytest.mark.parametrize(
@@ -204,8 +204,9 @@ def test_gridmind_reconciles_lost_replacement_response_from_audit_without_contro
 
         assert result == {"reconciled": True, "accepted": 17, "receipt": "replace_grid"}
         assert control_requests == []
-        assert "控制回执" in page.locator("#live").text_content()
-        assert "替换网格 · 已接受" in page.locator("#live").text_content()
+        open_system(page)  # /trade folds #live into 「系统详情」; read it as Park sees it unfolded (#1419)
+        assert "控制回执" in page.locator("#live").inner_text()
+        assert "替换网格 · 已接受" in page.locator("#live").inner_text()
         browser.close()
 
 
