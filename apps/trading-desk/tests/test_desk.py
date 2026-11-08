@@ -515,7 +515,7 @@ def test_trade_page_is_gridmind_behind_the_desk_gate(config, sources, store, fet
     client = TestClient(create_app(cfg, sources, store, FakeExecutor(cfg, fetch)), base_url="https://testserver")
     assert client.get("/", follow_redirects=False).headers["location"] == "/trade"
     page = client.get("/trade")
-    assert 'id="dashboardControlCard"' in page.text and "/static/gm-desk.js" in page.text and "<title>Park 交易台 · 交易</title>" in page.text
+    assert 'id="trade-app"' in page.text and "/static/gm-desk.js" in page.text and "<title>Park 交易台 · 交易</title>" in page.text
     assert page.headers["cache-control"] == "no-store" and calls == []  # the desk renders the page; 8765 is not asked
     assert client.get("/api/trading-system/read-model?x=1").json() == {"ok": True}
     assert calls[-1] == ("http://dash/api/trading-system/read-model?x=1", "GET", None)
@@ -560,10 +560,34 @@ def test_the_desk_serves_the_page_files_from_its_checkout_and_nothing_else(confi
     assert not set(gridmind.STATIC_FILES) & (gridmind.READ_PATHS | gridmind.WRITE_PATHS)
 
 
-def test_the_desk_page_is_the_8765_page_with_the_desk_shell(config):
-    # Until #1415 replaces the page, 8765's dashboard-gridmind.html is the fallback and must stay identical.
+def test_the_desk_page_is_a_mount_point_that_starts_the_old_scripts_in_order(config):
+    # #1415: web.js draws the page as one React tree, then starts GridMind's scripts and gm-desk.js in the
+    # order the old page ran them. Without web.js the page says so instead of showing nothing.
+    import json, re
     from trading_desk import gridmind
-    assert gridmind.render_trade_page() == gridmind.inject_shell((gridmind.ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8"))
+    page = gridmind.render_trade_page()
+    boot = json.loads(re.search(r"data-boot='([^']+)'", page).group(1))
+    old = re.findall(r'<script src="(assets/gridmind/[^"]+)"></script>', (gridmind.ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8"))
+    assert boot[:-1] == old and len(old) == 4
+    assert boot[-1] == f"/static/gm-desk.js?v={gridmind._asset_version()}"
+    assert page.index('id="trade-app"') < page.index("/static/web/web.js") and "交易页面没有加载出来" in page
+    assert "defer" not in page and "async" not in page
+    assert not re.search(r"<script>(?!\s*</script>)", page)  # no inline script
+
+
+def test_the_page_version_follows_the_files_on_disk_without_a_restart(config, tmp_path, monkeypatch):
+    # The deploy fast-forwards the checkout, then restarts the desk only after the gate passes. In between the
+    # new page must not go out with the old ?v=, or a browser could reuse a cached old web.js.
+    import shutil
+    from trading_desk import gridmind
+    static = tmp_path / "static"
+    shutil.copytree(gridmind.STATIC_DIR, static)
+    monkeypatch.setattr(gridmind, "STATIC_DIR", static)
+    before = gridmind.render_trade_page()
+    (static / "web" / "web.js").write_bytes((static / "web" / "web.js").read_bytes() + b"\n")
+    after = gridmind.render_trade_page()
+    assert before != after and f"/static/web/web.js?v={gridmind._asset_version()}" in after
+    assert gridmind._asset_version() != gridmind.ASSET_VERSION  # the startup value would have been stale
 
 
 def test_tunnel_requests_need_the_passcode_and_local_ones_do_not(config, sources, store, fetch, tmp_path):

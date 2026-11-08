@@ -130,6 +130,11 @@ test("islands POST only to the allow-list, and never reach an order or control e
   const code = Object.entries(sources).filter(([path]) => !/\.test\.tsx?$/.test(path));
   expect(code.length).toBeGreaterThan(10);
   for (const [path, source] of code) {
+    if (path === "./trade/Skeleton.tsx") {
+      // The page's markup (#1415): it names GridMind's classes (dashboard-control-card, ...) but sends nothing.
+      expect([path, /\/api\/|fetch\(|XMLHttpRequest|sendBeacon|method:|postJson|api\(/.test(source)]).toEqual([path, false]);
+      continue;
+    }
     // Until #1329: 执行, 停止, 补单 and GridMind's own controls stay in the legacy page.
     expect([path, /\/api\/execute|\/api\/grid\/|dashboard-control|\/api\/dualtrack\/orders|\/api\/park-paper|\/api\/mainnet/.test(source)]).toEqual([path, false]);
     if (!path.endsWith("/api.ts")) expect([path, /method:/.test(source)]).toEqual([path, false]);

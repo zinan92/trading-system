@@ -32,9 +32,12 @@ export function createBridge(registry: Registry) {
     flushSync(() => mounted.render(<Component {...props} />));
   }
 
+  // A placeholder already live belongs to the /trade tree (trade/Islands.tsx); the bridge leaves it alone.
+  const free = (el: HTMLElement) => !roots.has(el) && !el.hasAttribute("data-island-live");
+
   function scan(scope: ParentNode) {
-    if (scope instanceof HTMLElement && scope.dataset.island && !roots.has(scope)) render(scope);
-    scope.querySelectorAll<HTMLElement>("[data-island]").forEach(el => { if (!roots.has(el)) render(el); });
+    if (scope instanceof HTMLElement && scope.dataset.island && free(scope)) render(scope);
+    scope.querySelectorAll<HTMLElement>("[data-island]").forEach(el => { if (free(el)) render(el); });
   }
 
   function sweep() {

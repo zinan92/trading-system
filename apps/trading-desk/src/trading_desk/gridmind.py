@@ -22,6 +22,7 @@ from . import remote
 
 ROOT = Path(__file__).resolve().parents[4]  # the trading-system checkout the desk runs from
 TEMPLATE = Path(__file__).resolve().parent / "trade.html"
+STATIC_DIR = Path(__file__).resolve().parent / "static"  # the desk's own files, under /static
 CSS, JS = "text/css; charset=utf-8", "text/javascript; charset=utf-8"
 # The page's static files, served from this checkout (#1414). Each path maps to exactly one file;
 # nothing else under the checkout is reachable.
@@ -76,12 +77,10 @@ def _asset_version() -> str:
     """
 
     import hashlib
-    from pathlib import Path
 
-    static = Path(__file__).resolve().parent / "static"
     digest = hashlib.sha256()
     for name in ASSET_FILES:
-        digest.update((static / name).read_bytes())
+        digest.update((STATIC_DIR / name).read_bytes())
     return digest.hexdigest()[:12]
 
 
@@ -101,16 +100,18 @@ def urllib_fetch(url: str, method: str, body: bytes | None, content_type: str, t
 
 
 def render_trade_page() -> str:
-    """The desk's /trade page, read from disk on every request.
+    """The desk's /trade page: a mount point for one React tree (#1415), read from disk on every request.
 
-    The page's static files are read from disk too, so a deploy that changes both never serves a
-    new structure with old scripts or the reverse.
+    The asset version is hashed from the files on disk on every request too. A deploy fast-forwards the
+    checkout and restarts the desk only after the gate passes; a version fixed at startup would serve the
+    new page with the old ?v= in between, and a browser could then reuse a cached old web.js.
     """
-    return TEMPLATE.read_text(encoding="utf-8").replace("__DESK_ASSET_VERSION__", ASSET_VERSION)
+    return TEMPLATE.read_text(encoding="utf-8").replace("__DESK_ASSET_VERSION__", _asset_version())
 
 
 def inject_shell(html: str) -> str:
-    """The shell added to 8765's dashboard-gridmind.html; trade.html must equal it until #1415 changes the page."""
+    """The shell the desk added to 8765's dashboard-gridmind.html before #1415: that page plus this shell is
+    the reference the React tree is checked against (tests/test_trade_tree_browser.py) until #1419."""
     tag = SHELL.format(v=ASSET_VERSION)
     head = html.replace("<title>Extended 网格交易机器人 · GridMind 视觉版</title>", "<title>Park 交易台 · 交易</title>", 1)
     if "</body>" not in head:
