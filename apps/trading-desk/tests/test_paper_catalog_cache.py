@@ -65,7 +65,7 @@ def test_callers_that_arrive_together_share_one_read(sources, fetch):
             time.sleep(0.2)
         return real(url, body)
 
-    sources.fetch = slow
+    sources.catalog_fetch = slow
     results: list[object] = []
     workers = [threading.Thread(target=lambda: results.append(sources.paper_gold())) for _ in range(4)]
     for worker in workers:
@@ -82,3 +82,13 @@ def test_an_unreadable_catalog_is_not_kept(sources, fetch):
     assert sources._paper_catalog is None
     fetch.routes[CATALOG] = good
     assert sources.paper_gold()["venue_profile_id"] == "okx.paper"
+
+
+def test_the_catalog_read_waits_longer_than_the_default_cut_off(config, monkeypatch):
+    """Production's catalog took up to 12.8 s; the default 12 s timeout left gold's venue unknown now and then."""
+    from trading_desk import sources as module
+
+    seen = []
+    monkeypatch.setattr(module, "http_json", lambda url, body=None, timeout=12.0: seen.append((url, timeout)) or {"venue_profiles": []})
+    module.Sources(config).paper_catalog()
+    assert seen and seen[0][0].endswith("/api/dashboard-control/catalog") and seen[0][1] == 30

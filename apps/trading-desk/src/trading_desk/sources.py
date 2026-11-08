@@ -52,6 +52,8 @@ class Sources:
         self.venues = venues or DEFAULT_VENUES
         self.fetch = fetch or http_json
         self.slow_fetch = fetch or (lambda url, body: http_json(url, body, timeout=120))
+        # GridMind's catalog takes 8-13 s; the default 12 s cut it off now and then, leaving gold's venue unknown (#1431).
+        self.catalog_fetch = fetch or (lambda url, body: http_json(url, body, timeout=30))
         self._news_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._news_lock = threading.Lock()
         self._paper_catalog: tuple[float, dict[str, Any]] | None = None
@@ -241,7 +243,7 @@ class Sources:
 
     def _fetch_paper_catalog(self) -> dict[str, Any] | None:
         try:
-            payload = self.fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
+            payload = self.catalog_fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
         except Exception:  # noqa: BLE001 - unreachable catalog is reported by the caller.
             LOG.warning("caught_exception", exc_info=True)
             return None

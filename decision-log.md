@@ -192,6 +192,8 @@
 - A failed read never replaces the last good one. Once that expires, an unreadable catalog gives `None`, and
   callers show 「场所读不到」 as before. A failed read is not kept, so the next call tries again.
 - `serve` starts one background read at startup, so the first page after a deploy does not wait either.
+- The catalog read waits up to 30 s (`catalog_fetch`). The default 12 s cut it off now and then: production's
+  `/api/assets` showed gold with an empty `instrument_id` during this work.
 - `catalog()` (the testnet list for adding an asset) still reads fresh: it shows current eligibility.
 
 ## Gotchas
