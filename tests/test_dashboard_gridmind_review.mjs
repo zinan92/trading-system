@@ -4,9 +4,10 @@ import test from "node:test";
 import {fileURLToPath} from "node:url";
 import {dirname, resolve} from "node:path";
 import vm from "node:vm";
+import {gridmindSource} from "./gridmind_page.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const html = readFileSync(resolve(root, "dashboard-gridmind.html"), "utf8");
+const html = gridmindSource(); // #1420: the page and its own files, inlined back
 
 function reviewHarness() {
   const context = vm.createContext({

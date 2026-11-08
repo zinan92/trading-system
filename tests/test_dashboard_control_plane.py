@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.gridmind_page import gridmind_source
 from services.dashboard_control_plane import (
     DashboardControlPlane,
     canonical_preview_digest,
@@ -294,9 +295,7 @@ def test_dashboard_selection_builder_is_non_executing(tmp_path: Path) -> None:
 
 
 def test_dashboard_v5_contains_the_venue_asset_strategy_track() -> None:
-    html = (Path(__file__).resolve().parents[1] / "dashboard-gridmind.html").read_text(
-        encoding="utf-8"
-    )
+    html = gridmind_source()
 
     for element_id in (
         "dashboardControlCard",

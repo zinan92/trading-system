@@ -1,11 +1,12 @@
 from pathlib import Path
+from tests.gridmind_page import gridmind_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _html() -> str:
-    return (ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8")
+    return gridmind_source()  # #1420: the page and its own files, inlined back
 
 
 def _tables() -> str:

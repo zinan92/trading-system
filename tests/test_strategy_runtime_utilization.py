@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.gridmind_page import gridmind_source
+
 from services.control_audit import (
     append_control_event,
     build_control_event,
@@ -84,10 +86,7 @@ def test_runtime_utilization_and_supervisor_reach_read_model() -> None:
 
 
 def test_dashboard_shows_supervisor_utilization_and_history() -> None:
-    html = (
-        Path(__file__).resolve().parents[1]
-        / "dashboard-gridmind.html"
-    ).read_text(encoding="utf-8")
+    html = gridmind_source()
 
     assert '["策略运行占比",runtimeUtilizationText(runtime)]' in html
     assert '`24h ${value("24h")} / 7d ${value("7d")}`' in html
