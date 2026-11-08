@@ -322,6 +322,9 @@ function MarketCard() {
               <option value="4h">
                 {"4h"}
               </option>
+              <option value="1d">
+                {"日"}
+              </option>
             </select>
           </label>
           <div>

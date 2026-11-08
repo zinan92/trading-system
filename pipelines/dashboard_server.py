@@ -1607,7 +1607,7 @@ def _build_selected_testnet_read_model(
             "start_stop_production": True,
             "parameter_mutation": False,
             "cancel_order": True,
-            "market_timeframes": ["1m", "5m", "15m", "30m", "1h", "4h"],
+            "market_timeframes": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
         },
     }
     park = {
@@ -2279,7 +2279,7 @@ def _assemble_strategy_console_snapshot(
         "ui_capabilities": {
             "manual_order": True,
             "manual_close": True,
-            "market_timeframes": ["1m", "5m", "15m", "30m", "1h", "4h"],
+            "market_timeframes": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
             "start_stop_production": True,
             "parameter_mutation": True,
             "cancel_order": True,

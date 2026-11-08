@@ -45,10 +45,12 @@ def test_gridmind_keeps_the_compact_production_console_layout() -> None:
     assert "includeGridRange" not in html
 
 
-def test_gridmind_defaults_to_30m_without_changing_strategy_input_timeframes() -> None:
+def test_gridmind_defaults_to_4h_without_changing_strategy_input_timeframes() -> None:
     html = _html()
 
-    assert 'timeframe:"30m"' in html
+    # #1445: the chart opens on 4h; start, trend and the strip read the 1m feed regardless (#1443).
+    assert 'timeframe:"4h",timeframesOpen:false' in html
+    assert 'const TF_PRIMARY=["1h","4h","1d"],TF_LABEL={"1d":"日"};' in html
 
 
 def test_gridmind_renders_last_trusted_read_model_before_optional_30m_refresh() -> None:

@@ -410,3 +410,69 @@ def test_a_4h_chart_starts_and_judges_from_the_selected_symbol_s_1m_feed(case: s
             assert "开始" not in " ".join(page.locator("#deskStatus button").all_inner_texts())
         assert browser_errors == []
         browser.close()
+
+
+@pytest.mark.parametrize("width", [1680, 375])
+def test_the_chart_opens_on_4h_with_1h_4h_day_and_the_rest_behind_more(width: int) -> None:
+    """#1445: 4h by default; 1h / 4h / 日 shown, 1m 5m 15m 30m behind 「更多」; 日 reads 1d bars."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4000.0)
+    model.setdefault("ui_capabilities", {})["market_timeframes"] = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+    chart_requests: list[str] = []
+    browser_errors: list[str] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_bars(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        if timeframe == "1m":
+            payload = _minute_feed(4010.0, 5)
+        else:
+            chart_requests.append(timeframe)
+            day = timeframe == "1d"
+            stamps = [f"2026-07-{d:02d}" for d in range(1, 18)] if day else [f"2026-07-17T{h:02d}:00:00+00:00" for h in range(0, 24, 4)]
+            payload = {"symbol": "GOLD", "timeframe": timeframe, "provider": "okx", "provider_symbol": "XAUUSDT", "trusted": True,
+                       "latest_close": 4000.0, "latest_timestamp": stamps[-1],
+                       "bars": [{"timestamp": t, "open": 3990.0 + i, "high": 4005.0 + i, "low": 3985.0 + i, "close": 4000.0 + i} for i, t in enumerate(stamps)]}
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - local browser dependency
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": width, "height": 1000})
+        page.on("pageerror", lambda error: browser_errors.append(str(error)))
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
+        page.goto(f"{origin}/trade", wait_until="load")
+        page.wait_for_function("() => window.gridmindView && window.gridmindView.market && window.gridmindView.market.timeframe")
+        buttons = page.locator("#timeframeButtons button")
+
+        assert chart_requests[0] == "4h"  # the first chart read is 4h, not 30m
+        assert page.evaluate("() => window.gridmindView.market.timeframe") == "4h"
+        assert buttons.all_inner_texts() == ["1h", "4h", "日", "更多"]
+        assert page.locator("#timeframeButtons button.on").inner_text() == "4h"
+
+        page.locator("#timeframeButtons [data-tf-more]").click()
+        assert buttons.all_inner_texts() == ["1h", "4h", "日", "收起", "1m", "5m", "15m", "30m"]
+        page.locator("#timeframeButtons [data-tf-more]").click()
+        assert buttons.all_inner_texts() == ["1h", "4h", "日", "更多"]
+
+        page.locator('#timeframeButtons [data-tf="1d"]').click()
+        page.wait_for_function("() => window.gridmindView.market.timeframe === '1d'")
+        assert chart_requests[-1] == "1d"
+        assert page.locator("#timeframeButtons button.on").inner_text() == "日"
+        assert page.locator("#timeframe").input_value() == "1d"
+        assert page.locator("#chartMeta").inner_text().startswith("GOLD · 1d")
+        assert page.evaluate("() => window.gridmindView.marketTrusted") is True  # still the 1m feed (#1443)
+
+        page.locator("#timeframeButtons [data-tf-more]").click()
+        page.locator('#timeframeButtons [data-tf="15m"]').click()
+        page.wait_for_function("() => window.gridmindView.market.timeframe === '15m'")
+        # A selected 「更多」 timeframe keeps the rest open, without a collapse button.
+        assert buttons.all_inner_texts() == ["1h", "4h", "日", "1m", "5m", "15m", "30m"]
+        assert page.evaluate("() => document.documentElement.scrollWidth") <= width
+        assert browser_errors == []
+        browser.close()
