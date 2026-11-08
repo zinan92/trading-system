@@ -15,9 +15,12 @@ def test_gridmind_exposes_dca_as_a_distinct_paper_strategy() -> None:
     assert '✓ 当前选择' in html
     assert 'id="dcaTarget"' in html
     assert 'id="dcaStop"' in html
-    assert 'loop_enabled:false' in html
+    # #1418: the start payload and the start risk acknowledgement are TypeScript, built to assets/gridmind/control.js.
+    control = (ROOT / "apps" / "web" / "src" / "gridmind" / "control.ts").read_text(encoding="utf-8")
+    assert "loop_enabled: false" in control
     assert 'schema_version:"dca-risk-ack-v1"' not in html
-    assert 'manual.schema_version||"grid-range-risk-ack-v1"' in html
+    assert 'schema_version: "dca-risk-ack-v1"' not in control
+    assert 'manual.schema_version || "grid-range-risk-ack-v1"' in control
     assert "新增成交后整轮止盈单会更新为累计数量" in html
     assert "DCA 使用右侧加仓区间参数，不支持拖动网格" in html
 

@@ -6,7 +6,7 @@
   "description": "React + TypeScript islands for the 交易台 /trade page. Built into apps/trading-desk/src/trading_desk/static/web/.",
   "engines": {"node": "^20.19.0 || >=22.12.0"},
   "scripts": {
-    "build": "vite build && vite build --config vite.read.config.ts && vite build --config vite.chart.config.ts",
+    "build": "vite build && vite build --config vite.read.config.ts && vite build --config vite.chart.config.ts && vite build --config vite.control.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

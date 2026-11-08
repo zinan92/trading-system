@@ -19,6 +19,12 @@ def _chart_layer() -> str:
     return (ROOT / "apps" / "web" / "src" / "gridmind" / "chart.ts").read_text(encoding="utf-8")
 
 
+def _control_layer() -> str:
+    """#1418: the start form, control bodies, start/stop, the start risk review and the range replacement are TypeScript,
+    built to assets/gridmind/control.js. gridmind.js keeps control(), the one place a control request is sent (ADR 0008)."""
+    return (ROOT / "apps" / "web" / "src" / "gridmind" / "control.ts").read_text(encoding="utf-8")
+
+
 def _tables() -> str:
     """#1328: the 持仓/委托/成交 cells are laid out by this React island; GridMind publishes the rows."""
     return (ROOT / "apps" / "web" / "src" / "islands" / "ExecTables.tsx").read_text(encoding="utf-8")
@@ -162,14 +168,15 @@ def test_gridmind_invalid_manual_draft_is_visible_and_cannot_start() -> None:
 
     assert "draftProblem:null" in html
     assert "function invalidStrategyDraft()" in html
-    assert 'title:"每格名义缺失"' in html
+    control = _control_layer()
+    assert 'title: "每格名义缺失"' in control
     assert 'button.textContent=locked?"手动":"AUTO"' in html
     assert "function renderParameterValidity()" in html
     assert 'input.classList.toggle("is-invalid",invalid)' in html
     assert 'box.className="preview-summary invalid"' in html
     assert 'text:!controlled?"登录后可启动机器人":invalidDraft?"请先修复参数"' in html
     assert "!invalidDraft&&fresh" in html
-    assert "state.preview=null;const inputProblem=invalidStrategyDraft()" in html
+    assert "s.preview = null;" in control and "const inputProblem = hostInvalidDraft(host);" in control
 
 
 def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
@@ -313,8 +320,8 @@ def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> 
         assert f'id="{element_id}"' in html
 
     assert 'id="outOfRange"' not in html
-    assert 'mode:"manual_adaptive"' in html
-    assert 'const locked=[...state.parameterLocks].sort()' in html
+    assert 'mode: "manual_adaptive"' in _control_layer()
+    assert "const locked = [...locks].sort()" in _control_layer()
     assert 'data-param-lock="grid_count"' in html
     assert 'data-param-lock="profit_target"' in html
     assert 'data-param-lock="notional_per_grid"' in html
@@ -332,7 +339,7 @@ def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> 
     ):
         assert f"control('{action}'" in html or f'control("{action}"' in html
 
-    assert "prepared_start_id:state.preparedStartId" in html
+    assert "prepared_start_id: s.preparedStartId" in _control_layer()
     assert "prepared_start_market_moved" in html
     assert "机器人已启动" in html
     assert "await requestPreview({useInputs:true});const result=await control('adjust_plan'" not in html
@@ -529,10 +536,11 @@ def test_gridmind_range_adjustment_is_an_explicit_read_only_draft_mode() -> None
     assert 'aria-pressed="false"' in html
     assert "function toggleGridAdjustMode()" in html
     assert "function runtimeMatchesProductionPlan" in html
-    assert 'actual==="running"' in html
-    assert "runtimePlanId===planId" in html
-    assert "Number(runtime.strategy_plan_version)===Number(plan.version)" in html
-    assert "expected_strategy_plan_version:draft.expectedPlanVersion" in html
+    control = _control_layer()
+    assert 'actual === "running"' in control
+    assert "runtimePlanId === planId" in control
+    assert "Number(runtime.strategy_plan_version) === Number(plan.version)" in control
+    assert "expected_strategy_plan_version: draft.expectedPlanVersion" in control
     assert "state.gridAdjustMode&&Boolean(draft)" in html
     chart = _chart_layer()
     assert 'data-grid-drag="upper"' in chart
@@ -543,13 +551,15 @@ def test_gridmind_range_adjustment_is_an_explicit_read_only_draft_mode() -> None
     assert "grid-ghost-line" in html
     assert 'data-grid-action="confirm"' in chart
     assert 'data-grid-action="cancel"' in chart
-    assert 'control("preview_range"' in html
-    assert "grid-range-drag-preview-v1" in html
+    assert 'host.control("preview_range"' in control
+    assert "grid-range-drag-preview-v1" in control
     assert "点击最终按钮前仍是只读草稿" in html
-    assert "orders_created: 0" not in html
-    assert "Object.entries(requiredEffects).some" in html
+    # The required no-side-effect fields are a table the check walks, never page copy.
+    built_control = (ROOT / "assets" / "gridmind" / "control.js").read_text(encoding="utf-8")
+    assert "orders_created: 0" not in html.replace(built_control, "")
+    assert "Object.entries(requiredEffects).some" in control
     assert "function createStartupGridRangeDraft()" in html
-    assert 'scope:"startup"' in html
+    assert 'scope: "startup"' in control
     assert 'draft.scope === "startup" ? "应用参数" : "确认"' in chart
     assert "async function applyStartupGridRangeDraft()" in html
     assert 'lockParameter("range")' in html
@@ -564,8 +574,8 @@ def test_gridmind_start_failures_use_a_centered_dialog_not_trade_toasts() -> Non
     assert 'id="startFailureReason" role="alert"' in html
     assert "启动未完成" in html
     assert "生产状态没有改变" in html
-    assert 'failureSurface="toast"' in html
-    assert 'failureSurface==="dialog"' in html
+    assert 'failureSurface = "toast"' in _control_layer()
+    assert 'failureSurface === "dialog"' in _control_layer()
     assert html.count('{failureSurface:"dialog"}') == 2
 
 
@@ -602,15 +612,15 @@ def test_gridmind_range_review_card_shows_required_old_to_new_fields() -> None:
 
 
 def test_uncertain_start_requires_persisted_complete_start_evidence() -> None:
-    html = _html()
+    control = _control_layer()
 
-    assert "accepted=Number(counts.accepted_order_count)" in html
-    assert "auditedControlAcceptance(runtime,action,afterEvent)" in html
-    assert "runtime.last_action==='start'" in html
-    assert "runtime.accepted_order_count_known===true" in html
-    assert "samePlan" in html
-    assert "控制面已确认完整网格启动" in html
-    assert "openOrders=Number(counts.open_order_count)" in html
+    assert "accepted = Number(counts.accepted_order_count)" in control
+    assert "auditedControlAcceptance(runtime, action, afterEvent)" in control
+    assert 'runtime.last_action === "start"' in control
+    assert "runtime.accepted_order_count_known === true" in control
+    assert "samePlan" in control
+    assert "控制面已确认完整网格启动" in control
+    assert "openOrders = Number(counts.open_order_count)" in control
 
 
 def test_response_recovery_reads_audit_receipt_without_repeating_control_actions() -> None:
@@ -618,11 +628,15 @@ def test_response_recovery_reads_audit_receipt_without_repeating_control_actions
 
     assert "function controlReceiptText(runtime)" in html
     assert "控制回执" in html
-    assert "result=await reconcileControlOutcome('prepare_start',error,{afterEvent})" in html
-    assert 'result=await reconcileControlOutcome("replace_grid",error,{afterEvent})' in html
-    assert html.count("await control('prepare_start',payload,{reload:false})") == 1
-    assert html.count('await control("replace_grid",payload,{reload:false})') == 1
-    assert "连接中断后已通过控制回执核对" in html
+    control = _control_layer()
+    assert 'result = await reconcileControlOutcome(host, "prepare_start", error, {afterEvent})' in control
+    assert 'result = await reconcileControlOutcome(host, "replace_grid", error, {afterEvent})' in control
+    assert control.count('await host.control("prepare_start", payload, {reload: false})') == 1
+    assert control.count('await host.control("replace_grid", payload, {reload: false})') == 1
+    assert "连接中断后已通过控制回执核对" in control
+    # ADR 0008: gridmind.js's control() is still the one sender, and the control layer only reaches it through the host.
+    assert html.count("await api('/api/strategy-console/control'") == 1
+    assert "gmControl.controlRequestBody(action,payload," in html
 
 
 def test_gridmind_order_state_is_always_escaped_as_text() -> None:
