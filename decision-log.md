@@ -180,6 +180,49 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — The asset is chosen once, in the top bar (#1433)
+
+## Decision
+
+- Block 1b of the redesign (#1427). The top bar (`renderAssets()` in gm-desk.js) lists every desk asset, not just
+  the two GridMind instruments. Each button calls `pickAsset(key)`:
+  - BTC and gold switch GridMind's venue and instrument as before;
+  - ETH, silver and crude switch only the desk (judgment, plan, review). Their buttons are dashed, with a title
+    saying the chart does not switch, and 今天 shows `AssetNote` (`#deskAssetNote`): the chart and the tables below
+    stay on GridMind's asset. The wording depends on `grid_plan`: an asset with a desk grid plan says its judgment
+    and plan are here.
+- 今天's own asset chips and the `desk:pick-asset` event are removed. `pushProps` now passes each asset's
+  `capabilities` to the island.
+- The buttons draw right after `/api/assets` answers, not after GridMind's selection (about 12 s in production).
+- With no usable GridMind selection (none yet, or a remembered one that no longer exists), 今天 follows
+  `chartAsset()`: the asset the chart shows (gold for `xau_paper`, BTC for `btc`), not a blind BTC fallback.
+- Phone: the row stays one line and scrolls sideways (`flex-wrap:nowrap; overflow-x:auto`); the page does not
+  widen.
+- Bridge scope: `gridmindView` is still read here; it goes when the strip and the chart header become components.
+
+## Gotchas
+
+- `tests/fixtures/trade_tree_shape.json` is re-recorded on purpose, from /trade with the root `#trade-app` and the
+  compact format the test writes (`{\n "source": …,\n "desktop": …,\n "phone": …\n}`). A first attempt used
+  `body` as the root and an indented dump (24k lines); the test compares `#trade-app` only. The diff is two
+  intended changes: 今天's props carry `capabilities`, and step 1 lost the chips `DIV`. Errors, wire, reads and
+  scroll widths are unchanged.
+- The first note said ETH, silver and crude "cannot open a grid". They have `grid_plan` and `execute` on the desk;
+  only GridMind's chart lacks them. The wording now says only what the chart does.
+
+## Verification
+
+- `test_gm_desk_today_browser.py`: `test_the_top_bar_is_the_one_asset_picker` (BTC, gold, ETH; ETH dashed; no
+  chips; picking ETH moves 今天 and its note, survives the 2 s follow loop, and fires no venue or instrument intent),
+  `test_a_retired_selection_judges_what_the_chart_shows`, `test_five_assets_fit_a_phone_top_bar_without_widening_the_page`.
+  Today file and tree shape pass.
+- vitest `today-panel.test.tsx` 17 (AssetNote: none for a GridMind asset, both wordings). Web 2260, tsc clean,
+  build changes only `web.js`. Desk 273, mjs 29, root 4145 passed, 2 skipped (after the rebase on #1431). Mocks only.
+- Production record for #1431 at a8c5403 (no `--dashboard`), read-only: `curl /api/assets` 5.1 s on the first call
+  after the restart (the warm-up read was in flight), then 3 ms twice; gold, silver and crude carry venue ids. A
+  fresh load in the browser pane: `/api/assets` 20 ms (was 29.4 s); 「今天」 drew at 9.2 s, right after GridMind's
+  selection (9.1 s). This change removes that wait.
+
 # 2026-11-08 — The desk reads GridMind's catalog once and keeps it (#1431)
 
 ## Decision
