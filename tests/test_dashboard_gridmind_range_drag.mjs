@@ -16,10 +16,9 @@ function extractedFunction(name, nextName) {
   return vm.runInNewContext(`(${html.slice(start, end)})`);
 }
 
-const calculateGridDragBounds = extractedFunction(
-  "calculateGridDragBounds",
-  "moveGridDrag",
-);
+// #1417: the drag bounds are TypeScript (apps/web/src/gridmind/chart.ts), built to assets/gridmind/chart.js.
+const chartLayer = vm.runInNewContext(readFileSync(resolve(root, "assets/gridmind/chart.js"), "utf8") + ";window.gmChart", {window: {}});
+const {calculateGridDragBounds} = chartLayer;
 const runtimeMatchesProductionPlan = extractedFunction(
   "runtimeMatchesProductionPlan",
   "createGridRangeDraft",

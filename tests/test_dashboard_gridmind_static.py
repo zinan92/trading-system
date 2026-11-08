@@ -14,6 +14,11 @@ def _read_layer() -> str:
     return (ROOT / "apps" / "web" / "src" / "gridmind" / "read.ts").read_text(encoding="utf-8")
 
 
+def _chart_layer() -> str:
+    """#1417: the price lines, the grid-range overlay and its drag, and the history tests are TypeScript, built to assets/gridmind/chart.js."""
+    return (ROOT / "apps" / "web" / "src" / "gridmind" / "chart.ts").read_text(encoding="utf-8")
+
+
 def _tables() -> str:
     """#1328: the 持仓/委托/成交 cells are laid out by this React island; GridMind publishes the rows."""
     return (ROOT / "apps" / "web" / "src" / "islands" / "ExecTables.tsx").read_text(encoding="utf-8")
@@ -131,12 +136,13 @@ def test_gridmind_draws_only_visible_price_overlays_with_one_axis_label() -> Non
 
     assert "visibleOhlcPriceWindow(market)" in html
     assert "state.chart?.getVisibleOhlcRange?.(100)" in html
-    assert "visibleWindowOrders=visibleOrders.filter" in html
-    assert "const labelledOrder=" in html
-    assert "showLabel=order===labelledOrder" in html
-    assert 'axisLabelVisible:showLabel' in html
-    assert 'rgba(148,163,184,.16)' in html
-    assert 'rgba(40,199,111,.38)' in html
+    chart = _chart_layer()
+    assert "visibleWindowOrders = visibleOrders.filter" in chart
+    assert "const labelledOrder = nearest(visibleWindowOrders, latest)" in chart
+    assert "showLabel = order === labelledOrder" in chart
+    assert "axisLabelVisible: showLabel" in chart
+    assert 'rgba(148,163,184,.16)' in chart
+    assert 'rgba(40,199,111,.38)' in chart
 
     install = html.index("state.chart.setAdaptedData(StandardKline.adaptBarPayload(market)")
     overlay = html.index("state.chart.setPriceLines(buildVisibleChartPriceLines", install)
@@ -181,7 +187,8 @@ def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
         assert f'id="{retired_id}"' not in html
     assert 'id="actionStatus"' in html
     assert ".chart{height:450px;min-height:320px}" in html
-    assert "StandardKlineChart(host,{height:450,minHeight:320" in html
+    assert "StandardKlineChart(host,{...gmChart.CHART_OPTIONS})" in html
+    assert "height: 450, minHeight: 320" in _chart_layer()
     assert ".chart{height:420px}" in html
     assert ".chart{height:340px}" in html
 
@@ -236,7 +243,7 @@ def test_gridmind_draws_the_testnet_grid_lifecycle_when_no_production_plan_exist
     assert "function lifecycleDisplayPlan(runtime)" in html
     assert "function displayPlan(data)" in html
     assert 'renderChart(market,livePlan,execution)' in html
-    assert 'title:"硬止损"' in html
+    assert 'title: "硬止损"' in _chart_layer()
     assert 'row.eligibility==="eligible"||row.instrument_id===control.selection?.instrument_id' in html
 
 
@@ -268,7 +275,7 @@ def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> No
     assert "restoreVisibleLogicalRange" in html
     assert "standard-kline:viewchange" in html
     assert "shouldLoadOlderHistory" in html
-    assert "alreadyAtOldestEdge" in html
+    assert "alreadyAtOldestEdge" in _chart_layer()
     assert "event=>finish(event,true)" in html
     assert "event=>finish(event,false)" in html
     assert 'status: "error", fresh: false, trusted: false' in _read_layer()
@@ -510,7 +517,8 @@ def test_gridmind_lifecycle_retention_cannot_change_controls_or_chart_truth() ->
     assert "applyReadModel(data)" in html
     assert "applyReadModel(latest)" in html
     assert "renderRobotControls(data,fresh,execution)" in html
-    assert "visibleOrders=previewing?startupPreview.orders:(execution.open_orders||[])" in html
+    assert "preview:state.gridAdjustMode?null:state.preview" in html
+    assert "visibleOrders: Json[] = previewing ? preview.orders : (execution.open_orders || [])" in _chart_layer()
     assert "openOrders=counts.open_order_count" in html
 
 
@@ -526,14 +534,15 @@ def test_gridmind_range_adjustment_is_an_explicit_read_only_draft_mode() -> None
     assert "Number(runtime.strategy_plan_version)===Number(plan.version)" in html
     assert "expected_strategy_plan_version:draft.expectedPlanVersion" in html
     assert "state.gridAdjustMode&&Boolean(draft)" in html
-    assert 'data-grid-drag="upper"' in html
-    assert 'data-grid-drag="move"' in html
-    assert 'data-grid-drag="lower"' in html
+    chart = _chart_layer()
+    assert 'data-grid-drag="upper"' in chart
+    assert 'data-grid-drag="move"' in chart
+    assert 'data-grid-drag="lower"' in chart
     assert ".grid-hit.upper,.grid-hit.lower{height:16px;cursor:ns-resize}" in html
     assert ".grid-hit.interior{cursor:grab" in html
     assert "grid-ghost-line" in html
-    assert 'data-grid-action="confirm"' in html
-    assert 'data-grid-action="cancel"' in html
+    assert 'data-grid-action="confirm"' in chart
+    assert 'data-grid-action="cancel"' in chart
     assert 'control("preview_range"' in html
     assert "grid-range-drag-preview-v1" in html
     assert "点击最终按钮前仍是只读草稿" in html
@@ -541,7 +550,7 @@ def test_gridmind_range_adjustment_is_an_explicit_read_only_draft_mode() -> None
     assert "Object.entries(requiredEffects).some" in html
     assert "function createStartupGridRangeDraft()" in html
     assert 'scope:"startup"' in html
-    assert 'draft.scope==="startup"?"应用参数":"确认"' in html
+    assert 'draft.scope === "startup" ? "应用参数" : "确认"' in chart
     assert "async function applyStartupGridRangeDraft()" in html
     assert 'lockParameter("range")' in html
 
@@ -710,7 +719,9 @@ def test_the_control_panel_keeps_every_request_and_approval_in_gridmind() -> Non
     source = (ROOT / "apps" / "web" / "src" / "islands" / "ControlSummaries.tsx").read_text(encoding="utf-8")
     for forbidden in ("<input", "<select", "<button", "onClick", "onChange", "fetch(", "dangerouslySetInnerHTML"):
         assert forbidden not in source
-    assert 'gmIntent.fire("gesture","grid.dragEnd",{event,commit:true})' in html  # ADR 0008: a finished drag is an intent
+    # ADR 0008: a finished drag is an intent. #1417: the overlay (chart.ts) hands every release back to gridmind.js.
+    assert 'dragEnd:(event,commit)=>gmIntent.fire("gesture","grid.dragEnd",{event,commit})' in html
+    assert 'window.addEventListener("pointerup", event => on.dragEnd(event, true)' in _chart_layer()
     assert 'gmIntent.on("gesture","grid.dragEnd"' in script
     assert "async function executeGridRangeReplacement" in script
     frame = (ROOT / "apps" / "web" / "src" / "islands" / "ChartFrame.tsx").read_text(encoding="utf-8")

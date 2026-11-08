@@ -25,11 +25,11 @@ def test_the_page_has_no_inline_style_or_script_left() -> None:
 def test_the_page_loads_its_files_in_the_old_order_as_plain_blocking_tags() -> None:
     assert gridmind_files() == [
         "assets/gridmind/base.css", "assets/gridmind/skin.css",
-        "assets/gridmind/control-intents.js", "assets/gridmind/read.js", "assets/gridmind/gridmind.js",
+        "assets/gridmind/control-intents.js", "assets/gridmind/read.js", "assets/gridmind/chart.js", "assets/gridmind/gridmind.js",
         "assets/gridmind/park-ai-chat.js", "assets/gridmind/dashboard-control.js",
     ]
     tags = re.findall(r'<script src="assets/gridmind/[^"]+"[^>]*>', PAGE.read_text(encoding="utf-8"))
-    assert len(tags) == 5 and not [t for t in tags if re.search(r"\b(defer|async|type=)", t)]  # run in place, before the desk's deferred scripts
+    assert len(tags) == 6 and not [t for t in tags if re.search(r"\b(defer|async|type=)", t)]  # run in place, before the desk's deferred scripts
     for path in gridmind_files():
         assert (ROOT / path).is_file() and (ROOT / path).stat().st_size > 0
 

@@ -9,6 +9,15 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-08, K 线和网格区间拖动搬到 TypeScript · #1417)
+
+- 整页换 React（#1330）第 5 步：K 线上画的线（区间上下界、网格线、挂单、硬止损、持仓均价）、网格区间的拖动层（上下边、整体平移、拖动中的预览线、确认/取消按钮的位置）、向左拖加载更早 K 线的判断，搬成了一个带类型、带测试的 TypeScript 模块（`apps/web/src/gridmind/chart.ts`）。gridmind.js 改成调用它。
+- 拖动松手仍然发 `grid.dragEnd` 意图；确认后替换网格那一段（`executeGridRangeReplacement`）没搬，留给 #1418。
+- 判断一条没改：先让旧代码对 434 组输入跑一遍（含拖动层的每个位置和样式），新模块逐条对上。
+- 截图对比：拖动相关的 4 张浏览器截图，新旧版本只在顶栏「运行中」的闪烁圆点上有差别，旧版本自己跑两次也差在这里；K 线、网格线、拖动层逐像素一致。
+- 新文件 `assets/gridmind/chart.js` 由模块编译出来、随代码提交，CI 检查是否最新。8765、交易台和云网关都放行它，部署不用重启 8765。
+- 第 4 步（#1416）已在生产 c63a066 上只读核对：read.js 和 gridmind.js 与代码库逐字节一致，18 个组件都在，两个交易场所都加载，图表 30 分钟行情显示「实时·可信」，没有报错。顶栏价格提示「最新 1m 行情未通过可信门控」，因为顶栏只认 1 分钟行情而图表是 30 分钟，旧代码也这样。浏览器面板隐藏，手机宽度没量。
+
 ## 现在在哪里(2026-11-08, GridMind 读取层搬到 TypeScript · #1416)
 
 - 整页换 React（#1330）第 4 步：GridMind 读数据的那部分逻辑搬成了一个带类型、带测试的 TypeScript 模块（`apps/web/src/gridmind/read.ts`），包括调接口、出错时给 Park 看的说明、行情可不可信、刷新失败时保留最后可信 K 线、顶栏价格和涨跌、定时刷新。原脚本 gridmind.js 改成调用这个模块。

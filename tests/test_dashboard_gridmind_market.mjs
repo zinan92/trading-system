@@ -1,25 +1,13 @@
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import {gridmindSource} from "./gridmind_page.mjs";
-
-const html = gridmindSource(); // #1420: the page and its own files, inlined back
-
-function sourceBetween(name, nextName) {
-  const start = html.indexOf(`function ${name}`);
-  const end = html.indexOf(`\nfunction ${nextName}`, start);
-  assert.ok(start >= 0 && end > start, `could not extract ${name}`);
-  return html.slice(start, end);
-}
 
 // #1416: mergeMarketBars, retainLastTrustedMarket and reconcileReadModelMarket moved to
 // apps/web/src/gridmind/read.ts; their tests moved with them (read.test.ts, "market snapshots").
-const shouldLoadOlderHistory = vm.runInNewContext(
-  `(${sourceBetween("shouldLoadOlderHistory", "historyInputCanLoad")})`,
-);
-const historyInputCanLoad = vm.runInNewContext(
-  `(${sourceBetween("historyInputCanLoad", "setupHistoryGesture")})`,
-);
+// #1417: the history-gesture tests are TypeScript (apps/web/src/gridmind/chart.ts), built to assets/gridmind/chart.js.
+const chartLayer = vm.runInNewContext(readFileSync(new URL("../assets/gridmind/chart.js", import.meta.url), "utf8") + ";window.gmChart", {window: {}});
+const {shouldLoadOlderHistory, historyInputCanLoad} = chartLayer;
 
 test("history loads when a right drag starts at the oldest fitted edge", () => {
   assert.equal(shouldLoadOlderHistory({startX: 100, lastX: 120, startRange: {from: -1}}, {from: -1}), true);

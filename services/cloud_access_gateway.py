@@ -80,6 +80,7 @@ ALLOW_EXACT = frozenset(
         "/assets/gridmind/skin.css",
         "/assets/gridmind/control-intents.js",
         "/assets/gridmind/read.js",
+        "/assets/gridmind/chart.js",
         "/assets/gridmind/gridmind.js",
         "/assets/gridmind/park-ai-chat.js",
         "/assets/gridmind/dashboard-control.js",

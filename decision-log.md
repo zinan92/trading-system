@@ -180,6 +180,57 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — GridMind's chart and range drag are TypeScript (#1417)
+
+## Decision
+
+- Step 5 of #1330. These moved out of `gridmind.js` into `apps/web/src/gridmind/chart.ts`:
+  - the price lines on the main K-line (`buildVisibleChartPriceLines`, `visibleOhlcPriceWindow`);
+  - the grid draft's levels and sides (`draftGridLevels`, `draftGridLinePresentation`);
+  - the drag: pointer price with edge extrapolation, the start gate, bounds, the dragged draft;
+  - the overlay: its markup, mount and listeners, and its layout (`gridOverlayLayout`, `renderGridOverlay`);
+  - the history-gesture tests (`shouldLoadOlderHistory`, `historyInputCanLoad`);
+  - the chart options, the re-fit key and the indicator choice.
+- `chart.ts` keeps no state. gridmind.js still owns `state.gridDraft`, `state.gridDrag` and the chart object, and
+  keeps the same function names as thin wrappers (`renderGridAdjustOverlay`, `buildVisibleChartPriceLines`,
+  `beginGridDrag`, …), so page scripts and browser tests reach them unchanged.
+- A release still goes out as the `grid.dragEnd` intent (ADR 0008): the overlay hands it back to gridmind.js,
+  which fires it. `executeGridRangeReplacement` and the review dialog stay for #1418.
+- Built like read.js: `vite.chart.config.ts` (IIFE, not minified) writes `assets/gridmind/chart.js`, committed and
+  checked by `make test-web`. It loads after read.js and before gridmind.js on both pages, and 8765, the desk and
+  the gateway allow-list carry it. Vite's IIFE build takes one entry, hence one config per layer.
+
+## Gotchas
+
+- gridmind.js's `isDca(value=state.strategyType)` falls back to the form's type when a plan has no
+  `strategy_type`. The port keeps that: `isDcaType(value, formStrategyType)` and `chartVisualKey` take it explicitly.
+- A startup preview without `orders` threw in `buildVisibleChartPriceLines`; the port still throws there (pinned).
+- Each new overlay adds its own window pointer listeners, as before (a chart remount makes a fresh overlay).
+- `legacy-chart.json` was captured from c63a066 in a VM with a fake `state` and a fake overlay node (434 cases,
+  `TZ=UTC`). NaN inputs are encoded as `{num: "NaN"}`; an early capture wrote them as `null`, which `Number()`
+  turns into 0, and 10 cases looked like regressions until the encoding was fixed.
+- The two mjs tests that pulled `calculateGridDragBounds`, `shouldLoadOlderHistory` and `historyInputCanLoad` out
+  of the page now load the built `chart.js` in a VM. Static asserts that searched gridmind.js for the moved
+  code now search `chart.ts`. `chart.ts` passes the islands guard with no exemption: no `/api/`, no `method:`.
+
+## Verification
+
+- Vitest 689 passed. `chart.test.ts` (442) checks the port against the legacy table and the overlay mount in jsdom.
+  Typecheck clean; `chart.js` rebuilds byte-identically and `web.js` is unchanged.
+- Desk 263 passed (`data-boot` equals the page's 6 scripts, in order). Static, own-files, gateway and server
+  tests: 137 passed. mjs: 29 passed.
+- GridMind, control, intents, today, tree and kline browser suites: 91 passed, including the range-drag journeys
+  (drag, release, remount, wheel unclamp, ghost sides, startup apply/cancel, risk confirmation).
+- Screenshots: the 4 range-drag screenshots taken on c63a066 and on this branch, pixel-diffed in Chromium. The only
+  changed pixels are a 24 x 28 px patch over the header's live status dot, and two c63a066 runs differ there too.
+  The chart, grid lines and drag overlay are pixel-identical.
+- Production record for #1416 at c63a066, read-only on 127.0.0.1:8790/trade:
+  - read.js and gridmind.js are served byte-identical to the repo; 8765 serves read.js; `data-boot` lists it.
+  - `gmRead` has 31 exports; 18 islands, 7 canvases, both venues; the chart's 30m market reads 实时·可信; no
+    console errors.
+  - The header price title says the latest 1m is not trusted because the chart is on 30m; legacy did the same.
+  - The pane was hidden, so the 375 px width was not measured.
+
 # 2026-11-08 — GridMind's read layer is TypeScript (#1416)
 
 ## Decision
