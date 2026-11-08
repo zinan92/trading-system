@@ -9,6 +9,12 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-08, 交易页的脚本和样式搬成独立文件 · #1420)
+
+- 整页换 React（#1330）第 1 步：`dashboard-gridmind.html` 原来把约 270KB 脚本和 53KB 样式写在页面里，现在搬到 `assets/gridmind/` 下 6 个文件，页面只剩结构（约 20KB）。内容一个字节没改，加载顺序不变，页面行为、请求和按钮都一样。
+- 8765、交易台 /trade 和云网关都放行这 6 个文件，8765 不缓存它们。
+- 手机上的 PAPER 标记（#1412）已在生产 e9f1308 上确认显示。
+
 ## 现在在哪里(2026-11-07, 手机上也能看到 PAPER 标记 · #1412)
 
 - 手机宽度（760px 以下）顶栏原来把 PAPER/TESTNET 标记藏掉了，看不出页面是在纸面盘还是测试盘上操作。现在只藏副标题，标记一直显示。

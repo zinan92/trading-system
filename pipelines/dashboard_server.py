@@ -170,6 +170,17 @@ STRATEGY_MUTATION_ENDPOINT_ALLOWLIST = frozenset(
 )
 
 
+# #1420: dashboard-gridmind.html loads these; the desk (/trade) and the cloud gateway forward the same paths.
+GRIDMIND_OWN_FILES = (
+    "/assets/gridmind/base.css",
+    "/assets/gridmind/skin.css",
+    "/assets/gridmind/control-intents.js",
+    "/assets/gridmind/gridmind.js",
+    "/assets/gridmind/park-ai-chat.js",
+    "/assets/gridmind/dashboard-control.js",
+)
+
+
 class _SingleFlightCall:
     def __init__(self) -> None:
         self.done = threading.Event()
@@ -344,6 +355,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/assets/shell.js",
             "/assets/shell.css",
             "/packages/standard-kline/standard-kline.js",
+            *GRIDMIND_OWN_FILES,  # #1420: the console's own styles and scripts
         }
 
     def do_OPTIONS(self) -> None:

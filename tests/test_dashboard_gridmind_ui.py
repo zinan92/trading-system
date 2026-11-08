@@ -1,11 +1,12 @@
 from pathlib import Path
+from tests.gridmind_page import gridmind_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_gridmind_exposes_dca_as_a_distinct_paper_strategy() -> None:
-    html = (ROOT / "dashboard-gridmind.html").read_text()
+    html = gridmind_source()
 
     assert 'data-strategy-type="grid"' in html
     assert 'data-strategy-type="dca"' in html
@@ -22,7 +23,7 @@ def test_gridmind_exposes_dca_as_a_distinct_paper_strategy() -> None:
 
 
 def test_gridmind_shows_position_first_ai_framework_before_strategy_adoption() -> None:
-    html = (ROOT / "dashboard-gridmind.html").read_text()
+    html = gridmind_source()
 
     assert "① 长期位置" in html
     assert "② 趋势阶段" in html

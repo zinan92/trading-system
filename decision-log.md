@@ -180,6 +180,40 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — GridMind's inline scripts and styles become files (#1420)
+
+## Decision
+
+- Step 1 of #1330. `dashboard-gridmind.html` keeps its structure; its 4 inline scripts and 7 style blocks move to
+  `assets/gridmind/`: `base.css` (the block above the GridMind comment), `skin.css` (the 6 blocks after it, joined by
+  a newline, in document order), `control-intents.js`, `gridmind.js`, `park-ai-chat.js`, `dashboard-control.js`.
+- Each `<style>` became a `<link>` and each `<script>` a plain `<script src>` in the same place, with no `defer` or
+  `async`. They still run in order and before the desk's deferred `gm-desk.js` and `web.js`.
+- `GRIDMIND_OWN_FILES` in `pipelines/dashboard_server.py` lists the 6 paths. 8765 sends them with no-store. The desk
+  relay (`READ_PATHS`) and the cloud gateway (`ALLOW_EXACT`) forward the same paths.
+- Tests that read the page as text use `tests/gridmind_page.py` / `tests/gridmind_page.mjs`, which inline the files
+  back. Their "not in" and ordering checks still cover the whole source.
+
+## Gotchas
+
+- The GridMind HTML comment contains the text `<script>`. A naive `<script>…</script>` regex matched from the comment
+  to the first real `</script>`. The split masks comments first.
+- A path missing from one allowlist would leave that server's page without its controls, and tests that read files
+  from disk would still pass. `tests/test_gridmind_own_files.py` ties the page's file list to all three allowlists.
+- Browser tests that serve the page from a route already fall back to files under the repo root, so they load the new
+  files unchanged.
+
+## Verification
+
+- Rebuilding the page from the shell and the 6 files gives exactly `origin/main`'s page (sha256 0635cd0d…) with the 5
+  `</style>\n<style>` separators between the skin blocks folded to `\n`: rebuilt and expected sha256 b2f45f8d….
+- `tests/test_gridmind_own_files.py`: no inline style or script is left, the files load in the old order as blocking
+  tags, and every server forwards them.
+- `tests/fixtures/gridmind_control_wire.json` has no diff.
+- Local at 21313e0: GridMind, dashboard-control and today browser tests 87 passed; static page, control plane, gateway
+  and server tests 201 passed; root focused set 868 passed; desk 259 passed; the 4 mjs tests (32) and the picker and
+  actions vitest files (13) pass.
+
 # 2026-11-07 — The PAPER/TESTNET badge stays visible on a phone (#1412)
 
 ## Decision
@@ -197,6 +231,11 @@
 
 - A new browser test at 375 px asserts the badge is visible, within the viewport, the subtitle hidden and no sideways
   scroll. It fails on main and passes with the fix. `test_gm_desk_today_browser.py` and the static page tests pass.
+- Production at e9f1308, deployed with `--dashboard`. On 127.0.0.1:8790/trade at 375 px the badge reads PAPER, sits
+  inside the viewport, and `scrollWidth` is 375. Read-only checks; nothing was pressed.
+- Right after the 8765 restart, /trade showed 「黄金行情中断，已停止开新仓（最后可信 18:30）」 once. A reload, with the
+  OKX market fresh and trusted, cleared it. The page read the market while 8765 was restarting, and the fail-closed
+  banner is the expected result. This was not a data outage.
 
 # 2026-11-07 — The desk runs silver and crude as Paper grids (#1407)
 
