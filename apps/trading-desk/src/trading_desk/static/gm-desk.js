@@ -146,7 +146,6 @@ if (typeof document !== "undefined") (() => {
     $d(".gm-control-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
     $d(".strategy-card .robot-actions")?.insertAdjacentHTML("afterend", `<p class="desk-rail-note">${note}</p>`);
     mountStatus(wrap, rail);
-    $d("#deskJudgeDate").textContent = new Date().toLocaleDateString("zh-CN", {month: "long", day: "numeric"});
   }
 
   // ---- status line, retired selection, collapsed GridMind cards --------------------------
@@ -393,6 +392,10 @@ if (typeof document !== "undefined") (() => {
     if (!old || $d("#deskReview")) return;
     old.dataset.panel = "review-legacy";
     old.insertAdjacentHTML("afterend", `<div class="tab card-body desk-review" data-panel="review" id="deskReview" data-island="review" data-props="{}"></div>`);
+  }
+
+  function bindReview() {
+    if (!$d("#deskReview")) return;
     $d("#tabs")?.addEventListener("click", event => { if (event.target.closest('[data-tab="review"]')) $d("#deskReview").dataset.props = '{"active":true}'; });
   }
 
@@ -406,9 +409,16 @@ if (typeof document !== "undefined") (() => {
   }
 
   async function boot() {
-    mountReview();
-    mountBench();
-    mountShell();
+    // /trade is one React tree since #1415: it already drew everything mountReview, mountBench and
+    // mountShell would insert or move. Any other page that loads this file still gets them.
+    if (!document.getElementById("trade-app")) {
+      mountReview();
+      mountBench();
+      mountShell();
+    }
+    bindReview();
+    const date = $d("#deskJudgeDate");
+    if (date) date.textContent = new Date().toLocaleDateString("zh-CN", {month: "long", day: "numeric"});
     syncSteps();
     renderStatus();
     setInterval(renderStatus, 1000);  // follows whatever GridMind last rendered

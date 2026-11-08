@@ -180,6 +180,76 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — /trade is one React tree (#1415)
+
+## Decision
+
+- Step 3 of #1330. `trade.html` is now a mount point, `#trade-app` (`display:contents`). `web.js` renders
+  `apps/web/src/trade/Skeleton.tsx` into it once. The skeleton contains the header, cards, chart frame, tables,
+  control rail, desk rail and dialogs.
+- `Skeleton.tsx` was generated once from the pre-#1415 page: `dashboard-gridmind.html` plus the desk shell, after
+  gm-desk.js's structural mounts and before GridMind or the islands ran. It is edited by hand from here on.
+  - Every text node is a literal, so whitespace between inline elements is unchanged.
+  - Island placeholders keep their legacy children as opaque markup.
+- The frame is `memo` with no props, state or context, so React never reconciles it again. GridMind and gm-desk.js
+  keep writing inside it and moving its cards (`placeForViewport`) as before.
+- Start order is unchanged, with React in front:
+  1. The skeleton renders.
+  2. `data-boot` loads the 4 GridMind scripts and `gm-desk.js` in order (`async = false`; a failed one does not stop
+     the next).
+  3. The islands mount.
+  4. The bridge starts for placeholders added later (gm-desk.js step 3).
+- Islands are children of the tree through portals (`trade/Islands.tsx`). They behave as the bridge did:
+  - legacy children are cleared and `data-island-live` is set before mounting;
+  - a changed `data-props` re-renders synchronously;
+  - a bad `data-props` keeps what is on screen.
+  The bridge skips placeholders that are already live.
+- gm-desk.js skips `mountReview`, `mountBench` and `mountShell` when `#trade-app` exists. The review-tab listener
+  and the date line, which were inside those functions, now run in `boot` for both pages.
+- The page's asset version is hashed from the files on every request (`STATIC_DIR`). A deploy waits up to 30
+  minutes for the gate before restarting the desk. A startup value would serve the new mount point with the old
+  `?v=` in between, and a browser could reuse a cached old `web.js` and show a blank page.
+- **Deliberate change:** if `web.js` fails to load, /trade shows one line, 「交易页面没有加载出来，请刷新。交易所上的挂单和
+  持仓不受影响。」. Before this step, GridMind still drew without the bundle. 8765's page keeps that behaviour and
+  stays the reference until #1419.
+
+## Gotchas
+
+- `dashboard-control.js` and `park-ai-chat.js` exit at once on localhost unless the port is 8765, 8766 or 8790.
+  A parity check on a random local port would pass with the control rail never running. The tree tests use a
+  `.test` host.
+- In the reference, gm-desk.js moving cards out of `.console-wrap` leaves adjacent text nodes, which serialise
+  into one. The DOM comparison joins adjacent text nodes. They render the same.
+- On /trade, gm-desk.css hides GridMind's own control buttons. The journey test presses them with a bubbling
+  click, which is what the intent router handles, after waiting for each to be enabled.
+- The islands guard test is a text search. `Skeleton.tsx` names classes such as `dashboard-control-card`, so it
+  gets a stricter check instead: no `/api/`, no `fetch(`, no `method:`.
+- Importing `main.tsx` in a test starts the bridge on `document.body`. The registry moved to `registry.tsx`.
+
+## Verification
+
+- Vitest 167 passed:
+  - the skeleton is the reference node for node, with no React warning;
+  - islands wait for boot, clear legacy children and follow `data-props`;
+  - scripts load in order and a failed last script still boots;
+  - the desk mount point boots with the real registry.
+- `tests/test_trade_tree_browser.py`, reference vs tree with the same mocks, fixed clock and a `.test` host:
+  - Desktop and 375 px: the booted DOM matches node for node, as do the island list, body class and GET list. No
+    control request is sent, there are no page or console errors, and `scrollWidth` matches.
+  - The control journey on the tree sends `gridmind_control_wire.json`'s 7 requests byte for byte, the same as the
+    reference.
+  - A one-character change to the skeleton fails the desktop check at the exact node (checked once by hand).
+- Desk 263 passed: the mount point boots the old scripts in order, and the version follows the files on disk.
+  `web.js` rebuilds byte-identically.
+- Root browser, static, gateway, server and focused tests: 1015 passed. That includes the today flow, now running on
+  the tree.
+- Production record for #1414 at 9e87c8e, deployed without `--dashboard`:
+  - /trade is byte-equal to the pre-switch page (sha256 04016be1…).
+  - All 10 mapped files are served by the desk with repo bytes and their content type. Traversal returns 404.
+  - Desktop and 375 px render as before, with `scrollWidth` 375 and no console errors.
+  - A first read 6 s after load caught the catalog still pending, and a resize reload aborted requests. A reload
+    with a 10 s wait shows both venues and no failed request.
+
 # 2026-11-08 — The desk renders /trade itself (#1414)
 
 ## Decision
