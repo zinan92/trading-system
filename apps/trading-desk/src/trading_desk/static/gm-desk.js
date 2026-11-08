@@ -458,9 +458,12 @@ if (typeof document !== "undefined") (() => {
     window.matchMedia("(max-width: 760px)").addEventListener("change", placeForViewport);
     try { D.assets = (await call("/api/assets")).assets; } catch (e) { setProps($d('[data-island="today"]'), {error: e.message}); return; }
     renderAssets();  // the buttons show as soon as the list is read, before GridMind's selection (#1433)
-    const ready = await waitFor(() => window.dashboardControlState?.selection, 15000);
-    if (!ready || !selectionAsset()) focusAsset(chartAsset());
-    else applyAsset();
+    // 「今天」 starts on whichever comes first: a usable GridMind selection, or its first read naming the chart's asset.
+    // The selection waits on 8765's catalog (8–13 s); the read takes about 1.5 s (#1436). A retired selection is not
+    // usable, so it does not end the wait before the chart's asset is known. The follow loop below moves 「今天」 to
+    // the selection's asset if it turns out to be another one.
+    await waitFor(() => selectionAsset() || window.gridmindView?.market?.symbol, 15000);
+    if (selectionAsset()) applyAsset(); else focusAsset(chartAsset());
     setInterval(() => { if (!D.switching) applyAsset(); }, 2000);  // follow selection changes made inside GridMind
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
