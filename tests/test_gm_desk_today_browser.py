@@ -32,7 +32,7 @@ BTC_SELECTION = "{venue_profile_id: 'hyperliquid.testnet', instrument_id: 'BTC-U
 
 
 def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers: dict | None = None, reads_extra: dict | None = None,
-          selection: str = BTC_SELECTION, title: str = "今天 · BTC", width: int = 1680, assets: dict | None = None):
+          selection: str | None = BTC_SELECTION, title: str = "今天 · BTC", width: int = 1680, assets: dict | None = None):
     from trading_desk.gridmind import render_trade_page
 
     html = render_trade_page()  # exactly what the desk's /trade sends (#1414)
@@ -87,7 +87,8 @@ def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers:
     page.goto(f"{origin}/trade", wait_until="load")
     # GridMind's control script only runs on its own ports, so publish the selection it would:
     # the console is on BTC (Hyperliquid Testnet) unless a test says otherwise.
-    page.evaluate(f"() => {{ window.dashboardControlState = {{catalog: {{venue_profiles: []}}, preview: null, selection: {selection}}}; }}")
+    if selection is not None:  # None: GridMind's selection has not arrived (8765's catalog is slow)
+        page.evaluate(f"() => {{ window.dashboardControlState = {{catalog: {{venue_profiles: []}}, preview: null, selection: {selection}}}; }}")
     page.locator("#deskJudgeTitle", has_text=title).wait_for()
     return browser, page
 
@@ -398,4 +399,22 @@ def test_the_news_and_the_three_events_are_one_line_in_step_one(width: int) -> N
         assert page.locator("#deskNews li", has_text="比特币 ETF 净流入").is_visible()
         assert page.evaluate("() => getComputedStyle(document.querySelector('.desk-layout')).gridTemplateColumns.split(' ').length") == 1
         assert page.evaluate("() => document.documentElement.scrollWidth") <= width
+        browser.close()
+
+
+def test_today_starts_on_the_chart_before_gridmind_s_selection_arrives() -> None:
+    """#1436: the selection waits on 8765's catalog (8–13 s in production). 「今天」 starts on the chart's asset from
+    GridMind's first read, and moves when the selection arrives naming another asset."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [], selection=None, title="今天 · 黄金",
+                              reads_extra={"/api/desk/XAU": _desk(), "/api/news/XAU": {"ok": True, "items": []}})
+        # Well inside the old 15 s wait for the selection (the read model answers at once here).
+        assert page.evaluate("() => performance.now()") < 8000
+        assert page.evaluate("() => window.dashboardControlState === undefined")
+        assert page.evaluate("() => window.gridmindView.market.symbol") == "GOLD"
+        assert page.locator('#deskAssets [data-asset="XAU"]').get_attribute("aria-pressed") == "true"
+        page.evaluate(f"() => {{ window.dashboardControlState = {{catalog: {{venue_profiles: []}}, preview: null, selection: {BTC_SELECTION}}}; }}")
+        page.locator("#deskJudgeTitle", has_text="今天 · BTC").wait_for(timeout=5000)
+        assert page.locator('#deskAssets [data-asset="BTC"]').get_attribute("aria-pressed") == "true"
         browser.close()
