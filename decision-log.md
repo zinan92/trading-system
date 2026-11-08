@@ -222,6 +222,11 @@
 - `test_a_failed_1m_feed_is_named_even_when_the_chart_shows_a_trusted_4h`; static assertions updated.
 - gridmind browser + static + today 131, control wire 1 (`gridmind_control_wire.json` unchanged), desk 276, mjs 29.
 - Root: 4155 passed, 2 skipped before the re-record (the 2 tree cases failed on the `#gate` text); tree 2 passed after.
+- Production record for #1441 at d594ad2 (no `--dashboard`), read-only: web.js, gm-desk.js, gm-desk.css and
+  gridmind.js (served by the desk from its checkout) byte-identical; `gridmindView.gateMarket` present (GOLD 1m,
+  provider `unavailable`, untrusted: Sunday close); chart GOLD 30m untrusted; banner 「黄金行情中断，已停止开新仓」 with
+  「行情源现在没有返回可用数据（还没有可信数据）」; health 「行情没有通过可信检查」. The deciding case (chart trusted,
+  read model not) was not seen in production; tests only.
 
 # 2026-11-09 — The banner's "market trusted" reads the same feed the start gate does (#1441)
 
