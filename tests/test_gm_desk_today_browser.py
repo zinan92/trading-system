@@ -14,6 +14,7 @@ import sys
 import pytest
 
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _read_model, _static_server
+from tests.trade_page import open_manual
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "apps" / "trading-desk" / "src" / "trading_desk" / "static"
@@ -440,4 +441,34 @@ def test_a_retired_selection_that_arrives_first_still_waits_for_the_chart() -> N
         browser, page = _page(runtime, origin, _desk(), [], [], selection=retired, title="今天 · 黄金", hold_read_model=True,
                               reads_extra={"/api/desk/XAU": _desk(), "/api/news/XAU": {"ok": True, "items": []}})
         assert page.locator('#deskAssets [data-asset="XAU"]').get_attribute("aria-pressed") == "true"
+
+
+@pytest.mark.parametrize("width", [1680, 375])
+def test_one_way_in_manual_tuning_under_step_two_and_one_highlighted_button(width: int) -> None:
+    """#1438: 「自己调」 (GridMind's manual cards, ids unchanged) sits in 「今天」 between step 2 and step 3; only the
+    current step's primary button is highlighted; the banner offers no start button of its own."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), [], [], width=width)
+        order = page.evaluate("""() => { const card = document.getElementById('deskToday');
+          return [...card.querySelectorAll('.desk-today, #deskManual, .desk-steps-exec')].map(el => el.id || el.className); }""")
+        assert order == ["desk-today", "deskManual", "desk-steps desk-steps-exec"]
+        assert page.locator("#deskManual > summary").inner_text().startswith("自己调")
+        for element_id in ("dashboardControlCard", "parkAiChatCard", "strategyCard", "dashboardVenueSelect", "startRobot", "stopRobot"):
+            assert page.locator(f"#deskToday #deskManual #{element_id}").count() == 1, element_id
+        open_manual(page)
+        assert page.locator("#dashboardVenueSelect").is_visible()
+        assert page.locator("#deskStatusAction", has_text="开始").count() == 0
+
+        accent = "rgb(63, 208, 224)"
+        background = "el => getComputedStyle(el).backgroundColor"
+        page.locator(".desk-dir [data-d=long]").click()
+        approve = page.get_by_role("button", name="批准这份计划")
+        approve.wait_for()
+        assert approve.evaluate(background) == accent  # step 2 is the current step
+        approve.click()
+        page.locator("#deskExec").wait_for()
+        assert page.locator('.desk-step[data-step="3"]').get_attribute("class").split() == ["desk-step", "on"]
+        assert approve.evaluate(background) == "rgba(0, 0, 0, 0)"  # still there and usable, no longer highlighted
+        assert page.evaluate("() => document.documentElement.scrollWidth") <= width
         browser.close()
