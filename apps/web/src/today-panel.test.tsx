@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import {NewsRail} from "./islands/NewsRail";
 import {ADVICE_POLL_MS, AssetNote, REFRESH_MS, TodayPanel, basisLine} from "./islands/TodayPanel";
 import {execRestore, judgmentBody, planBody} from "./today";
@@ -64,7 +64,8 @@ test("pick → plan → approve sends the legacy bodies and hands the preview to
   const exec = events.filter(e => e.name === "desk:exec");
   expect(exec[0]!.detail).toEqual({asset: "XAU", clear: true});
   expect(exec.at(-1)!.detail).toEqual({asset: "XAU", judgmentId: 99, preview, done: null});
-  expect(events.filter(e => e.name === "desk:steps").at(-1)!.detail).toEqual({asset: "XAU", direction: true, planKind: "new", handed: true});
+  // desk:steps goes out from an effect after the render that shows the toast; CI once read it one render early.
+  await waitFor(() => expect(events.filter(e => e.name === "desk:steps").at(-1)!.detail).toEqual({asset: "XAU", direction: true, planKind: "new", handed: true}));
   expect(events.find(e => e.name === "desk:desk")!.detail.desk.meta.kind).toBe("xau_paper");
 });
 
