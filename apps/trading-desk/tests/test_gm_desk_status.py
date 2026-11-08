@@ -54,6 +54,24 @@ def idle_view(**market) -> dict:
     }
 
 
+def with_gate(view: dict, **market) -> dict:
+    """The read model's own market (#1441): the configured instrument, 1m."""
+    view["gateMarket"] = {"provider_label": "OKX 1m", "latest_timestamp": "2026-11-05T02:40:00+00:00", "timeframe": "1m", **market}
+    return view
+
+
+def test_the_read_model_feed_counts_for_the_same_asset_and_names_itself() -> None:
+    """#1441: never looser than the chart alone; the red body is worded from the feed that failed."""
+    view = with_gate(with_run(idle_view(symbol="GOLD")), symbol="GOLD", trusted=False)
+    banner = run("banner", view, {"asset": "黄金"})
+    assert banner["tone"] == "bad" and banner["title"] == "黄金行情中断，已停止开新仓"
+    assert "OKX 1m的数据没有通过可信检查（最后可信数据 11/5 10:40）" in banner["body"]
+    assert run("health", view)["text"].startswith("行情没有通过可信检查")
+    btc = with_gate(with_run(idle_view(symbol="BTC")), symbol="GOLD", trusted=False)
+    assert run("banner", btc, {"asset": "BTC"})["tone"] == "idle"
+    assert run("health", btc)["text"] == "行情可信"
+
+
 def running_view() -> dict:
     view = idle_view()
     view["data"]["current_strategy"] = {
@@ -248,8 +266,14 @@ def test_start_is_offered_only_when_everything_is_calm() -> None:
         "running": with_run(running_view(), label="运行中", runClass="running"),
         "running, heartbeat lost": with_tick(running_view()),
         "running, error": with_run(running_view(), label="运行异常", runClass="error"),
+        # #1441: the read model's feed counts when it is the chart's instrument.
+        "chart trusted, read model untrusted (same asset)": with_gate(with_run(idle_view(symbol="GOLD")), symbol="GOLD", trusted=False),
+        "chart untrusted, read model trusted": with_gate(with_run(idle_view(symbol="GOLD", trusted=False)), symbol="GOLD", trusted=True),
+        "chart trusted, read model trusted": with_gate(with_run(idle_view(symbol="GOLD")), symbol="GOLD", trusted=True),
+        "chart BTC trusted, gold read model untrusted": with_gate(with_run(idle_view(symbol="BTC")), symbol="GOLD", trusted=False),
     }
     banners = {name: run("banner", view, {"asset": "黄金"}) for name, view in states.items()}
-    assert {name for name, b in banners.items() if b.get("startable")} == {"calm idle", "calm idle, older page without a verdict"}
-    assert {name for name, b in banners.items() if b.get("next")} == {"calm idle", "calm idle, older page without a verdict"}
+    calm = {"calm idle", "calm idle, older page without a verdict", "chart trusted, read model trusted", "chart BTC trusted, gold read model untrusted"}
+    assert {name for name, b in banners.items() if b.get("startable")} == calm
+    assert {name for name, b in banners.items() if b.get("next")} == calm
     assert all((b["action"] or {}).get("kind") != "start" for b in banners.values())
