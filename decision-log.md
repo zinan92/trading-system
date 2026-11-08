@@ -214,6 +214,9 @@
   「黄金行情中断，已停止开新仓」, `#deskHealth` starts 「行情没有通过可信检查」, no start.
 - `test_a_feed_with_no_provider_says_so_in_plain_words`.
 - Desk 275, gridmind static + header browser 50, mjs 29.
+- Root: 4128 passed, 2 skipped, 25 failed in five git-state files (live activation gate/protocol, live DCA canary,
+  schedule manager, testnet soak) because the branch was rebased while the run was in progress; those five files
+  rerun alone: 59 passed.
 - Production record for #1438 at dc690c9 (no `--dashboard`), read-only: the three static files byte-identical;
   `#deskManual` inside `#deskToday` before `ol.desk-steps-exec` with `#dashboardControlCard`, `#parkAiChatCard`,
   `#strategyCard` inside; the banner's only button is 「查看原因」 (gold feed closed for the weekend, correctly red);
