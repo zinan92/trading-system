@@ -180,6 +180,50 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-08 — The news and the week's three events are one line in step 1 (#1435)
+
+## Decision
+
+- Block 2a of the redesign (#1427). Step 1 of 「今天」 has `Basis` (`#deskBasis`, a folded `<details>`): 「今天的依据：N 件大事
+  · M 条新闻」. Opened, it shows `WatchCards` and `NewsList`; `#deskNews` and the click-to-cite are unchanged.
+- The reads moved into hooks, `useWatch()` (5 min) and `useNews(asset)` (1 min), both owned by the today island, so
+  they keep running while the line is folded. `WatchPanel` and `NewsRail` remain as thin wrappers (their tests
+  still render them) but are no longer islands: `data-island="watch"` and `"news"` are gone from the skeleton, the
+  registry and gm-desk.js's shell.
+- `basisLine(watch, news)` is the one place the line is worded. M counts `isKey` (high_impact or watch), the same
+  filter the list opens on. The alert names a watch item with `kind: "breaking"` (the data's own 「突发」) and
+  `freshImportant`: high_impact items absent from the previous read. No new threshold. The thin strip at the top
+  of the page is deferred to when the status strip becomes a component.
+- `.desk-layout` is one column (the 300 px news column is gone); the desktop chart grows from 874 to 1182 px.
+  `placeForViewport` moves only the today card on a phone.
+- An `/api/assets` failure used to be written into the news rail. It now goes to the today island as
+  `{error}` (`#deskAssetsError`), so React owns that node.
+
+## Gotchas
+
+- The news list's `.card-title` inside the today card picked up the today card's title style (large, centered,
+  with GridMind's control-rail dot). `#deskToday .desk-basis .card-title` resets it to the events header's look.
+- `tests/fixtures/trade_tree_shape.json` re-recorded on purpose (same script and compact format as #1433). The
+  differences, checked node by node: the watch and news islands are gone, the chart's inline widths changed
+  (874 → 1182 px on desktop), and step 1 gained `#deskBasis`. Reads, wire, errors and scroll widths are unchanged.
+- Correction to #1433's record: in production 「今天」 still waits for GridMind's selection object before choosing
+  its asset (8.6 s for the selection, steps at 8.7 s), because `boot()` awaits `dashboardControlState.selection`
+  after `renderAssets()`. Only the buttons stopped waiting. A follow-up starts 「今天」 from the chart's asset.
+
+## Verification
+
+- vitest `today-panel.test.tsx` 20 (3 new: `basisLine` wording for counts, loading, errors, stale and fresh;
+  folded reads update the line and the alert, opening shows 3 cards and a click cites; the asset-list error).
+- Browser `test_the_news_and_the_three_events_are_one_line_in_step_one` at 1680, 1100 and 375: the line reads
+  「今天的依据：3 件大事 · 1 条新闻」, every `.desk-news`/`.desk-watch` is inside step 1's `#deskBasis`, the news is hidden
+  until opened, the layout is one column, no horizontal overflow. The approve flow test opens the line before
+  citing. Today file 18, tree shape 3, header and static pass.
+- Web 2263, tsc clean, build changes only `web.js`. Desk 273, mjs 29, root 4148 passed, 2 skipped.
+  `gridmind_control_wire.json` unchanged. Mocks only.
+- Production record for #1433 at ab5e759 (no `--dashboard`), read-only: the three static files are byte-identical;
+  the top bar showed BTC, 黄金, ETH, 白银, 原油 at 0.4 s with the last three dashed; no `#deskChips`; with the retired
+  selection and a GOLD chart, 「今天 · 黄金」 with 黄金 pressed. 「今天」's steps at 8.7 s (see the correction above).
+
 # 2026-11-08 — The asset is chosen once, in the top bar (#1433)
 
 ## Decision
@@ -221,7 +265,8 @@
 - Production record for #1431 at a8c5403 (no `--dashboard`), read-only: `curl /api/assets` 5.1 s on the first call
   after the restart (the warm-up read was in flight), then 3 ms twice; gold, silver and crude carry venue ids. A
   fresh load in the browser pane: `/api/assets` 20 ms (was 29.4 s); 「今天」 drew at 9.2 s, right after GridMind's
-  selection (9.1 s). This change removes that wait.
+  selection (9.1 s). (Corrected after deploy: this change draws the buttons without waiting, but 「今天」 still
+  waits for the selection; see #1435's record.)
 
 # 2026-11-08 — The desk reads GridMind's catalog once and keeps it (#1431)
 
