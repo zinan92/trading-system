@@ -242,7 +242,7 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
         browser.close()
 
 
-@pytest.mark.parametrize("case", ["untrusted_market", "read_model_502", "risk_blocked", "heartbeat_stale"])
+@pytest.mark.parametrize("case", ["untrusted_market", "read_model_502", "risk_blocked", "heartbeat_stale", "read_model_feed_untrusted"])
 def test_trade_shows_park_the_failure_the_hidden_header_pills_carry(case: str) -> None:
     """/trade hides GridMind's header pills (#1294); the banner says what they said (#1419, #1429). Timers run, as
     on the real page (the banner refreshes every second). No failure state offers 「开始今天的计划」."""
@@ -253,6 +253,8 @@ def test_trade_shows_park_the_failure_the_hidden_header_pills_carry(case: str) -
         "risk_blocked": lambda: _header_model(5001.0, provider="backup_venue", risk_blocked=True),
         "heartbeat_stale": lambda: _header_model(5003.0, execution_tick_health={
             "status": "blocked", "reason": "heartbeat_stale", "age_seconds": 181, "max_age_seconds": 180}),
+        # #1441: the chart's bars are trusted, the read model's own (same-instrument) feed is not.
+        "read_model_feed_untrusted": lambda: _header_model(5004.0, provider="backup_venue", trusted=False),
     }[case]()
 
     def fulfill_read_model(route) -> None:
@@ -262,7 +264,8 @@ def test_trade_shows_park_the_failure_the_hidden_header_pills_carry(case: str) -
             route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
 
     def fulfill_bars(route) -> None:
-        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "bars": []}))
+        bars_market = {**model["market"], "trusted": True} if case == "read_model_feed_untrusted" else model["market"]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**bars_market, "bars": []}))
 
     with _static_server() as origin, playwright.sync_playwright() as runtime:
         try:
@@ -279,11 +282,16 @@ def test_trade_shows_park_the_failure_the_hidden_header_pills_carry(case: str) -
             "read_model_502": "读不到交易状态",
             "risk_blocked": "运行状态异常",
             "heartbeat_stale": "执行心跳中断",
+            "read_model_feed_untrusted": "黄金行情中断，已停止开新仓",
         }[case]
         banner.locator("h1", has_text=title).wait_for(state="visible")
         page.wait_for_timeout(1500)  # a banner tick or more: the state holds
         assert banner.locator("h1").inner_text() == title
         copy = banner.inner_text()
+        if case == "read_model_feed_untrusted":
+            assert page.evaluate("() => window.gridmindView.marketTrusted") is True  # the chart's own feed passed
+            assert page.evaluate("() => window.gridmindView.gateMarket.trusted") is False
+            assert page.locator("#deskHealth").inner_text().startswith("行情没有通过可信检查")
         if case == "untrusted_market":
             assert "不会改用别的数据源顶替" in copy and "页面会自动重试" in copy
             assert page.locator("#deskHealth").inner_text().startswith("行情没有通过可信检查")

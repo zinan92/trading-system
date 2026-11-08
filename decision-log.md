@@ -180,6 +180,49 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — The banner's "market trusted" reads the same feed the start gate does (#1441)
+
+## Decision
+
+- `DeskStatus.banner` and `DeskStatus.health` judged trust from `gridmindView.marketTrusted` alone: the chart's
+  feed, at whatever timeframe the chart shows. The read model's market (`_dashboard_market_identity()`, always the
+  configured symbol at 1m; the source of `completeness`' `market_not_trusted`) was not part of it, so the banner
+  could say trusted while the read model said not.
+- gridmind.js's `gridmindView` gains `gateMarket: data?.market || null`. New `DeskStatus.feedTrust(view)`: trusted
+  only if the chart feed passed and, when `gateMarket` names the same symbol (or either symbol is missing), the
+  read model's feed passed too. A different symbol (BTC chart, gold read model) is judged by the chart alone: the
+  gold feed never vouches for BTC. The red banner's provider and last trusted time come from the feed that failed.
+- Stricter only. GridMind's own `fresh`/`headerFresh` (trend box, `#gate`, robot and start controls) is untouched.
+- The header price cell still reads the chart's feed. It moves to the gate feed with block 3a (default chart 4h),
+  where it would otherwise call a 4h chart "1m feed not trusted".
+
+## Gotchas
+
+- `gateMarket` with no symbol is treated as the same instrument (stricter), not skipped.
+- The new browser case fails on the old gm-desk.js (banner calm, start offered) and passes on the new one.
+- Seen in production while checking #1438 (Sunday, gold closed): the read model's market has provider
+  `unavailable`, label `Unavailable`, no timestamp, and the red body read 「Unavailable的数据没有通过可信检查」. It now
+  reads 「行情源现在没有返回可用数据」 when the provider is `unavailable` or there is no label.
+
+## Verification
+
+- `test_gm_desk_status.py`: `test_the_read_model_feed_counts_for_the_same_asset_and_names_itself`; the startable
+  table adds read model trusted/chart untrusted, chart trusted/read model untrusted (same symbol) as not startable,
+  and chart BTC trusted/gold read model untrusted as startable. On the old gm-desk.js 2 fail.
+- Browser `test_trade_shows_park_the_failure_the_hidden_header_pills_carry[read_model_feed_untrusted]`: bars route
+  trusted, read model market untrusted; `marketTrusted` true, `gateMarket.trusted` false, banner
+  「黄金行情中断，已停止开新仓」, `#deskHealth` starts 「行情没有通过可信检查」, no start.
+- `test_a_feed_with_no_provider_says_so_in_plain_words`.
+- Desk 275, gridmind static + header browser 50, mjs 29.
+- Root (local): the run overlapped a rebase and uncommitted edits in the same worktree, so its 25 failures in five
+  git-state files are not evidence either way (those files rerun alone: 59 passed). The full suite of record is CI's
+  run on the PR head.
+- Production record for #1438 at dc690c9 (no `--dashboard`), read-only: the three static files byte-identical;
+  `#deskManual` inside `#deskToday` before `ol.desk-steps-exec` with `#dashboardControlCard`, `#parkAiChatCard`,
+  `#strategyCard` inside; the banner's only button is 「查看原因」 (gold feed closed for the weekend, correctly red);
+  no horizontal overflow. Not seen in production: the calm idle `.desk-status-next` line (the banner was red) and
+  the one-filled-button rule (no step had a `.desk-btn.primary` yet). To check read-only after the open.
+
 # 2026-11-09 — One way in: 「自己调」 under step 2 and one highlighted button (#1438)
 
 ## Decision

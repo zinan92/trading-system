@@ -35,6 +35,19 @@ const DeskStatus = (() => {
   // Start is offered only here: read ok, data present, feed trusted, nothing running, GridMind says stopped.
   const calmRun = run => !run.tickLost && (run.runClass === undefined || run.runClass === "stopped");
 
+  // 「行情可信」 (#1441): the chart's feed must be trusted, and so must the read model's feed (the configured market the
+  // backend's completeness check reads) whenever it is the same instrument as the chart. Never looser than the
+  // chart alone. The read model's market stays on the configured symbol, so for another asset it is not consulted:
+  // a gold feed never vouches for BTC. `failed` is the feed that did not pass, so the wording comes from one object.
+  function feedTrust(view) {
+    const chart = view?.market || view?.data?.market || {}, gate = view?.gateMarket;
+    if (view?.marketTrusted !== true) return {trusted: false, failed: chart};
+    const symbol = m => String(m?.symbol || "").toUpperCase();
+    const same = gate && (!symbol(gate) || !symbol(chart) || symbol(gate) === symbol(chart));
+    if (same && gate.trusted !== true) return {trusted: false, failed: gate};
+    return {trusted: true, failed: null};
+  }
+
   function banner(view, {asset = "黄金"} = {}) {
     // A failed read outranks everything: what is on the page is no longer known to be true.
     if (view?.readError) {
@@ -42,11 +55,11 @@ const DeskStatus = (() => {
       return {tone: "bad", title: view.data ? "读不到最新交易状态" : "读不到交易状态", body: [view.readError, old].filter(Boolean).join(" "), action: null};
     }
     if (!view?.data) return {tone: "wait", title: "正在读取交易状态", body: "", action: null};
-    const data = view.data, market = view.market || data.market || {}, current = data.current_strategy || {};
-    if (view.marketTrusted !== true) {
+    const data = view.data, feed = feedTrust(view), market = feed.failed || view.market || data.market || {}, current = data.current_strategy || {};
+    if (!feed.trusted) {
       const last = market.latest_timestamp ? `最后可信数据 ${bjTime(market.latest_timestamp)}` : "还没有可信数据";
       return {tone: "bad", title: `${asset}行情中断，已停止开新仓`,
-        body: `${market.provider_label || "行情源"}的数据没有通过可信检查（${last}）。恢复之前不会开新仓，也不会改用别的数据源顶替。页面会自动重试。`,
+        body: `${String(market.provider || "").toLowerCase() === "unavailable" || !market.provider_label ? "行情源现在没有返回可用数据" : `${market.provider_label}的数据没有通过可信检查`}（${last}）。恢复之前不会开新仓，也不会改用别的数据源顶替。页面会自动重试。`,
         action: {kind: "details", label: "查看原因"}};
     }
     if (isActive(view)) {
@@ -93,9 +106,9 @@ const DeskStatus = (() => {
     if (rec?.status && !["ok", "pass", "reconciled"].includes(rec.status)) issues.push(`reconciliation_${rec.status}${rec.reason ? `:${rec.reason}` : ""}`);
     const expected = active ? [] : issues.filter(code => IDLE_EXPECTED.has(code)), other = issues.filter(code => !expected.includes(code));
     // Whether a plan runs is the banner's to say, once (#1429).
-    const parts = [view.marketTrusted === true ? "行情可信" : "行情没有通过可信检查"];
+    const trusted = feedTrust(view).trusted, parts = [trusted ? "行情可信" : "行情没有通过可信检查"];
     if (other.length) parts.push(`${other.length} 项需要看一下`);
-    return {tone: view.marketTrusted !== true ? "bad" : other.length ? "warn" : "calm", text: parts.join(" · "), other, expected};
+    return {tone: !trusted ? "bad" : other.length ? "warn" : "calm", text: parts.join(" · "), other, expected};
   }
 
   function retired(selection, catalog) {
@@ -107,7 +120,7 @@ const DeskStatus = (() => {
     return {old: label, next: paper?.label || null};
   }
 
-  return {banner, health, retired, isActive, calmRun};
+  return {banner, health, retired, isActive, calmRun, feedTrust};
 })();
 if (typeof module !== "undefined") module.exports = DeskStatus;
 
