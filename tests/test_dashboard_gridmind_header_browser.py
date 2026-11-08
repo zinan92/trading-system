@@ -242,15 +242,18 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
         browser.close()
 
 
-@pytest.mark.parametrize("case", ["untrusted_market", "read_model_502"])
+@pytest.mark.parametrize("case", ["untrusted_market", "read_model_502", "risk_blocked", "heartbeat_stale"])
 def test_trade_shows_park_the_failure_the_hidden_header_pills_carry(case: str) -> None:
-    """#1419: /trade hides GridMind's header pills (#1294), so the tests above read them hidden. This pins what Park
-    sees for the same failures, with the page's own timers running (the desk banner refreshes every second):
-    an untrusted feed is the red banner, and a failed read names its cause on the chart, never a healthy state.
-    Known gap, for #1427 block 1: a risk block (pill 运行异常) and a stale execution heartbeat (运行降级) do not
-    reach the banner yet; it shows the idle state for both."""
+    """/trade hides GridMind's header pills (#1294); the banner says what they said (#1419, #1429). Timers run, as
+    on the real page (the banner refreshes every second). No failure state offers 「开始今天的计划」."""
     playwright = pytest.importorskip("playwright.sync_api")
-    model = _header_model(5002.0, provider="backup_venue", trusted=False)
+    model = {
+        "untrusted_market": lambda: _header_model(5002.0, provider="backup_venue", trusted=False),
+        "read_model_502": lambda: _header_model(4000.0),
+        "risk_blocked": lambda: _header_model(5001.0, provider="backup_venue", risk_blocked=True),
+        "heartbeat_stale": lambda: _header_model(5003.0, execution_tick_health={
+            "status": "blocked", "reason": "heartbeat_stale", "age_seconds": 181, "max_age_seconds": 180}),
+    }[case]()
 
     def fulfill_read_model(route) -> None:
         if case == "read_model_502":
@@ -271,17 +274,67 @@ def test_trade_shows_park_the_failure_the_hidden_header_pills_carry(case: str) -
         page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
         page.goto(f"{origin}/trade", wait_until="load")
         banner = page.locator("#deskStatus")
+        title = {
+            "untrusted_market": "黄金行情中断，已停止开新仓",
+            "read_model_502": "读不到交易状态",
+            "risk_blocked": "运行状态异常",
+            "heartbeat_stale": "执行心跳中断",
+        }[case]
+        banner.locator("h1", has_text=title).wait_for(state="visible")
+        page.wait_for_timeout(1500)  # a banner tick or more: the state holds
+        assert banner.locator("h1").inner_text() == title
+        copy = banner.inner_text()
         if case == "untrusted_market":
-            page.locator("#deskStatus.bad").wait_for(state="visible")
-            assert banner.locator("h1").inner_text() == "黄金行情中断，已停止开新仓"
-            assert "不会改用别的数据源顶替" in banner.inner_text()
+            assert "不会改用别的数据源顶替" in copy and "页面会自动重试" in copy
             assert page.locator("#deskHealth").inner_text().startswith("行情没有通过可信检查")
-        else:
-            # The one place in view that names the cause is the chart's notice; #actionStatus says it too, folded.
-            page.locator("#chartHistoryNotice").filter(has_text="Dashboard 服务暂不可用").wait_for(state="visible")
+        if case == "read_model_502":
+            assert "Dashboard 服务暂不可用" in copy and "HTTP 502" in copy
+            assert page.locator("#deskHealth").inner_text() == "读不到最新状态"
+            # The chart's notice names the same cause, in the same words.
             assert "HTTP 502" in page.locator("#chartHistoryNotice").inner_text()
-            page.wait_for_timeout(1500)  # a banner tick or more
-            assert banner.get_attribute("class") == "desk-status wait"
-            assert banner.inner_text().strip() == "正在读取交易状态"
-            assert page.locator("#deskStatusAction").count() == 0  # no start offered on a failed read
+        if case == "heartbeat_stale":
+            assert "执行心跳 181 秒没更新（上限 180 秒）" in copy
+        assert "开始今天的计划" not in copy
+        assert page.locator("#deskStatusAction", has_text="开始").count() == 0
+        browser.close()
+
+
+def test_a_failed_read_survives_any_redraw_until_the_next_good_read() -> None:
+    """#1429: GridMind keeps the failure in its state, so a redraw from old data (a market refresh, a tab switch)
+    never brings back the old running state while reads still fail. Only a good read clears it."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4000.0)
+    answers = ["ok", "502", "ok"]
+
+    def fulfill_read_model(route) -> None:
+        answer = answers.pop(0) if len(answers) > 1 else answers[0]
+        if answer == "502":
+            route.fulfill(status=502, content_type="text/plain", body="bad gateway")
+        else:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_bars(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "bars": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - local browser dependency
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
+        page.goto(f"{origin}/trade", wait_until="load")
+        page.wait_for_function("() => window.gridmindView?.data && window.gridmindView.readError === null")
+        assert page.evaluate("() => window.gridmindView.runState.label") == "运行中"
+
+        page.evaluate("() => load()")  # the 502
+        assert "HTTP 502" in page.evaluate("() => window.gridmindView.readError")
+        assert page.evaluate("() => Boolean(window.gridmindView.data)")  # old data kept, marked old
+        page.evaluate("() => render()")  # a redraw from old data
+        assert "HTTP 502" in page.evaluate("() => window.gridmindView.readError")
+
+        page.evaluate("() => load()")  # a good read clears it
+        assert page.evaluate("() => window.gridmindView.readError") is None
         browser.close()
