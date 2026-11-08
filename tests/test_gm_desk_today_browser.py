@@ -1,7 +1,7 @@
 """「今天」 on the real /trade page (#1327): GridMind + gm-desk.js + the React islands, every API mocked.
 
 Steps 1–2 are React; step 3 (执行, 停止, 暂停补单) is still gm-desk.js. These tests drive the
-handoff between them through the page the desk serves (`inject_shell`), with routed endpoints only:
+handoff between them through the page the desk serves (`render_trade_page`), with routed endpoints only:
 nothing here reaches a backend, and 执行 is answered by a mock that records the request body.
 """
 from __future__ import annotations
@@ -29,9 +29,9 @@ PREVIEW = {"execution_ready": True, "orders": [{"price": 72000}, {"price": 74000
 
 
 def _page(runtime, origin: str, desk: dict, posts: list, dialogs: list, answers: dict | None = None, reads_extra: dict | None = None):
-    from trading_desk.gridmind import inject_shell
+    from trading_desk.gridmind import render_trade_page
 
-    html = inject_shell((ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8"))
+    html = render_trade_page()  # exactly what the desk's /trade sends (#1414)
     model = _read_model("accepted", full_orders=True)
     try:
         browser = runtime.chromium.launch(headless=True, channel="chrome")
@@ -279,3 +279,36 @@ def test_the_environment_badge_stays_visible_on_a_phone() -> None:
         assert not page.locator(".brand small").is_visible()  # the subtitle still makes room
         assert page.evaluate("() => document.documentElement.scrollWidth") <= 375  # no sideways scroll
         browser.close()
+
+
+def test_with_8765_gone_the_page_says_so_and_sends_nothing() -> None:
+    """#1414: /trade no longer needs 8765 to load. When 8765 goes away, every path the desk forwards answers with the
+    relay's 503: GridMind's next read shows why under the chart and in the action status, and nothing is posted."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    from trading_desk.gridmind import READ_PATHS
+
+    relay_down = {"error": "gridmind_unavailable", "message": "交易后台（8765）暂时连不上，稍后自动重试。"}
+    posts: list = []
+    dialogs: list = []
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser, page = _page(runtime, origin, _desk(), posts, dialogs)
+        try:
+            page.unroute("**/api/**")
+
+            def down(route) -> None:
+                path = "/" + route.request.url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+                if route.request.method == "POST":
+                    posts.append(path)
+                if path in READ_PATHS or path.startswith("/api/dualtrack/") or path.startswith("/api/dashboard-control/"):
+                    return route.fulfill(status=503, content_type="application/json", body=json.dumps(relay_down, ensure_ascii=False))
+                return route.fulfill(status=200, content_type="application/json", body="{}")
+
+            page.route("**/api/**", down)
+            page.evaluate("() => load()")
+            notice = page.locator("#chartHistoryNotice", has_text="Dashboard 服务暂不可用")
+            notice.wait_for()  # on /trade the desk hides GridMind's header pills; the chart notice is what Park sees
+            assert "HTTP 503" in notice.inner_text() and "Dashboard 服务暂不可用" in page.locator("#actionStatus").text_content()
+            assert page.locator("#runBadge").text_content().startswith("Dashboard 服务暂不可用")
+            assert posts == [] and dialogs == []  # no control request goes out on its own
+        finally:
+            browser.close()

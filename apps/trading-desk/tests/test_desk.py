@@ -505,8 +505,6 @@ def test_trade_page_is_gridmind_behind_the_desk_gate(config, sources, store, fet
 
     def upstream(url, method, body, content_type, timeout):
         calls.append((url, method, body))
-        if url.endswith("/dashboard-v5.html"):
-            return 200, "<html><head><title>Extended 网格交易机器人 · GridMind 视觉版</title></head><body>GRID</body></html>".encode(), "text/html"
         return 200, b'{"ok": true}', "application/json"
 
     monkeypatch.setattr(gridmind, "urllib_fetch", upstream)
@@ -516,22 +514,56 @@ def test_trade_page_is_gridmind_behind_the_desk_gate(config, sources, store, fet
     cfg = dataclasses.replace(config, remote_passcode=secret)
     client = TestClient(create_app(cfg, sources, store, FakeExecutor(cfg, fetch)), base_url="https://testserver")
     assert client.get("/", follow_redirects=False).headers["location"] == "/trade"
-    page = client.get("/trade").text
-    assert "GRID" in page and "/static/gm-desk.js" in page and "<title>Park 交易台 · 交易</title>" in page
+    page = client.get("/trade")
+    assert 'id="dashboardControlCard"' in page.text and "/static/gm-desk.js" in page.text and "<title>Park 交易台 · 交易</title>" in page.text
+    assert page.headers["cache-control"] == "no-store" and calls == []  # the desk renders the page; 8765 is not asked
     assert client.get("/api/trading-system/read-model?x=1").json() == {"ok": True}
     assert calls[-1] == ("http://dash/api/trading-system/read-model?x=1", "GET", None)
     assert client.get("/api/trading-system/secrets").status_code == 404
     assert client.get("/api/auth/session").json()["can_control"] is True
     tunnel = {"cf-connecting-ip": "203.0.113.9"}
     assert client.get("/trade", headers=tunnel, follow_redirects=False).headers["location"] == "/login"
+    assert client.get("/assets/gridmind/gridmind.js", headers=tunnel, follow_redirects=False).status_code in (302, 303, 307, 401)
     assert client.post("/api/dashboard-control/control", json={"action": "stop"}, headers=tunnel).status_code == 401
     client.post("/login", data={"passcode": "orchid-47"}, headers=tunnel)
     assert client.post("/api/dashboard-control/control", json={"action": "stop"}, headers=tunnel).status_code == 403  # no Origin
     sent = client.post("/api/dashboard-control/control", json={"action": "stop"}, headers={**tunnel, "origin": "https://testserver"})
     assert sent.status_code == 200 and calls[-1][0] == "http://dash/api/dashboard-control/control" and calls[-1][1] == "POST"
+
+
+def test_with_8765_down_the_page_loads_and_every_relayed_call_says_so(config, sources, store, fetch, monkeypatch):
+    # #1414: the page no longer depends on 8765. GridMind's own reads fail and it shows 运行异常; a control
+    # request gets the relay's 503, never an empty success.
+    from trading_desk import gridmind
     monkeypatch.setattr(gridmind, "urllib_fetch", lambda *a: (_ for _ in ()).throw(ConnectionError("down")))
-    down = TestClient(create_app(cfg, sources, store, FakeExecutor(cfg, fetch)))
-    assert down.get("/trade").status_code == 503 and "交易后台暂时连不上" in down.get("/trade").text
+    down = TestClient(create_app(config, sources, store, FakeExecutor(config, fetch)))
+    assert down.get("/trade").status_code == 200
+    assert down.get("/assets/gridmind/dashboard-control.js").status_code == 200
+    for response in (down.get("/api/trading-system/read-model"),
+                     down.post("/api/dashboard-control/confirm", json={"x": 1})):
+        assert response.status_code == 503 and response.json()["error"] == "gridmind_unavailable"
+
+
+def test_the_desk_serves_the_page_files_from_its_checkout_and_nothing_else(config, sources, store, fetch, monkeypatch):
+    from trading_desk import gridmind
+    calls = []
+    monkeypatch.setattr(gridmind, "urllib_fetch", lambda *a: calls.append(a) or (200, b"{}", "application/json"))
+    client = TestClient(create_app(config, sources, store, FakeExecutor(config, fetch)))
+    for path, kind in gridmind.STATIC_FILES.items():
+        served = client.get(path)
+        assert served.status_code == 200 and served.content == (gridmind.ROOT / path.lstrip("/")).read_bytes()
+        assert served.headers["content-type"] == kind and served.headers["cache-control"] == "no-store"
+    assert calls == []
+    for path in ("/assets/gridmind/other.js", "/assets/shell.js", "/dashboard-gridmind.html",
+                 "/packages/standard-kline/README.md", "/assets/%2e%2e/requirements.txt"):
+        assert client.get(path).status_code == 404, path
+    assert not set(gridmind.STATIC_FILES) & (gridmind.READ_PATHS | gridmind.WRITE_PATHS)
+
+
+def test_the_desk_page_is_the_8765_page_with_the_desk_shell(config):
+    # Until #1415 replaces the page, 8765's dashboard-gridmind.html is the fallback and must stay identical.
+    from trading_desk import gridmind
+    assert gridmind.render_trade_page() == gridmind.inject_shell((gridmind.ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8"))
 
 
 def test_tunnel_requests_need_the_passcode_and_local_ones_do_not(config, sources, store, fetch, tmp_path):

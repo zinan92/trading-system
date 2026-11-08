@@ -1,11 +1,13 @@
-"""The trading page is the GridMind console itself, served same-origin through the desk.
+"""The trading page is the GridMind console itself, served same-origin by the desk.
 
-GridMind (trading-system, port 8765) stays the one product for charts, grids, orders and
-controls. The desk forwards only the paths that page uses, behind the desk's passcode gate,
-and adds its own news rail and judgment panel on top (static/gm-desk.*).
+The desk renders /trade from its own template (trade.html, #1414) and serves the page's static
+files from this checkout. GridMind (trading-system, port 8765) stays the one product for data,
+grids, orders and controls: the desk forwards only the API paths that page uses, behind the desk's
+passcode gate, and adds its own news rail and judgment panel on top (static/gm-desk.*).
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
@@ -18,18 +20,25 @@ from starlette.concurrency import run_in_threadpool
 
 from . import remote
 
-# Same allowlist as trading-system's public gateway (services/cloud_access_gateway.py).
+ROOT = Path(__file__).resolve().parents[4]  # the trading-system checkout the desk runs from
+TEMPLATE = Path(__file__).resolve().parent / "trade.html"
+CSS, JS = "text/css; charset=utf-8", "text/javascript; charset=utf-8"
+# The page's static files, served from this checkout (#1414). Each path maps to exactly one file;
+# nothing else under the checkout is reachable.
+STATIC_FILES = {
+    "/assets/tokens.css": CSS,
+    "/packages/standard-kline/standard-kline.js": JS,
+    "/data/vendor/echarts.min.js": JS,
+    "/data/vendor/lightweight-charts.standalone.production.js": JS,
+    "/assets/gridmind/base.css": CSS,
+    "/assets/gridmind/skin.css": CSS,
+    "/assets/gridmind/control-intents.js": JS,
+    "/assets/gridmind/gridmind.js": JS,
+    "/assets/gridmind/park-ai-chat.js": JS,
+    "/assets/gridmind/dashboard-control.js": JS,
+}
+# API paths forwarded to 8765; same allowlist as trading-system's public gateway (services/cloud_access_gateway.py).
 READ_PATHS = frozenset({
-    "/assets/tokens.css",
-    "/packages/standard-kline/standard-kline.js",
-    "/data/vendor/echarts.min.js",
-    "/data/vendor/lightweight-charts.standalone.production.js",
-    "/assets/gridmind/base.css",
-    "/assets/gridmind/skin.css",
-    "/assets/gridmind/control-intents.js",
-    "/assets/gridmind/gridmind.js",
-    "/assets/gridmind/park-ai-chat.js",
-    "/assets/gridmind/dashboard-control.js",
     "/api/trading-system/read-model",
     "/api/trading-system/cloud-health",
     "/api/trading-system/daily-self-review",
@@ -91,7 +100,17 @@ def urllib_fetch(url: str, method: str, body: bytes | None, content_type: str, t
         return exc.code, exc.read(), exc.headers.get("Content-Type") or "application/json"
 
 
+def render_trade_page() -> str:
+    """The desk's /trade page, read from disk on every request.
+
+    The page's static files are read from disk too, so a deploy that changes both never serves a
+    new structure with old scripts or the reverse.
+    """
+    return TEMPLATE.read_text(encoding="utf-8").replace("__DESK_ASSET_VERSION__", ASSET_VERSION)
+
+
 def inject_shell(html: str) -> str:
+    """The shell added to 8765's dashboard-gridmind.html; trade.html must equal it until #1415 changes the page."""
     tag = SHELL.format(v=ASSET_VERSION)
     head = html.replace("<title>Extended 网格交易机器人 · GridMind 视觉版</title>", "<title>Park 交易台 · 交易</title>", 1)
     if "</body>" not in head:
@@ -119,14 +138,16 @@ def install(app: FastAPI, dashboard_url: str, fetch: Fetch | None = None) -> Non
 
     @app.get("/trade")
     def trade() -> Response:
-        try:
-            status, payload, _ = fetch(f"{upstream}/dashboard-v5.html", "GET", None, "", 20)
-        except (URLError, OSError, TimeoutError):
-            status, payload = 503, b""
-        if status != 200:
-            return Response(UNAVAILABLE, status_code=503, media_type="text/html; charset=utf-8")
-        html = inject_shell(payload.decode("utf-8", "replace"))
-        return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-store"})
+        # Rendered here, not fetched from 8765: when 8765 is down the page still loads and GridMind
+        # shows 运行异常, and every control request it sends gets the relay's 503.
+        return Response(render_trade_page(), media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-store"})
+
+    def static_file(request: Request) -> Response:
+        path = request.url.path
+        return Response((ROOT / path.lstrip("/")).read_bytes(), media_type=STATIC_FILES[path], headers={"Cache-Control": "no-store"})
+
+    for path in STATIC_FILES:
+        app.add_api_route(path, static_file, methods=["GET"], include_in_schema=False)
 
     @app.get("/dashboard-v5.html")
     def legacy_link() -> RedirectResponse:
@@ -157,10 +178,3 @@ def install(app: FastAPI, dashboard_url: str, fetch: Fetch | None = None) -> Non
         for method in methods:
             app.add_api_route(path, read if method == "GET" else write, methods=[method], include_in_schema=False)
 
-
-UNAVAILABLE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Park 交易台 · 交易</title><meta http-equiv="refresh" content="15"></head>
-<body style="margin:0;background:#0b0c0f;color:#eceef2;font-family:'PingFang SC',sans-serif;display:grid;place-items:center;min-height:100vh;padding-inline:16px">
-<div style="max-width:420px"><h1 style="font-size:20px">交易后台暂时连不上</h1>
-<p style="color:#9aa3ad">GridMind（8765）没有响应。交易所上的挂单和持仓不受影响。页面每 15 秒自动重试。</p>
-<p><a style="color:#3fd0e0" href="/desk#system">查看系统状态</a></p></div></body></html>"""
