@@ -126,7 +126,8 @@ if (typeof document !== "undefined") (() => {
   // 2-second follow loop never re-renders (or resets) them.
   const setProps = (el, value) => { const text = JSON.stringify(value); if (el && el.dataset.props !== text) el.dataset.props = text; };
   function pushProps() {
-    setProps($d('[data-island="today"]'), {asset: D.asset, assets: D.assets.map(a => ({key: a.key, label: a.label, kind: a.kind, instrument_id: a.instrument_id})),
+    setProps($d('[data-island="today"]'), {asset: D.asset,
+      assets: D.assets.map(a => ({key: a.key, label: a.label, kind: a.kind, instrument_id: a.instrument_id, capabilities: a.capabilities || []})),
       gridmind: D.assets.filter(onGridMind).map(a => a.key)});
     setProps($d('[data-island="news"]'), {asset: D.asset});
   }
@@ -258,13 +259,20 @@ if (typeof document !== "undefined") (() => {
     }
     return D.assets.find(a => a.kind === "hl_testnet" && a.instrument_id === sel.instrument_id) || null;
   }
+  // The one place an asset is chosen (#1433): every desk asset is here. BTC and gold switch GridMind (chart and
+  // trading); the others are judged on the desk while GridMind stays on its chart.
+  const deskOnlyNote = a => !(a.capabilities || []).includes("grid_plan") ? "只记判断和复盘；图表不切换" : "在交易台判断和计划；图表不切换";
   function renderAssets() {
+    const box = $d("#deskAssets");
+    if (!box) return;
     const signature = `${D.asset}|${D.switching}|${D.assets.map(a => a.key).join(",")}`;
     if (signature === D.assetSignature) return;
     D.assetSignature = signature;
-    $d("#deskAssets").innerHTML = D.assets.filter(onGridMind)
-      .map(a => `<button type="button" data-asset="${escD(a.key)}" aria-pressed="${a.key === D.asset}" ${D.switching ? "disabled" : ""}>${escD(a.label)}</button>`).join("");
-    document.querySelectorAll("#deskAssets [data-asset]").forEach(b => b.onclick = () => switchAsset(b.dataset.asset));
+    box.innerHTML = D.assets.map(a => {
+      const gm = onGridMind(a);
+      return `<button type="button" data-asset="${escD(a.key)}" aria-pressed="${a.key === D.asset}" ${gm ? "" : `data-desk-only title="${escD(deskOnlyNote(a))}"`} ${D.switching ? "disabled" : ""}>${escD(a.label)}</button>`;
+    }).join("");
+    box.querySelectorAll("[data-asset]").forEach(b => b.onclick = () => pickAsset(b.dataset.asset));
   }
   const waitFor = (test, ms = 8000) => new Promise(resolve => { const start = Date.now(); const tick = () => test() ? resolve(true) : Date.now() - start > ms ? resolve(false) : setTimeout(tick, 120); tick(); });
   async function switchAsset(key) {
@@ -290,13 +298,13 @@ if (typeof document !== "undefined") (() => {
   }
   // BTC and gold follow GridMind; ETH, silver and oil are judged here while GridMind stays on its chart.
   const onGridMind = a => a.kind === "xau_paper" || a.instrument_id === "BTC-USD-PERP";
-  // A chip in the 「今天」 island was pressed: BTC and gold switch GridMind; the others are judged here.
-  window.addEventListener("desk:pick-asset", event => {
-    const asset = D.assets.find(a => a.key === event.detail?.key);
+  // A top-bar button was pressed: BTC and gold switch GridMind; the others are judged here.
+  function pickAsset(key) {
+    const asset = D.assets.find(a => a.key === key);
     if (!asset || asset.key === D.asset) return;
     if (onGridMind(asset)) { switchAsset(asset.key); return; }
     D.override = asset.key; focusAsset(asset);
-  });
+  }
   function focusAsset(asset) {
     const changed = asset.key !== D.asset;
     D.asset = asset.key;
@@ -307,6 +315,13 @@ if (typeof document !== "undefined") (() => {
     $d("#deskJudgeTitle").textContent = `今天 · ${asset.label}`;
     $d("#deskStop").innerHTML = "";
     syncSteps();
+  }
+  // No usable GridMind selection (none yet, or a retired one): judge what the chart shows, so the chart and 「今天」
+  // name the same asset (#1433). Starting still needs Park's own pick; nothing here selects a venue.
+  function chartAsset() {
+    const symbol = String(window.gridmindView?.market?.symbol || "").toUpperCase();
+    const gold = D.assets.find(a => a.kind === "xau_paper"), btc = D.assets.find(a => a.instrument_id === "BTC-USD-PERP");
+    return (symbol === "GOLD" && gold) || (symbol === "BTC" && btc) || btc || D.assets[0];
   }
   function applyAsset() {
     if (D.override) return;  // Park is judging an asset GridMind does not chart
@@ -449,10 +464,10 @@ if (typeof document !== "undefined") (() => {
     placeForViewport();
     window.matchMedia("(max-width: 760px)").addEventListener("change", placeForViewport);
     try { D.assets = (await call("/api/assets")).assets; } catch (e) { $d(".desk-news").innerHTML = `<p class="desk-bad">${escD(e.message)}</p>`; return; }
+    renderAssets();  // the buttons show as soon as the list is read, before GridMind's selection (#1433)
     const ready = await waitFor(() => window.dashboardControlState?.selection, 15000);
-    if (!ready || !selectionAsset()) {  // GridMind control rail unavailable: fall back to BTC for news and judgment
-      D.asset = (D.assets.find(a => a.instrument_id === "BTC-USD-PERP") || D.assets[0]).key; renderAssets(); pushProps();
-    } else applyAsset();
+    if (!ready || !selectionAsset()) focusAsset(chartAsset());
+    else applyAsset();
     setInterval(() => { if (!D.switching) applyAsset(); }, 2000);  // follow selection changes made inside GridMind
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
