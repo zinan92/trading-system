@@ -125,7 +125,9 @@ def _open(browser, html: str, *, width: int = 1680, height: int = 1050):
             local = ROOT / path.lstrip("/")
         return route.fulfill(status=200, path=str(local)) if local.is_file() else route.fulfill(status=404, body="")
 
-    page = browser.new_page(viewport={"width": width, "height": height})
+    # The frozen reference was recorded in Beijing time (desk times such as 「每分钟更新 · 12:00」 are local);
+    # CI runs in UTC, so the browser is pinned to the zone the reference was recorded in.
+    page = browser.new_page(viewport={"width": width, "height": height}, timezone_id="Asia/Shanghai")
     page.set_default_timeout(10000)
     page.clock.set_fixed_time(NOW)
     page.add_init_script("window.setInterval = () => 0")  # one boot, no refresh loop: both pages settle the same way

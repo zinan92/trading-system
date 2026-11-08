@@ -237,6 +237,9 @@
   execution heartbeat (运行降级) never reach the banner, which shows the calm idle state with 「开始今天的计划」;
   a failed read names its cause only on the chart, while the banner and 系统详情 line say 「读取中」. Starting
   stays refused by the backend gates in all three; only the display is missing.
+- The frozen shape holds desk times in local time (「每分钟更新 · 12:00」, recorded in Beijing). CI runs in UTC and
+  saw 04:00: the first CI run failed both shape cases. The test pins the browser to `Asia/Shanghai`; under `TZ=UTC`
+  it fails without the pin and passes with it.
 - `tests/fixtures/trade_tree_shape.json` is the frozen reference. Phase 2 changes the layout on purpose, so each
   block re-records it on purpose and says so in its record.
 
