@@ -99,7 +99,7 @@ export const OPERATOR_FAILURE_COPY: Readonly<Record<string, FailureCopy>> = Obje
 export interface OperatorFailure { kind: string; title: string; reason: string; action: string; text: string }
 
 export function operatorFailure(kind: string, reason = ""): OperatorFailure {
-  const copy = OPERATOR_FAILURE_COPY[kind] || OPERATOR_FAILURE_COPY.control_request_rejected;
+  const copy = (OPERATOR_FAILURE_COPY[kind] || OPERATOR_FAILURE_COPY.control_request_rejected) as FailureCopy;
   const renderedReason = reason || copy.reason;
   return {kind, title: copy.title, reason: renderedReason, action: copy.action, text: `${copy.title}：${renderedReason} 下一步：${copy.action}`};
 }

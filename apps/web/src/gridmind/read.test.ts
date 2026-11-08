@@ -10,7 +10,7 @@ const errorShape = (e: any) => plain({message: e.message, status: e.status, code
 const asError = (e: any) => e && typeof e === "object" ? Object.assign(new Error(e.message), e) : e;
 
 describe("failure kinds read as before", () => {
-  it.each(L.tradingFailure.map((c: any) => [JSON.stringify(c.input), c]))("tradingFailure %s", (_name, c: any) => {
+  it.each<[string, any]>(L.tradingFailure.map((c: any): [string, any] => [JSON.stringify(c.input), c]))("tradingFailure %s", (_name, c: any) => {
     expect(read.tradingFailure(asError(c.input))).toEqual(c.output);
   });
   it("every operator failure kind is covered and the fallback is 操作未完成", () => {
@@ -25,7 +25,7 @@ describe("failure kinds read as before", () => {
 });
 
 describe("trust stays strict", () => {
-  it.each(L.trust.map((c: any) => [JSON.stringify(c.input), c]))("%s", (_name, c: any) => {
+  it.each<[string, any]>(L.trust.map((c: any): [string, any] => [JSON.stringify(c.input), c]))("%s", (_name, c: any) => {
     expect({isFresh: read.isFresh(c.input), isTrustedHeaderMarket: read.isTrustedHeaderMarket(c.input), statusText: read.statusText(c.input)})
       .toEqual({isFresh: c.isFresh, isTrustedHeaderMarket: c.isTrustedHeaderMarket, statusText: c.statusText});
   });
@@ -128,7 +128,7 @@ describe("the read model", () => {
 describe("api() sends and names exactly as before", () => {
   afterEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); });
 
-  it.each(L.api.map((c: any, i: number) => [i, JSON.stringify(c.response).slice(0, 80), c]))("case %i %s", async (_i, _name, c: any) => {
+  it.each<[number, string, any]>(L.api.map((c: any, i: number): [number, string, any] => [i, JSON.stringify(c.response).slice(0, 80), c]))("case %i %s", async (_i, _name, c: any) => {
     if (c.reauth !== null) sessionStorage.setItem(read.ACCESS_REAUTH_KEY, c.reauth);
     const calls: unknown[] = [], timers: unknown[] = [];
     vi.spyOn(globalThis, "setTimeout").mockImplementation(((_fn: unknown, ms: unknown) => { timers.push(ms); return 0; }) as any);
