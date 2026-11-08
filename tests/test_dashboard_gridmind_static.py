@@ -704,7 +704,13 @@ def test_gridmind_trend_card_gives_the_real_reason_on_a_trusted_non_1m_chart() -
 
 
 def test_gridmind_exposes_what_it_rendered_for_the_desk_status_line() -> None:
-    assert "window.gridmindView=Object.freeze({data,market,livePlan,marketTrusted:fresh,renderedAt:Date.now()})" in _html()
+    html = _html()
+    # #1429: plus GridMind's own run verdict and the last read failure, which only a good read clears.
+    assert ("window.gridmindView=Object.freeze({data,market,livePlan,marketTrusted:fresh,renderedAt:Date.now(),"
+            "runState:{label:headerState.label,runClass:headerState.runClass,tickLost:headerState.tickLost},"
+            "readError:state.readError})") in html
+    assert "state.readError=null;applyReadModel(data);" in html
+    assert "const failure=tradingFailure(error);state.readError=failure.text;" in html
 
 
 def test_gridmind_publishes_the_top_bar_and_cards_instead_of_writing_them() -> None:
