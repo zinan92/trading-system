@@ -346,3 +346,67 @@ def test_a_failed_read_survives_any_redraw_until_the_next_good_read() -> None:
         page.evaluate("() => load()")  # a good read clears it
         assert page.evaluate("() => window.gridmindView.readError") is None
         browser.close()
+
+
+@pytest.mark.parametrize("case", ["minute_trusted", "minute_untrusted", "minute_fails", "minute_other_symbol"])
+def test_a_4h_chart_starts_and_judges_from_the_selected_symbol_s_1m_feed(case: str) -> None:
+    """#1443: the chart's timeframe is display only; start, trend, header price and the strip read the 1m feed."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4000.0)
+    model.setdefault("ui_capabilities", {})["market_timeframes"] = ["1m", "5m", "15m", "30m", "1h", "4h"]
+    minute_requests: list[str] = []
+    browser_errors: list[str] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_bars(route) -> None:
+        url = route.request.url
+        timeframe = url.split("timeframe=", 1)[1].split("&", 1)[0]
+        if timeframe == "1m":
+            minute_requests.append(url)
+            if case == "minute_fails":
+                route.fulfill(status=503, content_type="application/json", body=json.dumps({"detail": "datafeed down"}))
+                return
+            payload = _minute_feed(4010.0, 5, trusted=case != "minute_untrusted")
+            if case == "minute_other_symbol":
+                payload["symbol"] = "BTC"
+        else:
+            payload = {"symbol": "GOLD", "timeframe": timeframe, "provider": "binance_usdm_futures",
+                       "provider_symbol": "XAUUSDT", "trusted": True, "latest_close": 4000.0,
+                       "latest_timestamp": "2026-07-18T00:00:00+00:00",
+                       "bars": [{"timestamp": "2026-07-18T00:00:00+00:00", "open": 3960.0, "high": 4010.0, "low": 3950.0, "close": 4000.0}]}
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - local browser dependency
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.on("pageerror", lambda error: browser_errors.append(str(error)))
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
+        page.goto(f"{origin}/trade", wait_until="load")
+        page.wait_for_function("() => window.gridmindView && window.gridmindView.data")
+        page.evaluate("() => { state.timeframe = '4h'; return load(); }")
+
+        view = page.evaluate("() => ({tf: window.gridmindView.market.timeframe, trusted: window.gridmindView.marketTrusted,"
+                             " exec: window.gridmindView.execMarket})")
+        assert view["tf"] == "4h"  # the chart itself stays on 4h
+        assert minute_requests and all("symbol=GOLD" in url and "limit=2" in url for url in minute_requests)
+        trend = page.locator("#trendBox").text_content()
+        assert "切到 1m" not in trend
+        if case == "minute_trusted":
+            assert view["trusted"] is True and view["exec"]["timeframe"] == "1m"
+            assert page.locator("#headerPrice").inner_text() == "4,010"  # the 1m price, not the 4h close
+            assert page.locator("#refreshTrend").is_disabled() is False
+            assert "行情不可用" not in trend
+        else:
+            assert view["trusted"] is False  # never the trusted 4h chart standing in
+            assert page.locator("#refreshTrend").is_disabled() is True
+            assert "行情不可用" in trend
+            page.wait_for_function("() => (document.querySelector('#deskStatus')?.innerText || '').includes('行情中断')")
+            assert "开始" not in " ".join(page.locator("#deskStatus button").all_inner_texts())
+        assert browser_errors == []
+        browser.close()

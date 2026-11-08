@@ -90,7 +90,9 @@ def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
     assert ">自检<" not in html
     assert "dashboardMarketBinding" in html
     assert "dashboardMarketBarsUrl({symbol,timeframe,limit:240})" in html
-    assert "headerMarket=state.market||data?.market||{}" in html
+    # #1443: the header, start and trend read the selected symbol's 1m feed, not the chart's timeframe.
+    assert "headerMarket=executionMarket()||{}" in html
+    assert "fresh=isTrustedHeaderMarket(headerMarket),headerFresh=fresh" in html
     assert "function syncSelectedMarketLabels(market,execution)" in html
     assert "syncSelectedMarketLabels(market,execution)" in html
     assert "build_strategy_timeframes" not in html
@@ -693,11 +695,12 @@ def test_gridmind_status_card_does_not_repeat_account_numbers_from_another_sourc
     assert '["账户与盈亏","见页面上方账户栏"]' in live
 
 
-def test_gridmind_trend_card_gives_the_real_reason_on_a_trusted_non_1m_chart() -> None:
+def test_gridmind_trend_card_reads_the_1m_feed_whatever_the_chart_shows() -> None:
     html = _html()
     trend = html.split("function renderTrend(data,fresh){", 1)[1].split("if(!recommendation)", 1)[0]
-    assert "切到 1m 后可评估" in trend
-    assert "行情不可用" in trend  # still said when the market itself is not trusted
+    # #1443: the trend box reads the selected symbol's 1m feed, so a 4h chart no longer asks Park to switch.
+    assert "切到 1m 后可评估" not in trend
+    assert "行情不可用" in trend  # still said when the 1m feed is not trusted
     # The 1m requirement for the trend refresh and start controls is unchanged.
     assert 'export function isTrustedHeaderMarket(m: Json): boolean { return isFresh(m) && m?.timeframe === "1m"; }' in _read_layer()
     assert "renderRobotControls(data,headerFresh,execution)" in html
@@ -707,7 +710,8 @@ def test_gridmind_exposes_what_it_rendered_for_the_desk_status_line() -> None:
     html = _html()
     # #1429: plus GridMind's own run verdict and the last read failure, which only a good read clears.
     # #1441: plus the read model's own market, so the strip can require it too.
-    assert ("window.gridmindView=Object.freeze({data,market,livePlan,marketTrusted:fresh,gateMarket:data?.market||null,renderedAt:Date.now(),"
+    # #1443: plus the selected symbol's 1m feed that marketTrusted now judges.
+    assert ("window.gridmindView=Object.freeze({data,market,livePlan,marketTrusted:fresh,execMarket:headerMarket,gateMarket:data?.market||null,renderedAt:Date.now(),"
             "runState:{label:headerState.label,runClass:headerState.runClass,tickLost:headerState.tickLost},"
             "readError:state.readError})") in html
     assert "state.readError=null;applyReadModel(data);" in html

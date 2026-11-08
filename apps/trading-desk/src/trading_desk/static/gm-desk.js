@@ -40,7 +40,7 @@ const DeskStatus = (() => {
   // chart alone. The read model's market stays on the configured symbol, so for another asset it is not consulted:
   // a gold feed never vouches for BTC. `failed` is the feed that did not pass, so the wording comes from one object.
   function feedTrust(view) {
-    const chart = view?.market || view?.data?.market || {}, gate = view?.gateMarket;
+    const chart = view?.execMarket || view?.market || view?.data?.market || {}, gate = view?.gateMarket;  // #1443: execMarket is the selected symbol's 1m feed
     if (view?.marketTrusted !== true) return {trusted: false, failed: chart};
     const symbol = m => String(m?.symbol || "").toUpperCase();
     const same = gate && (!symbol(gate) || !symbol(chart) || symbol(gate) === symbol(chart));

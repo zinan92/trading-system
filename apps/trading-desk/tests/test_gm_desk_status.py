@@ -72,6 +72,17 @@ def test_the_read_model_feed_counts_for_the_same_asset_and_names_itself() -> Non
     assert run("health", btc)["text"] == "行情可信"
 
 
+def test_a_failed_1m_feed_is_named_even_when_the_chart_shows_a_trusted_4h() -> None:
+    """#1443: marketTrusted judges the selected symbol's 1m feed (execMarket); the red body names that feed."""
+    view = with_run(idle_view(symbol="GOLD", trusted=False, timeframe="4h"))
+    view["execMarket"] = {"symbol": "GOLD", "timeframe": "1m", "trusted": False, "provider_label": "OKX 1m",
+                          "latest_timestamp": "2026-11-05T02:40:00+00:00"}
+    banner = run("banner", view, {"asset": "黄金"})
+    assert banner["tone"] == "bad"
+    assert banner["body"].startswith("OKX 1m的数据没有通过可信检查（最后可信数据 11/5 10:40）")
+    assert run("health", view)["text"].startswith("行情没有通过可信检查")
+
+
 def test_a_feed_with_no_provider_says_so_in_plain_words() -> None:
     """Production, weekend: provider "unavailable", label "Unavailable", no timestamp."""
     view = with_gate(with_run(idle_view(symbol="GOLD")), symbol="GOLD", trusted=False,
