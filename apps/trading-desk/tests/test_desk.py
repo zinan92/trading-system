@@ -568,7 +568,7 @@ def test_the_desk_page_is_a_mount_point_that_starts_the_old_scripts_in_order(con
     page = gridmind.render_trade_page()
     boot = json.loads(re.search(r"data-boot='([^']+)'", page).group(1))
     old = re.findall(r'<script src="(assets/gridmind/[^"]+)"></script>', (gridmind.ROOT / "dashboard-gridmind.html").read_text(encoding="utf-8"))
-    assert boot[:-1] == old and len(old) == 5
+    assert boot[:-1] == old and len(old) == 6
     assert boot[-1] == f"/static/gm-desk.js?v={gridmind._asset_version()}"
     assert page.index('id="trade-app"') < page.index("/static/web/web.js") and "交易页面没有加载出来" in page
     assert "defer" not in page and "async" not in page

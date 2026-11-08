@@ -176,6 +176,7 @@ GRIDMIND_OWN_FILES = (
     "/assets/gridmind/skin.css",
     "/assets/gridmind/control-intents.js",
     "/assets/gridmind/read.js",  # #1416: built from apps/web/src/gridmind/read.ts
+    "/assets/gridmind/chart.js",  # #1417: built from apps/web/src/gridmind/chart.ts
     "/assets/gridmind/gridmind.js",
     "/assets/gridmind/park-ai-chat.js",
     "/assets/gridmind/dashboard-control.js",
