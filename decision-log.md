@@ -180,6 +180,39 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — One way in: 「自己调」 under step 2 and one highlighted button (#1438)
+
+## Decision
+
+- Block 2b of the redesign (#1427). `DeskStatus.banner` no longer returns a `start` action. The calm idle state
+  (the same `calmRun` verdict as #1429) returns `action: null`, `startable: true` and `next: "今天的计划从「今天」第 1 步开始。"`,
+  drawn as `.desk-status-next`. Stop and details actions are unchanged.
+- GridMind's manual cards (`#dashboardControlCard`, `#parkAiChatCard`, `.market-card`, `#strategyCard`) move from
+  their own `#deskManual` card under the today card into the today card, between the island and step 3, as
+  「自己调」. `ManualDetails` is a static sibling of the today island in the skeleton, so React never redraws what
+  GridMind writes there; every id is unchanged. gm-desk.js's non-/trade shell inserts it at the same place.
+- Only the current step's `.desk-btn.primary` is filled (`.desk-step:not(.on) .desk-btn.primary` is outlined).
+
+## Gotchas
+
+- `tests/fixtures/trade_tree_shape.json` re-recorded on purpose. Checked node by node: outside `#deskManual`
+  nothing differs; inside it, only the summary, its small line and the two rail notes' text. The phone island
+  order changes because the manual islands now come before the tables.
+- A vitest case (`pick → plan → approve`) failed once in #1439's CI on `handed: false`: `desk:steps` is emitted
+  from an effect after the render that shows the toast. It now waits for the event; the expected value is the same.
+
+## Verification
+
+- `test_gm_desk_status.py` 17: the calm idle banner has no action, `startable` and `next`; over 14 states only the
+  two calm idle ones are startable and none carries a start action.
+- Browser `test_one_way_in_manual_tuning_under_step_two_and_one_highlighted_button` at 1680 and 375: order
+  island → `#deskManual` → step 3; the six control ids inside it; `open_manual` shows the venue select; no banner
+  start; step 2's approve is filled while current and transparent after step 3 becomes current; no overflow.
+  Every test file that calls `open_manual`, header, static and today: 122 passed before the rebase.
+- Web 2263, desk 273, mjs 29, root 4152 passed, 2 skipped. `gridmind_control_wire.json` unchanged. Mocks only.
+- Production record for #1436 at 5c83cb4 (no `--dashboard`), read-only: the three static files byte-identical;
+  GridMind's read 2.6 s, 「今天」's steps 2.7 s (was 8.7 s), the selection 9.3 s; 「今天 · 黄金」 throughout.
+
 # 2026-11-08 — 「今天」 starts on the chart's asset instead of waiting for GridMind's selection (#1436)
 
 ## Decision
