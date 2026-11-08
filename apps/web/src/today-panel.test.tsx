@@ -1,6 +1,6 @@
 import {act, fireEvent, render, screen} from "@testing-library/react";
 import {NewsRail} from "./islands/NewsRail";
-import {ADVICE_POLL_MS, AssetNote, REFRESH_MS, TodayPanel} from "./islands/TodayPanel";
+import {ADVICE_POLL_MS, AssetNote, REFRESH_MS, TodayPanel, basisLine} from "./islands/TodayPanel";
 import {execRestore, judgmentBody, planBody} from "./today";
 import {citeStore} from "./todayStore";
 
@@ -254,4 +254,49 @@ test("an asset GridMind does not chart says where its chart is, by what its venu
   expect(document.getElementById("deskAssetNote")!.textContent).toBe("SOL只记判断和复盘。图表和下方表格仍是 GridMind 上的品种。");
   rerender(<AssetNote asset="XAU" assets={assets} gridmind={["XAU"]} />);
   expect(document.getElementById("deskAssetNote")).toBeNull();
+});
+
+// #1435: the week's three events and the news are one folded line in step 1.
+describe("今天的依据", () => {
+  const now = () => new Date().toISOString();
+  const WATCH = {generated_at: "2026-11-08T09:12:00+08:00", provider: "codex", items: [
+    {ref: "a", title: "非农", at: "2030-01-01T00:00:00Z"}, {ref: "b", title: "CPI", at: "2030-01-02T00:00:00Z"},
+    {ref: "c", kind: "breaking", title: "霍尔木兹海峡封锁", at: "2026-11-08T01:00:00Z"}]};
+  const desk = () => ({kline: {ok: true, structure: "日线偏空", synthesis: "x"}, today_judgment: null, executions: [], meta: {kind: "xau_paper"}});
+
+  test("the line counts the events and the 重要+关注 news, and says a breaking event", () => {
+    const news = {items: [{title: "a", bucket: "high_impact"}, {title: "b", bucket: "watch"}, {title: "c", bucket: "noise"}], error: "", stale: false, at: new Date(), fresh: new Set<string | number>()};
+    expect(basisLine({data: WATCH, error: "", now: 0}, news)).toEqual({text: "今天的依据：3 件大事 · 2 条新闻", alert: "突发：霍尔木兹海峡封锁"});
+    expect(basisLine({data: null, error: "", now: 0}, {...news, at: null}).text).toBe("今天的依据：三件事读取中 · 新闻读取中");
+    expect(basisLine({data: null, error: "Intel 读不到", now: 0}, {...news, error: "新闻服务没开"}).text).toBe("今天的依据：三件事读不到 · 新闻读不到");
+    expect(basisLine({data: {items: []}, error: "", now: 0}, {...news, stale: true}).text).toBe("今天的依据：0 件大事 · 2 条新闻（上次读到的）");
+    expect(basisLine({data: {items: []}, error: "", now: 0}, {...news, fresh: new Set(["a", "b"])}).alert).toBe("1 条新的重要新闻");
+  });
+
+  test("folded, it keeps reading; opened, a click cites the news in today's judgment", async () => {
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    let list = [{id: "n1", title: "金价跳水", bucket: "high_impact", source: "cls", collected_at: now()},
+                {id: "n2", title: "无关小事", bucket: "noise", source: "x", collected_at: now()}];
+    serve({"GET /api/desk/XAU": desk, "GET /api/watch": () => WATCH, "GET /api/news/XAU": () => ({ok: true, items: list})});
+    const {container} = render(<TodayPanel asset="XAU" assets={ASSETS} gridmind={["XAU"]} />);
+    expect(await screen.findByText("今天的依据：3 件大事 · 1 条新闻")).toBeTruthy();
+    expect(container.querySelector("#deskBasis")?.hasAttribute("open")).toBe(false);
+    expect(container.querySelector("#deskBasisAlert")?.textContent).toBe("突发：霍尔木兹海峡封锁");
+    list = [{id: "n3", title: "美联储加息", bucket: "high_impact", source: "cls", collected_at: now()}, ...list];
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(screen.getByText("今天的依据：3 件大事 · 2 条新闻")).toBeTruthy();
+    expect(container.querySelector("#deskBasisAlert")?.textContent).toBe("突发：霍尔木兹海峡封锁 · 1 条新的重要新闻");
+    fireEvent.click(screen.getByText("今天的依据：3 件大事 · 2 条新闻"));
+    expect(container.querySelector("#deskBasis")?.hasAttribute("open")).toBe(true);
+    expect(container.querySelectorAll("#deskBasis article.desk-watch-card")).toHaveLength(3);
+    fireEvent.click(screen.getByText("金价跳水").closest("li")!);
+    expect(container.querySelector("#deskCites")?.textContent).toContain("金价跳水");
+    expect(calls.filter(c => c.url === "/api/watch")).toHaveLength(1);
+    expect(calls.every(c => c.method === "GET")).toBe(true);
+  });
+
+  test("an asset list that cannot be read says why", () => {
+    render(<TodayPanel error="请求失败，请稍后再试" />);
+    expect(screen.getByText("请求失败，请稍后再试").id).toBe("deskAssetsError");
+  });
 });

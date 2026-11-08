@@ -736,7 +736,7 @@ def test_the_control_panel_keeps_every_request_and_approval_in_gridmind() -> Non
     assert sorted(item.split('"', 2)[1] for item in islands) == sorted([
         "chart-frame", "control-actions", "control-picker", "exec-tables", "exec-tables", "exec-tables", "exec-tables", "gm-cards", "gm-grid-summary", "gm-header", "gm-preview",
         "robot-actions", "start-risk",
-        "news", "review", "today", "watch", "workbench",  # the desk's own islands, on the same /trade tree since #1415
+        "review", "today", "workbench",  # the desk's own islands, on the same /trade tree since #1415 (news and watch inside today since #1435)
     ])
     source = (ROOT / "apps" / "web" / "src" / "islands" / "ControlSummaries.tsx").read_text(encoding="utf-8")
     for forbidden in ("<input", "<select", "<button", "onClick", "onChange", "fetch(", "dangerouslySetInnerHTML"):

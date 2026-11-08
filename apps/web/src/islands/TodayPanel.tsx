@@ -18,6 +18,8 @@ import {
 } from "../today";
 import {citeStore, useCites} from "../todayStore";
 import {AiSources} from "./AiSources";
+import {NewsList, freshImportant, isKey, useNews, type News} from "./NewsRail";
+import {WatchCards, useWatch, type Watch} from "./WatchPanel";
 
 export const REFRESH_MS = 60000;
 export const ADVICE_POLL_MS = 5000;
@@ -26,10 +28,11 @@ const DIRECTIONS: Array<[Direction, string]> = [["long", "做多"], ["flat", "�
 const emit = (name: string, detail: unknown) => window.dispatchEvent(new CustomEvent(name, {detail}));
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export interface TodayProps {asset?: string; assets?: Asset[]; gridmind?: string[]}
+export interface TodayProps {asset?: string; assets?: Asset[]; gridmind?: string[]; error?: string}
 
 /** Keyed by asset: a different asset starts a fresh panel, as the legacy focusAsset() reset it. */
-export function TodayPanel({asset, assets = [], gridmind = []}: TodayProps) {
+export function TodayPanel({asset, assets = [], gridmind = [], error}: TodayProps) {
+  if (error) return <p className="desk-bad" id="deskAssetsError">{error}</p>;
   if (!asset) return <p className="desk-meta" style={{padding: 0}}>正在读取品种…</p>;
   return <Today key={asset} asset={asset} assets={assets} gridmind={gridmind} />;
 }
@@ -45,6 +48,32 @@ export function AssetNote({asset, assets, gridmind}: {asset: string; assets: Ass
     ? `${a.label}只记判断和复盘。图表和下方表格仍是 GridMind 上的品种。`
     : `${a.label}的判断和计划在这里；图表和下方表格仍是 GridMind 上的品种。`;
   return <p className="desk-asset-note" id="deskAssetNote">{text}</p>;
+}
+
+/** 「今天的依据」 (#1435): the week's three events and the news, folded into one line of step 1. Both keep
+ * reading while it is folded, so the counts are current. 「N 条新闻」 counts the list's default 「重要+关注」. */
+export function basisLine(watch: Watch, news: News): {text: string; alert: string} {
+  const events = watch.error ? "三件事读不到" : watch.data ? `${watch.data.items?.length ?? 0} 件大事` : "三件事读取中";
+  const count = news.error ? "新闻读不到" : news.at ? `${news.items.filter(isKey).length} 条新闻${news.stale ? "（上次读到的）" : ""}` : "新闻读取中";
+  const breaking = (watch.data?.items ?? []).find(i => i.kind === "breaking");
+  const important = freshImportant(news).length;
+  const alert = [breaking ? `突发：${breaking.title ?? ""}` : "", important ? `${important} 条新的重要新闻` : ""].filter(Boolean).join(" · ");
+  return {text: `今天的依据：${events} · ${count}`, alert};
+}
+
+function Basis({asset}: {asset: string}) {
+  const watch = useWatch();
+  const news = useNews(asset);
+  const {text, alert} = basisLine(watch, news);
+  return (
+    <details className="desk-basis" id="deskBasis">
+      <summary><span id="deskBasisLine">{text}</span>{alert ? <span className="desk-basis-alert" id="deskBasisAlert">{alert}</span> : null}</summary>
+      <div className="desk-basis-body">
+        <section className="desk-watch" aria-labelledby="deskWatchTitle"><WatchCards watch={watch} /></section>
+        <section className="desk-news" aria-labelledby="deskNewsTitle"><NewsList asset={asset} news={news} /></section>
+      </div>
+    </details>
+  );
 }
 
 function Reading({desk, error}: {desk: Desk | null; error: string}) {
@@ -195,6 +224,7 @@ function Today({asset, assets, gridmind}: {asset: string; assets: Asset[]; gridm
           <AssetNote asset={asset} assets={assets} gridmind={gridmind} />
           <Reading desk={desk} error={deskError} />
           {desk ? <Ai desk={desk} direction={direction} adopted={adopted} onAdopt={pick} onRefreshed={() => void loadDesk()} /> : <div className="desk-ai" id="deskAi" />}
+          <Basis asset={asset} />
           <div className="desk-dir" role="group" aria-label="方向">
             {DIRECTIONS.map(([d, label]) => (
               <button key={d} type="button" data-d={d} aria-pressed={direction === d} onClick={() => pick(d)}>{label}</button>

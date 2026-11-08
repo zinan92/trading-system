@@ -739,8 +739,6 @@ export function Skeleton() {
       <div className="desk-layout">
         <section className="desk-status wait" id="deskStatus" aria-live="polite" />
         <div className="desk-retired hidden" id="deskRetired" role="status" />
-        <section className="card desk-watch" aria-labelledby="deskWatchTitle" data-island="watch" dangerouslySetInnerHTML={{__html: ""}} />
-        <aside className="card desk-news" aria-labelledby="deskNewsTitle" data-island="news" data-props={"{}"} dangerouslySetInnerHTML={{__html: ""}} />
         <div className="console-wrap">
           {"\n    \n    "}
           <YesterdayPnlCard />

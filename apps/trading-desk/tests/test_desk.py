@@ -749,9 +749,11 @@ def test_react_islands_bundle_is_shipped_and_replaces_the_old_scripts():
         assert retired not in shell and not (static / retired).exists()
     desk = (static / "gm-desk.js").read_text(encoding="utf-8")
     # #1327: 「AI 用了什么」 now renders inside the today island's AI card, not as its own mount.
-    for island in ("watch", "today", "news", "backtest", "review", "workbench"):
+    for island in ("today", "backtest", "review", "workbench"):
         assert f'data-island="{island}"' in desk
-    assert 'data-island="ai-sources"' not in desk
+    # #1435: the news and the week's three events are inside 「今天」 step 1, not islands of their own.
+    for island in ("ai-sources", "watch", "news"):
+        assert f'data-island="{island}"' not in desk
 
 
 def _review_ledger(config):

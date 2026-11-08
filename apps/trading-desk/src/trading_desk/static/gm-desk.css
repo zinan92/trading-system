@@ -16,9 +16,22 @@
 .desk-pass:hover{color:var(--gm-muted,#9aa3ad)}
 :focus-visible{outline:2px solid var(--gm-accent,#3fd0e0);outline-offset:2px}
 
-.desk-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:9px;width:min(1800px,100%);margin:0 auto;padding:9px 0 0 16px;align-items:start}
-.desk-layout>.console-wrap{width:100%;padding-top:0;padding-left:0}
-.desk-news{position:sticky;top:81px;max-height:calc(100vh - 90px);display:flex;flex-direction:column;overflow:hidden}
+.desk-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:9px;width:min(1800px,100%);margin:0 auto;padding:9px 0 0;align-items:start}
+.desk-layout>.console-wrap{width:100%;padding-top:0;padding-left:16px}
+/* 今天的依据 (#1435): the week's three events and the news, folded inside step 1. */
+.desk-basis{margin:2px 0 8px;border:1px solid var(--gm-line,rgba(255,255,255,.08));border-radius:8px;background:var(--gm-panel-2,#15181e)}
+.desk-basis>summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;padding:7px 10px;cursor:pointer;list-style:none;font-size:13px;color:var(--gm-accent,#3fd0e0)}
+.desk-basis>summary::-webkit-details-marker{display:none}
+.desk-basis>summary::after{content:"›";margin-left:auto;color:var(--gm-muted,#9aa3ad);transition:transform .15s}
+.desk-basis[open]>summary::after{transform:rotate(90deg)}
+.desk-basis-alert{font-size:12px;color:var(--gm-warn,#f0a52e)}
+.desk-basis-body{display:grid;gap:10px;padding:0 6px 8px}
+.desk-basis .desk-news{display:flex;flex-direction:column}
+.desk-basis .desk-news ul{max-height:360px}
+#deskToday .desk-basis .card-title{padding:0 2px 6px;font-size:12px;font-weight:400;letter-spacing:.08em;text-transform:none;color:var(--gm-text,#eceef2);justify-content:space-between}
+#deskToday .desk-basis .card-title::before{display:none}
+.desk-basis .desk-meta{padding:0 2px 6px}
+.desk-basis .desk-news ul{padding:0 0 4px}
 .desk-news .card-title,.desk-judge .card-title{display:flex;align-items:center;gap:8px;justify-content:space-between}
 .desk-seg{display:inline-flex;border:1px solid var(--gm-line,rgba(255,255,255,.08));border-radius:6px;overflow:hidden}
 .desk-seg button{font:inherit;font-size:11px;padding:3px 8px;border:0;background:transparent;color:var(--gm-muted,#9aa3ad);cursor:pointer}
@@ -73,16 +86,10 @@
 .desk-toast{font-size:12px;color:var(--gm-accent,#3fd0e0);min-height:1em;line-height:1.45}
 
 
-@media (max-width:1280px){
-  .desk-layout{grid-template-columns:minmax(0,1fr);padding-left:0}
-  .desk-layout>.console-wrap{padding-left:16px}
-  .desk-news{position:static;order:2;max-height:460px;margin:0 16px 16px}
-}
 @media (max-width:760px){
   .desk-nav{order:-1;margin-left:0}
   .desk-layout>.console-wrap{padding-left:7px}
-  .desk-news{margin:0;max-height:420px;order:0}
-  .market-column>.desk-judge,.market-column>.desk-news{margin:0}
+  .market-column>.desk-judge{margin:0}
 }
 
 /* One start path and one stop path on this page: the desk panel re-previews and refuses when the loss grew.
@@ -91,9 +98,9 @@
 .desk-rail-note{margin:6px 0 0;font-size:11px;color:var(--gm-faint,#5d666f);line-height:1.5}
 
 /* 本周要看的三件事: full width above news and console */
-.desk-watch{grid-column:1/-1;padding:8px 12px 10px}
+.desk-watch{padding:4px 4px 0}
 .desk-watch-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:0 2px 6px;font-size:12px;letter-spacing:.08em;color:var(--gm-text,#eceef2)}
-.desk-watch-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.desk-watch-row{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
 .desk-watch-card{display:grid;gap:3px;align-content:start;padding:8px 10px;border-radius:7px;background:var(--gm-panel-2,#15181e);border:1px solid var(--gm-line,rgba(255,255,255,.08));border-left:3px solid var(--gm-warn,#f0a52e)}
 .desk-watch-card.high{border-left-color:var(--gm-red,#f2495f)}
 .desk-watch-card .w-src{font-size:11px;color:var(--gm-faint,#5d666f);line-height:1.4;overflow-wrap:anywhere}
@@ -105,8 +112,6 @@
 .desk-watch-card p{margin:0;font-size:12px;line-height:1.5;color:var(--gm-muted,#9aa3ad)}
 .desk-watch-card .w-mk{display:flex;flex-wrap:wrap;gap:3px}
 .desk-watch-card .w-mk span{font-size:10.5px;padding:0 5px;border-radius:3px;background:var(--gm-panel-3,#1c2027);color:var(--gm-muted,#9aa3ad)}
-@media (max-width:1280px){.desk-watch{margin:0 16px}}
-@media (max-width:760px){.desk-watch{margin:0 7px}.desk-watch-row{grid-template-columns:1fr}}
 
 .desk-ai{font-size:12px;color:var(--gm-muted,#9aa3ad);display:grid;gap:3px;padding:7px 9px;border-radius:6px;background:var(--gm-panel-2,#15181e)}
 .desk-ai:empty{display:none}
@@ -134,8 +139,7 @@
 /* ---- 2026-11-05 trade page redesign (#1294): one status line, one start path, no false alarms ---- */
 /* The banner says what the header pills used to repeat. */
 #marketBadge,#cycleBadge,#accessBadge,#runBadge{display:none}
-.desk-layout>.desk-status,.desk-layout>.desk-retired{grid-column:1/-1;margin-bottom:0}
-@media (max-width:1280px){.desk-layout>.desk-status,.desk-layout>.desk-retired{margin:0 16px}}
+.desk-layout>.desk-status,.desk-layout>.desk-retired{grid-column:1/-1;margin:0 16px}
 @media (max-width:760px){.desk-layout>.desk-status,.desk-layout>.desk-retired{margin:0 7px}}
 .desk-status{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:18px 22px;margin-bottom:10px;border-radius:12px;background:var(--gm-panel,#131519);border:1px solid var(--gm-line,rgba(236,238,242,.08))}
 .desk-status-ic{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none;background:var(--gm-panel-2,#191c22);color:var(--gm-muted,#99a0ab)}
