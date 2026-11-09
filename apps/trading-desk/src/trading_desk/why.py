@@ -191,7 +191,7 @@ def _testnet(root: Path, plan_id: str, judgments: list[dict[str, Any]], origins:
     ]
     return _finish({"kind": "run", "id": f"testnet:{plan_id}"}, asset=asset, environment="testnet", label=f"{asset} Testnet", steps=steps,
                    identity={"run_id": f"testnet:{plan_id}", "plan_digest": digest, "strategy_session_id": state.get("strategy_session_id"), "activation_id": activation,
-                             "release_sha": (preview or {}).get("release_sha"), "market_source": None})
+                             "release_sha": (preview or {}).get("source_sha"), "market_source": None})  # the Preview's pinned release_sha is runtime identity, not code (#1472)
 
 
 def explain_run(paper_output: Path, run_id: str, judgments: list[dict[str, Any]], *, origins: dict[str, dict[str, Any]] | None = None) -> dict[str, Any] | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -400,7 +401,8 @@ def test_testnet_preview_carries_non_secret_activation_identity_from_host(
     )
 
     assert preview["runtime_id"] == "dashboard-testnet-runtime"
-    assert preview["release_sha"] == "a" * 40
+    assert preview["release_sha"] == "a" * 40  # pinned runtime identity, unchanged
+    assert preview["source_sha"] == subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     assert preview["transport_profile"] == "hyperliquid-testnet-position-protection"
     assert "private_key" not in str(preview)
 
