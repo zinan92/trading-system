@@ -1,7 +1,8 @@
 // Desk layer injected into the GridMind console (served at /trade): nav + asset switch, one status
 // line, and step 3 of 「今天」 (执行, 停止, 暂停补单). Steps 1–2 (with the news) are a React island
 // (apps/web TodayPanel, #1327, #1435); this file keeps which asset is selected, because that
-// drives GridMind's own selects, and every order or control request until #1329.
+// drives GridMind's own selects, and every order or control request: apps/web never sends one (ADR 0008;
+// why these bridges stay is in decision-log.md under #1427).
 // GridMind's own cards stay in the page (collapsed); only presentation changes here.
 
 // Pure status model, read from the view GridMind last rendered (window.gridmindView), so the
@@ -195,7 +196,7 @@ if (typeof document !== "undefined") (() => {
     // The news and the week's three events are inside 「今天」 step 1 (apps/web TodayPanel, #1435).
     layout.appendChild(wrap);
     const rail = $d(".control-rail");
-    // Steps 1–2 are a React island (apps/web TodayPanel, #1327); step 3 stays here until #1329.
+    // Steps 1–2 are a React island (apps/web TodayPanel, #1327); step 3 stays here because it sends requests (ADR 0008).
     rail?.insertAdjacentHTML("afterbegin", `<section class="card desk-judge" id="deskToday" aria-labelledby="deskJudgeTitle">
       <div class="card-title"><span id="deskJudgeTitle">今天</span><span class="desk-meta" style="padding:0" id="deskJudgeDate"></span></div>
       <div class="card-body">
@@ -440,7 +441,7 @@ if (typeof document !== "undefined") (() => {
       catch (e) { $d("#deskStopToast").textContent = e.message; $d("#deskStopBtn").disabled = false; }
     };
   }
-  // ---- step 3: 执行 (same flow, endpoint and body as before; moves to React in #1329) ----------
+  // ---- step 3: 执行 (sends /api/execute and /api/grid requests, so it stays out of apps/web; ADR 0008) ----------
   // Steps 1–2 mark themselves in the island; this marks step 3 and its placeholder from desk:steps.
   function syncSteps() {
     const exec = $d("#deskExecBox");
