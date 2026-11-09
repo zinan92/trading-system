@@ -1,5 +1,26 @@
 # Decision Log
 
+# 2026-11-09 — The control loop logs every run and names the failing step (#1475)
+
+## Decision
+
+- `pipelines.park_control.main` configures `structured_log` as `park-control` in `<output-root>/logs`. Each run writes one `tick` record: status, code, total `ms`, `steps` (ms per step), the Testnet and execution status and code, and the Telegram delivery counts. A run that does not pass is logged at WARNING.
+- Steps: `ownership`, `config`, `setup`, `telegram`, `testnet_tick`, `notices`, `legacy_cutover`, `safety_evidence`, `paper_runtime`, `delivery`.
+- A caught failure (`TelegramBotTransportError`, `ParkTelegramRuntimeError`, `ValueError`, `OSError`, JSON) writes `tick_failed` at ERROR, with the step and the traceback, before the existing blocked result. Any other exception writes `tick_crashed` and is re-raised, exactly as before.
+- The desk's 「日志（24 小时）」 check reads `park-control.jsonl` beside `desk` and `dashboard`.
+- Stdout JSON and exit codes are unchanged (79 when not the scheduler owner).
+
+## Gotchas
+
+- `setup` is the stretch between config and the Telegram call (router, transport, runtime config). In the first test draft a missing `--park-user-id` failed there, not in `telegram`, and the record said so. That is the point of naming the step.
+- The traceback goes through `structured_log.redact`. The test puts `token=abc123` in the exception and checks it is not in the file.
+- The stdout file (`park-paper-control.stdout.log`, 64 MB) still grows without rotation. It is launchd's capture and out of scope here.
+
+## Verification
+
+- `tests/test_park_control_log.py` (3) covers a blocked run, a typed Telegram failure and an unexpected crash. All fail without the change. `test_the_system_page_counts_control_loop_errors` fails without the desk change.
+- park_control, lifecycle, legacy cutover, replay, systemd and structured-log tests: 157 passed. Desk: 283 passed.
+
 # 2026-11-09 — The why panel's code version is the commit that ran (#1472)
 
 ## Decision

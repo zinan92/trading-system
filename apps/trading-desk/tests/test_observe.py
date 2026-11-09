@@ -80,6 +80,15 @@ def test_the_system_page_counts_problems_and_names_the_latest(config, sources, s
     assert path.exists()
 
 
+def test_the_system_page_counts_control_loop_errors(config, sources, store, fetch) -> None:
+    sl.configure("park-control", config.paper_output / "logs")
+    sl.get_logger("park_control").error("tick_failed")
+    sl.configure("desk", None)
+    client, _ = client_for(config, sources, store, fetch)
+    row = next(check for check in client.get("/api/system").json()["checks"] if check["name"] == "日志（24 小时）")
+    assert row["ok"] is False and "错误 1" in row["detail"] and "tick_failed" in row["detail"]
+
+
 def test_the_request_id_travels_to_the_dashboard(monkeypatch) -> None:
     seen = {}
 

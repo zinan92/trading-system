@@ -629,7 +629,7 @@ def create_app(config: Config | None = None, sources: Sources | None = None, sto
         checks.append({"name": "本周三件事", "ok": bool(current_watch.get("items")) and current_watch.get("provider") == "codex",
                        "detail": f"{str(current_watch.get('generated_at') or '没有生成')[5:16]} · {current_watch.get('provider') or '—'}"})
         logs = config.paper_output / "logs"
-        problems = recent_problems([log_path(logs, "desk"), log_path(logs, "dashboard")])
+        problems = recent_problems([log_path(logs, "desk"), log_path(logs, "dashboard"), log_path(logs, "park-control")])
         latest = problems["latest"]
         checks.append({"name": "日志（24 小时）", "ok": problems["errors"] == 0,
                        "detail": f"错误 {problems['errors']} · 警告 {problems['warnings']}" + (f" · 最新 {latest['event']}，编号 {latest['request_id']}" if latest else "")})
