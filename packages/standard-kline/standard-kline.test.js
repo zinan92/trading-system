@@ -285,3 +285,11 @@ test("normalizeQualityFlags accepts arrays and delimited strings", () => {
   assert.deepEqual(kline.normalizeQualityFlags("a, b|c"), ["a", "b", "c"]);
   assert.deepEqual(kline.normalizeQualityFlags(null), []);
 });
+
+test("chart wrapper lets the host page choose the up and down candle colours", () => {
+  const source = fs.readFileSync(path.join(__dirname, "standard-kline.js"), "utf8");
+
+  assert.match(source, /const up = this\.options\.upColor \|\| COLORS\.up/);
+  assert.match(source, /const down = this\.options\.downColor \|\| COLORS\.down/);
+  assert.match(source, /upColor:up,\s*downColor:down,\s*borderUpColor:up,\s*borderDownColor:down,\s*wickUpColor:up,\s*wickDownColor:down/);
+});

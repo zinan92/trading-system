@@ -28,7 +28,7 @@ function Chart({data}: {data: Timeline}) {
     }});
     chart.current.setPayload(payload, {
       markers: markers(data, snap),
-      priceLines: (data.lines ?? []).map(line => ({price: Number(line.price), title: line.title, color: line.title === "止损" ? "#f0a24b" : "#8b95a3", lineStyle: 2, lineWidth: 1})),
+      priceLines: (data.lines ?? []).map(line => ({price: Number(line.price), title: line.title, color: line.title === "止损" ? "#f0a52e" : "#8b95a3", lineStyle: 2, lineWidth: 1})),
     });
   }, [data]);
 
