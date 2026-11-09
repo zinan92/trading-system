@@ -128,6 +128,10 @@ def test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars(
         page.route("**/api/dualtrack/market/bars?*", fulfill_market)
         page.goto(f"{base_url}/trade", wait_until="networkidle")
         open_manual(page)  # /trade keeps GridMind's form inside 「手动配置与 AI 助手」 (#1419)
+        # The fixture pages are 30m bars; the chart opens on 4h since #1445, so pick 30m as Park would.
+        page.locator('#timeframeButtons [data-tf-more]').click()
+        page.locator('#timeframeButtons [data-tf="30m"]').click()
+        page.wait_for_load_state("networkidle")
 
         source = page.locator(".standard-kline-source")
         assert "240 bars" in source.inner_text()
