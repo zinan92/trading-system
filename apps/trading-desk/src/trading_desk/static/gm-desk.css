@@ -299,3 +299,14 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
 .desk-why dd{margin:0;color:inherit;overflow-wrap:anywhere}
 .desk-why li .desk-why-source{display:block;margin-left:0}
 .desk-why-identity,.desk-why-note{margin:10px 0 0;font-size:12px;color:var(--muted,#aab1bb)}
+/* 「这一轮」 (#1449): while a plan runs it replaces 「今天」's steps 1–2 and step 3's plan box; step 3's stop area and 「自己调」 stay. */
+.desk-thisrun:empty{display:none}
+.desk-thisrun{margin:0 0 10px;padding:10px 12px;border:1px solid var(--gm-line,#2a2f38);border-radius:8px;background:var(--gm-panel-2,#151a21)}
+.desk-thisrun h3{margin:0 0 8px;font-size:14px;color:var(--gm-text,#e6e8eb)}
+.desk-thisrun .warn{margin:0 0 8px;color:var(--gm-warn,#e0a84a);font-size:12px}
+.desk-thisrun dl{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 14px}
+.desk-thisrun dl div{display:flex;justify-content:space-between;gap:8px;min-width:0;border-bottom:1px dashed var(--gm-line,#2a2f38);padding:3px 0}
+.desk-thisrun dt{color:var(--gm-muted,#99a0ab);font-size:12px}
+.desk-thisrun dd{margin:0;font-size:13px;text-align:right;overflow-wrap:anywhere}
+body.desk-running #deskToday .desk-today,body.desk-running #deskToday .desk-steps-exec .desk-n,body.desk-running #deskToday .desk-steps-exec h3,body.desk-running #deskExecBox{display:none}
+@media(max-width:760px){.desk-thisrun dl{grid-template-columns:minmax(0,1fr)}}
