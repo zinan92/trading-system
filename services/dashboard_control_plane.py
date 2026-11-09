@@ -398,9 +398,22 @@ class DashboardControlPlane:
     def venue_profiles() -> tuple[dict[str, Any], ...]:
         return tuple(dict(row) for row in _venue_profiles())
 
-    def catalog(self) -> dict[str, Any]:
+    def catalog(self, *, environment: str | None = None) -> dict[str, Any]:
+        """The Venue/Instrument catalog; with ``environment``, only the profiles of that environment.
+
+        The filter decides which catalogs are loaded, not just which are shown: the desk asks for
+        ``environment="paper"`` and must not wait on the Hyperliquid testnet calls (~8 s, #1466). An
+        environment no profile has is refused, never answered with an empty list. Selection, preview
+        and control keep reading the full, live catalog through ``_catalog_entry``.
+        """
+        chosen = [
+            profile for profile in _venue_profiles()
+            if environment is None or str(profile.get("environment") or "") == environment
+        ]
+        if not chosen:
+            raise ValueError("venue_environment_unknown")
         profiles: list[dict[str, Any]] = []
-        for profile in _venue_profiles():
+        for profile in chosen:
             profile_id = str(profile["id"])
             blockers: list[str] = []
             try:
@@ -428,8 +441,10 @@ class DashboardControlPlane:
                 "blockers": sorted(set(blockers)),
             }
             profiles.append(profile_payload)
+        filtered = {} if environment is None else {"environment_filter": environment}
         return {
             "schema_version": DASHBOARD_CONTROL_SCHEMA,
+            **filtered,
             "catalog_revision": _digest(
                 [
                     {

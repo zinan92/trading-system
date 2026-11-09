@@ -22,7 +22,7 @@ class FakeFetch:
             if (typed and typed == prefix) or (not typed and prefix in url):
                 if isinstance(value, Exception):
                     raise value
-                return value
+                return value(url) if callable(value) else value
         raise ConnectionError(f"no route for {typed or url}")
 
 
@@ -58,10 +58,16 @@ def fetch() -> FakeFetch:
     bars = [{"timestamp": f"2026-09-{d:02d}T00:00:00+00:00", "open": 100.0 + d, "high": 102.0 + d, "low": 99.0 + d, "close": 101.0 + d} for d in range(1, 15)]
     f.routes["/api/dualtrack/market/bars"] = {"status": "ready", "fresh": True, "bars": bars}
     f.routes["candleSnapshot"] = [{"t": 1788998400000 + d * 86_400_000, "o": str(100 + d), "h": str(102 + d), "l": str(99 + d), "c": str(101 + d)} for d in range(14)]
-    f.routes["/api/dashboard-control/catalog"] = {"venue_profiles": [{"id": "hyperliquid.testnet", "instruments": [
+    catalog = {"venue_profiles": [{"id": "hyperliquid.testnet", "instruments": [
         {"asset": "BTC", "instrument_id": "BTC-USD-PERP", "eligibility": "eligible"}, {"asset": "ETH", "instrument_id": "ETH-USD-PERP", "eligibility": "unknown"}]},
         {"id": "okx.paper", "label": "OKX Paper", "environment": "paper", "paper_gold_venue": {"label": "OKX XAU-USDT-SWAP 永续"},
          "instruments": [{"asset": "XAU", "instrument_id": "XAU-USDT-SWAP.OKX", "eligibility": "eligible"}]}]}
+    # Like 8765 (#1466): ?environment=paper returns only the Paper profiles, so a desk reader that wanted
+    # Hyperliquid from the Paper read would fail here as it would in production.
+    f.routes["/api/dashboard-control/catalog"] = lambda url: (
+        {**catalog, "environment_filter": "paper",
+         "venue_profiles": [p for p in catalog["venue_profiles"] if p.get("environment") == "paper"]}
+        if "environment=paper" in url else catalog)
     f.routes["/api/ui/realtime"] = {"items": [
         {"id": 11, "title": "美联储9月降息预期升温", "source": "cls_telegraph", "collected_at": "2099-01-01T08:00:00Z", "triage": {"bucket": "high_impact"}, "exposure_assets": ["bitcoin", "gold"]},
         {"id": 12, "title": "比特币跌破7.7万", "source": "blockbeats_newsflash", "collected_at": "2099-01-01T09:30:00Z", "triage": {"bucket": "watch"}, "exposure_assets": ["bitcoin"]},

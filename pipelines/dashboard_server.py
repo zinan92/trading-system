@@ -478,7 +478,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._handle_connector_catalog_get()
             return
         if parsed.path == "/api/dashboard-control/catalog":
-            self._handle_dashboard_control_catalog_get()
+            self._handle_dashboard_control_catalog_get(parsed.query)
             return
         if parsed.path == "/api/dashboard-control/selection":
             self._handle_dashboard_control_selection_get()
@@ -929,9 +929,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_connector_catalog_get(self) -> None:
         self._write_json(200, build_connector_catalog_response())
 
-    def _handle_dashboard_control_catalog_get(self) -> None:
+    def _handle_dashboard_control_catalog_get(self, query: str = "") -> None:
+        environment = str((parse_qs(query).get("environment") or [""])[0]).strip() or None
         try:
-            self._write_json(200, build_dashboard_control_catalog_response())
+            self._write_json(200, build_dashboard_control_catalog_response(environment=environment))
+        except ValueError as exc:
+            if str(exc) != "venue_environment_unknown":
+                self._write_error(503, "dashboard_control_catalog_unavailable", type(exc).__name__)
+                return
+            self._write_error(400, "venue_environment_unknown", "no venue profile has this environment")
         except Exception as exc:  # noqa: BLE001 - read-only catalog blocker.
             LOG.warning("caught_exception", exc_info=True)
             self._write_error(503, "dashboard_control_catalog_unavailable", type(exc).__name__)
@@ -4149,11 +4155,13 @@ def build_connector_catalog_response() -> dict:
     return ConnectorCatalog().snapshot()
 
 
-def build_dashboard_control_catalog_response(*, output_root: Path | None = None) -> dict[str, Any]:
-    """Return the explicit Venue/Instrument catalog for Dashboard V5."""
+def build_dashboard_control_catalog_response(
+    *, output_root: Path | None = None, environment: str | None = None
+) -> dict[str, Any]:
+    """Return the explicit Venue/Instrument catalog for Dashboard V5 (only ``environment``'s profiles when given)."""
 
     output = _dualtrack_output_root(output_root)
-    return DashboardControlPlane(output, catalog_loader=public_catalog_loader).catalog()
+    return DashboardControlPlane(output, catalog_loader=public_catalog_loader).catalog(environment=environment)
 
 
 def build_dashboard_control_selection_response(
