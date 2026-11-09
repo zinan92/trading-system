@@ -433,13 +433,15 @@
       this.chart.subscribeCrosshairMove?.(param => this._setCrosshairTime(param));
       this._patchTimeScale();
       this._timeScale?.subscribeVisibleLogicalRangeChange?.(range => this._emitViewChange("visible-logical-range", range));
+      const up = this.options.upColor || COLORS.up;
+      const down = this.options.downColor || COLORS.down;
       this.candleSeries = this.chart.addSeries(lwc.CandlestickSeries, {
-        upColor:COLORS.up,
-        downColor:COLORS.down,
-        borderUpColor:COLORS.up,
-        borderDownColor:COLORS.down,
-        wickUpColor:COLORS.up,
-        wickDownColor:COLORS.down,
+        upColor:up,
+        downColor:down,
+        borderUpColor:up,
+        borderDownColor:down,
+        wickUpColor:up,
+        wickDownColor:down,
         priceLineVisible:false,
         lastValueVisible:true,
         priceFormat:{type:"price", precision:2, minMove:.01},

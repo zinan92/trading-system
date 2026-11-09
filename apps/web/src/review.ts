@@ -43,7 +43,8 @@ export interface Timeline {
 export interface Marker {time: number; position: "belowBar" | "aboveBar"; shape: "arrowUp" | "arrowDown" | "circle"; color: string; text: string}
 export interface Cell {label: string; value: string; big?: boolean; bad?: boolean}
 
-const BUY = "#7fb2ff", SELL = "#f0a24b", JUDGE = "#c5a8ff";
+// #1459: buy/sell use the desk green/red, judgements the accent cyan.
+const BUY = "#2fc98a", SELL = "#f2495f", JUDGE = "#3fd0e0";
 const fmt = (value: number | null | undefined, digits = 2) =>
   value == null ? "—" : Number(value).toLocaleString("zh-CN", {minimumFractionDigits: digits, maximumFractionDigits: digits});
 export const signed = (value: number | null | undefined) =>

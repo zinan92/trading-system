@@ -198,7 +198,7 @@ def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
         assert f'id="{retired_id}"' not in html
     assert 'id="actionStatus"' in html
     assert ".chart{height:450px;min-height:320px}" in html
-    assert "StandardKlineChart(host,{...gmChart.CHART_OPTIONS,labels:{fit:\"复位\"" in html  # #1455: Chinese toolbar and overlays
+    assert "StandardKlineChart(host,{...gmChart.CHART_OPTIONS,upColor:deskColour(\"--gm-green\",\"#2fc98a\"),downColor:deskColour(\"--gm-red\",\"#f2495f\"),labels:{fit:\"复位\"" in html  # #1455 Chinese labels; #1459 desk candle colours
     assert "height: 450, minHeight: 320" in _chart_layer()
     assert ".chart{height:420px}" in html
     assert ".chart{height:340px}" in html

@@ -180,6 +180,40 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — /trade gives each colour one meaning (#1459)
+
+## Decision
+
+- Block 4, last step (#1427). The skin tokens are the only palette: `--gm-accent` (cyan) is the primary action and
+  the selected state; `--gm-green` / `--gm-red` mean up/down, profit/loss and buy/sell; `--gm-warn` (amber) means
+  "look at this". A large solid red panel is kept for states that block new orders (datafeed down, no valid plan).
+- gm-desk.css: the off-palette literals `#f0a24b`, `#d9a35b`, `#5a4526`, `#7fb2ff`, `#5bbf8a` and `#1f2733` are
+  gone. Citations, focus rings, backtest bars and the pressed review event are accent; the verified-evidence verdict
+  is plain ink, so only failures are coloured.
+- 「执行」 (`.desk-btn.exec`) was a filled amber button. It is the primary action, so it is now cyan, like the
+  other primary buttons.
+- 「拒绝草稿」 (`button.danger` in the AI panel) is a neutral secondary button. The chart history notice is muted.
+- Chart: standard-kline gains `upColor` / `downColor` options (default unchanged for other hosts), and gridmind passes
+  the skin green and red. Inside `#productionChart`, the toolbar hover and active scale button are accent (were gold),
+  the loading message is plain text, and the no-bars and simulated-bars messages are amber (were red). The red block
+  banner stays in `#deskStatus`.
+- Review chart (apps/web): buy and sell markers use the desk green and red (were blue and amber), judgement markers
+  use the accent (were violet), and the stop line uses the skin amber.
+
+## Gotchas
+
+- The empty-chart overlay is what shows during a datafeed outage. It was red before. It is now amber because the
+  red, blocking statement belongs to the status banner. The chart only says there is nothing to draw.
+- The volume histogram colours inside standard-kline (`rgba(53,208,127,.42)` / `rgba(239,95,95,.38)`) stay as they
+  are. They are translucent canvas fills, set per bar in the adapter, and out of this change's scope.
+
+## Verification
+
+- Browser `tests/test_gm_semantic_colours_browser.py` (1680, 375; 自己调 and 系统详情 open): every non-grey text,
+  background and border colour is one of the four skin hues; no large solid red panel in an unblocked state;
+  「拒绝草稿」 is grey. Static checks: gridmind passes the candle colours; gm-desk.css has no off-palette literal.
+- standard-kline node test 22; vitest 2263, tsc clean, build.
+
 # 2026-11-09 — /trade uses two text sizes and one figure size (#1457)
 
 ## Decision
@@ -209,6 +243,8 @@
   toolbar buttons one line; no overflow.
 - gridmind/gm/trade browser + static 186; mjs 29; desk 279. Production screenshots before/after with this branch's
   CSS routed over the live page: no overflow at 1440 or 390.
+- Production 4af2e95 (deployed with `ops/deploy-paper.sh`; the CSS files are byte-identical to main): a read-only
+  headless load shows only 12/14/20px text at 1440 and 375, with no overflow and no non-GET request.
 
 # 2026-11-09 — /trade's labels outside 系统详情 read in Chinese (#1455)
 
