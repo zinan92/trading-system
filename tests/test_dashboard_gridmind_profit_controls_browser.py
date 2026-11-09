@@ -250,7 +250,7 @@ def test_gridmind_smart_fill_replaces_manual_range_with_one_read_only_preview() 
         assert page.locator("#rangeHigh").input_value() == "4100"
         assert page.locator("#gridCount").input_value() == "30"
         assert page.locator("#gridNotional").input_value() == "6666.67"
-        assert page.locator('[data-param-lock="range"]').first.inner_text() == "AUTO"
+        assert page.locator('[data-param-lock="range"]').first.inner_text() == "自动"
         browser.close()
 
 
@@ -1115,6 +1115,6 @@ def test_gridmind_invalid_manual_notional_is_visible_and_disables_start() -> Non
         page.wait_for_function("document.querySelector('#gridNotional').value === '6666.67'")
 
         assert [row["action"] for row in requests] == ["preview"]
-        assert page.locator('[data-param-lock="notional_per_grid"]').inner_text() == "AUTO"
+        assert page.locator('[data-param-lock="notional_per_grid"]').inner_text() == "自动"
         assert page.locator("#gridNotional").get_attribute("aria-invalid") == "false"
         browser.close()

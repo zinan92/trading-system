@@ -557,11 +557,14 @@ def test_gridmind_park_draft_snapshot_shows_risk_digest_and_exact_grid_geometry(
         page.locator("#parkAiSend").click()
         page.locator("#parkAiSnapshot").wait_for(state="visible")
         copy = page.locator("#parkAiSnapshot").inner_text()
-        assert "Risk Digest" in copy and "sha256:" + "b" * 64 in copy
-        assert "Grid Entry Range" in copy and "3810" in copy and "3990" in copy
-        assert "Grid Hard Stop" in copy and "3800" in copy and "4000" in copy
-        assert "TP geometry" in copy and "3810" in copy and "3990" in copy
-        assert "Local stop" in copy and "absent by default" in copy
+        # #1455: the snapshot reads in Chinese and prices are formatted.
+        assert "风控摘要" in copy and "sha256:" + "b" * 64 in copy
+        assert "网格区间" in copy and "3,810 ~ 3,990" in copy
+        assert "网格硬止损" in copy and "做多 3,800" in copy and "做空 4,000" in copy
+        assert "每格止盈" in copy and "3,810" in copy and "3,990" in copy
+        assert "本地止损" in copy and "默认不设" in copy
+        for english in ("Risk Digest", "Grid Entry Range", "Grid Hard Stop", "TP geometry", "Local stop", "absent by default", "Snapshot"):
+            assert english not in copy
         browser.close()
 
 

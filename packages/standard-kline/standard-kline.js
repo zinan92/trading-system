@@ -291,12 +291,16 @@
     }).filter(Boolean);
   }
 
+  function escapeLabel(value){
+    return String(value).replace(/[&<>"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
+  }
+
   function toolbarHtml(options){
     const showZoom = options?.toolbar?.zoom !== false;
     const zoomButtons = showZoom
       ? `<button type="button" data-action="zoom-in" title="Zoom in">+</button><button type="button" data-action="zoom-out" title="Zoom out">-</button><button type="button" data-action="pan-left" title="Pan left">&lt;</button><button type="button" data-action="pan-right" title="Pan right">&gt;</button>`
       : "";
-    return `${zoomButtons}<button type="button" data-action="fit" title="Fit">fit</button><span class="standard-kline-ohlc" data-ohlc></span><span class="standard-kline-source" data-source></span>`;
+    return `${zoomButtons}<button type="button" data-action="fit" title="${escapeLabel(options?.labels?.fitTitle || "Fit")}">${escapeLabel(options?.labels?.fit || "fit")}</button><span class="standard-kline-ohlc" data-ohlc></span><span class="standard-kline-source" data-source></span>`;
   }
 
   function injectStyles(){
@@ -717,10 +721,12 @@
     }
 
     _setOverlay(kind, title, detail){
+      const custom = this.options?.labels?.overlays?.[kind];
       this.overlayEl.classList.add("is-visible", `standard-kline-${kind}`);
       this.overlayEl.dataset.state = kind;
-      this.overlayEl.querySelector("b").textContent = title;
-      this.overlayEl.querySelector("span").textContent = detail;
+      this.overlayEl.querySelector("b").textContent = custom?.title || title;
+      this.overlayEl.querySelector("span").textContent = custom?.detail || detail;
+      this.overlayEl.title = custom ? String(detail || "") : "";
     }
 
     _hideOverlay(){

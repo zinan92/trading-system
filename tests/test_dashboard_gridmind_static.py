@@ -174,7 +174,7 @@ def test_gridmind_invalid_manual_draft_is_visible_and_cannot_start() -> None:
     assert "function invalidStrategyDraft()" in html
     control = _control_layer()
     assert 'title: "每格名义缺失"' in control
-    assert 'button.textContent=locked?"手动":"AUTO"' in html
+    assert 'button.textContent=locked?"手动":"自动"' in html
     assert "function renderParameterValidity()" in html
     assert 'input.classList.toggle("is-invalid",invalid)' in html
     assert 'box.className="preview-summary invalid"' in html
@@ -198,7 +198,7 @@ def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
         assert f'id="{retired_id}"' not in html
     assert 'id="actionStatus"' in html
     assert ".chart{height:450px;min-height:320px}" in html
-    assert "StandardKlineChart(host,{...gmChart.CHART_OPTIONS})" in html
+    assert "StandardKlineChart(host,{...gmChart.CHART_OPTIONS,labels:{fit:\"复位\"" in html  # #1455: Chinese toolbar and overlays
     assert "height: 450, minHeight: 320" in _chart_layer()
     assert ".chart{height:420px}" in html
     assert ".chart{height:340px}" in html
@@ -227,11 +227,11 @@ def test_gridmind_adds_an_additive_park_ai_chat_without_replacing_existing_contr
     assert "DEEPSEEK_API_KEY" not in html
     assert 'body:JSON.stringify({action,...payload})' in html
     assert 'post("confirm",{draft_id:pending.draft_id,plan_digest:pending.plan_digest})' in html
-    assert "Grid Entry Range" in html
-    assert "Grid Hard Stop" in html
-    assert "TP geometry" in html
-    assert "Risk Digest" in html
-    assert "Local stop" in html
+    assert "网格区间" in html
+    assert "网格硬止损" in html
+    assert "每格止盈" in html
+    assert "风控摘要" in html
+    assert "本地止损" in html
 
 
 def test_gridmind_keeps_the_chart_above_the_fold_and_park_ai_chat_in_the_control_rail() -> None:
