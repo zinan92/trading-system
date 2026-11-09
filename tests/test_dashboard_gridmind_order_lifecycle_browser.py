@@ -410,18 +410,21 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
         assert page.evaluate("() => !!document.querySelector('#deskSystem #currentStrategyCard')")
         assert "当前运行策略" in copy
         assert "运行中" in copy
-        assert "Short · Grid" in copy
+        assert "做空 · 网格" in copy  # #1463: the card reads in Chinese
         assert "3,800 – 4,000" in copy
-        assert "Grid Entry Range" in copy and "3,810 – 3,990" in copy
-        assert "Grid Spacing" in copy and "10 · 19 Rungs" in copy
-        assert "Hard Stop 4,000" in copy
+        assert "入场区间" in copy and "3,810 – 3,990" in copy
+        assert "网格间距 / 格数" in copy and "10 · 19 格" in copy
+        assert "硬止损\n4,000" in copy or "硬止损 4,000" in copy
+        assert "策略版本" in copy and "网格区间" in copy
+        for english in ("Grid Boundary", "Grid Entry Range", "Grid Spacing", "Rungs", "Grid Hard Stop", "Revision", "Recording Window", "Short · Grid"):
+            assert english not in copy, english
         assert "10x" in copy
         assert "最大理论亏损" in copy and "480 USD" in copy
         assert "12 挂单" in copy and "7 成交" in copy and "2 持仓" in copy
         assert "session-browser-park" in copy
         assert "revision-browser-4" in copy
         assert "行情可信" in copy and "对账 ok" in copy and "4 秒前" in copy
-        assert "Recording Window 2026-08-18_DAY · complete" in copy
+        assert "记录窗口 2026-08-18_DAY · complete" in copy
         assert "2026-08-17 · +12.50 USD" in yesterday_copy
         assert "证据完整" in yesterday_copy
         assert "手续费" in yesterday_copy and "+0.50" in yesterday_copy
@@ -610,7 +613,7 @@ def test_gridmind_surfaces_legacy_exposure_as_a_visible_migration_blocker() -> N
         assert "迁移阻塞" in copy
         assert "25 挂单" in copy and "1 持仓" in copy
         assert "Park 身份缺失" in copy
-        assert "暂无 Park Strategy" not in copy
+        assert "暂无 Park 策略" not in copy
         assert browser_errors == []
         browser.close()
 
@@ -665,10 +668,10 @@ def test_gridmind_distinguishes_evidence_blocked_from_clean_idle() -> None:
         yesterday_copy = page.locator("#yesterdayPnlCard").inner_text()
         assert "策略证据阻塞" in copy
         assert "证据阻塞" in copy
-        assert "暂无 Park Strategy" not in copy
+        assert "暂无 Park 策略" not in copy
         assert "阻塞: safety_evidence_not_passing" in copy
-        assert "Recording Window 2026-08-18_DAY · blocked" in copy
-        assert "Recording Window 阻塞: recording_package_blocked" in copy
+        assert "记录窗口 2026-08-18_DAY · blocked" in copy
+        assert "记录窗口阻塞: recording_package_blocked" in copy
         assert "2026-07-17 · --" in yesterday_copy
         assert "证据不足" in yesterday_copy
         assert "阻塞: yesterday_daily_report_missing" in yesterday_copy
@@ -710,8 +713,8 @@ def test_gridmind_shows_recording_window_in_progress_without_strategy_transition
         open_system(page)  # /trade keeps this card inside 「系统详情」 (#1419)
         page.locator("#currentStrategyCard").wait_for(state="visible")
         copy = page.locator("#currentStrategyCard").inner_text()
-        assert "Recording Window 2026-08-18_NIGHT · in_progress" in copy
-        assert "Recording Window 阻塞" not in copy
+        assert "记录窗口 2026-08-18_NIGHT · in_progress" in copy
+        assert "记录窗口阻塞" not in copy
         assert browser_errors == []
         browser.close()
 
@@ -767,11 +770,11 @@ def test_gridmind_shows_dca_tp_sl_without_grid_only_facts() -> None:
         open_system(page)  # /trade keeps this card inside 「系统详情」 (#1419)
         page.locator("#currentStrategyCard").wait_for(state="visible")
         copy = page.locator("#currentStrategyCard").inner_text()
-        assert "Long · DCA" in copy
-        assert "DCA TP / SL" in copy
-        assert "TP 4,050 · SL 3,800" in copy
-        assert "Grid Entry Range" not in copy
-        assert "Grid Spacing" not in copy
+        assert "做多 · 趋势加仓" in copy
+        assert "止盈 / 止损" in copy and "加仓区间" in copy
+        assert "止盈 4,050 · 止损 3,800" in copy
+        assert "入场区间" not in copy
+        assert "网格间距" not in copy
         assert browser_errors == []
         browser.close()
 
