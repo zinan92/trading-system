@@ -74,6 +74,8 @@ def test_every_coloured_element_uses_one_of_the_four_meanings(width: int) -> Non
             browser, page, errors = _open(runtime, origin, width, model)
         except Exception as exc:  # pragma: no cover - local browser dependency
             pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page.add_style_tag(content="*,*::before,*::after{transition:none!important;animation:none!important}")
+        page.wait_for_timeout(50)  # measure end colours, not a hover/selection transition caught mid-way
         found = page.evaluate(COLOURS)
         strays = [item for item in found if _hue(item["rgb"]) is None]
         assert strays == [], strays[:12]
