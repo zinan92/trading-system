@@ -81,6 +81,24 @@ def _canonical_preview_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _serving_source_sha() -> str | None:
+    """The commit this process started on, read once at import (#1472).
+
+    A deploy moves the checkout without restarting the dashboard, so reading git
+    per Preview could name code that is not running. ``None`` when unreadable.
+    """
+
+    try:
+        from services.paper_release_receipt import current_source_sha
+
+        return current_source_sha()
+    except Exception:  # noqa: BLE001 - a missing version is recorded as missing.
+        return None
+
+
+SERVING_SOURCE_SHA = _serving_source_sha()
+
+
 def canonical_preview_digest(value: Mapping[str, Any]) -> str:
     """Recompute a Preview digest without trusting a client-supplied token."""
 
@@ -832,7 +850,10 @@ class DashboardControlPlane:
                             or runtime_config.account_fingerprint
                         ),
                         "runtime_id": runtime_config.runtime_id,
+                        # Pinned runtime identity: the coordinator refuses a tick
+                        # whose broker release_sha differs from the activation's.
                         "release_sha": runtime_config.release_sha,
+                        "source_sha": SERVING_SOURCE_SHA,
                         "capability_revision": runtime_config.capability_revision,
                         "transport_profile": (
                             TESTNET_PROFILE

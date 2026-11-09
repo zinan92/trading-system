@@ -1,5 +1,24 @@
 # Decision Log
 
+# 2026-11-09 — The why panel's code version is the commit that ran (#1472)
+
+## Decision
+
+- A GridMind Preview records `source_sha`: the commit the dashboard process started on, read once at import with `current_source_sha()`. It is `None` when git cannot be read.
+- `why.explain_run` shows a Testnet run's 「代码版本」 from the Preview's `source_sha` only. An older Preview without it shows 「当时没有记录」, never today's commit.
+- `release_sha` stays the pinned value from the dashboard plist and `run-park-paper-control.sh` (`f80fa54…`).
+
+## Gotchas
+
+- `release_sha` is runtime identity, not code. `testnet_automation_coordinator` raises `testnet_preflight_identity_mismatch` when the bound broker's `release_sha` differs from the activation's. Deriving it from git would trip every open activation on the next deploy. Do not "fix" the pin.
+- The commit is read at import, not per Preview. `ops/deploy-paper.sh` moves the checkout without restarting the dashboard unless `--dashboard` is passed, so a per-Preview read would name code that is not running.
+- Desk-started runs were already right: `Store.release` stamps the desk process's commit (#1359).
+
+## Verification
+
+- `test_testnet_preview_carries_non_secret_activation_identity_from_host` asserts `source_sha` equals the checkout's HEAD while `release_sha` keeps the pin. `test_a_clean_testnet_run` shows `source_sha`. `test_a_preview_without_source_sha_says_not_recorded` shows `None`. All three fail without the change.
+- Dashboard, testnet and Hyperliquid root tests: 491 passed, 2 failed. The 2 failures are in `tests/test_testnet_soak_readiness.py`, and they fail the same way on main without this change. Desk: 282 passed.
+
 # 2026-11-07 — GridMind controls listen for intents (#1395)
 
 ## Decision

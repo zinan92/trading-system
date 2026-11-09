@@ -56,7 +56,7 @@ def paper(tmp_path: Path) -> Path:
 def testnet(tmp_path: Path) -> Path:
     base = tmp_path / "dashboard_control_plane"
     _write(base / "previews.json", [{"preview_digest": "sha256:other", "execution_ready": False, "blockers": ["account_not_clean"]},
-                                    {"preview_digest": DIGEST, "execution_ready": True, "blockers": [], "release_sha": "f80fa54b1e03", "venue_profile_id": "hyperliquid.testnet", "instrument_id": "BTC-USD-PERP",
+                                    {"preview_digest": DIGEST, "execution_ready": True, "blockers": [], "release_sha": "f80fa54b1e03", "source_sha": "2f7085f0c0de", "venue_profile_id": "hyperliquid.testnet", "instrument_id": "BTC-USD-PERP",
                                      "strategy_family": "grid", "account_fingerprint": "acct-fingerprint-1", "runtime_id": "runtime-secret-id"}])
     _write(base / "confirmations.json", [{"event": "operator_confirmed", "status": "confirmed", "preview_digest": DIGEST, "plan_digest": DIGEST, "activation_id": "sha256:act", "operator_id": "park",
                                           "confirmed_at": "2026-09-14T01:13:46+00:00", "account_fingerprint": "acct-fingerprint-1", "runtime_id": "runtime-secret-id"},
@@ -128,7 +128,7 @@ def test_a_clean_testnet_run(testnet: Path) -> None:
     result = why.explain_run(testnet, f"testnet:{PLAN_ID}", [])
     assert [step["key"] for step in result["steps"]] == ["ai", "preview", "confirm", "activate", "orders", "fills", "end"]
     assert result["status"] == "clean"
-    assert result["identity"]["release_sha"] == "f80fa54b1e03"
+    assert result["identity"]["release_sha"] == "2f7085f0c0de"  # the code that ran, not the pinned runtime identity (#1472)
     assert result["identity"]["activation_id"] == "sha256:act"
     assert "触发硬止损" in _step(result, "end")["summary"]
 
@@ -249,6 +249,12 @@ def test_a_press_with_no_result_is_a_gap(tmp_path: Path) -> None:
     rows = [execution("preview", 1, DIGEST, execution_ready=True), execution("execute_started", 2)]
     result = why.explain_judgment(tmp_path, judgment(), rows, [])
     assert result["first_problem"]["key"] == "result" and _step(result, "result")["status"] == "unknown"
+
+
+def test_a_preview_without_source_sha_says_not_recorded(testnet: Path) -> None:
+    previews = testnet / "dashboard_control_plane" / "previews.json"
+    _write(previews, [{key: value for key, value in row.items() if key != "source_sha"} for row in json.loads(previews.read_text())])
+    assert why.explain_run(testnet, f"testnet:{PLAN_ID}", [])["identity"]["release_sha"] is None
 
 
 def test_a_started_plan_links_to_its_testnet_run(testnet: Path) -> None:
