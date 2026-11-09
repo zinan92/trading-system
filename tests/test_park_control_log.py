@@ -89,3 +89,80 @@ def test_an_unexpected_crash_is_logged_and_still_raised(monkeypatch, tmp_path) -
     [crashed] = _records(tmp_path)
     assert crashed["event"] == "tick_crashed" and crashed["level"] == "ERROR" and crashed["step"] == "config"
     assert "RuntimeError: boom" in crashed["exception"]
+
+
+def _stub_run(monkeypatch, calls: list[str]) -> None:
+    """Every step but Telegram is a cheap stub; each records that it ran."""
+    monkeypatch.setattr(module, "SchedulerOwnershipGuard", _Owned)
+    monkeypatch.setattr(module, "load_effective_park_config", lambda _root, config: config)
+    monkeypatch.setattr(module, "prepare_park_paper_config", lambda config, **_kw: config)
+    monkeypatch.setattr(module, "active_instrument_key", lambda _root: "gold")
+    monkeypatch.setattr(module, "TelegramBotTransport", lambda **_kw: object())
+    monkeypatch.setattr(module, "ParkAiProviderGateway", lambda: object())
+    monkeypatch.setattr(module.HyperliquidTestnetRuntimeConfig, "from_environment", classmethod(lambda cls: None))
+
+    class Router:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def drain_outbound(self, _transport):
+            calls.append("delivery")
+            return {"delivered": 1, "failed": 0, "messages": []}
+
+    class Worker:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def run_once(self, _transport):
+            calls.append("telegram")
+            return {"status": "pass"}
+
+    class Binding:
+        adapter, authorize, revoke = object(), None, None
+
+    class Runtime:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def run_once(self):
+            calls.append("paper_runtime")
+            return {"status": "idle"}
+
+    monkeypatch.setattr(module, "ParkTelegramRouter", Router)
+    monkeypatch.setattr(module, "ParkTelegramWorker", Worker)
+    monkeypatch.setattr(module, "_testnet_scheduler_snapshot", lambda _root: {})
+    monkeypatch.setattr(module, "run_testnet_control_tick", lambda _root: calls.append("testnet_tick") or {"status": "not_applicable"})
+    monkeypatch.setattr(module, "queue_testnet_scheduler_notice", lambda *_a, **_kw: calls.append("notices"))
+    monkeypatch.setattr(module, "queue_testnet_fill_notices", lambda *_a, **_kw: calls.append("notices"))
+    monkeypatch.setattr(module, "run_legacy_cutover_once", lambda *_a, **_kw: {"status": "idle"})
+    monkeypatch.setattr(module, "build_park_authoritative_adapter", lambda *_a, **_kw: Binding())
+    monkeypatch.setattr(module, "build_park_safety_evidence", lambda *_a, **_kw: None)
+    monkeypatch.setattr(module, "ParkPaperRuntime", Runtime)
+
+
+def _argv(tmp_path: Path) -> list[str]:
+    return ["--output-root", str(tmp_path), "--park-config", str(_config(tmp_path)), "--park-user-id", "1", "--chat-id", "2"]
+
+
+def test_with_telegram_on_the_run_polls_notifies_and_delivers(monkeypatch, tmp_path, capsys) -> None:
+    calls: list[str] = []
+    _stub_run(monkeypatch, calls)
+    monkeypatch.delenv("TRADING_ORCHESTRATOR_TELEGRAM", raising=False)
+
+    assert module.main(_argv(tmp_path)) == 0
+    assert calls == ["telegram", "testnet_tick", "notices", "notices", "paper_runtime", "delivery"]
+    assert _records(tmp_path)[-1]["telegram"] == "pass"
+
+
+def test_with_telegram_off_nothing_reaches_telegram_and_paper_still_runs(monkeypatch, tmp_path, capsys) -> None:
+    calls: list[str] = []
+    _stub_run(monkeypatch, calls)
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_TELEGRAM", "off")
+
+    assert module.main(_argv(tmp_path)) == 0
+    assert calls == ["testnet_tick", "paper_runtime"]
+    result = json.loads(capsys.readouterr().out)
+    assert result["telegram"] == {"status": "off"} and result["delivery"] == {"status": "off"}
+    assert result["status"] == "pass" and result["execution"] == {"status": "idle"}
+    tick = _records(tmp_path)[-1]
+    assert tick["telegram"] == "off" and "telegram" not in tick["steps"] and "delivery" not in tick["steps"]

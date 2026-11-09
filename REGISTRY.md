@@ -9,6 +9,12 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-09, Telegram 关掉 · #1478)
+
+- Park 决定停掉 Telegram。关之前的情况：Park 从 8 月 31 日到现在一共只发过 4 条消息，最后一条在 10 月 29 日；策略已经改成在 /trade 和 GridMind 上启动。Telegram 主要是往外推消息：最近 14 天推了 94 条突发新闻、14 条早报、9 条事件提醒。控制循环每一轮在 Telegram 这一步卡 65–91 秒。
+- 现在：控制脚本里有一行 `export TRADING_ORCHESTRATOR_TELEGRAM=off`。控制循环不再收消息、不再发通知、不再投递；交易台的早报、突发、事件和价格提醒也不再排队。Paper 运行、Testnet 检查、安全证据都照旧。代码没删，删掉这一行就能恢复。
+- 代价：Park 手机上不会再收到早报、突发新闻和成交提醒，要看就打开交易台。
+
 ## 现在在哪里(2026-11-09, 每分钟一次的控制循环有了日志 · #1475)
 
 - 交易台和看板早就有结构化日志（#1364），唯一没有的是每分钟跑一次的控制循环：它要依次处理 Telegram、Testnet 检查、通知、旧版切换、安全证据、Paper 运行，但只往 stdout 打一大段 JSON。出错时只留一个错误码，不知道是哪一步、为什么；也不知道哪一步慢。

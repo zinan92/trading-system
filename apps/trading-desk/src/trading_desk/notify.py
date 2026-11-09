@@ -16,6 +16,7 @@ Testnet fills are already pushed by trading-system itself.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,8 +38,19 @@ NEAR_STOP_PCT = 1.5
 Queue = Callable[[str, str, str], dict[str, Any]]  # (idempotency_key, message_type, text) -> outbox row
 
 
+def telegram_off(control_script: Path) -> bool:
+    """The control script's `export TRADING_ORCHESTRATOR_TELEGRAM=off` is the one switch for both processes (#1478)."""
+    try:
+        text = Path(control_script).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return re.search(r"""^\s*export\s+TRADING_ORCHESTRATOR_TELEGRAM=["']?off["']?\s*$""", text, re.M | re.I) is not None
+
+
 def park_outbox(config: Any) -> Queue | None:
-    """Queue into trading-system's Park Telegram outbox; None when the identity file is missing."""
+    """Queue into trading-system's Park Telegram outbox; None when Telegram is off or the identity file is missing."""
+    if telegram_off(config.control_script):
+        return None
     identity = Path.home() / ".config/trading-system/park-paper-telegram.env"
     values: dict[str, str] = {}
     try:

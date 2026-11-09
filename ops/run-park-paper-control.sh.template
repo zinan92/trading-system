@@ -42,6 +42,8 @@ export TRADING_ORCHESTRATOR_RELEASE_SHA="f80fa54b1e03a5d5dd7493a3f63a9f04e3f3dd2
 export STANDARD_BROKER_RELEASE_SHA="2d3a5cc26538b24fb31ab81201facd5ee46476ba"
 export CODEX_HOME="/Users/wendy/.codex"
 export PYTHONPATH="$ROOT:$ROOT/packages/standard-broker/src"
+# Telegram is off (#1478): no poll, no notices, no desk pushes. Delete this line to turn it back on.
+export TRADING_ORCHESTRATOR_TELEGRAM=off
 
 NAUTILUS_PYTHON="/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python"
 if [[ ! -x "$NAUTILUS_PYTHON" ]]; then

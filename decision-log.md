@@ -1,5 +1,24 @@
 # Decision Log
 
+# 2026-11-09 — Telegram is switched off by one line in the control script (#1478)
+
+## Decision
+
+- `export TRADING_ORCHESTRATOR_TELEGRAM=off` in the Park Paper control script is the one switch. `pipelines.park_control` then skips the poll, the Testnet scheduler and fill notices, and delivery. `telegram` and `delivery` become `{"status": "off"}`, and the tick log records `telegram: off`.
+- The desk's 20-minute notifier reads the same line from `config.control_script` (the file `executor._driver_env` already reads), so the desk queues nothing. There are no two switches to drift apart.
+- Paper runtime, the Testnet tick, safety evidence and legacy cutover are unchanged. The code and the token/identity files stay. Deleting the line turns Telegram back on.
+
+## Gotchas
+
+- While Telegram is off, the Paper runtime and the router may still queue rows in `telegram_outbox.jsonl`. Turning Telegram back on would deliver whatever is still queued. Clear or mark them first if they are stale.
+- With Telegram off, a Testnet start can no longer be confirmed from chat. GridMind's confirm path is unchanged.
+- The wrapper still requires the token and identity files to exist (it exits 2 without them). The switch does not change that.
+
+## Verification
+
+- `test_with_telegram_off_nothing_reaches_telegram_and_paper_still_runs` and `test_the_control_scripts_telegram_switch_stops_desk_pushes` fail without the change. `test_with_telegram_on_the_run_polls_notifies_and_delivers` pins the default order.
+- park_control, lifecycle, legacy cutover, replay and systemd tests: 129 passed. Desk: 284 passed.
+
 # 2026-11-09 — The control loop logs every run and names the failing step (#1475)
 
 ## Decision
