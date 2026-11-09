@@ -295,7 +295,7 @@
 			if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return parameterProblem({
 				fields: rangeFields,
 				title: "加仓区间无效",
-				detail: "下边界必须小于上边界。请填写有效价格，或点击“根据当前行情智能填充 DCA”。"
+				detail: "下边界必须小于上边界。请填写有效价格，或点击“根据当前行情智能填充加仓参数”。"
 			});
 			if (!Number.isInteger(Number(form.gridCount)) || Number(form.gridCount) < 1) return parameterProblem({
 				fields: ["#gridCount"],
@@ -324,7 +324,7 @@
 			if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return parameterProblem({
 				fields: rangeFields,
 				title: "Range 无效",
-				detail: "下边界必须小于上边界。请填写有效价格，或点击“根据当前行情智能填充 Range”恢复自动求解。"
+				detail: "下边界必须小于上边界。请填写有效价格，或点击“根据当前行情智能填充区间”恢复自动求解。"
 			});
 		}
 		if (locked("grid_count") && (!Number.isInteger(Number(form.gridCount)) || Number(form.gridCount) < 1)) return parameterProblem({

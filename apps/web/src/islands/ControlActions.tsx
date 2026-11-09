@@ -8,8 +8,8 @@ interface ActionsProps {previewDisabled?: boolean; confirmDisabled?: boolean}
 export function ControlActions({previewDisabled = true, confirmDisabled = true}: ActionsProps) {
   return (
     <>
-      <button className="button subtle" id="dashboardPreviewButton" data-gm-intent="control.preview" type="button" disabled={previewDisabled}>生成 Strategy Preview</button>
-      <button className="button" id="dashboardConfirmButton" data-gm-intent="control.confirm" type="button" disabled={confirmDisabled}>{"Confirm & Run"}</button>
+      <button className="button subtle" id="dashboardPreviewButton" data-gm-intent="control.preview" type="button" disabled={previewDisabled}>生成策略预览</button>
+      <button className="button" id="dashboardConfirmButton" data-gm-intent="control.confirm" type="button" disabled={confirmDisabled}>{"确认并运行"}</button>
     </>
   );
 }

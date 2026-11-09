@@ -95,7 +95,7 @@ export function invalidStrategyDraft(form: StrategyForm, {dca, parameterLocks}: 
   const positive = (value: string) => Number(value) > 0;
   if (dca) {
     const low = Number(form.rangeLow), high = Number(form.rangeHigh);
-    if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return parameterProblem({fields: rangeFields, title: "加仓区间无效", detail: "下边界必须小于上边界。请填写有效价格，或点击“根据当前行情智能填充 DCA”。"});
+    if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return parameterProblem({fields: rangeFields, title: "加仓区间无效", detail: "下边界必须小于上边界。请填写有效价格，或点击“根据当前行情智能填充加仓参数”。"});
     if (!Number.isInteger(Number(form.gridCount)) || Number(form.gridCount) < 1) return parameterProblem({fields: ["#gridCount"], title: "加仓次数无效", detail: "最多加仓次数必须是正整数。"});
     if (!positive(form.gridNotional)) return parameterProblem({fields: ["#gridNotional"], title: "每次加仓名义缺失", detail: "每次加仓名义不能为空且必须大于 0 USD。"});
     if (!positive(form.dcaTarget) || !positive(form.dcaStop)) return parameterProblem({fields: ["#dcaTarget", "#dcaStop"], title: "整轮止盈或止损价无效", detail: "止盈价和止损价都必须大于 0。"});
@@ -104,7 +104,7 @@ export function invalidStrategyDraft(form: StrategyForm, {dca, parameterLocks}: 
   }
   if (locked("range")) {
     const low = Number(form.rangeLow), high = Number(form.rangeHigh);
-    if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return parameterProblem({fields: rangeFields, title: "Range 无效", detail: "下边界必须小于上边界。请填写有效价格，或点击“根据当前行情智能填充 Range”恢复自动求解。"});
+    if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return parameterProblem({fields: rangeFields, title: "Range 无效", detail: "下边界必须小于上边界。请填写有效价格，或点击“根据当前行情智能填充区间”恢复自动求解。"});
   }
   if (locked("grid_count") && (!Number.isInteger(Number(form.gridCount)) || Number(form.gridCount) < 1)) return parameterProblem({fields: ["#gridCount"], title: "网格数量无效", detail: "网格数量必须是正整数；点击“手动”可恢复 AUTO 求解。"});
   if (locked("profit_target") && !positive(form.gridProfitTarget)) return parameterProblem({fields: ["#gridProfitTarget"], title: "每格净利目标无效", detail: "每格净利目标不能为空且必须大于 0 USD；点击“手动”可恢复 AUTO 求解。"});

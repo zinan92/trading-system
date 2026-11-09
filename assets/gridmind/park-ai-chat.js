@@ -4,6 +4,9 @@
   const messages=$ai("parkAiChatMessages"), input=$ai("parkAiChatInput"), send=$ai("parkAiSend"), confirm=$ai("parkAiConfirm"), reject=$ai("parkAiReject"), snapshotBox=$ai("parkAiSnapshot"), status=$ai("parkAiChatStatus");
   let pending=null;
   const text=(value)=>value===null||value===undefined||value===""?"—":String(value);
+  const price=(value)=>{const n=typeof value==="number"?value:(typeof value==="string"&&value.trim()!==""?Number(value):NaN);return Number.isFinite(n)?n.toLocaleString("en-US",{maximumFractionDigits:2}):text(value)};
+  const ZH={long:"做多",short:"做空",neutral:"中性",grid:"网格",dca:"趋势加仓",buy:"买",sell:"卖"};
+  const zh=(value)=>ZH[String(value||"").toLowerCase()]||text(value);
   const addMessage=(value,kind="system")=>{if(!value)return;const node=document.createElement("div");node.className=`park-ai-chat-message ${kind}`;node.textContent=String(value);messages.appendChild(node);messages.scrollTop=messages.scrollHeight};
   const setStatus=(value)=>{status.textContent=String(value||"")};
   // #1348: what this reply was based on — the model call, the market price it saw, the account facts.
@@ -31,7 +34,7 @@
     click("#directionChoices [data-direction]","data-direction",source.direction);
     const fields={rangeLow:source.lower_price_boundary,rangeHigh:source.upper_price_boundary,leverage:source.maximum_leverage,dcaStop:source.stop_price,dcaTarget:source.take_profit_price,gridCount:source.order_count,gridNotional:risk.per_order_notional};
     Object.entries(fields).forEach(([id,value])=>{if(value===null||value===undefined||value==="")return;const field=$ai(id);if(!field)return;field.value=String(value);field.dispatchEvent(new Event("input",{bubbles:true}))});
-    setStatus("Draft 已解析并填入左侧 Paper 表单；尚未下单。请检查 snapshot 后确认。");
+    setStatus("草稿已解析并填入左侧 Paper 表单；尚未下单。请检查快照后确认。");
   }
   function renderSnapshot(card,draft){
     const plan=(card&&card.plan)||((draft&&draft.plan)||{});
@@ -40,24 +43,24 @@
     const risk=(card&&card.risk)||plan.risk||{};
     const portfolio=(card&&card.portfolio)||plan.portfolio||{};
     const rows=[
-      ["方向 / 类型",`${text(normalized.direction)} / ${text(normalized.strategy_type)}`],
-      ["价格区间",`${text(normalized.lower_price_boundary)} ~ ${text(normalized.upper_price_boundary)}`],
-      ["当前价",text(market.price)],
+      ["方向 / 类型",`${zh(normalized.direction)} / ${zh(normalized.strategy_type)}`],
+      ["价格区间",`${price(normalized.lower_price_boundary)} ~ ${price(normalized.upper_price_boundary)}`],
+      ["当前价",price(market.price)],
       ["最大名义",text(risk.maximum_notional)],
       ["理论最大亏损",text(risk.theoretical_max_loss)],
       ["有效杠杆",`${text(risk.effective_leverage)}x`],
       ["旧仓处理",portfolio.disposition?JSON.stringify(portfolio.disposition):"无"],
-      ["Risk Digest",text(card&&card.risk_digest||draft&&draft.risk_digest)],
-      ["Digest",text(card&&card.plan_digest||draft&&draft.plan_digest)]
+      ["风控摘要",text(card&&card.risk_digest||draft&&draft.risk_digest)],
+      ["计划摘要",text(card&&card.plan_digest||draft&&draft.plan_digest)]
     ];
     if(String(normalized.strategy_type||"").toLowerCase()==="grid"){
       const entry=risk.grid_entry_range||{},hardStop=risk.hard_stop,prices=Array.isArray(risk.grid_rung_prices)?risk.grid_rung_prices:[];
       const rungs=Array.isArray(risk.grid_rungs)?risk.grid_rungs:[];
-      rows.splice(2,0,["Grid Entry Range",`${text(entry.lower)} ~ ${text(entry.upper)}`],["Grid Spacing / Rungs",`${text(risk.grid_spacing)} / ${text(risk.order_count)}`],["Grid Hard Stop",typeof hardStop==="object"?JSON.stringify(hardStop):text(hardStop)],["Local stop",risk.local_stop_authorized===true?"Park explicitly authorized":"absent by default"],["TP geometry",rungs.length?rungs.map(row=>`${text(row.price)}→${text(row.take_profit)} (${text(row.side)})`).join(" · "):"证据不足"]);
+      rows.splice(2,0,["网格区间",`${price(entry.lower)} ~ ${price(entry.upper)}`],["网格间距 / 格数",`${price(risk.grid_spacing)} / ${text(risk.order_count)}`],["网格硬止损",hardStop&&typeof hardStop==="object"?Object.entries(hardStop).map(([side,value])=>`${zh(side)} ${price(value)}`).join(" · "):price(hardStop)],["本地止损",risk.local_stop_authorized===true?"Park 已明确授权":"默认不设"],["每格止盈",rungs.length?rungs.map(row=>`${price(row.price)}→${price(row.take_profit)}（${zh(row.side)}）`).join(" · "):"证据不足"]);
     }
     snapshotBox.replaceChildren();
-    const sealed=Boolean(card&&!draft);const holder=sealed?document.createElement("details"):snapshotBox;if(sealed){const summary=document.createElement("summary");summary.textContent=`上一张策略 Snapshot · ${text(normalized.direction)} ${text(normalized.strategy_type)} ${text(normalized.lower_price_boundary)}~${text(normalized.upper_price_boundary)}`;holder.appendChild(summary);snapshotBox.appendChild(holder)}
-    const title=document.createElement("h4");title.textContent=card&&(card.sealed===true||card.status==="expired")?"已封存的不可变策略 Snapshot":card&&card.status==="confirmed"?"已确认的不可变策略 Snapshot":"Draft · 等待 Park 确认";holder.appendChild(title);
+    const sealed=Boolean(card&&!draft);const holder=sealed?document.createElement("details"):snapshotBox;if(sealed){const summary=document.createElement("summary");summary.textContent=`上一张策略快照 · ${zh(normalized.direction)}${zh(normalized.strategy_type)} ${price(normalized.lower_price_boundary)}~${price(normalized.upper_price_boundary)}`;holder.appendChild(summary);snapshotBox.appendChild(holder)}
+    const title=document.createElement("h4");title.textContent=card&&(card.sealed===true||card.status==="expired")?"已封存的不可变策略快照":card&&card.status==="confirmed"?"已确认的不可变策略快照":"草稿 · 等待 Park 确认";holder.appendChild(title);
     const grid=document.createElement("div");grid.className="park-ai-snapshot-grid";rows.forEach(([label,value])=>{const span=document.createElement("span");span.textContent=label;const b=document.createElement("b");b.textContent=value;grid.append(span,b)});holder.appendChild(grid);snapshotBox.classList.add("on");
   }
   function applyResponse(data){
@@ -83,18 +86,18 @@
   }
   async function confirmDraft(){
     if(!pending||!pending.draft_id||!pending.plan_digest)return;confirm.disabled=true;setStatus("正在重新核对最新行情、风险和 digest……");
-    try{applyResponse(await post("confirm",{draft_id:pending.draft_id,plan_digest:pending.plan_digest}))}catch(error){addMessage(`确认未完成：${error.message}`,"system");setStatus("仍未执行；请重新读取 Draft 后再确认");confirm.disabled=false}
+    try{applyResponse(await post("confirm",{draft_id:pending.draft_id,plan_digest:pending.plan_digest}))}catch(error){addMessage(`确认未完成：${error.message}`,"system");setStatus("仍未执行；请重新读取草稿后再确认");confirm.disabled=false}
   }
   async function rejectDraft(){
     if(!pending||!pending.draft_id)return;reject.disabled=true;
-    try{applyResponse(await post("reject",{draft_id:pending.draft_id}));pending=null;snapshotBox.classList.remove("on");snapshotBox.replaceChildren();confirm.disabled=true;setStatus("Draft 已拒绝且未保存为策略卡片。")}catch(error){addMessage(`拒绝未完成：${error.message}`,"system");reject.disabled=false}
+    try{applyResponse(await post("reject",{draft_id:pending.draft_id}));pending=null;snapshotBox.classList.remove("on");snapshotBox.replaceChildren();confirm.disabled=true;setStatus("草稿已拒绝，没有保存为策略卡片。")}catch(error){addMessage(`拒绝未完成：${error.message}`,"system");reject.disabled=false}
   }
   async function hydrate(){
     // Browser-only static smoke servers do not expose the Paper API. Avoid a
     // needless 404 there; the real local Dashboard ports and public gateway
     // remain enabled.
     if(["127.0.0.1","localhost"].includes(location.hostname)&&!["8765","8766","8790"].includes(location.port))return;
-    try{const response=await fetch("/api/park-paper/ai-chat",{credentials:"same-origin"});if(!response.ok)throw new Error(`HTTP ${response.status}`);const data=await response.json();if(data.pending_draft){pending=data.pending_draft;renderSnapshot(null,pending);confirm.disabled=!pending.confirmable;reject.disabled=false;setStatus("已恢复未过期 Draft；尚未下单。")}else if(Array.isArray(data.snapshots)&&data.snapshots.length){renderSnapshot(data.snapshots[data.snapshots.length-1],null);setStatus(`已读取 ${data.snapshots.length} 张策略 Snapshot；最新一张显示在上方。`)}}catch(error){setStatus(`AI 助手读取受限：${error.message}`)}
+    try{const response=await fetch("/api/park-paper/ai-chat",{credentials:"same-origin"});if(!response.ok)throw new Error(`HTTP ${response.status}`);const data=await response.json();if(data.pending_draft){pending=data.pending_draft;renderSnapshot(null,pending);confirm.disabled=!pending.confirmable;reject.disabled=false;setStatus("已恢复未过期的草稿；尚未下单。")}else if(Array.isArray(data.snapshots)&&data.snapshots.length){renderSnapshot(data.snapshots[data.snapshots.length-1],null);setStatus(`已读取 ${data.snapshots.length} 张策略快照；最新一张显示在上方。`)}}catch(error){setStatus(`AI 助手读取受限：${error.message}`)}
   }
   send.addEventListener("click",sendMessage);confirm.addEventListener("click",confirmDraft);reject.addEventListener("click",rejectDraft);input.addEventListener("keydown",event=>{if((event.metaKey||event.ctrlKey)&&event.key==="Enter"){event.preventDefault();sendMessage()}});hydrate();
 })();

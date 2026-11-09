@@ -134,7 +134,7 @@ def test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars(
         page.wait_for_load_state("networkidle")
 
         source = page.locator(".standard-kline-source")
-        assert "240 bars" in source.inner_text()
+        assert "240 根" in source.inner_text()  # #1455: Chinese count
         for _ in range(40):  # /trade's chart column is narrower, so more bars are left to pan past (#1419)
             page.locator('[data-action="pan-left"]').click()
 
@@ -149,7 +149,7 @@ def test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars(
         page.mouse.wheel(*newer_delta)
         page.wait_for_timeout(300)
         assert history_requests == 0
-        assert "240 bars" in source.inner_text()
+        assert "240 根" in source.inner_text()  # #1455: Chinese count
 
         # A real wheel/trackpad movement toward older candles arms exactly one
         # trusted historical page and preserves the fresh live snapshot fields.
@@ -162,16 +162,16 @@ def test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars(
         # execution freshness.
         page.evaluate("() => load({withMarket: true})")
         assert history_requests == 0
-        assert "240 bars" in source.inner_text()
+        assert "240 根" in source.inner_text()  # #1455: Chinese count
         page.evaluate("window.__releaseHistoryFetch()")
         page.locator("#chartHistoryNotice").filter(has_text="已向前加载 320 根").wait_for()
 
         assert history_requests == 1
-        assert "560 bars" in source.inner_text()
+        assert "560 根" in source.inner_text()
         assert "行情 blocked" not in page.locator("#gate").inner_text()
         if input_name == "mouse-wheel":
             page.wait_for_timeout(5_300)
-            assert "560 bars" in source.inner_text()
+            assert "560 根" in source.inner_text()
             assert "行情 blocked" not in page.locator("#gate").inner_text()
         artifact_dir = os.environ.get("GRID_HISTORY_SCREENSHOT_DIR")
         if artifact_dir and input_name == "mouse-wheel":

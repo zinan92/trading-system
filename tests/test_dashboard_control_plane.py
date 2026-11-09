@@ -318,7 +318,7 @@ def test_dashboard_v5_contains_the_venue_asset_strategy_track() -> None:
     assert "dashboardMarketBinding" in html
     assert "applyPersistedDashboardSelection" in html
     assert "syncPersistedStrategyFamily" in html
-    assert "Hyperliquid Testnet" not in html or "Venue Profile" in html
+    assert "Hyperliquid Testnet" not in html or "1 · 交易所" in html  # #1455: the venue step is labelled in Chinese
 
 
 def test_dca_preview_uses_the_canonical_builder_and_exposes_derived_risk(tmp_path: Path) -> None:

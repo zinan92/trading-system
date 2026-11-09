@@ -16,7 +16,7 @@ function TopBar() {
           </em>
         </span>
         <small>
-          {"production grid console"}
+          {"纸面交易台"}
         </small>
       </div>
       <nav className="desk-nav" aria-label="页面">
@@ -223,11 +223,11 @@ function ControlCard() {
   return (
     <section className="card dashboard-control-card" id="dashboardControlCard">
       <div className="card-title">
-        {"Trading BOT · Venue → Asset → Strategy"}
+        {"交易机器人 · 交易所 → 品种 → 策略"}
       </div>
       <div className="card-body">
-        <div className="gm-pick-steps" id="dashboardPicker" data-island="control-picker" dangerouslySetInnerHTML={{__html: "<div class=\"gm-pick-step\"><span class=\"label\">1 · Venue Profile</span><select class=\"select\" id=\"dashboardVenueSelect\" data-gm-intent=\"control.venue\" aria-label=\"选择 Venue Profile\"><option value=\"\">读取中…</option></select></div><div class=\"gm-pick-step\"><span class=\"label\">2 · Instrument</span><select class=\"select\" id=\"dashboardInstrumentSelect\" data-gm-intent=\"control.instrument\" aria-label=\"选择交易资产\" disabled=\"\"><option value=\"\">先选择 Venue</option></select></div><div class=\"gm-pick-step\"><span class=\"label\">3 · Strategy Family</span><div class=\"choice-row\" id=\"dashboardStrategyChoices\"><button class=\"choice\" data-dashboard-strategy=\"grid\" data-gm-intent=\"control.strategy\" type=\"button\" disabled=\"\">Grid<small>旧版网格</small></button><button class=\"choice\" data-dashboard-strategy=\"dca\" data-gm-intent=\"control.strategy\" type=\"button\" disabled=\"\">DCA<small>旧版 DCA</small></button></div></div>"}} />
-        <div className="gm-control-actions" id="dashboardActions" data-island="control-actions" dangerouslySetInnerHTML={{__html: "<button class=\"button subtle\" id=\"dashboardPreviewButton\" data-gm-intent=\"control.preview\" type=\"button\" disabled=\"\">生成 Strategy Preview</button><button class=\"button\" id=\"dashboardConfirmButton\" data-gm-intent=\"control.confirm\" type=\"button\" disabled=\"\">Confirm &amp; Run</button>"}} />
+        <div className="gm-pick-steps" id="dashboardPicker" data-island="control-picker" dangerouslySetInnerHTML={{__html: "<div class=\"gm-pick-step\"><span class=\"label\">1 · 交易所</span><select class=\"select\" id=\"dashboardVenueSelect\" data-gm-intent=\"control.venue\" aria-label=\"选择交易所\"><option value=\"\">读取中…</option></select></div><div class=\"gm-pick-step\"><span class=\"label\">2 · 品种</span><select class=\"select\" id=\"dashboardInstrumentSelect\" data-gm-intent=\"control.instrument\" aria-label=\"选择交易资产\" disabled=\"\"><option value=\"\">先选择交易所</option></select></div><div class=\"gm-pick-step\"><span class=\"label\">3 · 策略类型</span><div class=\"choice-row\" id=\"dashboardStrategyChoices\"><button class=\"choice\" data-dashboard-strategy=\"grid\" data-gm-intent=\"control.strategy\" type=\"button\" disabled=\"\">网格<small>旧版</small></button><button class=\"choice\" data-dashboard-strategy=\"dca\" data-gm-intent=\"control.strategy\" type=\"button\" disabled=\"\">趋势加仓<small>旧版</small></button></div></div>"}} />
+        <div className="gm-control-actions" id="dashboardActions" data-island="control-actions" dangerouslySetInnerHTML={{__html: "<button class=\"button subtle\" id=\"dashboardPreviewButton\" data-gm-intent=\"control.preview\" type=\"button\" disabled=\"\">生成策略预览</button><button class=\"button\" id=\"dashboardConfirmButton\" data-gm-intent=\"control.confirm\" type=\"button\" disabled=\"\">确认并运行</button>"}} />
         <p className="desk-rail-note">
           {"日常按上面的 1-2-3 走：选方向 → 批准计划 → 亲手按执行。这里是手动细调，按钮的作用和以前一样。"}
         </p>
@@ -235,7 +235,7 @@ function ControlCard() {
         <div className="dashboard-control-account" id="dashboardAccountSummary" aria-live="polite" />
         <div className="dashboard-control-runtime" id="dashboardRuntimeStatus" aria-live="polite" />
         <p className="dashboard-control-status" id="dashboardControlStatus" aria-live="polite">
-          {"正在读取可用 Venue Profile…"}
+          {"正在读取可用交易所…"}
         </p>
       </div>
     </section>
@@ -251,7 +251,7 @@ function AiChatCard() {
       <div className="card-body">
         <div className="park-ai-chat-messages" id="parkAiChatMessages" aria-live="polite">
           <div className="park-ai-chat-message system">
-            {"用自然语言描述策略。我会先解析并展示 snapshot，只有你点击“确认并执行”才会提交到 Paper 计划。"}
+            {"用自然语言描述策略。我会先解析并展示快照，只有你点击“确认并执行”才会提交到 Paper 计划。"}
           </div>
         </div>
         <div className="park-ai-snapshot" id="parkAiSnapshot" />
@@ -264,7 +264,7 @@ function AiChatCard() {
             {"确认并执行"}
           </button>
           <button className="danger" id="parkAiReject" type="button" disabled>
-            {"拒绝 Draft"}
+            {"拒绝草稿"}
           </button>
         </div>
         <p className="park-ai-status" id="parkAiChatStatus" aria-live="polite" />
@@ -283,7 +283,7 @@ function MarketCard() {
         <div className="split">
           <label>
             <span className="label">
-              {"Broker 来源"}
+              {"下单通道"}
             </span>
             <input className="input" id="brokerSource" readOnly defaultValue="读取中" />
           </label>
@@ -344,7 +344,7 @@ function MarketCard() {
             {"读取可信行情中"}
           </h3>
           <p>
-            {"只使用真实 broker 行情；行情陈旧、缺失或 synthetic 时停止新开仓。"}
+            {"只使用真实行情；行情陈旧、缺失或是模拟数据时停止新开仓。"}
           </p>
           <button className="recommendation" id="adoptRecommendation" type="button">
             {"采用推荐策略 + 自动区间"}
@@ -366,14 +366,14 @@ function StrategyCard() {
           {"策略类型"}
         </div>
         <div className="choice-row two strategy-type-row" id="strategyTypeChoices" data-gm-intent="strategy.type">
-          <button className="choice on" data-strategy-type="grid" type="button" aria-pressed="true" aria-label="Grid 网格，当前选择">
-            {"Grid 网格"}
+          <button className="choice on" data-strategy-type="grid" type="button" aria-pressed="true" aria-label="网格，当前选择">
+            {"网格"}
             <small>
               {"逐格止盈"}
             </small>
           </button>
-          <button className="choice" data-strategy-type="dca" type="button" aria-pressed="false" aria-label="DCA 趋势加仓，未选择">
-            {"DCA 趋势加仓"}
+          <button className="choice" data-strategy-type="dca" type="button" aria-pressed="false" aria-label="趋势加仓，未选择">
+            {"趋势加仓"}
             <small>
               {"整轮止盈"}
             </small>
@@ -442,7 +442,7 @@ function StrategyCard() {
           {"每次成交都会累积同一方向仓位；系统只保留一张整轮止盈单，并在新增成交后把数量更新为当前总持仓。V1 达到目标或止损后停止，不自动开始下一轮。"}
         </div>
         <button className="button fill" id="smartFill" type="button">
-          {"◎ 根据当前行情智能填充 Range"}
+          {"◎ 根据当前行情智能填充区间"}
         </button>
         <div className="params">
           <label>
@@ -451,7 +451,7 @@ function StrategyCard() {
                 {"加仓 / 网格下边界"}
               </span>
               <button className="param-lock" data-param-lock="range" type="button">
-                {"AUTO"}
+                {"自动"}
               </button>
             </span>
             <input className="input" id="rangeLow" inputMode="decimal" />
@@ -462,7 +462,7 @@ function StrategyCard() {
                 {"加仓 / 网格上边界"}
               </span>
               <button className="param-lock" data-param-lock="range" type="button">
-                {"AUTO"}
+                {"自动"}
               </button>
             </span>
             <input className="input" id="rangeHigh" inputMode="decimal" />
@@ -473,7 +473,7 @@ function StrategyCard() {
                 {"网格数量"}
               </span>
               <button className="param-lock" data-param-lock="grid_count" type="button">
-                {"AUTO"}
+                {"自动"}
               </button>
             </span>
             <input className="input" id="gridCount" inputMode="numeric" />
@@ -484,7 +484,7 @@ function StrategyCard() {
                 {"每格净利目标（USD）"}
               </span>
               <button className="param-lock" data-param-lock="profit_target" type="button">
-                {"AUTO"}
+                {"自动"}
               </button>
             </span>
             <input className="input" id="gridProfitTarget" inputMode="decimal" />
@@ -511,7 +511,7 @@ function StrategyCard() {
                 {"每格名义（USD）"}
               </span>
               <button className="param-lock" data-param-lock="notional_per_grid" type="button">
-                {"AUTO"}
+                {"自动"}
               </button>
             </span>
             <input className="input" id="gridNotional" inputMode="decimal" />
@@ -522,7 +522,7 @@ function StrategyCard() {
                 {"杠杆（x）"}
               </span>
               <button className="param-lock" data-param-lock="leverage" type="button">
-                {"AUTO"}
+                {"自动"}
               </button>
             </span>
             <input className="input" id="leverage" inputMode="decimal" />

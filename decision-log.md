@@ -180,6 +180,42 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — /trade's labels outside 系统详情 read in Chinese (#1455)
+
+## Decision
+
+- Block 4, third step (#1427): 「标签全中文」. Text nodes and aria labels only, in Skeleton + reference, the
+  ControlPicker/ControlActions islands, gridmind.js, dashboard-control.js status lines, control.ts (smart-fill hint,
+  rebuilt into control.js), park-ai-chat.js and standard-kline.js.
+- standard-kline gains two opt-in options, so other pages keep their defaults: `labels.fit` / `labels.fitTitle` for
+  the toolbar button, and `labels.overlays[kind]` for the loading / empty / synthetic overlay (the library's raw
+  reason moves to the overlay's `title`). GridMind passes Chinese ones and a `sourceFormatter` (「GOLD 1m · OKX · 240 根」).
+- `humanSource` maps provider `unavailable` (or label "Unavailable") to 「行情源不可用」, the same rule #1441 used for
+  the banner.
+- park-ai-chat's snapshot: Chinese labels, prices with at most two decimals, the hard stop as 「做多 3,800 · 做空 4,000」
+  instead of raw JSON, sides and directions in Chinese.
+- Kept: PAPER, tickers/brands, sha256 digests. Out of scope: 系统详情's machine codes (evidence) and
+  `#currentStrategyCard`'s fact labels (its own item).
+
+## Gotchas
+
+- `tests/fixtures/gridmind_control_wire.json` has zero diff: its confirmation statement says "Strategy Preview" and is
+  a payload, so dashboard-control.js's statement string was left alone; only its status lines changed.
+- `apps/web/src/gridmind/legacy-control-layer.json` records control.ts's messages; its 「智能填充 Range / DCA」 strings
+  were updated with the source so the parity tests still compare like with like.
+- The chart's source line now names the market's provider label (「Venue A」 in the mock) instead of the bars
+  payload's raw provider (「unknown」).
+- Tree fixture re-recorded: text only (labels, the chart's 复位 button and Chinese overlay); wire and reads unchanged.
+
+## Verification
+
+- Browser `tests/test_gm_labels_zh_browser.py`: at 1680 and 375, the visible text outside 系统详情 (with 自己调 open)
+  has none of the listed English labels and shows the Chinese ones; an `unavailable` provider shows 「行情源不可用」.
+- Updated: snapshot assertions (Chinese, 3,810 ~ 3,990, 做多 3,800), AUTO → 自动, history 「240 根」, static and
+  control-plane label checks.
+- gridmind/gm browser + static + tree + control plane + dualtrack static 240; mjs 29; standard-kline 21; web 2263;
+  desk 279.
+
 # 2026-11-09 — The tables row shows five tabs; 运行监督 / 影子策略 / 收益曲线 open from 系统详情 (#1453)
 
 ## Decision
