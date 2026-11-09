@@ -349,10 +349,19 @@ def public_catalog_loader(profile_id: str) -> Iterable[Mapping[str, Any]]:
 
     if profile_id != "hyperliquid.testnet":
         return _default_catalog_loader(profile_id)
-    from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+    from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader, run_together
 
     reader = HyperliquidTestnetMarketReader()
-    rows = [dict(row) for row in (reader.read_catalog().get("instruments") or ())]
+
+    def btc_market() -> tuple[dict[str, Any] | None, Exception | None]:
+        try:
+            return reader.read("BTC-USD-PERP"), None
+        except Exception as exc:  # noqa: BLE001 - a market failure blocks BTC below, never the catalog
+            return None, exc
+
+    # The inventory and BTC's market fact are read at the same time (#1469); a catalog failure still raises.
+    catalog, (market, market_error) = run_together(reader.read_catalog, btc_market)
+    rows = [dict(row) for row in (catalog.get("instruments") or ())]
     # The public metadata call establishes structural inventory.  The first
     # proof candidate (BTC) is execution-eligible only when its current public
     # market fact also passes the reader's BBO/mid checks; other pairs remain
@@ -360,9 +369,7 @@ def public_catalog_loader(profile_id: str) -> Iterable[Mapping[str, Any]]:
     for row in rows:
         if str(row.get("instrument_id") or "") != "BTC-USD-PERP":
             continue
-        try:
-            market = reader.read("BTC-USD-PERP")
-        except Exception:
+        if market_error is not None or market is None:
             row["eligibility"] = "blocked"
             row["blockers"] = ["market_facts_unavailable"]
         else:
@@ -499,25 +506,28 @@ class DashboardControlPlane:
 
         if str(venue_profile_id or "").strip().lower() != "hyperliquid.testnet":
             return None, None
-        from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader
+        from services.hyperliquid_testnet_market_reader import HyperliquidTestnetMarketReader, run_together
 
         market: dict[str, Any] | None = None
         account: dict[str, Any] | None = None
         try:
             reader = HyperliquidTestnetMarketReader()
-            market = reader.read(instrument_id)
             # The canonical DCA/Grid builders require the same trusted
             # source for execution bars and their 1d/4h planning contexts.
             # Resolve these facts at the composition seam so Preview never
-            # silently falls back to Paper or synthetic history.
+            # silently falls back to Paper or synthetic history. The market
+            # fact and the three bar series are read at the same time (#1469);
+            # any failure still leaves market None.
+            frames = (("1m", 240), ("1d", 32), ("4h", 32))
+            market, *series = run_together(
+                lambda: reader.read(instrument_id),
+                *(
+                    (lambda tf=timeframe, n=limit: reader.read_bars(instrument_id, timeframe=tf, limit=n, end=None))
+                    for timeframe, limit in frames
+                ),
+            )
             contexts: dict[str, Any] = {}
-            for timeframe, limit in (("1m", 240), ("1d", 32), ("4h", 32)):
-                bars = reader.read_bars(
-                    instrument_id,
-                    timeframe=timeframe,
-                    limit=limit,
-                    end=None,
-                )
+            for (timeframe, _limit), bars in zip(frames, series):
                 contexts[timeframe] = {
                     "provider": bars.get("provider") or "hyperliquid",
                     "is_synthetic": bars.get("is_synthetic") is True,
