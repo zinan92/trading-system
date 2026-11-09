@@ -176,16 +176,16 @@ function DataCard() {
             {"(0)"}
           </span>
         </button>
-        <button data-tab="supervisor" type="button" className="desk-tab-quiet">
+        <button data-tab="supervisor" type="button" className="desk-tab-quiet desk-tab-system">
           {"运行监督 "}
         </button>
         <button data-tab="review" type="button">
           {"交易回看 "}
         </button>
-        <button data-tab="shadows" type="button" className="desk-tab-quiet">
+        <button data-tab="shadows" type="button" className="desk-tab-quiet desk-tab-system">
           {"影子策略 "}
         </button>
-        <button data-tab="history" type="button">
+        <button data-tab="history" type="button" className="desk-tab-system">
           {"收益曲线 "}
         </button>
         <button data-tab="bench" type="button">
@@ -556,6 +556,20 @@ function SystemDrawer() {
       </summary>
       <div className="desk-sys-body">
         <div className="desk-records" id="deskRecords" />
+        <nav className="desk-sys-tabs" id="deskSysTabs" aria-label="更多记录">
+          <span>
+            {"更多记录："}
+          </span>
+          <button data-open-tab="supervisor" type="button">
+            {"运行监督"}
+          </button>
+          <button data-open-tab="shadows" type="button">
+            {"影子策略"}
+          </button>
+          <button data-open-tab="history" type="button">
+            {"收益曲线"}
+          </button>
+        </nav>
         <section className="card current-strategy-card idle" id="currentStrategyCard">
           <div className="current-strategy-head">
             <div>

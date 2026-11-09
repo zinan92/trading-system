@@ -80,3 +80,16 @@ def open_manual(page) -> None:
     """Unfold 「自己调」 (under step 2 of 「今天」 since #1438), where /trade keeps GridMind's own form."""
     page.locator("#deskManual").wait_for(state="attached")
     page.evaluate("() => { document.getElementById('deskManual').open = true; }")
+
+
+SYSTEM_TABS = {"supervisor", "shadows", "history"}
+
+
+def open_tab(page, tab: str) -> None:
+    """Open a tables tab the way Park does: the row for 持仓 / 委托 / 成交 / 交易回看 / 回测, and 系统详情's
+    「更多记录」 for 运行监督 / 影子策略 / 收益曲线 (#1453)."""
+    if tab in SYSTEM_TABS:
+        open_system(page)
+        page.locator(f'#deskSysTabs [data-open-tab="{tab}"]').click()
+    else:
+        page.locator(f'#tabs [data-tab="{tab}"]').click()

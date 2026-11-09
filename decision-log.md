@@ -180,6 +180,33 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — The tables row shows five tabs; 运行监督 / 影子策略 / 收益曲线 open from 系统详情 (#1453)
+
+## Decision
+
+- Block 4, second step (#1427). The supervisor, shadows and history tab buttons get `desk-tab-system`
+  (Skeleton, reference HTML, and gm-desk.js's non-/trade shell); gm-desk.css hides them except while `.on`.
+- 系统详情 gains `nav#deskSysTabs` 「更多记录：运行监督 · 影子策略 · 收益曲线」 (`data-open-tab`). One delegated click
+  listener in gm-desk.js presses GridMind's own hidden tab button and scrolls to the tables. Navigation only: no
+  request, no new sender; panels and reads unchanged.
+
+## Gotchas
+
+- Two older browser tests clicked the now-hidden tab buttons. `tests/trade_page.py` gains `open_tab(page, tab)`,
+  which opens system tabs through 系统详情 the way Park does; the operator journey and supervisor tests use it.
+- `tests/fixtures/trade_tree_shape.json` re-recorded: the three tab classes and the new nav; nothing else.
+
+## Verification
+
+- Browser `test_system_tabs_open_from_system_details` at 1680 and 375: row is positions/orders/fills/review/bench;
+  系统详情 lists the three; 收益曲线 opens its panel and shows its tab highlighted; 成交 hides it again; no non-GET
+  request; no overflow.
+- gridmind browser + static + today + control wire + this-run + account 141 after the test fixes; tree 3; web
+  2263; desk 279.
+- Production record for #1451 at 8fec2a4 (no `--dashboard`, Paper idle, gate pass), read-only: three static files
+  byte-identical, served gridmind.js has 「纸面盘权益」; `#account` is 3 cards (9,877.86 / −122.14 / 0 笔 · 手续费 4.51);
+  1440 three equal columns, 375 one column, no overflow. Account-mode cards not seen (Paper is ledger mode).
+
 # 2026-11-09 — The account strip is three cards: equity, cumulative PnL, positions (#1451)
 
 ## Decision
