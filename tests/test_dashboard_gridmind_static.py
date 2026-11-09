@@ -684,7 +684,10 @@ def test_gridmind_shows_unknown_pnl_as_unknown_not_zero() -> None:
     html = _html()
 
     assert 'function knownSigned(value){return value==null?"--":signed(value)}' in html
-    assert '["已实现盈亏",knownSigned(pnl.net_realized)' in html
+    # #1451: realized and unrealized sit under 「累计盈亏」, still unknown rather than zero.
+    assert '`已实现 ${knownSigned(pnl.net_realized)} · 浮动 ${knownSigned(pnl.unrealized)}' in html
+    assert '["累计盈亏",knownSigned(pnl.total),pnl.total==null?unknownPnlNote(execution)' in html
+    assert "每格计划净利目标" not in html
     assert "盈亏尚未核算" in html
 
 

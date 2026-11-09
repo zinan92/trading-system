@@ -180,6 +180,36 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — The account strip is three cards: equity, cumulative PnL, positions (#1451)
+
+## Decision
+
+- Block 4, first step (#1427). gridmind.js still picks the source and computes every number; it now publishes three
+  cards to the `#account` island instead of five:
+  - paper ledger: 「纸面盘权益」 (initial cash, session); 「累计盈亏」 = equity − starting cash with
+    「已实现 … · 浮动 … · 收益率 …%」 under it; 「持仓」 N 笔 with fees;
+  - execution account: 「账户权益」; 「累计盈亏」 = `pnl.total` (unknown stays 「--」 with the existing unknown note)
+    with realized, unrealized and return under it; 「持仓」 N 笔 with exposure, trade count and fees paid.
+- Dropped: the separate realized and unrealized cards (they repeated the total when flat), 「累计成交名义额」, and the
+  hard-coded 「每格计划净利目标 10 USD」 sub-line.
+- gm-desk.css: three columns on a desktop, one on a phone.
+
+## Gotchas
+
+- `apps/web/src/account-cards.test.tsx` compares AccountCards' rendering of recorded cards with the old innerHTML;
+  it does not depend on which cards GridMind publishes, so it is unchanged.
+- `tests/fixtures/trade_tree_shape.json` re-recorded: only the account cards differ (5 → 3, new labels).
+
+## Verification
+
+- Browser `test_the_paper_ledger_is_three_cards` (1680, 375: production's numbers 9,877.86 / −122.14 / 0 笔) and
+  `test_the_execution_account_is_three_cards_and_unknown_stays_unknown`; static assertions updated.
+- gridmind browser + static + today + control wire 136 and tree 3 after the re-record; web 2263; desk 276.
+- Root 4163 passed, 2 skipped (before the rebase onto #1449; the tree fixture was re-recorded again on top of it).
+- Production record for #1449 at be50a99 (no `--dashboard`), read-only: the four static files byte-identical;
+  idle (`current_strategy.active` false): `#deskThisRun` inside 「今天」, empty and hidden, no `desk-running`, steps
+  1–2 and `#deskExecBox` shown. The running panel was not seen in production (nothing runs); mocks only.
+
 # 2026-11-09 — While a plan runs, 「今天」's steps give way to 「这一轮」 (#1449)
 
 ## Decision

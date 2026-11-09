@@ -310,3 +310,6 @@ body.desk-idle #gridSummary{color:var(--gm-muted,#99a0ab)}
 .desk-thisrun dd{margin:0;font-size:13px;text-align:right;overflow-wrap:anywhere}
 body.desk-running #deskToday .desk-today,body.desk-running #deskToday .desk-steps-exec .desk-n,body.desk-running #deskToday .desk-steps-exec h3,body.desk-running #deskExecBox{display:none}
 @media(max-width:760px){.desk-thisrun dl{grid-template-columns:minmax(0,1fr)}}
+/* 账户数字 (#1451): three cards, one row on a desktop. */
+#account{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:760px){#account{grid-template-columns:minmax(0,1fr)}#account .metric:last-child{grid-column:auto}}
