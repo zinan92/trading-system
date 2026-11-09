@@ -348,11 +348,13 @@ def test_a_failed_read_survives_any_redraw_until_the_next_good_read() -> None:
         browser.close()
 
 
-@pytest.mark.parametrize("case", ["minute_trusted", "minute_untrusted", "minute_fails", "minute_other_symbol"])
+@pytest.mark.parametrize("case", ["paper_trusted", "paper_untrusted", "bound_trusted", "bound_fails", "bound_other_symbol"])
 def test_a_4h_chart_starts_and_judges_from_the_selected_symbol_s_1m_feed(case: str) -> None:
-    """#1443: the chart's timeframe is display only; start, trend, header price and the strip read the 1m feed."""
+    """#1443: the chart's timeframe is display only; start, trend, header price and the strip read the 1m feed.
+    #1447: on the Paper feed (no venue binding) that 1m feed is the read model's own market, so it is not read again."""
     playwright = pytest.importorskip("playwright.sync_api")
-    model = _header_model(4000.0)
+    bound = case.startswith("bound")
+    model = _header_model(4010.0, trusted=case != "paper_untrusted")
     model.setdefault("ui_capabilities", {})["market_timeframes"] = ["1m", "5m", "15m", "30m", "1h", "4h"]
     minute_requests: list[str] = []
     browser_errors: list[str] = []
@@ -365,11 +367,11 @@ def test_a_4h_chart_starts_and_judges_from_the_selected_symbol_s_1m_feed(case: s
         timeframe = url.split("timeframe=", 1)[1].split("&", 1)[0]
         if timeframe == "1m":
             minute_requests.append(url)
-            if case == "minute_fails":
+            if case == "bound_fails":
                 route.fulfill(status=503, content_type="application/json", body=json.dumps({"detail": "datafeed down"}))
                 return
-            payload = _minute_feed(4010.0, 5, trusted=case != "minute_untrusted")
-            if case == "minute_other_symbol":
+            payload = _minute_feed(4010.0, 5)
+            if case == "bound_other_symbol":
                 payload["symbol"] = "BTC"
         else:
             payload = {"symbol": "GOLD", "timeframe": timeframe, "provider": "binance_usdm_futures",
@@ -387,17 +389,24 @@ def test_a_4h_chart_starts_and_judges_from_the_selected_symbol_s_1m_feed(case: s
         page.on("pageerror", lambda error: browser_errors.append(str(error)))
         page.route("**/api/trading-system/read-model", fulfill_read_model)
         page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
+        page.route("**/api/dashboard-control/market-bars?*", fulfill_bars)
         page.goto(f"{origin}/trade", wait_until="load")
         page.wait_for_function("() => window.gridmindView && window.gridmindView.data")
+        if bound:  # a Hyperliquid Testnet binding reads its own feed, so its 1m is read on purpose
+            page.evaluate("() => { dashboardMarketBinding = () => ({venueProfileId: 'hyperliquid.testnet', instrumentId: 'GOLD-USD-PERP', symbol: 'GOLD'}); }")
+        minute_requests.clear()
         page.evaluate("() => { state.timeframe = '4h'; return load(); }")
 
         view = page.evaluate("() => ({tf: window.gridmindView.market.timeframe, trusted: window.gridmindView.marketTrusted,"
                              " exec: window.gridmindView.execMarket})")
         assert view["tf"] == "4h"  # the chart itself stays on 4h
-        assert minute_requests and all("symbol=GOLD" in url and "limit=2" in url for url in minute_requests)
+        if bound:
+            assert minute_requests and all("/api/dashboard-control/market-bars?" in url and "limit=2" in url for url in minute_requests)
+        else:
+            assert minute_requests == []  # #1447: the read model already carries the Paper 1m feed
         trend = page.locator("#trendBox").text_content()
         assert "切到 1m" not in trend
-        if case == "minute_trusted":
+        if case in ("paper_trusted", "bound_trusted"):
             assert view["trusted"] is True and view["exec"]["timeframe"] == "1m"
             assert page.locator("#headerPrice").inner_text() == "4,010"  # the 1m price, not the 4h close
             assert page.locator("#refreshTrend").is_disabled() is False
