@@ -20,6 +20,7 @@
 
 - `tests/test_park_control_log.py` (3) covers a blocked run, a typed Telegram failure and an unexpected crash. All fail without the change. `test_the_system_page_counts_control_loop_errors` fails without the desk change.
 - park_control, lifecycle, legacy cutover, replay, systemd and structured-log tests: 157 passed. Desk: 283 passed.
+- Deployed 2b3bf02 while Paper was idle; gate pass. Production `park-control.jsonl`: first 4 ticks `pass`, total 68–95 s, of which `telegram` 65–91 s, `safety_evidence` 1.5–4.3 s, everything else under 0.1 s. The loop is scheduled every 60 s, so runs are back to back about every 2.3 min. Cause not yet diagnosed: `run_once` recovers pending inputs, long-polls with a 5 s timeout, handles updates and drains outbound.
 
 # 2026-11-09 — The why panel's code version is the commit that ran (#1472)
 
