@@ -83,3 +83,20 @@ def test_nothing_is_sent_without_the_telegram_identity(config, sources, store, f
     n = Notifier(config, store, sources, StubWatch({"items": []}), StubAdvisor({}), queue=None,
                  now=lambda: datetime(2026, 9, 15, 10, 30, tzinfo=BJ))
     assert n.run() == []
+
+
+def test_the_control_scripts_telegram_switch_stops_desk_pushes(config, tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from trading_desk import notify
+
+    home = tmp_path / "home"
+    identity = home / ".config/trading-system/park-paper-telegram.env"
+    identity.parent.mkdir(parents=True)
+    identity.write_text("TRADING_ORCHESTRATOR_TELEGRAM_CHAT_ID=2\nTRADING_ORCHESTRATOR_TELEGRAM_PARK_USER_ID=1\n")
+    monkeypatch.setattr(notify.Path, "home", classmethod(lambda cls: home))
+    script = tmp_path / "run-park-paper-control.sh"
+    script.write_text('export TRADING_ORCHESTRATOR_TELEGRAM="off"\n')
+    assert notify.park_outbox(replace(config, control_script=script)) is None
+    script.write_text("export OTHER=1\n")
+    assert notify.park_outbox(replace(config, control_script=script)) is not None

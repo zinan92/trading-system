@@ -641,6 +641,14 @@ def _redacted_testnet_facts_message(exc: BaseException) -> str:
 
 
 LOG = get_logger("park_control")
+OFF = {"status": "off"}
+
+
+def telegram_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """`TRADING_ORCHESTRATOR_TELEGRAM=off` in the control script stops every Telegram read and send (#1478)."""
+
+    env = environ if environ is not None else os.environ
+    return str(env.get("TRADING_ORCHESTRATOR_TELEGRAM") or "on").strip().lower() != "off"
 
 
 class _Steps:
@@ -764,19 +772,23 @@ def _run(args: argparse.Namespace, output_root: Path, steps: _Steps) -> tuple[di
             testnet_start_handler=testnet_start_handler,
             config=config,
         )
-        with steps.step("telegram"):
-            telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
+        telegram_on = telegram_enabled()
+        telegram: dict[str, Any] = OFF
+        if telegram_on:
+            with steps.step("telegram"):
+                telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
         with steps.step("testnet_tick"):
             scheduler_before = _testnet_scheduler_snapshot(output_root)
             testnet_control = run_testnet_control_tick(output_root)
-        with steps.step("notices"):
-            queue_testnet_scheduler_notice(
-                output_root, scheduler_before, testnet_control,
-                park_user_id=args.park_user_id, chat_id=args.chat_id,
-            )
-            queue_testnet_fill_notices(
-                output_root, park_user_id=args.park_user_id, chat_id=args.chat_id,
-            )
+        if telegram_on:  # notices only feed the Telegram outbox
+            with steps.step("notices"):
+                queue_testnet_scheduler_notice(
+                    output_root, scheduler_before, testnet_control,
+                    park_user_id=args.park_user_id, chat_id=args.chat_id,
+                )
+                queue_testnet_fill_notices(
+                    output_root, park_user_id=args.park_user_id, chat_id=args.chat_id,
+                )
         with steps.step("legacy_cutover"):
             legacy_cutover = run_legacy_cutover_once(
                 output_root,
@@ -818,8 +830,10 @@ def _run(args: argparse.Namespace, output_root: Path, steps: _Steps) -> tuple[di
                 "code": exc.code,
                 "paper_only": True,
             }
-        with steps.step("delivery"):
-            delivery = router.drain_outbound(transport)
+        delivery: dict[str, Any] = OFF
+        if telegram_on:
+            with steps.step("delivery"):
+                delivery = router.drain_outbound(transport)
         result = {
             "schema_version": "park-control-v1",
             "status": "pass" if execution.get("status") != "blocked" else "blocked",
