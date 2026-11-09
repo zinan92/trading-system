@@ -12,7 +12,7 @@ import pytest
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
 from tests.test_dashboard_gridmind_profit_controls_browser import _preview
-from tests.trade_page import open_manual, press, text
+from tests.trade_page import open_manual, open_tab, press, text
 
 
 def _recommendation() -> dict:
@@ -174,7 +174,7 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
 
         for tab, panel in (("review", "#deskReview"),  # /trade: the desk's 交易回看 island (#1419)
                            ("shadows", "#shadows"), ("history", "#history")):
-            page.locator(f'[data-tab="{tab}"]').click()
+            open_tab(page, tab)  # 影子策略 / 收益曲线 open from 系统详情 since #1453
             assert page.locator(panel).evaluate("element => element.parentElement.classList.contains('on') || element.classList.contains('on')")
 
         assert browser_errors == []

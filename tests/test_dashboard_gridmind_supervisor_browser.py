@@ -11,7 +11,7 @@ from tests.test_dashboard_gridmind_order_lifecycle_browser import (
     _read_model,
     _static_server,
 )
-from tests.trade_page import open_system
+from tests.trade_page import open_system, open_tab
 
 
 def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
@@ -196,7 +196,7 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
             wait_until="load",
         )
         assert history_requests == []
-        page.locator('[data-tab="supervisor"]').click()
+        open_tab(page, "supervisor")  # from 系统详情 since #1453
 
         panel = page.locator('[data-panel="supervisor"]')
         panel.get_by_text(

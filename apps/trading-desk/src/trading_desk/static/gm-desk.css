@@ -313,3 +313,9 @@ body.desk-running #deskToday .desk-today,body.desk-running #deskToday .desk-step
 /* 账户数字 (#1451): three cards, one row on a desktop. */
 #account{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media(max-width:760px){#account{grid-template-columns:minmax(0,1fr)}#account .metric:last-child{grid-column:auto}}
+/* 表格标签 (#1453): the row shows 持仓 / 委托 / 成交 / 交易回看 / 回测; the system tabs open from 系统详情 and show in the row only while open. */
+#tabs .desk-tab-system{display:none}
+#tabs .desk-tab-system.on{display:inline-block}
+.desk-sys-tabs{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0}
+.desk-sys-tabs span{color:var(--gm-muted,#99a0ab);font-size:12px}
+.desk-sys-tabs button{border:1px solid var(--gm-line,#2a2f38);background:transparent;color:var(--gm-text,#e6e8eb);border-radius:5px;padding:3px 8px;font-size:12px;cursor:pointer}

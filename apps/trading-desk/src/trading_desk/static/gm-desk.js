@@ -231,15 +231,26 @@ if (typeof document !== "undefined") (() => {
     rail?.querySelector(".desk-judge .desk-steps-exec")?.insertAdjacentHTML("beforebegin", `<details class="card desk-more" id="deskManual"><summary>自己调<small>手动设网格参数 · AI 助手 · 趋势评估 · 策略配置与停止</small></summary><div class="desk-more-body"></div></details>`);
     const manual = $d("#deskManual .desk-more-body");
     ["#dashboardControlCard", "#parkAiChatCard", ".market-card", "#strategyCard"].forEach(sel => { const el = $d(sel); if (el && manual) manual.appendChild(el); });
-    wrap.insertAdjacentHTML("beforeend", `<details class="card desk-sys" id="deskSystem"><summary><span class="desk-dot" id="deskHealthDot"></span><span id="deskHealth">读取中</span><span class="desk-sys-link">系统详情：运行状态、策略明细、内部记录</span></summary><div class="desk-sys-body"><div class="desk-records" id="deskRecords"></div></div></details>`);
+    wrap.insertAdjacentHTML("beforeend", `<details class="card desk-sys" id="deskSystem"><summary><span class="desk-dot" id="deskHealthDot"></span><span id="deskHealth">读取中</span><span class="desk-sys-link">系统详情：运行状态、策略明细、内部记录</span></summary><div class="desk-sys-body"><div class="desk-records" id="deskRecords"></div><nav class="desk-sys-tabs" id="deskSysTabs" aria-label="更多记录"><span>更多记录：</span><button data-open-tab="supervisor" type="button">运行监督</button><button data-open-tab="shadows" type="button">影子策略</button><button data-open-tab="history" type="button">收益曲线</button></nav></div></details>`);
     const system = $d("#deskSystem .desk-sys-body");
     ["#currentStrategyCard", ".live-card"].forEach(sel => { const el = $d(sel); if (el && system) system.appendChild(el); });
     document.querySelectorAll("#tabs [data-tab]").forEach(button => {
       const label = TABS[button.dataset.tab], text = [...button.childNodes].find(node => node.nodeType === 3);
       if (label && text) text.textContent = `${label} `;
       if (["supervisor", "shadows"].includes(button.dataset.tab)) button.classList.add("desk-tab-quiet");
+      if (["supervisor", "shadows", "history"].includes(button.dataset.tab)) button.classList.add("desk-tab-system");
     });
   }
+
+  // #1453: 运行监督 / 影子策略 / 收益曲线 open from 系统详情. Navigation only: it presses GridMind's own (hidden) tab.
+  document.addEventListener("click", event => {
+    const link = event.target.closest?.("[data-open-tab]");
+    if (!link) return;
+    const tab = document.querySelector(`#tabs [data-tab="${link.dataset.openTab}"]`);
+    if (!tab) return;
+    tab.click();
+    reveal(document.querySelector(".data-card"));
+  });
 
   function reveal(target, details) {
     if (details) details.open = true;
