@@ -180,6 +180,48 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — While a plan runs, 「今天」's steps give way to 「这一轮」 (#1449)
+
+## Decision
+
+- Block 3b of the redesign (#1427). New `DeskStatus.thisRun(view)`: `null` unless `isActive(view)` (the banner's own
+  test, so the two never disagree); otherwise a title (`这一轮 · 网格运行中`, or the testnet lifecycle's label) and
+  facts, each only when a field backs it: range (`lower/upper_price_boundary`, else `livePlan.range`), direction,
+  grids and spacing (`grid_rung_count`, `grid_spacing`), fills and positions (`current_strategy.execution`, else
+  `execution.counts`), stop and take profit when set, the plan's worst case against its limit
+  (`theoretical_max_loss` / `maximum_acceptable_loss`, labelled 「计划最坏」, never 「已用」), unrealized PnL.
+- Not shown: realized PnL (`execution.pnl` realized spans every plan: scope `all_versioned_production_plans`),
+  buy/sell split (entry/exit fills are not sides), out-of-range behaviour and per-grid notional (no direct field).
+- gm-desk.js renders it into `#deskThisRun` at the top of `#deskToday .card-body` and toggles `body.desk-running`;
+  CSS hides the today island (steps 1–2) and step 3's number, title and `#deskExecBox`. `#deskStop` and
+  `#deskManual` stay, so 「去停止」 still finds a stop button. No buttons in the panel; no new sender.
+- The running banner's body drops range/grids/fills/positions (said once, in the panel) and carries only
+  「浮动盈亏 ±x USD」 when `unrealized` is finite. Its heartbeat and error lines keep their own text.
+- Shown whatever the feed or the last read says; with `readError` it notes 「最新状态读不到，下面是上次读到的。」.
+- Deferred: GridMind's `#currentStrategyCard` (lives in 系统详情; block 4), and a 「今天的判断」 line (gm-desk has no
+  judgment data to read yet).
+
+## Gotchas
+
+- `_read_model("accepted")` is not a running shape (`active: false`, empty spec). The tests use the running Park
+  strategy shape from the order lifecycle browser test.
+- `tests/fixtures/trade_tree_shape.json` re-recorded: the only difference is the empty `section#deskThisRun` at the
+  top of 「今天」's body.
+
+## Verification
+
+- `test_gm_desk_status.py` 23: `test_this_run_lists_only_the_facts_a_field_backs`,
+  `test_this_run_stays_when_the_feed_fails_or_a_read_fails`, `test_this_run_follows_a_testnet_lifecycle_until_it_ends`
+  (paused, hard stop, sealed); the running banner tests updated.
+- Browser `test_a_running_plan_shows_this_run_instead_of_today_s_steps` at 1680 and 375 (fails on the old code):
+  panel facts; `desk-running`; steps 1–2 and `#deskExecBox` hidden; `#deskStop` and `#deskManual` present; no
+  panel button; no banner start; no overflow; idle shows no panel and the steps.
+- gridmind browser + static + today + control wire 135 and tree 3 after the re-record; desk 279.
+- Production Paper is idle, so the running panel is verified with mocks only.
+- Root 4161 passed, 2 skipped.
+- Production record for #1447 at 12042e5 (no `--dashboard`), read-only: the four static files byte-identical; 20 s
+  on /trade read `timeframe=4h&limit=240` three times and `timeframe=1m` zero times; `execMarket` is the read
+  model's GOLD 1m. The datafeed was still timing out (01:44 UTC), so the page stayed red; zinan92/datafeed#194.
 # 2026-11-09 — Gold feed timeouts in production; the desk stops reading the Paper 1m feed twice (#1447)
 
 ## Decision

@@ -177,8 +177,60 @@ def test_running_grid_shows_its_range_and_fills_and_only_points_to_stop() -> Non
     banner = run("banner", running_view(), {"asset": "黄金"})
     assert banner["tone"] == "run"
     assert banner["title"] == "黄金网格运行中"
-    assert banner["body"] == "区间 4,080 – 4,180 · 10 格 · 中性 · 已成交 6 笔 · 持仓 2 笔"
+    # #1449: range, grids, fills and positions are said once, in 「这一轮」; no unrealized figure here, so no body.
+    assert banner["body"] == ""
     assert banner["action"] == {"kind": "stop", "label": "去停止"}
+    view = running_view()
+    view["data"]["execution"]["pnl"] = {"net_realized": -122.14, "unrealized": 21.4, "total": -100.74}
+    assert run("banner", view, {"asset": "黄金"})["body"] == "浮动盈亏 +21.4 USD"
+
+
+def park_running_view() -> dict:
+    """Shaped like tests/test_dashboard_gridmind_order_lifecycle_browser.py's running Park strategy."""
+    view = running_view()
+    view["data"]["current_strategy"]["specification"] = {
+        "strategy_type": "grid", "direction": "short", "lower_price_boundary": 3800.0, "upper_price_boundary": 4000.0,
+        "stop_price": 4000.0, "take_profit_price": None, "maximum_leverage": 10.0, "maximum_acceptable_loss": 500.0,
+        "maximum_notional": 40000.0, "theoretical_max_loss": 480.0, "order_count": 19, "grid_spacing": 10.0, "grid_rung_count": 19,
+    }
+    view["data"]["current_strategy"]["execution"] = {"fill_count": 7, "open_position_count": 2}
+    view["data"]["execution"]["pnl"] = {"net_realized": -122.14, "unrealized": -8.5, "total": -130.64}
+    return view
+
+
+def test_this_run_lists_only_the_facts_a_field_backs() -> None:
+    """#1449: 「这一轮」 replaces 「今天」's steps while a plan runs."""
+    panel = run("thisRun", park_running_view())
+    assert panel["title"] == "这一轮 · 网格运行中"
+    assert [(f["label"], f["value"]) for f in panel["facts"]] == [
+        ("区间", "3,800 – 4,000"), ("方向", "做空"), ("格数", "19 格 · 间距 10"), ("成交", "7 次"), ("持仓", "2 笔"),
+        ("止损", "4,000"), ("计划最坏", "−480 / 上限 −500 USD"), ("浮动盈亏", "−8.5 USD")]
+    labels = {f["label"] for f in panel["facts"]}
+    assert not labels & {"止盈", "已实现", "已用", "买", "卖", "出区间时", "每格"}  # no field backs these (take profit is null)
+    assert panel["stale"] is None
+    assert run("thisRun", idle_view()) is None
+
+
+def test_this_run_stays_when_the_feed_fails_or_a_read_fails() -> None:
+    untrusted = park_running_view()
+    untrusted["marketTrusted"] = False
+    assert run("banner", untrusted, {"asset": "黄金"})["tone"] == "bad"  # red banner, and the grid is still shown
+    assert run("thisRun", untrusted)["facts"][0] == {"label": "区间", "value": "3,800 – 4,000"}
+    failed = park_running_view()
+    failed["readError"] = "HTTP 502"
+    assert run("thisRun", failed)["stale"] == "最新状态读不到，下面是上次读到的。"
+
+
+def test_this_run_follows_a_testnet_lifecycle_until_it_ends() -> None:
+    view = idle_view()
+    view["livePlan"] = {"source": "testnet_grid_lifecycle", "status": "paused_above_range", "direction": "long", "range": {"low": 60000, "high": 70000}, "grid": {"count": 8}}
+    panel = run("thisRun", view)
+    assert panel["title"] == "这一轮 · 网格价格高于区间，暂停补单"
+    assert panel["facts"][:3] == [{"label": "区间", "value": "60,000 – 70,000"}, {"label": "方向", "value": "做多"}, {"label": "格数", "value": "8 格"}]
+    view["livePlan"]["status"] = "hard_stop_triggered"
+    assert run("thisRun", view)["title"] == "这一轮 · 网格已触发硬止损，正在平仓"
+    view["livePlan"]["status"] = "sealed"
+    assert run("thisRun", view) is None
 
 
 def test_testnet_lifecycle_pause_is_amber_and_ended_lifecycle_is_idle() -> None:
@@ -245,7 +297,7 @@ def test_a_failed_read_outranks_everything_and_says_the_page_is_old() -> None:
 def test_a_running_grid_names_a_stale_heartbeat_and_a_failed_check() -> None:
     lost = run("banner", with_tick(running_view()), {"asset": "黄金"})
     assert lost["tone"] == "warn" and lost["title"] == "黄金网格运行降级"
-    assert lost["body"].startswith("执行心跳 181 秒没更新（上限 180 秒）。 区间 4,080 – 4,180")
+    assert lost["body"] == "执行心跳 181 秒没更新（上限 180 秒）。"
     assert lost["action"] == {"kind": "stop", "label": "去停止"}
     error = run("banner", with_run(running_view(), label="运行异常", runClass="error"), {"asset": "黄金"})
     assert error["tone"] == "bad" and error["title"] == "黄金网格运行异常"

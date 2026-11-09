@@ -16,6 +16,7 @@ const DeskStatus = (() => {
   const num = v => finite(v) ? Number(v).toLocaleString("en-US", {maximumFractionDigits: 2}) : "--";
   const beijing = stamp => { const t = new Date(stamp); return isNaN(t) ? null : new Date(t.getTime() + 8 * 3600000); };
   const bjDay = stamp => { const t = beijing(stamp); return t ? `${t.getUTCMonth() + 1}/${t.getUTCDate()}` : ""; };
+  const signed = v => `${Number(v) > 0 ? "+" : Number(v) < 0 ? "−" : ""}${num(Math.abs(Number(v)))}`;
   const bjTime = stamp => { const t = beijing(stamp); return t ? `${bjDay(stamp)} ${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}` : "--"; };
 
   function tickText(data) {
@@ -69,8 +70,8 @@ const DeskStatus = (() => {
       const rungs = spec.grid_rung_count ?? plan.grid?.count, fills = ex.fill_count ?? counts.fill_count, held = ex.open_position_count ?? counts.open_position_count;
       const type = String(spec.strategy_type || plan.strategy_type || "grid").toLowerCase() === "dca" ? "定投" : "网格";
       const direction = {long: "做多", short: "做空", neutral: "中性"}[spec.direction || plan.direction] || null;
-      const parts = [finite(low) && finite(high) ? `区间 ${num(low)} – ${num(high)}` : null, finite(rungs) && Number(rungs) > 0 ? `${num(rungs)} 格` : null, direction,
-        finite(fills) ? `已成交 ${num(fills)} 笔` : null, finite(held) ? `持仓 ${num(held)} 笔` : null].filter(Boolean);
+      // #1449: range, grids, fills and positions are said once, in 「这一轮」; the banner keeps what changes by the minute.
+      const pnl = data.execution?.pnl || {}, parts = [finite(pnl.unrealized) ? `浮动盈亏 ${signed(pnl.unrealized)} USD` : null].filter(Boolean);
       const bad = /hard_stop|flatten/.test(lifecycle), paused = /paused/.test(lifecycle), run = runOf(view), stop = {kind: "stop", label: "去停止"};
       if (run.tickLost) return {tone: "warn", title: `${asset}${type}运行降级`, body: [tickText(data), parts.join(" · ")].filter(Boolean).join(" "), action: stop};
       if (!lifecycle && run.runClass === "error") return {tone: "bad", title: `${asset}${type}运行异常`, body: ["运行状态没有通过检查（风控、对账或状态记录），原因见系统详情。", parts.join(" · ")].filter(Boolean).join(" "), action: stop};
@@ -97,6 +98,35 @@ const DeskStatus = (() => {
     return {tone: "idle", title: "现在没有在跑的策略", body, next: "今天的计划从「今天」第 1 步开始。", action: null, startable: true};
   }
 
+  // 「这一轮」 (#1449): shown instead of 「今天」's steps whenever the banner says a plan runs (same isActive), whatever
+  // the feed or the last read says, so Park can always see the grid. Only facts a field backs; nothing to press.
+  function thisRun(view) {
+    if (!view?.data || !isActive(view)) return null;
+    const data = view.data, plan = view.livePlan || {}, current = data.current_strategy || {}, spec = current.specification || {};
+    const ex = current.execution || {}, counts = data.execution?.counts || {}, pnl = data.execution?.pnl || {};
+    const lifecycle = plan.source === "testnet_grid_lifecycle" ? String(plan.status || "") : "";
+    const low = spec.lower_price_boundary ?? plan.range?.low, high = spec.upper_price_boundary ?? plan.range?.high;
+    const rungs = spec.grid_rung_count ?? plan.grid?.count, spacing = spec.grid_spacing;
+    const fills = ex.fill_count ?? counts.fill_count, held = ex.open_position_count ?? counts.open_position_count;
+    const type = String(spec.strategy_type || plan.strategy_type || "grid").toLowerCase() === "dca" ? "定投" : "网格";
+    const direction = {long: "做多", short: "做空", neutral: "中性"}[spec.direction || plan.direction] || null;
+    const facts = [], add = (label, value) => facts.push({label, value});
+    if (finite(low) && finite(high)) add("区间", `${num(low)} – ${num(high)}`);
+    if (direction) add("方向", direction);
+    if (finite(rungs) && Number(rungs) > 0) add("格数", `${num(rungs)} 格${finite(spacing) && Number(spacing) > 0 ? ` · 间距 ${num(spacing)}` : ""}`);
+    if (finite(fills)) add("成交", `${num(fills)} 次`);
+    if (finite(held)) add("持仓", `${num(held)} 笔`);
+    if (finite(spec.stop_price)) add("止损", num(spec.stop_price));
+    if (finite(spec.take_profit_price)) add("止盈", num(spec.take_profit_price));
+    // The plan's worst case against its limit, not risk used so far.
+    if (finite(spec.theoretical_max_loss)) add("计划最坏", `−${num(Math.abs(spec.theoretical_max_loss))}${finite(spec.maximum_acceptable_loss) ? ` / 上限 −${num(Math.abs(spec.maximum_acceptable_loss))}` : ""} USD`);
+    // execution.pnl's realized part spans every plan (scope all_versioned_production_plans), so only the open
+    // positions' unrealized figure belongs to this run.
+    if (finite(pnl.unrealized)) add("浮动盈亏", `${signed(pnl.unrealized)} USD`);
+    return {title: `这一轮 · ${type}${LIFECYCLE[lifecycle] || "运行中"}`, facts,
+      stale: view.readError ? "最新状态读不到，下面是上次读到的。" : null};
+  }
+
   // Only claims a field backs. Never "all good": the calm state is grey, not green.
   function health(view) {
     if (view?.readError) return {tone: "bad", text: "读不到最新状态", other: [], expected: []};
@@ -120,7 +150,7 @@ const DeskStatus = (() => {
     return {old: label, next: paper?.label || null};
   }
 
-  return {banner, health, retired, isActive, calmRun, feedTrust};
+  return {banner, health, retired, isActive, calmRun, feedTrust, thisRun};
 })();
 if (typeof module !== "undefined") module.exports = DeskStatus;
 
@@ -224,13 +254,28 @@ if (typeof document !== "undefined") (() => {
     return String(window.gridmindView?.market?.symbol || "GOLD").toUpperCase() === "GOLD" ? "黄金" : String(window.gridmindView.market.symbol);
   }
 
+  // 「这一轮」 (#1449) sits at the top of 「今天」's body; while it shows, steps 1–2 and step 3's plan box are hidden by
+  // CSS (body.desk-running) and step 3's stop area and 「自己调」 stay.
+  function renderThisRun(run) {
+    let box = $d("#deskThisRun");
+    if (!box) {
+      $d("#deskToday .card-body")?.insertAdjacentHTML("afterbegin", '<section class="desk-thisrun" id="deskThisRun" aria-live="polite"></section>');
+      box = $d("#deskThisRun");
+    }
+    document.body.classList.toggle("desk-running", Boolean(run));
+    if (!box) return;
+    box.innerHTML = run ? `<h3>${escD(run.title)}</h3>${run.stale ? `<p class="warn">${escD(run.stale)}</p>` : ""}<dl>${run.facts.map(f => `<div><dt>${escD(f.label)}</dt><dd>${escD(f.value)}</dd></div>`).join("")}</dl>` : "";
+  }
+
   function renderStatus() {
     const view = window.gridmindView, control = window.dashboardControlState;
     const banner = DeskStatus.banner(view, {asset: statusAsset()}), health = DeskStatus.health(view), retired = DeskStatus.retired(control?.selection, control?.catalog);
-    const signature = JSON.stringify([banner, health, retired, D.switching]);
+    const run = DeskStatus.thisRun(view);
+    const signature = JSON.stringify([banner, health, retired, run, D.switching]);
     if (signature === D.statusSignature) return;
     D.statusSignature = signature;
     document.body.classList.toggle("desk-idle", banner.tone === "idle");
+    renderThisRun(run);
     const box = $d("#deskStatus");
     box.className = `desk-status ${banner.tone}`;
     box.innerHTML = `<span class="desk-status-ic">${ICONS[banner.tone] || ICONS.idle}</span><div class="desk-status-text"><h1>${escD(banner.title)}</h1>${banner.body ? `<p>${escD(banner.body)}</p>` : ""}${banner.next ? `<p class="desk-status-next">${escD(banner.next)}</p>` : ""}</div>`
