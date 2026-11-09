@@ -7,6 +7,7 @@ import json
 import os
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 from urllib.request import Request, urlopen
@@ -25,6 +26,20 @@ SUPPORTED_CANDLE_INTERVALS = {
 }
 DEFAULT_MAX_ORACLE_DEVIATION_BPS = 50.0
 MAX_ORACLE_DEVIATION_ENV = "HYPERLIQUID_TESTNET_MAX_ORACLE_DEVIATION_BPS"
+
+
+def run_together(*calls: Callable[[], Any]) -> list[Any]:
+    """Run independent blocking reads at the same time and return their results in order (#1469).
+
+    Each Hyperliquid testnet call takes ~2 s from this host; one after another they cost the catalog ~8 s.
+    Every call finishes before this returns. When several fail, the first in argument order is raised, so a
+    caller sees the same error it saw when the calls ran one after another.
+    """
+    if len(calls) < 2:
+        return [call() for call in calls]
+    with ThreadPoolExecutor(max_workers=len(calls), thread_name_prefix="hl-read") as pool:
+        futures = [pool.submit(call) for call in calls]
+    return [future.result() for future in futures]
 
 
 def oracle_deviation_config(
@@ -126,9 +141,13 @@ class HyperliquidTestnetMarketReader:
         return direct
 
     def _read_direct(self, instrument: str, symbol: str) -> dict[str, Any]:
-        mids = self._post({"type": "allMids"})
-        book = self._post({"type": "l2Book", "coin": symbol})
-        meta_and_contexts = self._request({"type": "metaAndAssetCtxs"})
+        # Three answers taken at the same moment: faster, and the mid/BBO coherence check compares a
+        # closer-together snapshot than three calls 2 s apart did (#1469).
+        mids, book, meta_and_contexts = run_together(
+            lambda: self._post({"type": "allMids"}),
+            lambda: self._post({"type": "l2Book", "coin": symbol}),
+            lambda: self._request({"type": "metaAndAssetCtxs"}),
+        )
         meta, asset_context = self._asset_context(meta_and_contexts, symbol)
         mid = self._positive_number(mids.get(symbol), "testnet_mid_missing")
         bids, asks = self._book_levels(book, symbol)

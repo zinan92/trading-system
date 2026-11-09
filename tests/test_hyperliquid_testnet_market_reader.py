@@ -76,7 +76,8 @@ def test_reads_btc_mid_and_l2_from_hyperliquid_testnet_without_credentials() -> 
     assert result["depth_notional"] > 100
     assert len(result["bids"]) == 1
     assert len(result["asks"]) == 1
-    assert [call["body"]["type"] for call in calls] == [
+    # The three calls run at the same time (#1469), so only which calls were made is fixed, not their order.
+    assert sorted(call["body"]["type"] for call in calls) == [
         "allMids",
         "l2Book",
         "metaAndAssetCtxs",

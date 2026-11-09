@@ -180,6 +180,26 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — Independent Hyperliquid testnet reads run at the same time (#1469)
+
+## Decision
+
+- After #1466, `/trade` still took ~12 s to go quiet: GridMind's venue/instrument picker reads the full catalog through the desk (8.2 s). Every Hyperliquid testnet call is a blocking HTTPS request of ~2 s from this host, and the catalog made four in a row (`meta`, then the BTC read's `allMids`, `l2Book`, `metaAndAssetCtxs`). Preview made seven (market read, then 1m, 1d and 4h bars).
+- `run_together(*calls)` in `hyperliquid_testnet_market_reader` runs independent reads on threads, returns results in argument order, waits for every call, and raises the first failure in argument order, so callers see the same error as before.
+- Used in `_read_direct` (three info calls), `public_catalog_loader` (inventory and BTC market), and `resolve_runtime_facts` (market and three bar series).
+
+## Gotchas
+
+- No cache. Every read is still live; the three market answers are now taken at the same moment, so the mid/BBO coherence check compares a closer snapshot.
+- `public_catalog_loader` now reads BTC's market even when the inventory read fails (it is discarded and the catalog failure raises as before).
+- The reader test that pinned the call order now checks the set of calls; the order is no longer fixed.
+
+## Verification
+
+- `tests/test_hyperliquid_reads_at_once.py` (11): results in order and overlapping; first failure in argument order wins; market read takes one delay, not three, with an identical result; a failed call is still `testnet_market_unavailable`; catalog reads inventory and market together, a market failure still blocks BTC, a catalog failure still raises; Preview reads four series together; any failed Preview read still leaves `market = None`. The four timing tests fail on the old code.
+- Reader, read-model, datafeed client, park control, catalog and control-plane tests: 150 passed.
+- Real testnet, read-only: `public_catalog_loader("hyperliquid.testnet")` 2.55 / 2.44 / 2.43 s (was ~8 s), 213 instruments, BTC eligible and fresh.
+
 # 2026-11-09 — The desk asks GridMind's catalog for the Paper profiles only (#1466)
 
 ## Decision
