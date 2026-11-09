@@ -201,6 +201,10 @@
 - `apps/trading-desk/tests/test_paper_catalog_cache.py`: Paper reads use `?environment=paper`; the add-asset list reads the full catalog.
 - Desk suite 281; dashboard catalog, control plane, gateway, concurrency and GridMind control-track tests 73.
 - Real code, read-only: `catalog(environment="paper")` 0.002 s warm, ~3 s with the silver/crude specs cold, no Hyperliquid call.
+- The desk's fake catalog now answers `?environment=paper` with the Paper profiles only, as 8765 does, so a desk reader that wanted Hyperliquid from the Paper read would fail in tests (desk suite 281). CI passed on ded042a; merged as d29fca8.
+- Deployed d29fca8 (Paper idle, gate pass). Read-only checks: 8765 `?environment=paper` 6 ms, `environment_filter: "paper"`, one profile, XAU/XAG/CL eligible; `?environment=live` 400 `venue_environment_unknown`; the full catalog still lists `okx.paper` and `hyperliquid.testnet`. desk.jsonl: the first `/api/assets` after the restart 4 ms, then 2 ms (was 8–12 s).
+- Headless read-only load of `/trade`: no non-GET request, no page error, venue shown. It still took 12.4 s to go quiet: GridMind's venue/instrument picker reads the full catalog through the desk (8.2 s, needs the Hyperliquid list), and `/api/news/XAU` took 8.1 s (Intel 8001). Not fixed here.
+- datafeed released 1024b2f (#210, definitions 1.5 s → 0.5 s) and b721351 (#212, 5xx reasons logged).
 
 # 2026-11-09 — The redesign's blocks are done; the window bridges stay as ADR 0008's seams (#1427, #1330)
 
