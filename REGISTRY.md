@@ -9,6 +9,12 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-09, 交易台不再等它用不到的 Hyperliquid 行情 · #1466)
+
+- 交易台要知道纸面黄金、白银、原油在哪个交易所、叫什么代码，这些来自交易后台（GridMind）的品种目录。完整目录每次还要去问 Hyperliquid 测试盘四次，从这台机器约 8 秒。交易台虽然记 10 分钟，但 Park 隔一阵才打开一次，所以多数时候打开页面要先等 8–12 秒。
+- 现在：交易台只要纸面那一部分（`?environment=paper`），不再碰 Hyperliquid。完整目录和下单前的检查照旧每次现读，没有加缓存。
+- 剩下的 3 秒在 datafeed：白银、原油的合约信息各要 1.5 秒（datafeed #210 处理）。
+
 ## 现在在哪里(2026-11-09, 交易页重做第二段收尾 · #1427、#1330)
 
 - 页面重做的四块都已上线：顶栏和状态条、「今天」三步、图表和「这一轮」、数字表格和系统详情（字号、颜色、中文标签）。

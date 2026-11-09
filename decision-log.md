@@ -180,6 +180,28 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — The desk asks GridMind's catalog for the Paper profiles only (#1466)
+
+## Decision
+
+- desk.jsonl: `/api/assets` p50 7.8 s, p95 28.8 s; `/api/dashboard-control/catalog` p50 8.6 s. A read-only curl today: 8765's catalog 12.2 / 8.1 / 8.0 s, the desk's `/api/assets` 11.6 s.
+- Inside the catalog: the OKX Paper profile is local config. The Hyperliquid testnet profile makes four public calls in a row, ~2 s each from this host (`meta` 1.96 s; BTC `allMids` + `l2Book` + `metaAndAssetCtxs` 6.04 s).
+- The desk needs only the Paper ids. #1431 kept them 10 minutes, but Park visits now and then, so most visits found the cache expired and waited.
+- `catalog(environment=...)` and `GET /api/dashboard-control/catalog?environment=paper` load only that environment's profiles and say so (`environment_filter`). An unknown environment is a 400 (`venue_environment_unknown`) before anything loads, never an empty list. The desk's Paper read uses it; the add-asset list still reads the full catalog.
+
+## Gotchas
+
+- No cache was added. Selection, preview and control (`_catalog_entry`) read the full, live catalog, so eligibility stays a live gate.
+- A cold Paper catalog still cost ~3 s: the datafeed answered each silver/crude definition in ~1.5 s, close to the dashboard's 2 s timeout, so a slow OKX moment listed silver or crude as blocked for 30 s. Fixed in the datafeed (zinan92/datafeed#210: three OKX calls at once, ~0.5 s).
+- My dev checkout was behind main and lacked #1431; read main before diagnosing.
+
+## Verification
+
+- `tests/test_dashboard_catalog_environment.py` (7): the Paper catalog never loads another profile; the full catalog is unchanged; unknown is refused before loading; selection still reads Hyperliquid; the endpoint routes `?environment=` through `do_GET`, serves all without it, 400 for unknown.
+- `apps/trading-desk/tests/test_paper_catalog_cache.py`: Paper reads use `?environment=paper`; the add-asset list reads the full catalog.
+- Desk suite 281; dashboard catalog, control plane, gateway, concurrency and GridMind control-track tests 73.
+- Real code, read-only: `catalog(environment="paper")` 0.002 s warm, ~3 s with the silver/crude specs cold, no Hyperliquid call.
+
 # 2026-11-09 — The redesign's blocks are done; the window bridges stay as ADR 0008's seams (#1427, #1330)
 
 ## Decision
