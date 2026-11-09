@@ -199,6 +199,8 @@
 - `tests/test_hyperliquid_reads_at_once.py` (11): results in order and overlapping; first failure in argument order wins; market read takes one delay, not three, with an identical result; a failed call is still `testnet_market_unavailable`; catalog reads inventory and market together, a market failure still blocks BTC, a catalog failure still raises; Preview reads four series together; any failed Preview read still leaves `market = None`. The four timing tests fail on the old code.
 - Reader, read-model, datafeed client, park control, catalog and control-plane tests: 150 passed.
 - Real testnet, read-only: `public_catalog_loader("hyperliquid.testnet")` 2.55 / 2.44 / 2.43 s (was ~8 s), 213 instruments, BTC eligible and fresh.
+- CI passed on f97520e; merged as 2f7085f and deployed (Paper idle, gate pass). Read-only: 8765 full catalog 2.36 / 2.41 / 2.38 s (was 8–12 s), both profiles `ready` with no blockers, 213 Hyperliquid instruments, BTC eligible and fresh; through the desk 2.32 s.
+- Headless read-only `/trade` load: no non-GET request, no page error; quiet after 9.6 s (was 12.4 s). In desk.jsonl the slowest was now `/api/news/XAU` at 7.7 s (Intel 8001), then the catalog at 2.3 s, the read-model at 1.0–1.2 s and `/api/desk/XAU` at 1.1 s.
 
 # 2026-11-09 — The desk asks GridMind's catalog for the Paper profiles only (#1466)
 
