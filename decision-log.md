@@ -180,6 +180,36 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — /trade uses two text sizes and one figure size (#1457)
+
+## Decision
+
+- Block 4, fourth step (#1427): 「两种字号」. tokens.css gains `--fs` 14px, `--fs-sm` 12px, `--fs-fig` 20px.
+- A mechanical rewrite of every px font size in base.css, skin.css and gm-desk.css: ≤12.5px → `--fs-sm`,
+  13–19px → `--fs`; `.metric strong` (account cards), `.pair-block strong` (header price) and
+  `.desk-review-kpis b.big` → `--fs-fig`. gm-desk.css carries fallbacks (`var(--fs,14px)`) because other desk
+  pages may load it without tokens.css.
+- The one status headline (`.desk-status h1`) also uses the 20px size: at 14px bold it read no stronger than body
+  text. So: two sizes for words, one display size for the headline and key figures.
+- The chart library's toolbar, source line and empty-state text are set from gm-desk.css; toolbar buttons do not
+  wrap (「复位」 wrapped at 12px on a phone). Canvas axis labels are out of scope.
+- The one hard-coded monospace stack in gm-desk.css now uses `var(--mono)`.
+
+## Gotchas
+
+- Same day, the gold outage was fixed outside this repo: datafeed's `/api/health` blocked its event loop and ran a
+  ~12 s integrity check on every call (zinan92/datafeed#194, released f58a863), then still made one caller wait
+  ~25 s every 10 minutes (#196); zinan92/human-kline-review#72 stopped requesting the expired `MGCV26.CMX`.
+  Measured after #194: a cached GOLD read during a health call 0.004–0.008 s (was 4.8 s).
+
+## Verification
+
+- Browser `tests/test_gm_type_scale_browser.py` (1680, 375; 自己调 and 系统详情 open): every visible text node is 12,
+  14 or 20px; 20px only in the account cards, header price, status headline or review KPIs; one monospace family;
+  toolbar buttons one line; no overflow.
+- gridmind/gm/trade browser + static 186; mjs 29; desk 279. Production screenshots before/after with this branch's
+  CSS routed over the live page: no overflow at 1440 or 390.
+
 # 2026-11-09 — /trade's labels outside 系统详情 read in Chinese (#1455)
 
 ## Decision
