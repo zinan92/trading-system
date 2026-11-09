@@ -235,15 +235,15 @@ class Sources:
                 "latest_timestamp": payload.get("latest_timestamp")}
 
     # The Paper venue and instrument ids come from configs/dualtrack.yaml through GridMind's catalog, and a deploy
-    # restarts the desk, so they are kept 10 minutes and refreshed in the background after 5 (#1431). GridMind's
-    # catalog takes 8-13 s (it reads Hyperliquid's public market each time); gold, silver and crude used to read
-    # it once each, so /api/assets took ~29 s and the page waited on it.
+    # restarts the desk, so they are kept 10 minutes and refreshed in the background after 5 (#1431). The full
+    # catalog takes 8-13 s because it reads Hyperliquid's public market each time, so the desk asks only for the
+    # Paper profiles (#1466); a cache miss after an idle spell then costs milliseconds, not the page's first 10 s.
     PAPER_CATALOG_TTL_SECONDS = 600.0
     PAPER_CATALOG_REFRESH_SECONDS = 300.0
 
     def _fetch_paper_catalog(self) -> dict[str, Any] | None:
         try:
-            payload = self.catalog_fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog", None)
+            payload = self.catalog_fetch(f"{self.config.dashboard_url}/api/dashboard-control/catalog?environment=paper", None)
         except Exception:  # noqa: BLE001 - unreachable catalog is reported by the caller.
             LOG.warning("caught_exception", exc_info=True)
             return None

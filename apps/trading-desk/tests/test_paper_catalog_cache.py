@@ -91,4 +91,16 @@ def test_the_catalog_read_waits_longer_than_the_default_cut_off(config, monkeypa
     seen = []
     monkeypatch.setattr(module, "http_json", lambda url, body=None, timeout=12.0: seen.append((url, timeout)) or {"venue_profiles": []})
     module.Sources(config).paper_catalog()
-    assert seen and seen[0][0].endswith("/api/dashboard-control/catalog") and seen[0][1] == 30
+    assert seen and seen[0][0].endswith("/api/dashboard-control/catalog?environment=paper") and seen[0][1] == 30
+
+
+def test_paper_reads_ask_for_the_paper_profiles_only(sources, fetch):
+    """The full catalog reads Hyperliquid testnet (~8 s); the Paper ids never wait on it (#1466)."""
+    assert sources.paper_gold()["venue_profile_id"] == "okx.paper"
+    urls = [url for url, _body in fetch.calls if CATALOG in url]
+    assert urls and all(url.endswith(f"{CATALOG}?environment=paper") for url in urls)
+
+
+def test_the_add_asset_list_still_reads_the_testnet_catalog(sources, fetch):
+    assert sources.catalog()["venue"] == "Hyperliquid Testnet"
+    assert [url for url, _body in fetch.calls if CATALOG in url][-1].endswith(CATALOG)
