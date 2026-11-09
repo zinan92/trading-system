@@ -180,6 +180,39 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — The redesign's blocks are done; the window bridges stay as ADR 0008's seams (#1427, #1330)
+
+## Decision
+
+- #1427's four blocks are live:
+  1. the top bar and status line;
+  2. 「今天」's three steps;
+  3. the chart and 「这一轮」;
+  4. numbers, tables and 系统详情 (#1453, #1455, #1457, #1459, #1461, #1463).
+- #1419 also moved retiring the window bridges here (`gmIntent`, `dashboardControlState`, the `desk:*` events).
+  After checking each one against ADR 0008, none of them is retired:
+  - `gmIntent` is ADR 0008's intent layer, the seam where React hands an action to GridMind's existing handler.
+    Removing it means either a second order path in `apps/web`, which the ADR rejected, or binding by element
+    reference, which #1329 found drops listeners silently.
+  - `dashboardControlState` is the state GridMind publishes ("GridMind decides; React shows"). gm-desk.js reads
+    the catalog and selection from it; it never writes them.
+  - `desk:*` connects 「今天」 steps 1–2 (React, `TodayPanel`) to step 3 in gm-desk.js. Step 3 sends `/api/execute`,
+    `/api/grid/stop` and `/api/grid/rearm-hold`. The ADR's ban keeps all three out of `apps/web`, so step 3
+    cannot become React and the events remain its documented contract (`TodayPanel.tsx` header).
+- Retiring these needs a decision that supersedes ADR 0008 (for example, one typed sender module shared by
+  both sides). Nothing plans that, so #1427 and #1330 close without it. The same reasoning covers the UI code
+  still in gridmind.js (`applyPreview`, `renderStartRiskReview`, …): it is drawn next to the one sender it serves.
+- gm-desk.js's comments said step 3 "moves to React in #1329". #1329 closed without that move, so the comments
+  now give the ADR 0008 reason instead. This is comment-only; no behaviour changes.
+
+## Verification
+
+- Comment-only change to gm-desk.js. Desk tests pass.
+- #1461 in production (89b3de9): read-only load, high-importance watch cards have an amber border
+  (rgb 240,165,46), no non-GET request.
+- #1463 in production (52ba359): read-only load, the idle card reads 策略版本 / 加仓区间 / 止盈 / 止损 / 结束记录 with
+  its codes kept verbatim; the 趋势 hint says 网格/趋势加仓; no non-GET request.
+
 # 2026-11-09 — The strategy card in 系统详情 reads in Chinese (#1463)
 
 ## Decision

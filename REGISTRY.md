@@ -9,6 +9,12 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-09, 交易页重做第二段收尾 · #1427、#1330)
+
+- 页面重做的四块都已上线：顶栏和状态条、「今天」三步、图表和「这一轮」、数字表格和系统详情（字号、颜色、中文标签）。
+- 原计划顺带拆掉页面里的几座「桥」。核对 ADR 0008 后决定不拆：它们正是那条「只有 GridMind 一处发下单请求」规则的接缝。React 只画界面、只发「意图」，真正的请求仍由 GridMind（以及 gm-desk.js 的第 3 步）发出。要拆它们，得先推翻 ADR 0008，眼下没有这个计划。
+- 页面上看不到任何变化；只改了两处过时的代码注释，并把这个决定记下来。
+
 ## 现在在哪里(2026-11-09, 「系统详情」里的策略卡片改中文 · #1463)
 
 - #1455 留下的尾巴：「当前运行策略」卡片还写着 Short · Grid、Revision、Grid Spacing … Rungs、DCA TP / SL 这些英文。
