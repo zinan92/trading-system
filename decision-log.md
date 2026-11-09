@@ -180,6 +180,40 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — Gold feed timeouts in production; the desk stops reading the Paper 1m feed twice (#1447)
+
+## Decision
+
+- Production's red 「黄金行情中断」 came from 8765's bars reads failing with `datafeed unavailable: timed out`: the
+  8100 datafeed (`zinan92/datafeed`, `kline.app`) answered `/api/health` in 2–20 s, and its stderr holds 2639
+  `$MGCV26.CMX: possibly delisted` lines (Yahoo, an expired micro gold contract) retried over 60d / 730d / 5y. The
+  same GOLD reads sometimes answered `ready` from OKX within 2 s. Fixing the datafeed is zinan92/datafeed#194.
+- The #1438, #1441 and #1443 records said "Sunday close". Wrong: OKX gold trades on weekends (1m trusted at
+  17:31 UTC on 11/8). Corrected in REGISTRY, this log and on the three issues. Failing closed was right; only the
+  stated cause changes.
+- gridmind.js: `readModelMinute(symbol)` returns the read model's market when there is no venue binding and it is
+  this symbol at 1m. That is the same unbound feed the extra read would hit (`chartSymbol()` without a binding is
+  the read model's symbol), so `refreshExecutionMarket` returns without a request and `executionMarket()` uses it
+  whenever the chart is not on 1m. A Hyperliquid Testnet binding still reads its own 1m. Stricter-or-equal: the
+  read model's untrusted market is untrusted.
+
+## Gotchas
+
+- `executionMarket()` must prefer the read model over an older kept snapshot when the chart leaves 1m; otherwise
+  the last 1m chart snapshot could stand after the chart moved to 4h.
+- Production has no binding, so after this deploy the page sends no `timeframe=1m&limit=2` reads at all.
+
+## Verification
+
+- Browser `test_a_4h_chart_starts_and_judges_from_the_selected_symbol_s_1m_feed` now × 5: Paper trusted/untrusted
+  send no 1m request and judge from the read model (both fail on the previous code); Testnet-bound trusted / 503 /
+  other symbol read `/api/dashboard-control/market-bars?…timeframe=1m&limit=2` as before.
+- gridmind browser + static + today + tree + crosshair + control wire 139, mjs 29, desk 276.
+- Production record for #1445 at adaaa7c (`--dashboard`, Paper idle), read-only: the read model's
+  `market_timeframes` ends with `1d`; the first chart read is `symbol=GOLD&timeframe=4h&limit=240`; buttons
+  1h / 4h / 日 / 更多 with 4h on; the four static files byte-identical; no overflow. The feed was timing out, so
+  the page was red and a drawn 4h chart was not seen in production.
+
 # 2026-11-09 — The chart opens on 4h; 1h / 4h / 日 shown, the rest behind 「更多」 (#1445)
 
 ## Decision
@@ -213,7 +247,7 @@
 - Root 4159 passed, 2 skipped.
 - Production record for #1443 at f0fa5dc (no `--dashboard`), read-only: the four static files byte-identical; with
   the chart still on 30m the extra `symbol=GOLD&timeframe=1m&limit=2` read runs; `execMarket` GOLD 1m provider
-  `unavailable`, untrusted (Sunday); trend box 「行情不可用 · 1 分钟行情未满足可信门控…」, 「刷新趋势」 disabled, header
+  `unavailable`, untrusted (the 8100 datafeed timing out, #1447; first recorded wrongly as the Sunday close); trend box 「行情不可用 · 1 分钟行情未满足可信门控…」, 「刷新趋势」 disabled, header
   price `--`, red banner. Not seen in production: a non-1m chart with a trusted 1m enabling start; tests only.
 
 # 2026-11-09 — Start, trend, header price and the desk strip read the selected symbol's 1m feed (#1443)
@@ -260,7 +294,7 @@
 - Root: 4155 passed, 2 skipped before the re-record (the 2 tree cases failed on the `#gate` text); tree 2 passed after.
 - Production record for #1441 at d594ad2 (no `--dashboard`), read-only: web.js, gm-desk.js, gm-desk.css and
   gridmind.js (served by the desk from its checkout) byte-identical; `gridmindView.gateMarket` present (GOLD 1m,
-  provider `unavailable`, untrusted: Sunday close); chart GOLD 30m untrusted; banner 「黄金行情中断，已停止开新仓」 with
+  provider `unavailable`, untrusted: the 8100 datafeed timing out, #1447; first recorded wrongly as the Sunday close); chart GOLD 30m untrusted; banner 「黄金行情中断，已停止开新仓」 with
   「行情源现在没有返回可用数据（还没有可信数据）」; health 「行情没有通过可信检查」. The deciding case (chart trusted,
   read model not) was not seen in production; tests only.
 
@@ -284,7 +318,7 @@
 
 - `gateMarket` with no symbol is treated as the same instrument (stricter), not skipped.
 - The new browser case fails on the old gm-desk.js (banner calm, start offered) and passes on the new one.
-- Seen in production while checking #1438 (Sunday, gold closed): the read model's market has provider
+- Seen in production while checking #1438 (the 8100 datafeed timing out, #1447; first recorded wrongly as the Sunday close): the read model's market has provider
   `unavailable`, label `Unavailable`, no timestamp, and the red body read 「Unavailable的数据没有通过可信检查」. It now
   reads 「行情源现在没有返回可用数据」 when the provider is `unavailable` or there is no label.
 
@@ -303,7 +337,7 @@
   run on the PR head.
 - Production record for #1438 at dc690c9 (no `--dashboard`), read-only: the three static files byte-identical;
   `#deskManual` inside `#deskToday` before `ol.desk-steps-exec` with `#dashboardControlCard`, `#parkAiChatCard`,
-  `#strategyCard` inside; the banner's only button is 「查看原因」 (gold feed closed for the weekend, correctly red);
+  `#strategyCard` inside; the banner's only button is 「查看原因」 (gold feed down: the 8100 datafeed timing out, #1447; first recorded wrongly as the Sunday close; correctly red);
   no horizontal overflow. Not seen in production: the calm idle `.desk-status-next` line (the banner was red) and
   the one-filled-button rule (no step had a `.desk-btn.primary` yet). To check read-only after the open.
 
