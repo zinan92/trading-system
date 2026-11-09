@@ -18,6 +18,8 @@
 
 - `test_testnet_preview_carries_non_secret_activation_identity_from_host` asserts `source_sha` equals the checkout's HEAD while `release_sha` keeps the pin. `test_a_clean_testnet_run` shows `source_sha`. `test_a_preview_without_source_sha_says_not_recorded` shows `None`. All three fail without the change.
 - Dashboard, testnet and Hyperliquid root tests: 491 passed, 2 failed. The 2 failures are in `tests/test_testnet_soak_readiness.py`, and they fail the same way on main without this change. Desk: 282 passed.
+- Deployed c427a7e with `--dashboard` while Paper was idle; gate pass. `/api/why` for `testnet:dashboard-plan:abcdb97b5a089ed7` now returns `release_sha: null` (it showed the pinned `f80fa54…` before). A new Preview carrying `source_sha` is unverified in production: no Preview was created there on Park's behalf.
+- The 2 soak-readiness failures pass when run alone and passed in CI, so they are order- or time-dependent locally, not a main regression.
 
 # 2026-11-07 — GridMind controls listen for intents (#1395)
 
