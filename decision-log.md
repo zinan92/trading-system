@@ -180,6 +180,25 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — The strategy card in 系统详情 reads in Chinese (#1463)
+
+## Decision
+
+- #1455 left the 「当前运行策略」 card in English. Its words are now Chinese:
+  - The headline uses `currentStrategyDirection` / `currentStrategyType`: 做多/做空/中性 · 网格/趋势加仓, and 「暂无 Park 策略」.
+  - Facts: 策略版本, 网格区间, 入场区间, 网格间距 / 格数 (「10 · 19 格」), 硬止损 (「做多 x · 做空 y」, as in #1455's AI snapshot), 硬止损来源, 加仓区间, 止盈 / 止损 (「止盈 x · 止损 y」).
+  - Evidence prefixes: 记录窗口, 反手, 结束记录. The 趋势 hint says 网格/趋势加仓.
+- Machine codes stay verbatim as evidence: session and revision IDs, `complete` / `in_progress`, blocker codes, and the `old=` / `new=` / `next=` fields.
+
+## Gotchas
+
+- The grid/DCA branch used to compare the translated label (`type==="Grid"`). It now reads `spec.strategy_type` directly (`grid`), so the display words can change without changing which facts are shown.
+- The quiet-evidence filter and the blocker highlighting match on the prefixes (`结束记录 `, `记录窗口阻塞:`, `反手 blocked`). Those strings changed together with the text.
+
+## Verification
+
+- Lifecycle browser tests assert the Chinese labels and the absence of the old English (Grid Boundary, Rungs, Revision, Recording Window, …). Lifecycle, static and labels tests: 60. mjs 29. Tree fixture re-recorded (only the 趋势 hint changed; no wire requests). `-k gm/gridmind/trade/desk` 345 with the fixture.
+
 # 2026-11-09 — News importance is amber, not red (#1461)
 
 ## Decision
