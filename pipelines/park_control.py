@@ -9,15 +9,19 @@ receipt rather than a best-effort start.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
+import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from services.journal_store import load_json, write_json
+from services.structured_log import configure as configure_log, event as log_event, get_logger
 from services.park_ai_provider_gateway import ParkAiProviderGateway
 from services.park_legacy_cutover import load_effective_park_config
 from services.park_legacy_cutover_runtime import run_legacy_cutover_once
@@ -636,6 +640,58 @@ def _redacted_testnet_facts_message(exc: BaseException) -> str:
     return message[:240] or "no_message"
 
 
+LOG = get_logger("park_control")
+
+
+class _Steps:
+    """Times each step of one run and remembers the one in progress, so a failure can name it (#1475)."""
+
+    def __init__(self) -> None:
+        self.ms: dict[str, int] = {}
+        self.current = "start"
+        self.started = time.perf_counter()
+
+    @contextmanager
+    def step(self, name: str):
+        self.current = name
+        began = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.ms[name] = round((time.perf_counter() - began) * 1000)
+
+    def total(self) -> int:
+        return round((time.perf_counter() - self.started) * 1000)
+
+
+def _status(value: object) -> Any:
+    return value.get("status") if isinstance(value, Mapping) else None
+
+
+def _log_tick(steps: _Steps, result: Mapping[str, Any]) -> None:
+    """One record per run: what happened, how long each step took. Logging never changes the run."""
+
+    execution = result.get("execution") if isinstance(result.get("execution"), Mapping) else {}
+    testnet = result.get("testnet_control") if isinstance(result.get("testnet_control"), Mapping) else {}
+    delivery = result.get("delivery") if isinstance(result.get("delivery"), Mapping) else {}
+    log_event(
+        LOG,
+        "tick",
+        level=logging.INFO if result.get("status") == "pass" else logging.WARNING,
+        status=result.get("status"),
+        code=result.get("code"),
+        ms=steps.total(),
+        steps=dict(steps.ms),
+        testnet=testnet.get("status"),
+        testnet_reason=testnet.get("reason") or testnet.get("blocker"),
+        execution=execution.get("status"),
+        execution_code=execution.get("code"),
+        telegram=_status(result.get("telegram")),
+        delivered=delivery.get("delivered"),
+        delivery_failed=delivery.get("failed"),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one Park Telegram + Paper pass.")
     parser.add_argument("--output-root", default=os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", "outputs"))
@@ -645,8 +701,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-seconds", type=int, default=20)
     args = parser.parse_args(argv)
     output_root = Path(args.output_root)
+    configure_log("park-control", output_root / "logs")
+    steps = _Steps()
     try:
-        ownership = SchedulerOwnershipGuard(output_root).verify()
+        result, exit_code = _run(args, output_root, steps)
+    except Exception:
+        LOG.error("tick_crashed", exc_info=True, extra={"fields": {"step": steps.current, "ms": steps.total(), "steps": dict(steps.ms)}})
+        raise
+    _log_tick(steps, result)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    if exit_code is not None:
+        return exit_code
+    return 0 if result.get("status") == "pass" else 2
+
+
+def _run(args: argparse.Namespace, output_root: Path, steps: _Steps) -> tuple[dict[str, Any], int | None]:
+    """One pass; returns the result and an exit code that overrides pass/blocked (79: not the owner)."""
+    try:
+        with steps.step("ownership"):
+            ownership = SchedulerOwnershipGuard(output_root).verify()
         if not ownership.get("ok"):
             result = {
                 "schema_version": "park-control-v1",
@@ -655,17 +728,18 @@ def main(argv: list[str] | None = None) -> int:
                 "ownership": ownership,
                 "paper_only": True,
             }
-            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-            return 79
-        config = json.loads(Path(args.park_config).read_text(encoding="utf-8"))
-        config = load_effective_park_config(output_root, config)
-        try:
-            # The running session's instrument (ADR 0009); gold when Paper is idle.
-            config = prepare_park_paper_config(config, instrument=active_instrument_key(output_root))
-        except Exception:
-            # The read-only router will persist the typed contract blocker;
-            # never invent an instrument or fee model at the process boundary.
-            pass
+            return result, 79
+        with steps.step("config"):
+            config = json.loads(Path(args.park_config).read_text(encoding="utf-8"))
+            config = load_effective_park_config(output_root, config)
+            try:
+                # The running session's instrument (ADR 0009); gold when Paper is idle.
+                config = prepare_park_paper_config(config, instrument=active_instrument_key(output_root))
+            except Exception:
+                # The read-only router will persist the typed contract blocker;
+                # never invent an instrument or fee model at the process boundary.
+                pass
+        steps.current = "setup"
         transport = TelegramBotTransport(chat_id=args.chat_id)
         intent_parser = ParkAiProviderGateway()
         testnet_runtime = HyperliquidTestnetRuntimeConfig.from_environment()
@@ -690,47 +764,53 @@ def main(argv: list[str] | None = None) -> int:
             testnet_start_handler=testnet_start_handler,
             config=config,
         )
-        telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
-        scheduler_before = _testnet_scheduler_snapshot(output_root)
-        testnet_control = run_testnet_control_tick(output_root)
-        queue_testnet_scheduler_notice(
-            output_root, scheduler_before, testnet_control,
-            park_user_id=args.park_user_id, chat_id=args.chat_id,
-        )
-        queue_testnet_fill_notices(
-            output_root, park_user_id=args.park_user_id, chat_id=args.chat_id,
-        )
-        legacy_cutover = run_legacy_cutover_once(
-            output_root,
-            config=config,
-            park_user_id=args.park_user_id,
-            chat_id=args.chat_id,
-            repo_root=Path(__file__).resolve().parents[1],
-            interpreter=os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or None,
-        )
-        # A completed exact-set receipt is the only way the default-off static
-        # config becomes effective for the next Park runtime pass.
-        config = load_effective_park_config(output_root, config)
-        try:
-            binding = build_park_authoritative_adapter(output_root, config=config)
-            build_park_safety_evidence(
+        with steps.step("telegram"):
+            telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
+        with steps.step("testnet_tick"):
+            scheduler_before = _testnet_scheduler_snapshot(output_root)
+            testnet_control = run_testnet_control_tick(output_root)
+        with steps.step("notices"):
+            queue_testnet_scheduler_notice(
+                output_root, scheduler_before, testnet_control,
+                park_user_id=args.park_user_id, chat_id=args.chat_id,
+            )
+            queue_testnet_fill_notices(
+                output_root, park_user_id=args.park_user_id, chat_id=args.chat_id,
+            )
+        with steps.step("legacy_cutover"):
+            legacy_cutover = run_legacy_cutover_once(
                 output_root,
                 config=config,
-                repo_root=Path(__file__).resolve().parents[1],
-                interpreter=os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or None,
-                adapter=binding.adapter,
-            )
-            evidence = _latest(output_root / "park_strategy" / "safety_evidence.json")
-            execution = ParkPaperRuntime(
-                output_root,
-                adapter=binding.adapter,
                 park_user_id=args.park_user_id,
                 chat_id=args.chat_id,
-                config=config,
-                safety_evidence_reader=lambda: evidence,
-                mutation_authorizer=binding.authorize,
-                mutation_revoker=binding.revoke,
-            ).run_once()
+                repo_root=Path(__file__).resolve().parents[1],
+                interpreter=os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or None,
+            )
+            # A completed exact-set receipt is the only way the default-off static
+            # config becomes effective for the next Park runtime pass.
+            config = load_effective_park_config(output_root, config)
+        try:
+            with steps.step("safety_evidence"):
+                binding = build_park_authoritative_adapter(output_root, config=config)
+                build_park_safety_evidence(
+                    output_root,
+                    config=config,
+                    repo_root=Path(__file__).resolve().parents[1],
+                    interpreter=os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or None,
+                    adapter=binding.adapter,
+                )
+                evidence = _latest(output_root / "park_strategy" / "safety_evidence.json")
+            with steps.step("paper_runtime"):
+                execution = ParkPaperRuntime(
+                    output_root,
+                    adapter=binding.adapter,
+                    park_user_id=args.park_user_id,
+                    chat_id=args.chat_id,
+                    config=config,
+                    safety_evidence_reader=lambda: evidence,
+                    mutation_authorizer=binding.authorize,
+                    mutation_revoker=binding.revoke,
+                ).run_once()
         except ParkPaperRuntimeError as exc:
             execution = {
                 "schema_version": "park-paper-runtime-v1",
@@ -738,7 +818,8 @@ def main(argv: list[str] | None = None) -> int:
                 "code": exc.code,
                 "paper_only": True,
             }
-        delivery = router.drain_outbound(transport)
+        with steps.step("delivery"):
+            delivery = router.drain_outbound(transport)
         result = {
             "schema_version": "park-control-v1",
             "status": "pass" if execution.get("status") != "blocked" else "blocked",
@@ -750,14 +831,14 @@ def main(argv: list[str] | None = None) -> int:
             "paper_only": True,
         }
     except (TelegramBotTransportError, ParkTelegramRuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+        LOG.error("tick_failed", exc_info=True, extra={"fields": {"step": steps.current}})
         result = {
             "schema_version": "park-control-v1",
             "status": "blocked",
             "code": getattr(exc, "code", "park_control_blocked"),
             "paper_only": True,
         }
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0 if result.get("status") == "pass" else 2
+    return result, None
 
 
 if __name__ == "__main__":
