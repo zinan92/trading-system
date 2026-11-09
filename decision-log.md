@@ -180,6 +180,26 @@
   - after deploy, read-only (`mode=ro`): no `check (kind in`, asset rows identical to the baseline, 250 judgments, no leftover table;
   - API diff unchanged apart from a transient silver futures-bar timeout, which was fine on retry.
 
+# 2026-11-09 — News importance is amber, not red (#1461)
+
+## Decision
+
+- The read-only production survey after deploying #1459 (e193722) found exactly four hues, but red was still
+  used for high-importance news: `.desk-watch-card.high` border, `.desk-news li.high .bar`, `.tag.high`.
+- High-importance news → `--gm-warn`; "watch" news → `--gm-muted`, so the two levels stay distinct.
+
+## Gotchas
+
+- The mocked browser test has no news cards, so it could not see this; the new static test reads the
+  `.high`/`.watch` rules directly.
+
+## Verification
+
+- `test_news_importance_asks_for_a_look_and_is_never_red`; semantic colour tests 5; `-k news/watch/desk_today/gm_`
+  61; desk 279.
+- #1459 in production (e193722, files byte-identical to main; read-only headless load, no non-GET): only the four
+  skin hues at 1440 and 375, no overflow; gold source badge green again after the datafeed fixes.
+
 # 2026-11-09 — /trade gives each colour one meaning (#1459)
 
 ## Decision

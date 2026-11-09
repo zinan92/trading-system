@@ -41,12 +41,12 @@
 .desk-news li{display:grid;grid-template-columns:3px minmax(0,1fr);gap:9px;padding:7px 6px;border-radius:6px;cursor:pointer}
 .desk-news li:hover{background:var(--gm-panel-2,#15181e)}
 .desk-news li .bar{border-radius:2px;background:var(--gm-line-strong,rgba(255,255,255,.16))}
-.desk-news li.high .bar{background:var(--gm-red,#f2495f)}
-.desk-news li.watch .bar{background:var(--gm-warn,#f0a52e)}
+.desk-news li.high .bar{background:var(--gm-warn,#f0a52e)}
+.desk-news li.watch .bar{background:var(--gm-muted,#99a0ab)}
 .desk-news li.cited{background:rgba(63,208,224,.09)}
 .desk-news .t{font-size:var(--fs,14px);line-height:1.45;color:var(--gm-text,#eceef2)}
 .desk-news .m{margin-top:2px;display:flex;flex-wrap:wrap;gap:4px 8px;font-size:var(--fs-sm,12px);color:var(--gm-faint,#5d666f);font-variant-numeric:tabular-nums}
-.desk-news .tag.high{color:var(--gm-red,#f2495f)}.desk-news .tag.watch{color:var(--gm-warn,#f0a52e)}
+.desk-news .tag.high{color:var(--gm-warn,#f0a52e)}.desk-news .tag.watch{color:var(--gm-muted,#99a0ab)}
 .desk-news .new{display:inline-block;margin-right:5px;padding:0 4px;border-radius:3px;background:var(--gm-accent,#3fd0e0);color:#06181b;font-size:var(--fs-sm,12px);font-weight:700}
 .desk-news .cite{color:var(--gm-accent,#3fd0e0)}
 .desk-empty{padding:10px 14px;color:var(--gm-muted,#9aa3ad);font-size:var(--fs-sm,12px)}
@@ -102,7 +102,7 @@
 .desk-watch-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:0 2px 6px;font-size:var(--fs-sm,12px);letter-spacing:.08em;color:var(--gm-text,#eceef2)}
 .desk-watch-row{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
 .desk-watch-card{display:grid;gap:3px;align-content:start;padding:8px 10px;border-radius:7px;background:var(--gm-panel-2,#15181e);border:1px solid var(--gm-line,rgba(255,255,255,.08));border-left:3px solid var(--gm-warn,#f0a52e)}
-.desk-watch-card.high{border-left-color:var(--gm-red,#f2495f)}
+.desk-watch-card.high{border-left-color:var(--gm-warn,#f0a52e)}
 .desk-watch-card .w-src{font-size:var(--fs-sm,12px);color:var(--gm-faint,#5d666f);line-height:1.4;overflow-wrap:anywhere}
 .desk-watch-card .w-src .warn{color:var(--gm-warn,#f0a52e)}
 .desk-watch-card.fresh{box-shadow:0 0 0 1px var(--gm-accent,#3fd0e0) inset}

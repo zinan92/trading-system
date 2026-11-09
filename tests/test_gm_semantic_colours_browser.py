@@ -96,3 +96,14 @@ def test_the_desk_stylesheet_has_no_off_palette_literals() -> None:
     css = (ROOT / "apps/trading-desk/src/trading_desk/static/gm-desk.css").read_text().lower()
     for literal in ("#f0a24b", "#d9a35b", "#7fb2ff", "#5a4526", "240,162,75"):
         assert literal not in css, literal
+
+
+def test_news_importance_asks_for_a_look_and_is_never_red() -> None:
+    """#1461: high-importance news is amber; red stays for down, loss and blocked orders."""
+    import re
+
+    css = (ROOT / "apps/trading-desk/src/trading_desk/static/gm-desk.css").read_text()
+    rules = re.findall(r"([^{}]*\.(?:high|watch)\b[^{}]*)\{([^}]*)\}", css)
+    assert len(rules) >= 4, rules
+    assert all("--gm-red" not in body for _, body in rules), rules
+    assert any(".high" in selector and "--gm-warn" in body for selector, body in rules)
