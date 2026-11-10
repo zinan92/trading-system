@@ -1,5 +1,20 @@
 # Decision Log
 
+# 2026-11-10 — The desk's passcode and session checks compare bytes (#1481)
+
+## Decision
+
+- `remote._same` compares UTF-8 bytes with `hmac.compare_digest`. `/login`, the current passcode on `/passcode`, and the session cookie on every remote request all use it.
+
+## Gotchas
+
+- `hmac.compare_digest` on two `str` values raises `TypeError` when either has a non-ASCII character. It raised on `/login` at 2026-11-09 22:18 UTC (ref `0e5a75feed8b`), and the request failed closed with a 500.
+- Starlette decodes cookie headers as latin-1, so non-ASCII cookie bytes reach the compare as non-ASCII `str`. The test sends the raw header bytes, because httpx's cookie jar refuses non-ASCII values.
+
+## Verification
+
+- `test_non_ascii_passcode_input_is_refused_not_a_server_error`: a non-ASCII login gets 401 「口令不对」, a non-ASCII cookie gets 401, a non-ASCII current passcode gets 401, and a non-ASCII passcode that matches logs in. It fails (500) without the change. Desk: 285 passed.
+
 # 2026-11-09 — Telegram is switched off by one line in the control script (#1478)
 
 ## Decision

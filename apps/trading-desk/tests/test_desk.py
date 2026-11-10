@@ -634,6 +634,26 @@ def test_park_changes_the_passcode_himself_and_old_one_stops_working(config, sou
     assert fresh.post("/login", data={"passcode": "park888"}, headers=tunnel, follow_redirects=False).status_code == 303
 
 
+def test_non_ascii_passcode_input_is_refused_not_a_server_error(config, sources, store, fetch, tmp_path):
+    import dataclasses, os
+    secret = tmp_path / "passcode"
+    secret.write_text("orchid-47")
+    os.chmod(secret, 0o600)
+    cfg = dataclasses.replace(config, remote_passcode=secret)
+    client = TestClient(create_app(cfg, sources, store, FakeExecutor(cfg, fetch)), base_url="https://testserver", raise_server_exceptions=False)
+    tunnel = {"cf-connecting-ip": "203.0.113.9"}
+    wrong = client.post("/login", data={"passcode": "兰花４７"}, headers=tunnel)  # IME and a full-width digit (#1481)
+    assert wrong.status_code == 401 and "口令不对" in wrong.text
+    raw_cookie = {**tunnel, "cookie": "desk_session=会话".encode("utf-8")}  # Starlette decodes it as latin-1: non-ASCII str
+    assert client.get("/api/health", headers=raw_cookie).status_code == 401
+    client.post("/login", data={"passcode": "orchid-47"}, headers=tunnel)
+    assert client.post("/passcode", data={"current": "兰花", "new": "x1", "again": "x1"}, headers=tunnel).status_code == 401
+    secret.write_text("兰花47")
+    fresh = TestClient(create_app(cfg, sources, store, FakeExecutor(cfg, fetch)), base_url="https://testserver")
+    assert fresh.post("/login", data={"passcode": "兰花47"}, headers=tunnel, follow_redirects=False).status_code == 303
+    assert fresh.get("/api/health", headers=tunnel).status_code == 200
+
+
 def test_kline_rerun_with_hash_suffix_wins_over_the_earlier_issue(config, sources, store, fetch):
     import os
     from trading_desk import digest
