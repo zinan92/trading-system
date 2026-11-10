@@ -14,6 +14,7 @@
 ## Verification
 
 - `test_non_ascii_passcode_input_is_refused_not_a_server_error`: a non-ASCII login gets 401 「口令不对」, a non-ASCII cookie gets 401, a non-ASCII current passcode gets 401, and a non-ASCII passcode that matches logs in. It fails (500) without the change. Desk: 285 passed.
+- Deployed 1e85439 while Paper was idle; gate pass. The desk restarted at 16:42 serving the new `remote.py`, and `GET /login` with a tunnel header returns 200. No passcode was POSTed to production (GET-only rule), so the non-ASCII refusal is verified by the test only.
 
 # 2026-11-09 — Telegram is switched off by one line in the control script (#1478)
 
