@@ -18,6 +18,7 @@
 
 - `test_with_telegram_off_nothing_reaches_telegram_and_paper_still_runs` and `test_the_control_scripts_telegram_switch_stops_desk_pushes` fail without the change. `test_with_telegram_on_the_run_polls_notifies_and_delivers` pins the default order.
 - park_control, lifecycle, legacy cutover, replay and systemd tests: 129 passed. Desk: 284 passed.
+- Deployed b321040 while Paper was idle; gate pass. Added the line to the production control script at 23:25 (backup `run-park-paper-control.sh.pre-1478-20261109-2325.bak`). The next three ticks: `telegram: off`, `pass`, 2.6–2.8 s each (previously 85–90 s). The outbox had 0 rows delivered and 0 queued after the switch. The desk's 20-minute notifier path was covered by its test; no desk tick had run yet in the observed window.
 
 # 2026-11-09 — The control loop logs every run and names the failing step (#1475)
 
