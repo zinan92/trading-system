@@ -9,6 +9,11 @@
   [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
 - Durable rationale and traps: [`decision-log.md`](decision-log.md).
 
+## 现在在哪里(2026-11-10, 登录页输入中文不再报「服务器出错」 · #1481)
+
+- 11 月 9 日 22:18，有人在 trade.park-ai-intel.com 的登录框输入了带中文字符的口令，页面报 500「服务器出错」。登录照样被拒，没有放行，只是提示不对、还记了一条错误。原因：比较口令的函数遇到非英文字符会直接抛错。改口令页和每次请求检查会话也用这个函数，带非英文字符的 cookie 同样会让它出错。
+- 现在三处都按字节比较。口令错就提示「口令不对」；口令本身用中文也可以。
+
 ## 现在在哪里(2026-11-09, Telegram 关掉 · #1478)
 
 - Park 决定停掉 Telegram。关之前的情况：Park 从 8 月 31 日到现在一共只发过 4 条消息，最后一条在 10 月 29 日；策略已经改成在 /trade 和 GridMind 上启动。Telegram 主要是往外推消息：最近 14 天推了 94 条突发新闻、14 条早报、9 条事件提醒。控制循环每一轮在 Telegram 这一步卡 65–91 秒。

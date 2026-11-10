@@ -52,7 +52,7 @@ async def _change_passcode(request: Request, passcode_file: Path, passcode: str 
     form = parse_qs((await request.body()).decode("utf-8", "replace"))
     current = (form.get("current") or [""])[0].strip()
     new, again = (form.get("new") or [""])[0].strip(), (form.get("again") or [""])[0].strip()
-    if passcode is None or not hmac.compare_digest(current, passcode):
+    if passcode is None or not _same(current, passcode):
         time.sleep(1.5)
         return HTMLResponse(CHANGE.format(error="当前口令不对", done=""), status_code=401)
     if len(new) < 6:
@@ -63,6 +63,11 @@ async def _change_passcode(request: Request, passcode_file: Path, passcode: str 
     response: Response = HTMLResponse(CHANGE.format(error="", done="已改好。其他设备需要用新口令重新登录。"))
     response.set_cookie(COOKIE, _session(new), max_age=30 * 86400, httponly=True, secure=True, samesite="strict")
     return response
+
+
+def _same(given: str, expected: str) -> bool:
+    """Constant-time compare of UTF-8 bytes. On str, compare_digest raises on non-ASCII text (#1481)."""
+    return hmac.compare_digest(given.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
 
 
 def install(app, passcode_file: Path) -> None:
@@ -83,14 +88,14 @@ def install(app, passcode_file: Path) -> None:
             if request.method == "POST":
                 form = parse_qs((await request.body()).decode("utf-8", "replace"))
                 given = (form.get("passcode") or [""])[0].strip()
-                if hmac.compare_digest(given, passcode):
+                if _same(given, passcode):
                     response: Response = RedirectResponse("/", status_code=303)
                     response.set_cookie(COOKIE, _session(passcode), max_age=30 * 86400, httponly=True, secure=True, samesite="strict")
                     return response
                 time.sleep(1.5)
                 return HTMLResponse(LOGIN.format(error="口令不对"), status_code=401)
             return HTMLResponse(LOGIN.format(error=""))
-        if hmac.compare_digest(request.cookies.get(COOKIE, ""), _session(passcode)):
+        if _same(request.cookies.get(COOKIE, ""), _session(passcode)):
             if request.url.path == "/passcode":
                 return await _change_passcode(request, passcode_file, passcode)
             return await call_next(request)
